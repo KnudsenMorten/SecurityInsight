@@ -7,11 +7,11 @@
     [switch] $AutomationFramework
 )
 
-Write-Output "***********************************************************************************************"
-Write-Output "Critical Asset Tagging using YAML-file"
-Write-Output ""
-Write-Output "Support: Morten Knudsen - mok@2linkit.net | 40 178 179"
-Write-Output "***********************************************************************************************"
+Write-host "***********************************************************************************************"
+Write-host "Critical Asset Tagging using YAML-file"
+Write-host ""
+Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
+Write-host "***********************************************************************************************"
 
 
 $AutomationFramework = $false    # Must be set fo $false when you test this out ! Solution can also be integrated with Morten Knudsen's automation framework !
@@ -31,41 +31,10 @@ If (!($AutomationFramework)) {
     #>
 
     $SettingsPath               = "c:\scripts\securityinsights"
-    $DefaultReportTemplate      = "RiskAnalysis_Summary_v2"
-
-    $OverwriteXlsx              = $true      # Overwrite existing Excel file if true
 
     $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
     $global:SpnClientId         = "<APP/CLIENT ID GUID>"
     $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
-
-    $global:SpnTenantId         = "f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e"
-    $global:SpnClientId         = "416ef8bc-1cbf-4d06-a759-6943fbde946a"
-    $global:SpnClientSecret     = "oV78Q~QNu0Pihk9zdsfFEeVg5Fy2DkK7o0r1QcpC"
-
-    # Email Notifications
-    $SMTPFrom                   = "svc-automation@2linkit.net"
-    $SmtpServer                 = "smtp-relay.brevo.com"
-    $SMTPPort                   = 587        # or 587 / 465
-    $SMTP_UseSSL                = $true    # or $false
-
-    $Report_SendMail_Detailed   = $true
-    $Report_To_Detailed         = @("mok@2linkit.net")
-
-    $Report_SendMail_Summary    = $true
-    $Report_To_Summary          = @("mok@2linkit.net")
-
-    $Mail_SendAnonymous         = $false
-
-    # Consider to use an Azure Keyvault and retrieve credentials from there !
-    $SmtpUsername               = "796b0a001@smtp-brevo.com"
-    $SmtpPassword               = "jLAGgBnb84krSONY"
-
-    $SecurePassword = ConvertTo-SecureString $SmtpPassword -AsPlainText -Force
-    $SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
-        $SmtpUsername,
-        $SecurePassword
-    )
 }
 
 # Script-default scope (used ONLY when -Scope is not provided)

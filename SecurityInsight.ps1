@@ -21,7 +21,7 @@ write-host "Security Insight: Rethink Secure Score into a new risk-based securit
 write-host "Solution includes critical asset tagging, ready-to-use reports (based on Defender Exposure Graph and Azure Resource Graphs),"
 write-host "automation-scripts, risk index and more"
 Write-host ""
-Write-host "Support: Morten Knudsen - mok@2linkit.net | +45 40 178 179"
+Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
 
 $AutomationFramework = $false    # Must be set fo $false when you test this out ! Solution can also be integrated with Morten Knudsen's automation framework !
@@ -49,124 +49,30 @@ If (!($AutomationFramework)) {
     $global:SpnClientId         = "<APP/CLIENT ID GUID>"
     $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
 
-    $global:SpnTenantId         = "f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e"
-    $global:SpnClientId         = "416ef8bc-1cbf-4d06-a759-6943fbde946a"
-    $global:SpnClientSecret     = "oV78Q~QNu0Pihk9zdsfFEeVg5Fy2DkK7o0r1QcpC"
-
     # Email Notifications
-    $SMTPFrom                   = "svc-automation@2linkit.net"
-    $SmtpServer                 = "smtp-relay.brevo.com"
+    $SMTPFrom                   = "<SMTP from address>"
+    $SmtpServer                 = "<SMTP server>"
     $SMTPPort                   = 587        # or 587 / 465
     $SMTP_UseSSL                = $true    # or $false
 
     $Report_SendMail_Detailed   = $true
-    $Report_To_Detailed         = @("mok@2linkit.net")
+    $Report_To_Detailed         = @("<email address>")
 
     $Report_SendMail_Summary    = $true
-    $Report_To_Summary          = @("mok@2linkit.net")
+    $Report_To_Summary          = @("<email address>")
 
     $Mail_SendAnonymous         = $false
 
     # Consider to use an Azure Keyvault and retrieve credentials from there !
-    $SmtpUsername               = "796b0a001@smtp-brevo.com"
-    $SmtpPassword               = "jLAGgBnb84krSONY"
+    $SmtpUsername               = "<SMTP username>"
+    $SmtpPassword               = "<SMTP password>"
 
     $SecurePassword = ConvertTo-SecureString $SmtpPassword -AsPlainText -Force
     $SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
         $SmtpUsername,
         $SecurePassword
     )
-
 }
-
-
-<#
-.SYNOPSIS
-  Risk-based Security Exposure Insight (Defender Exposure Management → Risk-scored Excel report)
-
-.DESCRIPTION
-  This script executes one or more Microsoft Defender Exposure Management Advanced Hunting queries (via Microsoft Graph),
-  enriches the results with risk scoring using a CSV-driven risk model, optionally splits large queries into buckets,
-  consolidates the output into a single Excel worksheet, and (optionally) emails the report.
-
-  It is designed for a YAML-driven reporting pipeline:
-    - ExposureInsight_Reports.yaml
-        - Reports:        individual report definitions (KQL query, column mapping, output order, scopes, etc.)
-        - ReportTemplates: "master templates" that list which Reports to run
-
-  ReportTemplates.ReportsIncluded supports either:
-    1) simple string list:
-       ReportsIncluded:
-         - Device_Recommendations_Detailed_v2
-         - Azure_Recommendations_Detailed_v2
-
-    2) object list with per-report overrides (recommended):
-       ReportsIncluded:
-         - Name: Device_Recommendations_Detailed_v2
-           UseQueryBucketing: true
-           DefaultBucketCount: 2
-           BucketPlaceholderToken: "__BUCKET_FILTER__"
-         - Name: Azure_Recommendations_Detailed_v2
-           UseQueryBucketing: false
-
-  Override precedence for bucketing:
-    Template include item > Report definition (legacy fields) > Script defaults
-
-.INPUTS
-  None. The script reads:
-    - YAML settings:  $SettingsPath\$ReportSettingsFile
-    - Risk model CSV: $RiskDefinitionsCsvPath
-
-.OUTPUTS
-  Excel workbook at:
-    $OutputXlsx
-  Worksheet:
-    "RiskAnalysis" (single worksheet export, sorted by RiskScore descending)
-
-.PREREQUISITES
-  PowerShell modules (installed/importable in your environment):
-    - powershell-yaml
-    - Microsoft.Graph.Security (and your custom Connect-MicrosoftGraphPS helper)
-    - ImportExcel
-
-  Local helper modules/scripts expected under:
-    $global:PathScripts\FUNCTIONS\
-      - 2LINKIT-Functions.psm1
-      - Automation-ConnectDetails.psm1
-      - Automation-DefaultVariables.psm1
-      - Connect_Azure.ps1
-
-.AUTHENTICATION
-  Uses app + certificate authentication to Microsoft Graph via:
-    Connect-MicrosoftGraphPS -AppId -CertificateThumbprint -TenantId
-  The script will auto-reconnect to Graph if the session is older than:
-    $GraphReconnectMaxAgeMinutes
-
-.RISK SCORING MODEL
-  Risk score = (ConsequenceScore + RiskFactor_Consequence) * (ProbabilityScore + RiskFactor_Probability)
-
-  Base scores come from CSV mappings in:
-    ExposureInsight_RiskReporting.csv
-  Optional risk factor flags are read from row columns:
-    - RiskFactor_Consequence (0/1 or true/false)
-    - RiskFactor_Probability (0/1 or true/false)
-
-  If your KQL adds these columns, they will be applied automatically.
-
-.BUCKETING (OPTIONAL)
-  If bucketing is enabled and the KQL query contains the placeholder token, the script replaces that token with a generated
-  bucket filter and runs the query N times (one per bucket), then de-duplicates rows.
-
-  Default placeholder token:
-    "__BUCKET_FILTER__"
-
-  Bucket key is derived from common columns:
-    AadDeviceId, DeviceId, MachineId, AssetName, Computer, DeviceName
-
-  De-duplication key:
-    AadDeviceId | AssetName | ConfigurationId | Category | SubCategory
-#>
-
 
 
 #######################################################################################################

@@ -1,0 +1,854 @@
+AssetTagging:
+  - AssetTagName: AutomationServer--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+           or NodeLabel has "microsoft.compute/virtualmachines"
+           or NodeLabel has "microsoft.hybridcompute/machines"
+        | where NodeName has "MGMT1"
+
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Server"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+        | extend
+            confidenceHigh = iff(isnull(rawData.criticalityConfidenceHigh), dynamic([]), todynamic(rawData.criticalityConfidenceHigh)),
+            confidenceLow  = iff(isnull(rawData.criticalityConfidenceLow),  dynamic([]), todynamic(rawData.criticalityConfidenceLow))
+        | extend
+            DetectedRoles  = strcat_array(array_concat(confidenceHigh, confidenceLow), ";"),
+            osPlatform     = tostring(rawData.osPlatform),
+            osVersion      = tostring(rawData.osVersion),
+            onboardingStatus = tostring(rawData.onboardingStatus)
+
+        // Output Required Columns
+        | extend
+            deviceManualTags = iff(isnull(rawData.deviceManualTags), dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags = iff(isnull(rawData.tags.tags), dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+             AssetTags  = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "AutomationServer",
+            AssetTierLevel = 0
+        | extend    
+            AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only Assets in the output, which doesn't have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: DomainControllerDNS--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+           or NodeLabel has "microsoft.compute/virtualmachines"
+           or NodeLabel has "microsoft.hybridcompute/machines"
+
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Server"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+        | extend
+            confidenceHigh = iff(isnull(rawData.criticalityConfidenceHigh), dynamic([]), todynamic(rawData.criticalityConfidenceHigh)),
+            confidenceLow  = iff(isnull(rawData.criticalityConfidenceLow),  dynamic([]), todynamic(rawData.criticalityConfidenceLow))
+        | extend
+            DetectedRoles  = strcat_array(array_concat(confidenceHigh, confidenceLow), ";"),
+            osPlatform     = tostring(rawData.osPlatform),
+            osVersion      = tostring(rawData.osVersion),
+            onboardingStatus = tostring(rawData.onboardingStatus)
+
+        | where DetectedRoles has "DomainController"
+            or DetectedRoles has "Dns"
+
+        // Output Required Columns
+        | extend
+            deviceManualTags = iff(isnull(rawData.deviceManualTags), dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags = iff(isnull(rawData.tags.tags), dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+             AssetTags  = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "DomainControllerDNS",
+            AssetTierLevel = 0
+        | extend    
+            AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only Assets in the output, which doesn't have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: ADCertificateService--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+           or NodeLabel has "microsoft.compute/virtualmachines"
+           or NodeLabel has "microsoft.hybridcompute/machines"
+
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Server"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+        | extend
+            confidenceHigh = iff(isnull(rawData.criticalityConfidenceHigh), dynamic([]), todynamic(rawData.criticalityConfidenceHigh)),
+            confidenceLow  = iff(isnull(rawData.criticalityConfidenceLow),  dynamic([]), todynamic(rawData.criticalityConfidenceLow))
+        | extend
+            DetectedRoles  = strcat_array(array_concat(confidenceHigh, confidenceLow), ";"),
+            osPlatform     = tostring(rawData.osPlatform),
+            osVersion      = tostring(rawData.osVersion),
+            onboardingStatus = tostring(rawData.onboardingStatus)
+
+        | where DetectedRoles has "ActiveDirectoryCertificateServicesServer"
+
+        // Output Required Columns
+        | extend
+            deviceManualTags = iff(isnull(rawData.deviceManualTags), dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags = iff(isnull(rawData.tags.tags), dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+             AssetTags  = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "ADCertificateService",
+            AssetTierLevel = 0
+        | extend    
+            AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only Assets in the output, which doesn't have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+
+  - AssetTagName: EntraSyncService--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+           or NodeLabel has "microsoft.compute/virtualmachines"
+           or NodeLabel has "microsoft.hybridcompute/machines"
+
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Server"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+        | extend
+            confidenceHigh = iff(isnull(rawData.criticalityConfidenceHigh), dynamic([]), todynamic(rawData.criticalityConfidenceHigh)),
+            confidenceLow  = iff(isnull(rawData.criticalityConfidenceLow),  dynamic([]), todynamic(rawData.criticalityConfidenceLow))
+        | extend
+            DetectedRoles  = strcat_array(array_concat(confidenceHigh, confidenceLow), ";"),
+            osPlatform     = tostring(rawData.osPlatform),
+            osVersion      = tostring(rawData.osVersion),
+            onboardingStatus = tostring(rawData.onboardingStatus)
+
+        | where DetectedRoles has "EntraConnectServer"
+            or DetectedRoles has "EntraCloudSyncServer"
+            or DetectedRoles has "AzureADConnectServer"
+
+        // Output Required Columns
+        | extend
+            deviceManualTags = iff(isnull(rawData.deviceManualTags), dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags = iff(isnull(rawData.tags.tags), dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+             AssetTags  = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "DomainControllerDNS",
+            AssetTierLevel = 0
+        | extend    
+            AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only Assets in the output, which doesn't have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+
+  - AssetTagName: ServerBusinessServices--tier1--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+            or NodeLabel has "microsoft.compute/virtualmachines"
+            or NodeLabel has "microsoft.hybridcompute/machines"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Server"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+        // Output Required Columns
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+            AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "ServerBusinessServices",
+            AssetTierLevel = 1
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Exclude devices already marked Tier 0 (--tier0--SI)
+        | where AssetTags !has "--tier0--SI"
+ 
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: PAWDevices--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+            or NodeLabel has "microsoft.compute/virtualmachines"
+            or NodeLabel has "microsoft.hybridcompute/machines"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Workstation"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | where NodeName has "PAW-"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+        // Output Required Columns
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+            AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "PAWDevices",
+            AssetTierLevel = 0
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: EmployeeWorkstations--tier2--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+            or NodeLabel has "microsoft.compute/virtualmachines"
+            or NodeLabel has "microsoft.hybridcompute/machines"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Workstation"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+        // Output Required Columns
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+            AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "EmployeeWorkstations",
+            AssetTierLevel = 2
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Exclude devices already marked Tier 0 or Tier 1 (--tier0--SI & --tier1--SI)
+        | where AssetTags !has "--tier0--SI"
+        | where AssetTags !has "--tier1--SI"
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: EmployeeMobile--tier2--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+            or NodeLabel has "microsoft.compute/virtualmachines"
+            or NodeLabel has "microsoft.hybridcompute/machines"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Mobile"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+        // Output Required Columns
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+            AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "EmployeeMobile",
+            AssetTierLevel = 2
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Exclude devices already marked Tier 0 or Tier 1 (--tier0--SI & --tier1--SI)
+        | where AssetTags !has "--tier0--SI"
+        | where AssetTags !has "--tier1--SI"
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: Network_Backbone_Switch--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        let TargetSubnet = "192.168.1.0/24";
+
+        let SwitchNodes =
+            ExposureGraphNodes
+            // Filter
+            | where NodeLabel has "device"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceSubtype) == "Switch"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+            // Output Required Columns
+            | extend
+                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+            | extend
+                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+            // Extract device IDs
+            | extend entityIds_dyn = todynamic(EntityIds)
+            | mv-apply e = entityIds_dyn on (
+                summarize
+                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+            )
+            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+            // Normalize DeviceId for join
+            | extend DeviceId = DeviceInventoryId
+            | where isnotempty(DeviceId)
+
+            // Tagging logic
+            | extend
+                AssetTagType   = "AssetTier",
+                AssetTag       = "Network_Backbone_Switch",
+                AssetTierLevel = 0
+            | extend
+                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI");
+
+        SwitchNodes
+        | join kind=inner (
+            DeviceNetworkInfo
+            | mv-expand ip = IPAddresses
+            | extend
+                IPAddress    = tostring(ip.IPAddress),
+                AddressType  = tostring(ip.AddressType),
+                SubnetPrefix = tostring(ip.SubnetPrefix)
+            | where isnotempty(IPAddress)
+            | where AddressType =~ "Private"
+            | where ipv4_is_in_range(IPAddress, TargetSubnet)
+            | project DeviceId, DeviceName, NetworkAdapterName, IPAddress, AddressType, SubnetPrefix
+        ) on DeviceId
+
+        | project
+            NodeName,
+            NodeLabel,
+            DeviceId,
+            DeviceInventoryId = DeviceId,
+            IPAddress,
+            NetworkAdapterName,
+            AssetTagName,
+            AssetTags
+        | distinct NodeName, NodeLabel, DeviceId, DeviceInventoryId, IPAddress, NetworkAdapterName, AssetTagName, AssetTags
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: Network_Backbone_Router--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        let TargetSubnet = "192.168.1.0/24";
+
+        let SwitchNodes =
+            ExposureGraphNodes
+            // Filter
+            | where NodeLabel has "device"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceSubtype) == "Router"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+            // Output Required Columns
+            | extend
+                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+            | extend
+                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+            // Extract device IDs
+            | extend entityIds_dyn = todynamic(EntityIds)
+            | mv-apply e = entityIds_dyn on (
+                summarize
+                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+            )
+            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+            // Normalize DeviceId for join
+            | extend DeviceId = DeviceInventoryId
+            | where isnotempty(DeviceId)
+
+            // Tagging logic
+            | extend
+                AssetTagType   = "AssetTier",
+                AssetTag       = "Network_Backbone_Router",
+                AssetTierLevel = 0
+            | extend
+                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI");
+
+        SwitchNodes
+        | join kind=inner (
+            DeviceNetworkInfo
+            | mv-expand ip = IPAddresses
+            | extend
+                IPAddress    = tostring(ip.IPAddress),
+                AddressType  = tostring(ip.AddressType),
+                SubnetPrefix = tostring(ip.SubnetPrefix)
+            | where isnotempty(IPAddress)
+            | where AddressType =~ "Private"
+            | where ipv4_is_in_range(IPAddress, TargetSubnet)
+            | project DeviceId, DeviceName, NetworkAdapterName, IPAddress, AddressType, SubnetPrefix
+        ) on DeviceId
+
+        | project
+            NodeName,
+            NodeLabel,
+            DeviceId,
+            DeviceInventoryId = DeviceId,
+            IPAddress,
+            NetworkAdapterName,
+            AssetTagName,
+            AssetTags
+        | distinct NodeName, NodeLabel, DeviceId, DeviceInventoryId, IPAddress, NetworkAdapterName, AssetTagName, AssetTags
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: Network_Backbone_Management--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        let TargetSubnet = "192.168.1.0/24";
+
+        let SwitchNodes =
+            ExposureGraphNodes
+            // Filter
+            | where NodeLabel has "device"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceSubtype) == "MonitoringServer"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+            // Output Required Columns
+            | extend
+                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+            | extend
+                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+            // Extract device IDs
+            | extend entityIds_dyn = todynamic(EntityIds)
+            | mv-apply e = entityIds_dyn on (
+                summarize
+                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+            )
+            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+            // Normalize DeviceId for join
+            | extend DeviceId = DeviceInventoryId
+            | where isnotempty(DeviceId)
+
+            // Tagging logic
+            | extend
+                AssetTagType   = "AssetTier",
+                AssetTag       = "Network_Backbone_Management",
+                AssetTierLevel = 0
+            | extend
+                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI");
+
+        SwitchNodes
+        | join kind=inner (
+            DeviceNetworkInfo
+            | mv-expand ip = IPAddresses
+            | extend
+                IPAddress    = tostring(ip.IPAddress),
+                AddressType  = tostring(ip.AddressType),
+                SubnetPrefix = tostring(ip.SubnetPrefix)
+            | where isnotempty(IPAddress)
+            | where AddressType =~ "Private"
+            | where ipv4_is_in_range(IPAddress, TargetSubnet)
+            | project DeviceId, DeviceName, NetworkAdapterName, IPAddress, AddressType, SubnetPrefix
+        ) on DeviceId
+
+        | project
+            NodeName,
+            NodeLabel,
+            DeviceId,
+            DeviceInventoryId = DeviceId,
+            IPAddress,
+            NetworkAdapterName,
+            AssetTagName,
+            AssetTags
+        | distinct NodeName, NodeLabel, DeviceId, DeviceInventoryId, IPAddress, NetworkAdapterName, AssetTagName, AssetTags
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: Network_WLANAccessPoint--tier2--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+        // Filter
+        | where NodeLabel has "device"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceSubtype) == "WLANAccessPoint"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+        // Output Required Columns
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+            AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+        // Extract device IDs
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging logic
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "Network_WLANAccessPoint",
+            AssetTierLevel = 2
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+
+  - AssetTagName: IoT--tier3--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+            ExposureGraphNodes
+            // Filter
+            | where NodeLabel has "device"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceCategory) == "IoT"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+            // Output Required Columns
+            | extend
+                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+            | extend
+                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+            // Extract device IDs
+            | extend entityIds_dyn = todynamic(EntityIds)
+            | mv-apply e = entityIds_dyn on (
+                summarize
+                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+            )
+            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+            // Tagging logic
+            | extend
+                AssetTagType   = "AssetTier",
+                AssetTag       = "IoT",
+                AssetTierLevel = 3
+            | extend
+                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+
+            // Show only assets that don't already have the tag
+            | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+            // Only assets missing the intended Tier 1 tag
+            | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+  - AssetTagName: AzPlatformManagementSub--tier0--SI
+    Mode: Prod
+    QueryEngine: AzureResourceGraph
+    Query:
+      - |
+        resourcecontainers
+        | where type == "microsoft.resources/subscriptions"
+        | join kind=inner (
+            resources
+            | where type == "microsoft.operationsmanagement/solutions"
+            | where name startswith "SecurityInsights("
+            | project subscriptionId
+            | distinct subscriptionId
+        ) on subscriptionId
+        | extend
+            Tag_AssetTier = tostring(tags["AssetTier"])
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "AzPlatformManagementSub",
+            AssetTierLevel = 0
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        | project
+            subscriptionId,
+            subscriptionName = name,
+            Tag_AssetTier,
+            AssetTagType,
+            AssetTag,
+            AssetTierLevel,
+            AssetTagName,
+            id
+        | order by subscriptionId asc
+        | where Tag_AssetTier != AssetTagName
+
+
+  - AssetTagName: AzPlatformManagementResources--tier0--SI
+    Mode: Prod
+    QueryEngine: AzureResourceGraph
+    Query:
+      - |
+        resources
+        | join kind=inner (
+            resources
+            | where type == "microsoft.operationsmanagement/solutions"
+            | where name startswith "SecurityInsights("
+            | project subscriptionId
+            | distinct subscriptionId
+        ) on subscriptionId
+        | extend Tag_AssetTier = tostring(tags["AssetTier"])
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "AzPlatformManagementResources",
+            AssetTierLevel = 0
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        | project
+            subscriptionId,
+            resourceGroup,
+            name,
+            resourceType = type,
+            location,
+            Tag_AssetTier,
+            AssetTagType,
+            AssetTag,
+            AssetTierLevel,
+            AssetTagName,
+            id
+        | order by subscriptionId asc, resourceType asc, resourceGroup asc, name asc
+        | where Tag_AssetTier != AssetTagName
+
+  - AssetTagName: AzCAFHubPlatformSub--tier0--SI
+    Mode: Prod
+    QueryEngine: AzureResourceGraph
+    Query:
+      - |
+        resourcecontainers
+        | where type == "microsoft.resources/subscriptions"
+        | where properties.managementGroupAncestorsChain has "mg-platform"
+        | extend Tag_AssetTier = tostring(tags["AssetTier"])
+        | extend
+            AssetTagType   = "AssetTier",
+            AssetTag       = "AzCAFHubPlatformSub--tier0--SI",
+            AssetTierLevel = 0
+        | extend AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        | project
+            subscriptionId,
+            subscriptionName = name,
+            Tag_AssetTier,
+            AssetTagType,
+            AssetTag,
+            AssetTierLevel,
+            AssetTagName,
+            id
+        //| where Tag_AssetTier != AssetTagName
+        | order by subscriptionId asc

@@ -24,8 +24,6 @@ Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
 
-$AutomationFramework = $false    # Must be set fo $false when you test this out ! Solution can also be integrated with Morten Knudsen's automation framework !
-
 If (!($AutomationFramework)) {
 
     <# PRE-REQ: ONBOARDING OF SERVICE PRINCIPAL IN ENTRA

@@ -1,5 +1,5 @@
 ﻿param(
-  [Parameter(Mandatory=$true)]
+  [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [string] $ReportTemplate,
 
@@ -18,12 +18,16 @@
   [Parameter(Mandatory=$false)]
   [switch] $AutomationFramework,
 
-  [Parameter(Mandatory=$true)]
+  [Parameter(Mandatory=$false)]
   [string] $SettingsPath,
 
   [Parameter(Mandatory=$false)]
-  [switch] $BuildSummaryByAI
+  [switch] $BuildSummaryByAI,
+
+  [Parameter(Mandatory=$false)]
+  [string] $AI_Uri
 )
+
 
 #------------------------------------------------------------------------------------------------ 
 Write-host "***********************************************************************************************"
@@ -76,7 +80,49 @@ function Ensure-Module {
   if (-not (Get-Module -ListAvailable -Name $Name)) {
     Write-Step ("Installing module $($Name)...")
     Install-Module $Name -Scope AllUsers -Force -AllowClobber
+  } else {
+    Write-Step ("Validating module $($Name)...")
   }
+}
+
+function Resolve-AssetNamesForRow {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)] $Row,
+        [Parameter()][string] $AssetsText
+    )
+
+    # 1) Summary mode path: parse ImpactedAssets text (json array or comma list)
+    if (-not [string]::IsNullOrWhiteSpace($AssetsText)) {
+        $list = Split-ImpactedAssets -AssetsText $AssetsText
+        if ($list -and @($list).Count -gt 0) { return @($list) }
+    }
+
+    # 2) Detailed mode path: one asset per row in a dedicated column
+    $fallback = Get-RowValue -Row $Row -Names @(
+        "AssetName",
+        "DeviceName",
+        "Device",
+        "MachineName",
+        "Computer",
+        "HostName",
+        "DnsName",
+        "FQDN",
+        "Endpoint",
+        "Asset"
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($fallback)) {
+        # handle cases where detailed column accidentally contains multiple values separated by ; or ,
+        $val = $fallback.Trim()
+        if ($val -match '[,;]') {
+            $parts = @($val -split '\s*[,;]\s*' | Where-Object { $_ -and $_.Trim() })
+            return @($parts | ForEach-Object { $_.Trim() } | Select-Object -Unique)
+        }
+        return @($val)
+    }
+
+    return @()
 }
 
 # ===== reset helper (delete workbook at start when OverwriteXlsx is true) =====
@@ -980,11 +1026,13 @@ function Send-MailSecure {
 }
 
 function Test-AzModuleInstalled {
-    return @(Get-Module -ListAvailable | Where-Object { $_.Name -like 'Az.*' }).Count -gt 0
+    Write-Step "Validating Az modules"
+    return $null -ne (Get-Module -ListAvailable -Name 'Az.Accounts' -ErrorAction SilentlyContinue)
 }
 
 function Test-MicrosoftGraphInstalled {
-    return @(Get-Module -ListAvailable | Where-Object { $_.Name -like 'Microsoft.Graph.*' }).Count -gt 0
+    Write-Step "Validating Microsoft Graph modules"
+    return $null -ne (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue)
 }
 
 
@@ -1740,15 +1788,26 @@ if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
             $confName    = Get-RowValue -Row $r -Names @("ConfigurationName", "RecommendationName", "FindingName", "Title", "Name")
             $confId      = Get-RowValue -Row $r -Names @("ConfigurationId", "RecommendationId", "FindingId", "Id")
             $devices     = Get-RowValue -Row $r -Names @("Devices", "DeviceCount", "ImpactedDevices")
+
+            # Summary mode usually has ImpactedAssets; Detailed mode often doesn't
             $assetsText  = Get-RowValue -Row $r -Names @("ImpactedAssets", "Assets", "AffectedAssets", "Machines")
 
             $findingLines += ("[{0}] RiskScore={1}; Tier={2}; Severity={3}; Domain={4}; Config={5} [{6}]; Category={7}/{8}; Devices={9}; ImpactedAssets={10}" -f `
                 $i, $riskScoreText, $tierLevel, $severity, $domain, $confName, $confId, $category, $subcat, $devices, $assetsText)
 
-            $assetList = Split-ImpactedAssets -AssetsText $assetsText
-            foreach ($a in $assetList) {
-                Add-AssetAgg -Asset $a -RiskScore $riskScore -TierLevel $tierLevel -Severity $severity -Domain $domain `
-                    -Category $category -Subcat $subcat -ConfName $confName -ConfId $confId
+            # NEW: resolves assets for BOTH summary + detailed
+            $assetList = Resolve-AssetNamesForRow -Row $r -AssetsText $assetsText
+
+            # If still empty, skip aggregation for this row (but keep findingLines for traceability)
+            if ($assetList -and @($assetList).Count -gt 0) {
+                foreach ($a in $assetList) {
+                    Add-AssetAgg -Asset $a -RiskScore $riskScore -TierLevel $tierLevel -Severity $severity -Domain $domain `
+                        -Category $category -Subcat $subcat -ConfName $confName -ConfId $confId
+                }
+            }
+            else {
+                # Optional: enable if you want visibility into rows that cannot be tied to an asset
+                Write-Warn2 ("AI rollup: no asset resolved for row {0}. Config={1} [{2}]" -f $i, $confName, $confId)
             }
         }
 
@@ -1855,7 +1914,7 @@ Rules:
                 stream = $true
                 temperature = 0.2
                 top_p = 1.0
-                max_tokens = 16000
+                max_tokens = 16384
                 messages = @(
                     @{
                         role = "system"

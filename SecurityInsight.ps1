@@ -1578,19 +1578,13 @@ Write-Ok ("excel file ready: {0}" -f $OutputXlsx)
 # BUILD AI SUMMARY CONTEXT (based on the final shaped + sorted export rows)
 #########################################################################################################
 
-$AI_apiKey     = "Eet1UxphX9YsHncQ98vS51jAUX0xwO3l9FqcKn95zhfuQVhisUw3JQQJ99BEAC5RqLJXJ3w3AAABACOGPGBy"
-$AI_endpoint   = "https://pim-role-advisor.openai.azure.com"
-$AI_deployment = "gpt-4o-mini"
-$AI_apiVersion = "2024-12-01-preview"
-$AI_uri        = "$AI_endpoint/openai/deployments/$AI_deployment/chat/completions?api-version=$AI_apiVersion"
-
-Write-Host "[AI] URI = $AI_uri"
-if ($AI_uri -notmatch '^https?://') { throw "[AI] URI is not absolute: $AI_uri" }
-
-# Make sure we always have a variable for mail body usage
-$AI_SummaryText = ""
-
 if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
+
+    Write-Host "[AI] URI = $AI_uri"
+    if ($AI_uri -notmatch '^https?://') { throw "[AI] URI is not absolute: $AI_uri" }
+
+    # Make sure we always have a variable for mail body usage
+    $AI_SummaryText = ""
 
     Write-Section "AI summary"
 

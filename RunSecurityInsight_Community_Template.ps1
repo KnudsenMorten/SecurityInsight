@@ -135,10 +135,17 @@ else {
 If ($BuildSummaryByAI) {
 
     # AI (explicit values; keep as-is if you want, but consider storing secrets elsewhere)
+
+    #-------- API Info - BEGIN --------
     $AI_apiKey     = ""   # sample: "xxxxxxxxxxxxxxxxxxxxx"
     $AI_endpoint   = ""   # sample: "https://xxxxx.openai.azure.com"
     $AI_deployment = ""   # sample: "security-insight"
     $AI_apiVersion = ""   # sample: "2025-01-01-preview"
+    #-------- API Info - END --------
+
+
+    #----------------- Do NOT remove !! ----------------------
+    $AI_uri = "$AI_endpoint/openai/deployments/$AI_deployment/chat/completions?api-version=$AI_apiVersion"
 }
 
 
@@ -184,7 +191,10 @@ if ($Detailed)           { $Params.Detailed = $true }
 if ($SendMail)           { $Params.Sendmail = $true }
 if ($MailTo)             { $Params.MailTo = $MailTo }
 if ($ReportTemplate)     { $Params.ReportTemplate = $ReportTemplate }
-if ($BuildSummaryByAI)   { $Params.BuildSummaryByAI = $true }
+if ($BuildSummaryByAI) { 
+    $Params.BuildSummaryByAI = $true 
+    $Params.AI_Uri = $AI_uri
+}
 
 # dot-source the script so ALL variables above remain available to the called script
 . $ScriptPath @Params

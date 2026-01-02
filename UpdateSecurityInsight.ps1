@@ -11,7 +11,7 @@ $Files = @("SecurityInsight.ps1",`
            "RunCriticalAssetTagging.ps1",`
            "RunSecurityInsight.ps1",`
            "CriticalAssetTaggingMaintenance.ps1" `
-           )
+          )
 
 Write-Host "SecurityInsight"
 Write-Host "Created by Morten Knudsen, Microsoft MVP (@knudsenmortendk - mok@mortenknudsen.net)"

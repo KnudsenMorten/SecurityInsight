@@ -3,6 +3,10 @@
   [Parameter(Mandatory=$false)]
     [ValidateSet('PROD','TEST')]
     [string[]] $Scope,
+
+  [Parameter(Mandatory=$true)]
+  [string] $SettingsPath,
+
   [Parameter(Mandatory=$false)]
     [switch] $AutomationFramework
 )
@@ -13,33 +17,6 @@ Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
 
-
-If (!($AutomationFramework)) {
-
-    <# PRE-REQ: ONBOARDING OF SERVICE PRINCIPAL IN ENTRA
-        # SPN Privilege (API permissions) - found under 'APIs my organization uses'. Remember: Grant Admin Control
-            Microsoft Threat Protection
-                AdvancedHunting.Read.All   (to run queries against Exposure Graph)
-
-            Microsoft Graph
-                ThreatHunting.Read.All     (to run queries against Exposure Graph)
-
-            WindowsDefenderATP
-                Machine.ReadWrite.All      (to set tag info on device)
-    #>
-
-    $SettingsPath               = "c:\scripts\securityinsights"
-
-    $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
-    $global:SpnClientId         = "<APP/CLIENT ID GUID>"
-    $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
-}
-
-# Script-default scope (used ONLY when -Scope is not provided)
-# Keep ONE definition only (you had two). Set what you want as default:
-$ScriptDefaultScope = @('PROD','TEST')  # change to @('PROD','TEST') to run both by default
-
-
 #######################################################################################################
 # FUNCTIONS (begin)
 #######################################################################################################
@@ -48,11 +25,9 @@ function Ensure-Module {
   param([string]$Name)
   if (-not (Get-Module -ListAvailable -Name $Name)) {
     Write-Step ("Installing module $($Name)...")
-    Install-Module $Name -Scope CurrentUser -Force -AllowClobber
+    Install-Module $Name -Scope AllUsers -Force -AllowClobber
     Write-Done ("Installed module $($Name).")
   }
-  Import-Module $Name -ErrorAction Stop
-  Write-Info ("Imported module $($Name).")
 }
 
 function Connect-GraphHighPriv {
@@ -392,6 +367,13 @@ function Add-AzureResourceTag {
     }
 }
 
+function Test-AzModuleInstalled {
+    return @(Get-Module -ListAvailable | Where-Object { $_.Name -like 'Az.*' }).Count -gt 0
+}
+
+function Test-MicrosoftGraphInstalled {
+    return @(Get-Module -ListAvailable | Where-Object { $_.Name -like 'Microsoft.Graph.*' }).Count -gt 0
+}
 
 #####################################################################################################
 # POWERSHEL MODULE VALIDATION
@@ -399,11 +381,21 @@ function Add-AzureResourceTag {
 
 Write-Step "initializing"
 
+if (-not (Test-AzModuleInstalled)) {
+    Write-Step "Installing Az modules ... Please Wait !"
+    Install-Module Az -Scope AllUsers -Force -AllowClobber
+}
+
+if (-not (Test-MicrosoftGraphInstalled)) {
+    Write-Step "Installing Microsoft Graph modules ... Please Wait !"
+    Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
+}
+
 Ensure-Module Az.Accounts
-Ensure-Module Az.ResourceGraph
 Ensure-Module Az.Resources
-Ensure-Module Microsoft.Graph.Authentication
+Ensure-Module Az.ResourceGraph
 Ensure-Module Microsoft.Graph.Security
+Ensure-Module MicrosoftGraphPS
 Ensure-Module ImportExcel
 Ensure-Module powershell-yaml
 
@@ -479,8 +471,6 @@ if ($AutomationFramework) {
     Write-Step "acquiring Defender API auth headers"
     $AccessHeaders = Get-DefenderAccessHeaders
 
-    $SettingsPath           = "$($global:PathScripts)\SecurityInsights"
-
 } Else {
 
     #----------------------
@@ -538,11 +528,6 @@ if ($AutomationFramework) {
 #####################################################################################################
 
 # ================= Scope handling ==================
-
-# If user did not pass -Scope (or passed empty), use script default
-if (-not $PSBoundParameters.ContainsKey('Scope') -or $null -eq $Scope -or @($Scope).Count -eq 0) {
-    $Scope = $ScriptDefaultScope
-}
 
 # Normalize (unique + uppercase)
 $Scope = @(

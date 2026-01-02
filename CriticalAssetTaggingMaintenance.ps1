@@ -1,8 +1,7 @@
 ﻿param(
-    # Which YAML rule Modes to run (PROD, TEST, or both)
-  [Parameter(Mandatory=$false)]
-    [ValidateSet('PROD','TEST')]
-    [string[]] $Scope,
+  [Parameter(Mandatory=$true)]
+  [string] $SettingsPath,
+
   [Parameter(Mandatory=$false)]
     [switch] $AutomationFramework
 )
@@ -12,32 +11,6 @@ Write-host "Critical Asset Tagging using YAML-file"
 Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
-
-
-If (!($AutomationFramework)) {
-
-    <# PRE-REQ: ONBOARDING OF SERVICE PRINCIPAL IN ENTRA
-        # SPN Privilege (API permissions) - found under 'APIs my organization uses'. Remember: Grant Admin Control
-            Microsoft Threat Protection
-                AdvancedHunting.Read.All   (to run queries against Exposure Graph)
-
-            Microsoft Graph
-                ThreatHunting.Read.All     (to run queries against Exposure Graph)
-
-            WindowsDefenderATP
-                Machine.ReadWrite.All      (to set tag info on device)
-    #>
-
-    $SettingsPath               = "c:\scripts\securityinsights"
-
-    $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
-    $global:SpnClientId         = "<APP/CLIENT ID GUID>"
-    $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
-}
-
-# Script-default scope (used ONLY when -Scope is not provided)
-# Keep ONE definition only (you had two). Set what you want as default:
-$ScriptDefaultScope = @('PROD','TEST')  # change to @('PROD','TEST') to run both by default
 
 
 #######################################################################################################
@@ -478,8 +451,6 @@ if ($AutomationFramework) {
     # ================= Defender Headers =================
     Write-Step "acquiring Defender API auth headers"
     $AccessHeaders = Get-DefenderAccessHeaders
-
-    $SettingsPath           = "$($global:PathScripts)\SecurityInsights"
 
 } Else {
 

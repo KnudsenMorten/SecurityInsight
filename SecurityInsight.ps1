@@ -1,5 +1,5 @@
 ﻿param(
-  [Parameter(Mandatory=$false)]
+  [Parameter(Mandatory=$true)]
   [ValidateNotNullOrEmpty()]
   [string] $ReportTemplate,
 
@@ -10,7 +10,19 @@
   [switch] $Summary,
 
   [Parameter(Mandatory=$false)]
-  [switch] $AutomationFramework
+  [switch] $SendMail,
+
+  [Parameter(Mandatory=$false)]
+  [string[]] $MailTo,
+
+  [Parameter(Mandatory=$false)]
+  [switch] $AutomationFramework,
+
+  [Parameter(Mandatory=$true)]
+  [string] $SettingsPath,
+
+  [Parameter(Mandatory=$false)]
+  [switch] $BuildSummaryByAI
 )
 
 #------------------------------------------------------------------------------------------------ 
@@ -24,52 +36,17 @@ Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
 
-If (!($AutomationFramework)) {
+if (-not $PSBoundParameters.ContainsKey('SettingsPath') -or [string]::IsNullOrWhiteSpace($SettingsPath)) {
 
-    <# PRE-REQ: ONBOARDING OF SERVICE PRINCIPAL IN ENTRA
-        # SPN Privilege (API permissions) - found under 'APIs my organization uses'. Remember: Grant Admin Control
-            Microsoft Threat Protection
-                AdvancedHunting.Read.All   (to run queries against Exposure Graph)
-
-            Microsoft Graph
-                ThreatHunting.Read.All     (to run queries against Exposure Graph)
-
-            WindowsDefenderATP
-                Machine.ReadWrite.All      (to set tag info on device)
-    #>
-
-    $SettingsPath               = "c:\scripts\securityinsights"
-    $DefaultReportTemplate      = "RiskAnalysis_Summary_v2"
-
-    $OverwriteXlsx              = $true      # Overwrite existing Excel file if true
-
-    $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
-    $global:SpnClientId         = "<APP/CLIENT ID GUID>"
-    $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
-
-    # Email Notifications
-    $SMTPFrom                   = "<SMTP from address>"
-    $SmtpServer                 = "<SMTP server>"
-    $SMTPPort                   = 587        # or 587 / 465
-    $SMTP_UseSSL                = $true    # or $false
-
-    $Report_SendMail_Detailed   = $true
-    $Report_To_Detailed         = @("<email address>")
-
-    $Report_SendMail_Summary    = $true
-    $Report_To_Summary          = @("<email address>")
-
-    $Mail_SendAnonymous         = $false
-
-    # Consider to use an Azure Keyvault and retrieve credentials from there !
-    $SmtpUsername               = "<SMTP username>"
-    $SmtpPassword               = "<SMTP password>"
-
-    $SecurePassword = ConvertTo-SecureString $SmtpPassword -AsPlainText -Force
-    $SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
-        $SmtpUsername,
-        $SecurePassword
-    )
+    if (-not [string]::IsNullOrWhiteSpace($SettingsPath_Default)) {
+        # Default value is enabled
+        $SettingsPath = $SettingsPath_Default
+    }
+    else {
+        # Default not enabled -> run from where the script was started
+        # (wrapper script location)
+        $SettingsPath = $PSScriptRoot
+    }
 }
 
 
@@ -86,15 +63,20 @@ function Write-Err2   ($msg){ Write-Host ("[ERR]  {0}" -f $msg) -ForegroundColor
 function Tick { param([string]$Label="") if($script:_sw){ $script:_sw.Stop(); Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds); $script:_sw=$null } }
 function Tock { $script:_sw = [System.Diagnostics.Stopwatch]::StartNew() }
 
+
+function Ensure-Directory {
+  param([Parameter(Mandatory)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) {
+    New-Item -ItemType Directory -Path $Path -Force | Out-Null
+  }
+}
+
 function Ensure-Module {
   param([string]$Name)
   if (-not (Get-Module -ListAvailable -Name $Name)) {
     Write-Step ("Installing module $($Name)...")
-    Install-Module $Name -Scope CurrentUser -Force -AllowClobber
-    Write-Done ("Installed module $($Name).")
+    Install-Module $Name -Scope AllUsers -Force -AllowClobber
   }
-  Import-Module $Name -ErrorAction Stop
-  Write-Info ("Imported module $($Name).")
 }
 
 # ===== reset helper (delete workbook at start when OverwriteXlsx is true) =====
@@ -205,6 +187,42 @@ function Invoke-GraphHuntingQuery {
         }
     }
 }
+
+function Export-AISummaryWorksheet {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path,
+    [Parameter(Mandatory)][string]$SheetName,
+    [Parameter(Mandatory)][string]$SummaryText
+  )
+
+  # Normalize line endings and split into rows so it’s readable in Excel
+  $text = ($SummaryText -replace "`r`n", "`n" -replace "`r", "`n").Trim()
+  if ([string]::IsNullOrWhiteSpace($text)) { $text = "No AI summary output was produced." }
+
+  $lines = @($text -split "`n")
+  $rows = for ($i=0; $i -lt $lines.Count; $i++) {
+    [pscustomobject]@{
+      LineNo = ($i + 1)
+      Text   = $lines[$i]
+    }
+  }
+
+  $safeSheet = $SheetName.Substring(0, [Math]::Min(31, $SheetName.Length)) -replace '[:\\/?*\[\]]','_'
+  $tableName = ($safeSheet -replace '\W','_')
+
+  $excel = $rows | Export-Excel -Path $Path -WorksheetName $safeSheet -TableStyle 'Medium9' `
+    -TableName $tableName -AutoFilter -FreezeTopRow -BoldTopRow -ClearSheet -PassThru
+
+  $ws = $excel.Workbook.Worksheets[$safeSheet]
+  $ws.Cells.AutoFitColumns()
+  for ($col = 1; $col -le $ws.Dimension.Columns; $col++) {
+    if ($ws.Column($col).Width -gt 90) { $ws.Column($col).Width = 90 }
+  }
+
+  Close-ExcelPackage $excel
+}
+
 
 function New-BucketFilterKql {
     param(
@@ -528,7 +546,6 @@ function Calculate-RiskScore {
         $SecurityDomainInputName = $RiskIndex.SecurityDomainColumn
     }
 
-    # Normalize Rows to a safe array (never null)
     if ($null -eq $Rows) { return @() }
     $rowsArr = @()
     foreach ($r in $Rows) { if ($null -ne $r) { $rowsArr += ,$r } }
@@ -563,17 +580,14 @@ function Calculate-RiskScore {
         $probAdj = ([double]$probBase.Score) + ([double]$rfProb)
         $risk    = $consAdj * $probAdj
 
-        # Clone original row properties to ordered hashtable
         $tmp = [ordered]@{}
         foreach ($p in $r.PSObject.Properties) { $tmp[$p.Name] = $p.Value }
 
-        # Write computed fields
         $tmp[$SecurityDomainInputName]        = $domainValue
         $tmp[$RiskConsequenceScoreOutputName] = [double]$consAdj
         $tmp[$RiskProbabilityScoreOutputName] = [double]$probAdj
         $tmp[$RiskScoreOutputName]            = [double]$risk
 
-        # Also expose normalized risk factors with consistent names
         if (-not $tmp.Contains('RiskFactor_Consequence')) { $tmp['RiskFactor_Consequence'] = [int]$rfCons }
         if (-not $tmp.Contains('RiskFactor_Probability')) { $tmp['RiskFactor_Probability'] = [int]$rfProb }
 
@@ -589,12 +603,10 @@ function Calculate-RiskScore {
 
     Write-Progress -Id 2 -Activity "Calculating Risk Scores" -Completed
 
-    # ---- FIX: finalize output safely in PS 5.1 (no @($out) casting) ----
     $finalOut = $null
     try {
         $finalOut = [object[]]$out.ToArray()
     } catch {
-        # fallback (very defensive)
         $tmpList = New-Object System.Collections.Generic.List[object]
         foreach ($x in $out) { $tmpList.Add($x) | Out-Null }
         $finalOut = [object[]]$tmpList.ToArray()
@@ -623,9 +635,8 @@ function Filter-ObjectsByColumn {
     [switch] $CaseInsensitive
   )
 
-  # Always return an array
   if ($null -eq $InputObject -or $InputObject.Count -eq 0) { return @() }
-  if ($null -eq $InScopeData -or $InScopeData.Count -eq 0) { return @($InputObject) }  # no scope -> pass-through
+  if ($null -eq $InScopeData -or $InScopeData.Count -eq 0) { return @($InputObject) }
 
   function _Normalize([object] $val, [bool] $ci) {
     if ($null -eq $val) { return $null }
@@ -647,16 +658,13 @@ function Filter-ObjectsByColumn {
 
     if ($null -eq $obj) { continue }
 
-    # ---- FIX: if column missing on object, KEEP the object (avoid filtering-to-zero on mismatch) ----
     if (-not ($obj.PSObject.Properties.Name -contains $ColumnToFilter)) {
       $out.Add($obj) | Out-Null
       continue
     }
-    # --------------------------------------------------------------------------------------------
 
     $val = $obj.$ColumnToFilter
 
-    # Build candidate list
     $candidates = @()
     if ($null -eq $val) {
       $candidates = @()
@@ -971,6 +979,14 @@ function Send-MailSecure {
     Send-MailMessage @params
 }
 
+function Test-AzModuleInstalled {
+    return @(Get-Module -ListAvailable | Where-Object { $_.Name -like 'Az.*' }).Count -gt 0
+}
+
+function Test-MicrosoftGraphInstalled {
+    return @(Get-Module -ListAvailable | Where-Object { $_.Name -like 'Microsoft.Graph.*' }).Count -gt 0
+}
+
 
 #####################################################################################################
 # POWERSHEL MODULE VALIDATION
@@ -978,11 +994,21 @@ function Send-MailSecure {
 
 Write-Step "initializing"
 
+if (-not (Test-AzModuleInstalled)) {
+    Write-Step "Installing Az modules ... Please Wait !"
+    Install-Module Az -Scope AllUsers -Force -AllowClobber
+}
+
+if (-not (Test-MicrosoftGraphInstalled)) {
+    Write-Step "Installing Microsoft Graph modules ... Please Wait !"
+    Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
+}
+
 Ensure-Module Az.Accounts
-Ensure-Module Az.ResourceGraph
 Ensure-Module Az.Resources
-Ensure-Module Microsoft.Graph.Authentication
+Ensure-Module Az.ResourceGraph
 Ensure-Module Microsoft.Graph.Security
+Ensure-Module MicrosoftGraphPS
 Ensure-Module ImportExcel
 Ensure-Module powershell-yaml
 
@@ -1059,20 +1085,9 @@ if ($AutomationFramework) {
     # Output File
     #------------------------------------------------------------------------------------------------------------
 
-    $DefaultReportTemplate = "RiskAnalysis_Summary_v2"
-
-    # If cmdline -ReportTemplate is provided, it wins. Otherwise use the internal default.
-    if (-not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
-      Write-Info "ReportTemplate override from command line: $ReportTemplate"
-    } else {
-      $ReportTemplate = $DefaultReportTemplate
-      Write-Info "ReportTemplate not provided on command line. Using default: $ReportTemplate"
-    }
-
-    Write-Info "Chosen ReportTemplate: $ReportTemplate"
-
-    $OutputXlsx     = "$global:PathScripts\OUTPUT\$ReportTemplate.xlsx"
-    $OverwriteXlsx  = $true      # Overwrite existing Excel file if true
+    $OutputDir  = Join-Path $global:PathScripts 'OUTPUT'
+    Ensure-Directory -Path $OutputDir
+    $OutputXlsx = Join-Path $OutputDir ("{0}.xlsx" -f $ReportTemplate)
 
     #------------------------------------------------------------------------------------------------------------
     # Mail routing (Summary vs Detailed)
@@ -1105,7 +1120,6 @@ if ($AutomationFramework) {
     # ExposureInsight settings
     #------------------------------------------------------------------------------------------------------------
 
-    $SettingsPath           = "$($global:PathScripts)\SecurityInsights"
     $ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
     $RiskDefinitionsCsvPath = "$SettingsPath\SecurityInsight_RiskIndex.csv"
 
@@ -1161,14 +1175,6 @@ if ($AutomationFramework) {
     # Output File
     #------------------------------------------------------------------------------------------------------------
 
-    # If cmdline -ReportTemplate is provided, it wins. Otherwise use the internal default.
-    if (-not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
-      Write-Info "ReportTemplate override from command line: $ReportTemplate"
-    } else {
-      $ReportTemplate = $DefaultReportTemplate
-      Write-Info "ReportTemplate not provided on command line. Using default: $ReportTemplate"
-    }
-
     Write-Info "Chosen ReportTemplate: $ReportTemplate"
 
 
@@ -1176,26 +1182,8 @@ if ($AutomationFramework) {
     # Mail routing (Summary vs Detailed)
     #------------------------------------------------------------------------------------------------------------
 
-    if ($Detailed -and $Summary) {
-      throw "Invalid parameters: Use only one of -Detailed or -Summary."
-    }
-
-    if ($Detailed) {
-      Write-Info "Mail mode selected: Detailed"
-      $Report_SendMail = $Report_SendMail_Detailed
-      $Report_To       = $Report_To_Detailed
-    }
-    elseif ($Summary) {
-      Write-Info "Mail mode selected: Summary"
-      $Report_SendMail = $Report_SendMail_Summary
-      $Report_To       = $Report_To_Summary
-    }
-    else {
-      # Default behavior (keep what you want as default)
-      Write-Info "Mail mode selected: Default (no -Detailed/-Summary provided)"
-      $Report_SendMail = $Report_SendMail_Detailed
-      $Report_To       = $Report_To_Detailed
-    }
+      $Report_SendMail = $SendMail
+      $Report_To       = $MailTo
 
     Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $Report_SendMail, ($Report_To -join ', '))
 
@@ -1203,7 +1191,9 @@ if ($AutomationFramework) {
     # ExposureInsight settings
     #------------------------------------------------------------------------------------------------------------
 
-    $OutputXlsx             = $SettingsPath + "\" + "$ReportTemplate.xlsx"
+    $OutputDir  = Join-Path $SettingsPath 'OUTPUT'
+    Ensure-Directory -Path $OutputDir
+    $OutputXlsx = Join-Path $OutputDir ("{0}.xlsx" -f $ReportTemplate)
 
     $ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
     $RiskDefinitionsCsvPath = "$SettingsPath\SecurityInsight_RiskIndex.csv"
@@ -1570,7 +1560,7 @@ if ($AllShapedRows.Count -eq 0) {
     Write-Step "exporting to excel (single write)"
     Write-Info ("path: {0}" -f $OutputXlsx)
     Tock
-    Export-Worksheet -Path $OutputXlsx -SheetName 'RiskAnalysis' `
+    Export-Worksheet -Path $OutputXlsx -SheetName 'Details' `
       -Rows @($final) `
       -SortColumn $FinalRiskScoreColumnName -SortDescending `
       -DesiredColumns $FinalDesiredColumns `
@@ -1583,6 +1573,385 @@ if ($AllShapedRows.Count -eq 0) {
 Write-Host ""
 Write-Ok ("excel file ready: {0}" -f $OutputXlsx)
 
+
+#########################################################################################################
+# BUILD AI SUMMARY CONTEXT (based on the final shaped + sorted export rows)
+#########################################################################################################
+
+$AI_apiKey     = "Eet1UxphX9YsHncQ98vS51jAUX0xwO3l9FqcKn95zhfuQVhisUw3JQQJ99BEAC5RqLJXJ3w3AAABACOGPGBy"
+$AI_endpoint   = "https://pim-role-advisor.openai.azure.com"
+$AI_deployment = "gpt-4o-mini"
+$AI_apiVersion = "2024-12-01-preview"
+$AI_uri        = "$AI_endpoint/openai/deployments/$AI_deployment/chat/completions?api-version=$AI_apiVersion"
+
+Write-Host "[AI] URI = $AI_uri"
+if ($AI_uri -notmatch '^https?://') { throw "[AI] URI is not absolute: $AI_uri" }
+
+# Make sure we always have a variable for mail body usage
+$AI_SummaryText = ""
+
+if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
+
+    Write-Section "AI summary"
+
+    if ($null -eq $final -or @($final).Count -eq 0) {
+        Write-Warn2 "BuildSummaryByAI requested, but there are no final rows to summarize."
+        # still continue, but AI will be empty
+    }
+    else {
+
+        # How many top findings to include in the AI context
+        $TopN = 50
+        if ($PSBoundParameters.ContainsKey('AISummaryTopN')) {
+            try { $TopN = [int]$AISummaryTopN } catch { }
+            if ($TopN -lt 10)  { $TopN = 10 }
+            if ($TopN -gt 200) { $TopN = 200 }
+        }
+
+        # How many top assets to include in asset rollup for AI context
+        $TopAssetsN = 25
+        if ($PSBoundParameters.ContainsKey('AISummaryTopAssetsN')) {
+            try { $TopAssetsN = [int]$AISummaryTopAssetsN } catch { }
+            if ($TopAssetsN -lt 10)  { $TopAssetsN = 10 }
+            if ($TopAssetsN -gt 200) { $TopAssetsN = 200 }
+        }
+
+        function Get-RowValue {
+            param(
+                [Parameter(Mandatory=$true)] $Row,
+                [Parameter(Mandatory=$true)] [string[]] $Names
+            )
+            foreach ($n in $Names) {
+                if ($Row.PSObject.Properties.Name -contains $n) {
+                    $v = $Row.$n
+                    if ($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v)) { return [string]$v }
+                }
+            }
+            return ""
+        }
+
+        function Test-LooksLikeHost {
+            param([string]$s)
+            if ([string]::IsNullOrWhiteSpace($s)) { return $false }
+            $t = $s.Trim()
+            if ($t -match '^[a-zA-Z0-9][a-zA-Z0-9\-]{1,63}$') { return $true }
+            if ($t -match '^[a-zA-Z0-9][a-zA-Z0-9\-]{1,63}(\.[a-zA-Z0-9\-]{1,63}){1,10}$') { return $true }
+            return $false
+        }
+
+        function Split-ImpactedAssets {
+            param([string]$AssetsText)
+
+            if ([string]::IsNullOrWhiteSpace($AssetsText)) { return @() }
+
+            $t = $AssetsText.Trim()
+
+            if ($t.StartsWith('[') -and $t.EndsWith(']')) {
+                try {
+                    $j = $t | ConvertFrom-Json -ErrorAction Stop
+                    $out = @()
+                    foreach ($item in $j) {
+                        if ($null -eq $item) { continue }
+                        if ($item -is [string]) { $out += $item; continue }
+                        $name = (Get-RowValue -Row $item -Names @("Name","name","DeviceName","deviceName","MachineName","machineName","DnsName","dnsName","Id","id"))
+                        if ($name) { $out += $name }
+                    }
+                    return @($out | ForEach-Object { $_.Trim() } | Where-Object { $_ } | Select-Object -Unique)
+                } catch { }
+            }
+
+            $parts = @($t -split '\s*,\s*' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+
+            $expanded = New-Object System.Collections.Generic.List[string]
+            foreach ($p in $parts) {
+                if (Test-LooksLikeHost $p) {
+                    $expanded.Add($p) | Out-Null
+                    continue
+                }
+
+                $tokens = @($p -split '\s+' | Where-Object { $_ })
+                $hostTokens = @($tokens | Where-Object { Test-LooksLikeHost $_ })
+
+                if ($hostTokens.Count -ge 2) {
+                    foreach ($ht in $hostTokens) { $expanded.Add($ht.Trim()) | Out-Null }
+                } elseif ($tokens.Count -eq 1) {
+                    $expanded.Add($tokens[0].Trim()) | Out-Null
+                } else {
+                    $expanded.Add($p) | Out-Null
+                }
+            }
+
+            return @($expanded | Where-Object { $_ } | Select-Object -Unique)
+        }
+
+        $colRiskScore = if ($FinalRiskScoreColumnName) { $FinalRiskScoreColumnName } else { "RiskScore" }
+
+        $topRows = @($final | Select-Object -First $TopN)
+
+        $findingLines = @()
+        $assetAgg = @{}  # asset -> object
+
+        function Add-AssetAgg {
+            param(
+                [string]$Asset,
+                [double]$RiskScore,
+                [string]$TierLevel,
+                [string]$Severity,
+                [string]$Domain,
+                [string]$Category,
+                [string]$Subcat,
+                [string]$ConfName,
+                [string]$ConfId
+            )
+
+            if ([string]::IsNullOrWhiteSpace($Asset)) { return }
+
+            if (-not $assetAgg.ContainsKey($Asset)) {
+                $assetAgg[$Asset] = [pscustomobject]@{
+                    Asset          = $Asset
+                    TierLevel      = $TierLevel
+                    Findings       = 0
+                    RiskScoreTotal = 0.0
+                    MaxRiskScore   = 0.0
+                    Domains        = New-Object System.Collections.Generic.HashSet[string]
+                    TopItems       = New-Object System.Collections.Generic.List[string]
+                }
+            }
+
+            $o = $assetAgg[$Asset]
+            $o.Findings++
+            $o.RiskScoreTotal += $RiskScore
+            if ($RiskScore -gt $o.MaxRiskScore) { $o.MaxRiskScore = $RiskScore }
+
+            if ($Domain) { [void]$o.Domains.Add($Domain) }
+
+            if ($o.TopItems.Count -lt 12) {
+                $o.TopItems.Add(("{0} [{1}] ({2}/{3})" -f $ConfName, $ConfId, $Category, $Subcat))
+            }
+        }
+
+        $i = 0
+        foreach ($r in $topRows) {
+            $i++
+
+            $riskScoreText = Get-RowValue -Row $r -Names @($colRiskScore, "RiskScore")
+            [double]$riskScore = 0
+            [void][double]::TryParse(($riskScoreText -replace ',', '.'), [ref]$riskScore)
+
+            $severity    = Get-RowValue -Row $r -Names @("SecuritySeverity", "Severity", "securityseverity")
+            $tierLevel   = Get-RowValue -Row $r -Names @("CriticalityTierLevel", "CriticalityTier", "Tier", "criticalitytierlevel")
+            $domain      = Get-RowValue -Row $r -Names @("SecurityDomain", "Domain", "securitydomain")
+            $category    = Get-RowValue -Row $r -Names @("Category", "category")
+            $subcat      = Get-RowValue -Row $r -Names @("Subcategory", "SubCategory", "subcategory")
+            $confName    = Get-RowValue -Row $r -Names @("ConfigurationName", "RecommendationName", "FindingName", "Title", "Name")
+            $confId      = Get-RowValue -Row $r -Names @("ConfigurationId", "RecommendationId", "FindingId", "Id")
+            $devices     = Get-RowValue -Row $r -Names @("Devices", "DeviceCount", "ImpactedDevices")
+            $assetsText  = Get-RowValue -Row $r -Names @("ImpactedAssets", "Assets", "AffectedAssets", "Machines")
+
+            $findingLines += ("[{0}] RiskScore={1}; Tier={2}; Severity={3}; Domain={4}; Config={5} [{6}]; Category={7}/{8}; Devices={9}; ImpactedAssets={10}" -f `
+                $i, $riskScoreText, $tierLevel, $severity, $domain, $confName, $confId, $category, $subcat, $devices, $assetsText)
+
+            $assetList = Split-ImpactedAssets -AssetsText $assetsText
+            foreach ($a in $assetList) {
+                Add-AssetAgg -Asset $a -RiskScore $riskScore -TierLevel $tierLevel -Severity $severity -Domain $domain `
+                    -Category $category -Subcat $subcat -ConfName $confName -ConfId $confId
+            }
+        }
+
+        $findingsText = $findingLines -join "`n"
+
+        # Rank assets: primary by MaxRiskScore, secondary by RiskScoreTotal, then Findings
+        $assetRanked = @()
+        if ($assetAgg.Count -gt 0) {
+            $assetRanked = $assetAgg.Values |
+                Sort-Object -Property @{Expression="MaxRiskScore";Descending=$true}, @{Expression="RiskScoreTotal";Descending=$true}, @{Expression="Findings";Descending=$true} |
+                Select-Object -First $TopAssetsN
+        }
+
+        $assetLines = @()
+        $rank = 0
+        foreach ($a in $assetRanked) {
+            $rank++
+
+            $domainSummary = ""
+            if ($a.Domains.Count -gt 0) {
+                $domainSummary = (@($a.Domains) | Sort-Object) -join ", "
+            }
+
+            $topItems = ""
+            if ($a.TopItems.Count -gt 0) {
+                $topItems = ($a.TopItems | Select-Object -First 8) -join "; "
+            }
+
+            $assetLines += ("{0}. Asset={1}; Tier={2}; Findings={3}; MaxRiskScore={4:N2}; RiskScoreTotal={5:N2}; Domains=[{6}]; TopItems={7}" -f `
+                $rank, $a.Asset, $a.TierLevel, $a.Findings, $a.MaxRiskScore, $a.RiskScoreTotal, $domainSummary, $topItems)
+        }
+
+        $assetsTextForAI = $assetLines -join "`n"
+
+        $runMeta = @"
+ReportTemplate: $ReportTemplate
+Final rows:     $(@($final).Count)
+Included in AI: $(@($topRows).Count) (TopN findings)
+Asset rollup:   $($assetAgg.Keys.Count) unique assets (TopAssetsN=$TopAssetsN included)
+RiskScore col:  $colRiskScore
+Output file:    $OutputXlsx
+Generated:      $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
+"@
+
+        $intro = @"
+This summary is generated from Microsoft Defender data to answer one practical question:
+what should we fix first, and on which assets, to reduce RiskScore the fastest.
+
+Scope:
+- This summary only covers the Top $TopAssetsN highest-risk assets for this run.
+- Full evidence and the complete set of findings per asset is in the attached Excel report (Details sheet).
+- A separate Summary sheet in the Excel contains the same AI text as this email.
+
+Risk scoring is transparent: Consequence × Probability = RiskScore, based on raw Kusto query outputs and a customizable risk index.
+"@
+
+        $userPrompt = @"
+$intro
+
+You are a security advisor AI.
+
+You MUST focus on ASSETS and prioritize remediation by RiskScore.
+You are given:
+A) An asset rollup (already ranked).
+B) The top findings (highest RiskScore first) for traceability.
+
+$runMeta
+
+A) Asset rollup:
+$assetsTextForAI
+
+B) Top findings:
+$findingsText
+
+Return format (STRICT):
+1) Top 25 risky assets (one line per asset):
+   - <Rank>. <AssetName> | Tier=<Tier> | MaxRiskScore=<Max> | RiskScoreTotal=<Total> | Findings=<Count> | Domains=<Domains>
+
+2) For the Top 10 assets only, include per asset:
+   - Asset: <AssetName>
+     - Why it is high risk (cite MaxRiskScore + 2-3 TopItems)
+     - Top 5 actions to reduce RiskScore FAST (each action MUST reference ConfigName [ConfigId])
+       Format each action line as:
+       - <Action> | <Why> | <Expected impact> | <References: ConfigName [ConfigId]>
+     - Expected overall risk reduction (High/Medium/Low)
+
+3) Cross-asset quick wins (max 8):
+   - <Action> [ConfigId] | Affects <N> assets | Example assets: <up to 4>
+
+Rules:
+- Do NOT write generic advice. Every action must tie back to ConfigName [ConfigId] and assets.
+- Do NOT merge multiple assets into one line. Each line must be one asset.
+- Keep the output concise and structured. No long paragraphs.
+"@
+
+        Write-Host "`n[AI SUMMARY RESPONSE]`n" -ForegroundColor Cyan
+
+        # capture streamed output
+        $sb = New-Object System.Text.StringBuilder
+
+        try {
+            $body = @{
+                model = $AI_deployment
+                stream = $true
+                temperature = 0.2
+                top_p = 1.0
+                max_tokens = 16000
+                messages = @(
+                    @{
+                        role = "system"
+                        content = "You are a helpful security advisor. You produce asset-focused prioritization and remediation guidance using the provided Defender-based risk data."
+                    },
+                    @{
+                        role = "user"
+                        content = $userPrompt
+                    }
+                )
+            } | ConvertTo-Json -Depth 12 -Compress
+
+            $handler = [System.Net.Http.HttpClientHandler]::new()
+            $client  = [System.Net.Http.HttpClient]::new($handler)
+
+            $request = [System.Net.Http.HttpRequestMessage]::new(
+                [System.Net.Http.HttpMethod]::Post,
+                $AI_uri
+            )
+
+            $request.Headers.Add("api-key", $AI_apiKey)
+            $request.Headers.Add("Accept", "text/event-stream")
+            $request.Content = [System.Net.Http.StringContent]::new(
+                $body,
+                [System.Text.Encoding]::UTF8,
+                "application/json"
+            )
+
+            $response = $client.SendAsync(
+                $request,
+                [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
+            ).Result
+
+            if (-not $response.IsSuccessStatusCode) {
+                $err = $response.Content.ReadAsStringAsync().Result
+                throw "Azure OpenAI returned HTTP $([int]$response.StatusCode): $err"
+            }
+
+            $stream = $response.Content.ReadAsStreamAsync().Result
+            $reader = [System.IO.StreamReader]::new($stream)
+
+            while (-not $reader.EndOfStream) {
+                $line = $reader.ReadLine()
+                if ($line -and $line.StartsWith("data: ")) {
+                    $json = $line.Substring(6)
+                    if ($json -eq "[DONE]") { break }
+
+                    try {
+                        $obj  = $json | ConvertFrom-Json
+                        $text = $obj.choices[0].delta.content
+                        if ($text) {
+                            [void]$sb.Append($text)
+                            Write-Host -NoNewline $text
+                        }
+                    } catch {
+                        Write-Warning "Failed to parse AI chunk: $json"
+                    }
+                }
+            }
+
+            $reader.Close()
+            $client.Dispose()
+
+            $AI_SummaryText = ($sb.ToString() -replace "`r`n","`n" -replace "`r","`n").Trim()
+
+            # Write AI summary into Excel Summary sheet
+            try {
+              Write-Step "writing AI summary to excel sheet 'Summary'"
+              Tock
+              Export-AISummaryWorksheet -Path $OutputXlsx -SheetName 'Summary' -SummaryText $AI_SummaryText
+              Tick "excel summary export"
+              Write-Ok "AI summary added to Excel (Summary sheet)"
+            } catch {
+              Write-Warn2 ("failed to write AI summary to excel: {0}" -f $_.Exception.Message)
+            }
+
+        } catch {
+            Write-Error "Azure OpenAI request failed: $($_.Exception.Message)"
+            if ($reader) { $reader.Close() }
+            if ($client) { $client.Dispose() }
+
+            # still try to write a summary sheet with error note
+            try {
+              $AI_SummaryText = "AI summary failed: $($_.Exception.Message)"
+              Export-AISummaryWorksheet -Path $OutputXlsx -SheetName 'Summary' -SummaryText $AI_SummaryText
+            } catch { }
+        }
+    }
+}
+
 #####################################################################################################
 # SEND OUTPUT VIA MAIL
 #####################################################################################################
@@ -1592,10 +1961,57 @@ Write-Section "mail dispatch decision"
 if ($Report_SendMail -eq $true) {
 
     $to          = $Report_To
-    $from        = $SMTPFrom
-    $subject     = "Risk Analysis | $ReportTemplate"
-    $bodyHtml    = "<font color=red>Risk Analysis</font><br><br>Attached you will find priotized security risks, based on risk score<br><br>"
+    $from        = $SMTPUser
+    $subject     = "Security Insights | Risk Analysis | $ReportTemplate"
     $attachments = @($OutputXlsx)
+
+    # Decide body content based on AI enablement + actual output
+    $aiEnabled = ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI)
+
+    if ($aiEnabled) {
+
+        # HTML-safe AI summary (if AI ran but produced nothing, keep message clear)
+        $aiHtml = ""
+        if (-not [string]::IsNullOrWhiteSpace($AI_SummaryText)) {
+          $aiHtml = ($AI_SummaryText.Trim() -replace "&","&amp;" -replace "<","&lt;" -replace ">","&gt;")
+          $aiHtml = $aiHtml -replace "`r`n","`n" -replace "`r","`n"
+          $aiHtml = $aiHtml -replace "`n","<br>"
+        } else {
+          $aiHtml = "AI summary was enabled, but no AI summary output was produced."
+        }
+
+        # Body html WITH AI section + disclaimer
+        $bodyHtml = @"
+Risk Analysis<br>
+<br>
+Attached you will find prioritized security risks, ranked by RiskScore.<br>
+The Excel file contains full evidence, raw data, and detailed findings per asset (Details sheet).<br>
+<br>
+AI summary (also included in the Excel Summary sheet):<br>
+<br>
+$aiHtml
+<br>
+<br>
+---## ---<br>
+Security Insight | Risk Analysis | support: Morten Knudsen | mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight.<br>
+This summary was generated using AI and may contain mistakes or incomplete conclusions. Please validate critical decisions using the detailed findings and raw data in the attached Excel report.
+"@
+
+    } else {
+
+        # Body html WITHOUT AI section (different text)
+        $bodyHtml = @"
+Risk Analysis<br>
+<br>
+Attached you will find prioritized security risks, ranked by RiskScore.<br>
+The Excel file contains full evidence, raw data, and detailed findings per asset (Details sheet).<br>
+<br>
+AI summary was not included for this run (BuildSummaryByAI was not enabled).<br>
+If you want an AI-based prioritization summary in both the email and the Excel (Summary sheet), run again with -BuildSummaryByAI.<br>
+<br>
+Security Insight | Risk Analysis | support: Morten Knudsen | mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight.<br>
+"@
+    }
 
     try {
         if ($Mail_SendAnonymous) {

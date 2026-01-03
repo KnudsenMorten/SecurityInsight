@@ -1,50 +1,51 @@
 ﻿param(
-
-  [Parameter(Mandatory=$false)]
-  [switch] $UpdateFiles,
-
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
   [string] $SettingsPath,
 
   [Parameter(Mandatory=$false)]
-    [ValidateSet('PROD','TEST')]
-    [string[]] $Scope,
+  [ValidateSet('PROD','TEST')]
+  [string[]] $Scope,
 
   [Parameter(Mandatory=$false)]
   [switch] $AutomationFramework
 )
 
 #########################################################################################################
+# Global Reset (clean reruns in same PowerShell session)
+#########################################################################################################
+
+# Core execution globals
+$global:SettingsPath        = $null
+$global:AutomationFramework = $null
+$global:Scope               = $null
+
+# SPN globals
+$global:SpnTenantId         = $null
+$global:SpnClientId         = $null
+$global:SpnClientSecret     = $null
+
+#########################################################################################################
 # Default Variables
 #########################################################################################################
 
-$UpdateFiles_Default = $false     # do you want to auto-update files from Morten Knudsen Github? Recommendation: set to $false and use the dedicated script (UpdateSecurityInsight.ps1) and test propertly !
-$AutomationFramework_Default = $false    # Community edt: set to $false
-$SettingsPath_Default = ''     # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
-$Scope_Default = @("PROD","TEST")  # you can scope which AssetTaggings to apply from the YAML file (CriticalAssetTagging.yaml)
+$AutomationFramework_Default = $false                   # $false = Community edition
+$SettingsPath_Default        = ''                       # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
+$Scope_Default               = @('PROD','TEST')         # Defines which AssetTaggings to include from YAML file
 
-# Apply defaults ONLY when parameter not provided (prevents empty/$null and avoids confusing mixing)
-if (-not $PSBoundParameters.ContainsKey('UpdateFiles')) { $UpdateFiles = [bool]$UpdateFiles_Default }
-if (-not $PSBoundParameters.ContainsKey('SettingsPath') -or [string]::IsNullOrWhiteSpace($SettingsPath)) {
+#########################################################################################################
+# Resolve runtime values (CMDLINE WINS, otherwise DEFAULT)
+#########################################################################################################
 
-    if (-not [string]::IsNullOrWhiteSpace($SettingsPath_Default)) {
-        # Default value is enabled
-        $SettingsPath = $SettingsPath_Default
-    }
-    else {
-        # Default not enabled -> run from where the script was started
-        # (wrapper script location)
-        $SettingsPath = $PSScriptRoot
-    }
+$AutomationFramework = if ($PSBoundParameters.ContainsKey('AutomationFramework')) { [bool]$AutomationFramework } else { [bool]$AutomationFramework_Default }
+
+if (-not $PSBoundParameters.ContainsKey('Scope') -or -not $Scope -or $Scope.Count -eq 0) {
+  $Scope = [string[]]$Scope_Default
 }
 
-# Normalize (optional but nice)
+$SettingsPath = if ($PSBoundParameters.ContainsKey('SettingsPath')) { $SettingsPath } else { $SettingsPath_Default }
+if ([string]::IsNullOrWhiteSpace($SettingsPath)) { $SettingsPath = $PSScriptRoot }
 $SettingsPath = (Resolve-Path -LiteralPath $SettingsPath).Path
-
-if (-not $PSBoundParameters.ContainsKey('AutomationFramework')) { $AutomationFramework = [bool]$AutomationFramework_Default }
-if (-not $PSBoundParameters.ContainsKey('Scope')) { $Scope = [string[]]$Scope_Default }
-
 
 ############################################################
 # AutomationFrameWork = $False
@@ -73,42 +74,29 @@ If (-not $AutomationFramework) {
 }
 
 #########################################################################################################
-# Downloading latest version of Critical Asset Tagging files
+# Publish resolved values to globals (main script reads these)
 #########################################################################################################
 
-if ($UpdateFiles) {
-    $global:GitHubUri = "https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main"
-    $Files = @("CriticalAssetTagging.ps1","CriticalAssetTagging.yaml")
+$global:SettingsPath        = $SettingsPath
+$global:Scope               = $Scope
+$global:AutomationFramework = $AutomationFramework
 
-    Write-Host "Critical Asset Tagging"
-    Write-Host "Created by Morten Knudsen, Microsoft MVP (@knudsenmortendk - mok@mortenknudsen.net)"
-    Write-Host ""
-    Write-Host "Downloading latest version of Critical Asset Tagging engine from"
-    Write-Host "$GitHubUri"
-    Write-Host ""
+#########################################################################################################
+# Optional: show config right away (helps troubleshooting)
+#########################################################################################################
 
-    foreach ($File in $Files) {
-        $FileFullPath = Join-Path $PSScriptRoot $File
-        Remove-Item $FileFullPath -ErrorAction SilentlyContinue
-        Invoke-WebRequest "$GitHubUri/$File" -OutFile $FileFullPath
-    }
-}
+Write-Host ("[LAUNCHER] AutomationFramework={0}" -f $global:AutomationFramework)
+Write-Host ("[LAUNCHER] SettingsPath={0}" -f $global:SettingsPath)
+Write-Host ("[LAUNCHER] Scope={0}" -f ($global:Scope -join ', '))
+Write-Host ""
 
 #########################################################################################################
 # Running Main program
 #########################################################################################################
 
-$ScriptPath = Join-Path $SettingsPath "CriticalAssetTagging.ps1"
+$ScriptPath = Join-Path $global:SettingsPath 'CriticalAssetTagging.ps1'
+if (-not (Test-Path -LiteralPath $ScriptPath)) {
+  throw "Main script not found: $ScriptPath"
+}
 
-# Build params explicitly (no mixing)
-$Params = @{}
-
-# Always pass SettingsPath (your main request)
-$Params.SettingsPath = $SettingsPath
-
-# Pass the rest only when enabled / present
-if ($AutomationFramework) { $Params.AutomationFramework = $true }
-if ($Scope) { $Params.Scope = $Scope }
-
-# dot-source the script so ALL variables above remain available to the called script
-. $ScriptPath @Params
+. $ScriptPath

@@ -4,16 +4,7 @@
   [string] $ReportTemplate,
 
   [Parameter(Mandatory=$false)]
-  [switch] $Detailed,
-
-  [Parameter(Mandatory=$false)]
-  [switch] $Summary,
-
-  [Parameter(Mandatory=$false)]
   [switch] $AutomationFramework,
-
-  [Parameter(Mandatory=$false)]
-  [switch] $UpdateFiles,
 
   [Parameter(Mandatory=$false)]
   [ValidateNotNullOrEmpty()]
@@ -23,54 +14,97 @@
   [switch] $BuildSummaryByAI
 )
 
+#########################################################################################################
+# Global Reset (clean reruns in same PowerShell session)
+#########################################################################################################
+
+# Core execution globals
+$global:SettingsPath                = $null
+$global:ReportTemplate              = $null
+$global:AutomationFramework         = $null
+$global:OverwriteXlsx               = $null
+
+# Mail globals (community edition section)
+$global:SendMail                    = $null
+$global:MailTo                      = $null
+$global:Mail_SendAnonymous          = $null
+$global:SMTPUser                    = $null
+$global:SmtpServer                  = $null
+$global:SMTPPort                    = $null
+$global:SMTP_UseSSL                 = $null
+$global:SmtpUsername                = $null
+$global:SmtpPassword                = $null
+$global:SecureCredentialsSMTP       = $null
+
+# SPN globals
+$global:SpnTenantId                 = $null
+$global:SpnClientId                 = $null
+$global:SpnClientSecret             = $null
+
+# AI globals (main script reads Global:OpenAI_* and builds AI_Uri)
+$global:BuildSummaryByAI            = $null
+$global:OpenAI_apiKey               = $null
+$global:OpenAI_endpoint             = $null
+$global:OpenAI_deployment           = $null
+$global:OpenAI_apiVersion           = $null
+$global:OpenAI_MaxTokensPerRequest  = $null
+$global:AI_MaxTokensPerRequest      = $null
+$global:AI_Uri                      = $null
 
 #########################################################################################################
-# Default Variables
+# Defaults (single source of truth)
 #########################################################################################################
 
-$UpdateFiles_Default = $false     # do you want to auto-update files from Morten Knudsen Github? Recommendation: set to $false and use the dedicated script (UpdateSecurityInsight.ps1) and test propertly !
-$AutomationFramework_Default = $false    # Community edt: set to $false
-$SettingsPath_Default = ''     # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
-$ReportTemplate_Default = "RiskAnalysis_Summary"  # See options in the ReportTemplates-section in the YAML file (SecurityInsight_RiskAnalysis.yaml)
-$OverwriteXlsx = $true # Overwrite existing Excel file if true
+$AutomationFramework_Default = $false                   # $false = Community edition
+$SettingsPath_Default        = ''                       # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
+$ReportTemplate_Default      = 'RiskAnalysis_Summary'   # default report template to use, if nothing specified
+$OverwriteXlsx_Default       = $true                    # $true = overwrite excel output file
+$BuildSummaryByAI_Default    = $false                   # $true = enable AI summary integration (require OpenAI PAYG instance deployment)
 
-# Apply defaults ONLY when parameter not provided (prevents empty/$null and avoids confusing mixing)
-if (-not $PSBoundParameters.ContainsKey('UpdateFiles')) { $UpdateFiles = [bool]$UpdateFiles_Default }
+#########################################################################################################
+# Resolve runtime values (CMDLINE WINS, otherwise DEFAULT)
+#########################################################################################################
 
-if (-not $PSBoundParameters.ContainsKey('SettingsPath') -or [string]::IsNullOrWhiteSpace($SettingsPath)) {
+# Switches: cmdline presence wins, otherwise default.
+# NOTE: also supports -AutomationFramework:$false etc.
+$AutomationFramework = if ($PSBoundParameters.ContainsKey('AutomationFramework')) { [bool]$AutomationFramework } else { [bool]$AutomationFramework_Default }
+$BuildSummaryByAI    = if ($PSBoundParameters.ContainsKey('BuildSummaryByAI'))    { [bool]$BuildSummaryByAI }    else { [bool]$BuildSummaryByAI_Default }
 
-    if (-not [string]::IsNullOrWhiteSpace($SettingsPath_Default)) {
-        # Default value is enabled
-        $SettingsPath = $SettingsPath_Default
-    }
-    else {
-        # Default not enabled -> run from where the script was started
-        # (wrapper script location)
-        $SettingsPath = $PSScriptRoot
-    }
-}
-
-# Normalize (optional but nice)
+# Strings: cmdline wins; otherwise default
+$SettingsPath = if ($PSBoundParameters.ContainsKey('SettingsPath')) { $SettingsPath } else { $SettingsPath_Default }
+if ([string]::IsNullOrWhiteSpace($SettingsPath)) { $SettingsPath = $PSScriptRoot }
 $SettingsPath = (Resolve-Path -LiteralPath $SettingsPath).Path
 
-if (-not $PSBoundParameters.ContainsKey('AutomationFramework')) { $AutomationFramework = [bool]$AutomationFramework_Default }
-if (-not $PSBoundParameters.ContainsKey('ReportTemplate'))      { $ReportTemplate      = $ReportTemplate_Default }
+$ReportTemplate = if ($PSBoundParameters.ContainsKey('ReportTemplate')) { $ReportTemplate } else { $ReportTemplate_Default }
 
-#######################################################################
-# Variables: AutomationFrameWork / AutomationFramework_Default = $true
-# Morten Knudsen customer edition (locked)
-#######################################################################
-If ($AutomationFramework) {
-    $Summary_Default = $true
-    $Detailed_Default = $false
+# OverwriteXlsx is only defaulted here (unless you later add it as param)
+$OverwriteXlsx = [bool]$OverwriteXlsx_Default
 
-    if (-not $PSBoundParameters.ContainsKey('Summary'))   { $Summary  = [bool]$Summary_Default }
-    if (-not $PSBoundParameters.ContainsKey('Detailed'))  { $Detailed = [bool]$Detailed_Default }
-}
+#########################################################################################################
+# Publish resolved values to globals (main script reads these)
+#########################################################################################################
+
+$global:SettingsPath        = $SettingsPath
+$global:ReportTemplate      = $ReportTemplate
+$global:AutomationFramework = $AutomationFramework
+$global:OverwriteXlsx       = $OverwriteXlsx
+$global:BuildSummaryByAI    = $BuildSummaryByAI
+
+#########################################################################################################
+# Optional: show config right away (helps troubleshooting)
+#########################################################################################################
+
+Write-Host ("[LAUNCHER] AutomationFramework={0} BuildSummaryByAI={1}" -f `
+  $global:AutomationFramework, $global:BuildSummaryByAI)
+
+Write-Host ("[LAUNCHER] SettingsPath={0}" -f $global:SettingsPath)
+Write-Host ("[LAUNCHER] ReportTemplate={0}" -f $global:ReportTemplate)
+Write-Host ""
 
 ############################################################
 # Variable: AutomationFrameWork = $False
 # Community Edition variables - fit to your needs !
+# Note: don’t hardcode secrets; prefer env vars or SecretManagement.
 ############################################################
 
 <# PRE-REQ: ONBOARDING OF SERVICE PRINCIPAL IN ENTRA
@@ -87,114 +121,59 @@ If ($AutomationFramework) {
             Machine.ReadWrite.All      (to set tag info on device)
 #>
 
-If (-not $AutomationFramework) {
+if (-not $global:AutomationFramework) {
 
-    $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
-    $global:SpnClientId         = "<APP/CLIENT ID GUID>"
-    $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
+    # SPN
+    $global:SpnTenantId        = "<Your TenantId>"     # override per your SPN tenant if different
+    $global:SpnClientId        = "<APP/CLIENT ID GUID>"
+    $global:SpnClientSecret    = "<CLIENT SECRET VALUE>"
 
     # Email Notifications
-    $SendMail                   = $false # true/false
-    $MailTo                     = @()    # array of recipients
-    $Mail_SendAnonymous         = $false        # $true = anonymous login against SMTP server
-    $SMTPUser                   = "<SMTP from address>"   # Default FROM address
-    $SmtpServer                 = "<SMTP server>"
-    $SMTPPort                   = 587        # or 587 / 465
-    $SMTP_UseSSL                = $true      # or $false
+    $global:SendMail           = $false # true/false
+    $global:MailTo             = @()    # array of recipients
+    $global:Mail_SendAnonymous = $false # $true = anonymous login against SMTP server
+    $global:SMTPUser           = "<SMTP from address>"   # Default FROM address
+    $global:SmtpServer         = "<SMTP server>"
+    $global:SMTPPort           = 587
+    $global:SMTP_UseSSL        = $true  # or $false
 
-    If (-not $Mail_SendAnonymous) {
+    if (-not $global:Mail_SendAnonymous) {
 
         # Consider to use an Azure Keyvault and retrieve credentials from there !
-        $SmtpUsername               = "<SMTP username>"
-        $SmtpPassword               = "<SMTP password>"
+        $global:SmtpUsername   = "<SMTP username>"
+        $global:SmtpPassword   = "<SMTP password>"
 
-        $SecurePassword = ConvertTo-SecureString $SmtpPassword -AsPlainText -Force
-        $SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
-            $SmtpUsername,
+        $SecurePassword = ConvertTo-SecureString $global:SmtpPassword -AsPlainText -Force
+        $global:SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
+            $global:SmtpUsername,
             $SecurePassword
         )
     }
 }
 
-############################################################
-# Variable: $BuildSummaryByAI_Default
-# Enable AI Summary Integration
-# Set $BuildSummaryByAI_Default to $true + extra parms
-############################################################
-$BuildSummaryByAI_Default = $false
-
-if ($PSBoundParameters.ContainsKey('BuildSummaryByAI')) {
-    # User explicitly enabled it
-    $BuildSummaryByAI = $true
-}
-else {
-    # Not provided → fall back to default
-    $BuildSummaryByAI = [bool]$BuildSummaryByAI_Default
-}
-
-If ($BuildSummaryByAI) {
-
-    # AI (explicit values; keep as-is if you want, but consider storing secrets elsewhere)
-
-    #-------- API Info - BEGIN --------
-    $AI_apiKey     = ""   # sample: "xxxxxxxxxxxxxxxxxxxxx"
-    $AI_endpoint   = ""   # sample: "https://xxxxx.openai.azure.com"
-    $AI_deployment = ""   # sample: "security-insight"
-    $AI_apiVersion = ""   # sample: "2025-01-01-preview"
-    #-------- API Info - END --------
-
-
-    #----------------- Do NOT remove !! ----------------------
-    $AI_uri = "$AI_endpoint/openai/deployments/$AI_deployment/chat/completions?api-version=$AI_apiVersion"
-}
-
-
 #########################################################################################################
-# Downloading latest version of SecurityInsight files
+# BuildSummaryByAI defaults (globals main script already expects)
 #########################################################################################################
 
-if ($UpdateFiles) {
-    $global:GitHubUri = "https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main"
-    $Files = @("SecurityInsight.ps1","SecurityInsight_RiskAnalysis.yaml","SecurityInsight_RiskIndex.csv")
+if ($global:BuildSummaryByAI) {
 
-    Write-Host "SecurityInsight"
-    Write-Host "Created by Morten Knudsen, Microsoft MVP (@knudsenmortendk - mok@mortenknudsen.net)"
-    Write-Host ""
-    Write-Host "Downloading latest version of SecurityInsight/compiler from"
-    Write-Host "$GitHubUri"
-    Write-Host ""
+    $global:OpenAI_apiKey              = "<API Key>"     # sample: "xxxxxxxxxxxxxxxxxxxxx"
+    $global:OpenAI_endpoint            = "<URL>"     # sample: "https://xxxxx.openai.azure.com"
+    $global:OpenAI_deployment          = "<Open AI Deployment Name>"     # sample: "security-insight"
+    $global:OpenAI_apiVersion          = "<OPEN AI Deployment API version for REST api>"     # sample: "2025-01-01-preview"
+    $global:OpenAI_MaxTokensPerRequest = 16384  # Recommended: 16384 - Azure OpenAI max_tokens default - modify to your needs
 
-    foreach ($File in $Files) {
-        $FileFullPath = Join-Path $PSScriptRoot $File
-        Remove-Item $FileFullPath -ErrorAction SilentlyContinue
-        Invoke-WebRequest "$GitHubUri/$File" -OutFile $FileFullPath
-    }
+  $global:AI_MaxTokensPerRequest = [int]$global:OpenAI_MaxTokensPerRequest
+  Write-Host ("[LAUNCHER] AI Max Tokens Per Request: {0}" -f $global:AI_MaxTokensPerRequest)
 }
-
 
 #########################################################################################################
 # Running Main program
 #########################################################################################################
 
-$ScriptPath = Join-Path $SettingsPath "SecurityInsight.ps1"
-
-# Build params explicitly (no mixing)
-$Params = @{}
-
-# Always pass SettingsPath (your main request)
-$Params.SettingsPath = $SettingsPath
-
-# Pass the rest only when enabled / present
-if ($AutomationFramework) { $Params.AutomationFramework = $true }
-if ($Summary)            { $Params.Summary = $true }
-if ($Detailed)           { $Params.Detailed = $true }
-if ($SendMail)           { $Params.Sendmail = $true }
-if ($MailTo)             { $Params.MailTo = $MailTo }
-if ($ReportTemplate)     { $Params.ReportTemplate = $ReportTemplate }
-if ($BuildSummaryByAI) { 
-    $Params.BuildSummaryByAI = $true 
-    $Params.AI_Uri = $AI_uri
+$ScriptPath = Join-Path $global:SettingsPath 'SecurityInsight.ps1'
+if (-not (Test-Path -LiteralPath $ScriptPath)) {
+  throw "Main script not found: $ScriptPath"
 }
 
-# dot-source the script so ALL variables above remain available to the called script
-. $ScriptPath @Params
+. $ScriptPath

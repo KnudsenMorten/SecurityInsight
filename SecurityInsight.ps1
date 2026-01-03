@@ -1,35 +1,4 @@
-﻿param(
-  [Parameter(Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
-  [string] $ReportTemplate,
-
-  [Parameter(Mandatory=$false)]
-  [switch] $Detailed,
-
-  [Parameter(Mandatory=$false)]
-  [switch] $Summary,
-
-  [Parameter(Mandatory=$false)]
-  [switch] $SendMail,
-
-  [Parameter(Mandatory=$false)]
-  [string[]] $MailTo,
-
-  [Parameter(Mandatory=$false)]
-  [switch] $AutomationFramework,
-
-  [Parameter(Mandatory=$false)]
-  [string] $SettingsPath,
-
-  [Parameter(Mandatory=$false)]
-  [switch] $BuildSummaryByAI,
-
-  [Parameter(Mandatory=$false)]
-  [string] $AI_Uri
-)
-
-
-#------------------------------------------------------------------------------------------------ 
+﻿#------------------------------------------------------------------------------------------------
 Write-host "***********************************************************************************************"
 Write-host "Risk-based Security Exposure Insight"
 Write-host ""
@@ -40,19 +9,72 @@ Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
 
-if (-not $PSBoundParameters.ContainsKey('SettingsPath') -or [string]::IsNullOrWhiteSpace($SettingsPath)) {
+# -------------------------------------------------------------------------------------------------
+# GLOBAL-ONLY CONFIG (launcher is source of truth)
+# -------------------------------------------------------------------------------------------------
 
-    if (-not [string]::IsNullOrWhiteSpace($SettingsPath_Default)) {
-        # Default value is enabled
-        $SettingsPath = $SettingsPath_Default
-    }
-    else {
-        # Default not enabled -> run from where the script was started
-        # (wrapper script location)
-        $SettingsPath = $PSScriptRoot
-    }
+# Optional safe defaults if someone runs the main script directly (without launcher)
+if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
+  $global:SettingsPath = $PSScriptRoot
+}
+if (-not $global:ReportTemplate -or [string]::IsNullOrWhiteSpace([string]$global:ReportTemplate)) {
+  $global:ReportTemplate = 'RiskAnalysis_Summary'
+}
+if ($null -eq $global:OverwriteXlsx)          { $global:OverwriteXlsx = $true  }
+if ($null -eq $global:AutomationFramework)   { $global:AutomationFramework = $false }
+if ($null -eq $global:Summary)               { $global:Summary = $false }
+if ($null -eq $global:Detailed)              { $global:Detailed = $false }
+if ($null -eq $global:SendMail)              { $global:SendMail = $false }
+if ($null -eq $global:BuildSummaryByAI)      { $global:BuildSummaryByAI = $false }
+if ($null -eq $global:ShowConfig)            { $global:ShowConfig = $false }
+
+if ($null -eq $global:AI_MaxTokensPerRequest -or [int]$global:AI_MaxTokensPerRequest -lt 1) {
+  $global:AI_MaxTokensPerRequest = 16384
 }
 
+# Defaults for bucketing (can be overridden via YAML or include-items)
+if ($null -eq $global:UseQueryBucketing)      { $global:UseQueryBucketing = $false }
+if ($null -eq $global:DefaultBucketCount)     { $global:DefaultBucketCount = 2 }
+if (-not $global:BucketPlaceholderToken -or [string]::IsNullOrWhiteSpace([string]$global:BucketPlaceholderToken)) {
+  $global:BucketPlaceholderToken = "__BUCKET_FILTER__"
+}
+
+# Graph tuning defaults
+if ($null -eq $global:GraphReconnectMaxAgeMinutes) { $global:GraphReconnectMaxAgeMinutes = 45 }
+if ($null -eq $global:GraphQueryMaxRetries)        { $global:GraphQueryMaxRetries = 4 }
+
+# Normalize SettingsPath
+try {
+  $global:SettingsPath = (Resolve-Path -LiteralPath $global:SettingsPath).Path
+} catch {
+  throw "SettingsPath does not exist or cannot be resolved: $($global:SettingsPath)"
+}
+
+# Validate required launcher-provided globals
+if ([string]::IsNullOrWhiteSpace([string]$global:ReportTemplate)) {
+  throw "Global:ReportTemplate is empty. Launcher must set it."
+}
+
+# If SendMail is enabled, MailTo must exist (non-automation path uses this)
+if ($global:SendMail -eq $true) {
+  if (-not $global:MailTo -or @($global:MailTo).Count -eq 0) {
+    throw "Global:SendMail is true, but Global:MailTo is empty."
+  }
+}
+
+function Get-RowValue {
+    param(
+        [Parameter(Mandatory=$true)] $Row,
+        [Parameter(Mandatory=$true)] [string[]] $Names
+    )
+    foreach ($n in $Names) {
+        if ($Row.PSObject.Properties.Name -contains $n) {
+            $v = $Row.$n
+            if ($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v)) { return [string]$v }
+        }
+    }
+    return ""
+}
 
 #######################################################################################################
 # FUNCTIONS (begin)
@@ -66,7 +88,6 @@ function Write-Warn2  ($msg){ Write-Host ("[WARN] {0}" -f $msg) -ForegroundColor
 function Write-Err2   ($msg){ Write-Host ("[ERR]  {0}" -f $msg) -ForegroundColor Red }
 function Tick { param([string]$Label="") if($script:_sw){ $script:_sw.Stop(); Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds); $script:_sw=$null } }
 function Tock { $script:_sw = [System.Diagnostics.Stopwatch]::StartNew() }
-
 
 function Ensure-Directory {
   param([Parameter(Mandatory)][string]$Path)
@@ -154,7 +175,6 @@ function Reset-ExcelOutput {
   }
   $script:_sheetWritten = @{}
 }
-
 
 function Connect-GraphHighPriv {
     [CmdletBinding()]
@@ -268,7 +288,6 @@ function Export-AISummaryWorksheet {
 
   Close-ExcelPackage $excel
 }
-
 
 function New-BucketFilterKql {
     param(
@@ -1035,9 +1054,8 @@ function Test-MicrosoftGraphInstalled {
     return $null -ne (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue)
 }
 
-
 #####################################################################################################
-# POWERSHEL MODULE VALIDATION
+# POWERSHELL MODULE VALIDATION
 #####################################################################################################
 
 Write-Step "initializing"
@@ -1060,19 +1078,18 @@ Ensure-Module MicrosoftGraphPS
 Ensure-Module ImportExcel
 Ensure-Module powershell-yaml
 
-
 #####################################################################################################
 # CONNECTION
 #####################################################################################################
 
-if ($AutomationFramework) {
+if ([bool]$global:AutomationFramework) {
 
     #----------------------
     # AUTOMATION FRAMEWORK
     #----------------------
 
-    $ScriptDirectory = $PSScriptRoot
-    $global:PathScripts = Split-Path -parent $ScriptDirectory
+    $global:ScriptDirectory = $PSScriptRoot
+    $global:PathScripts     = Split-Path -parent $global:ScriptDirectory
     Write-Output ""
     Write-Output "Script Directory -> $($global:PathScripts)"
 
@@ -1103,171 +1120,156 @@ if ($AutomationFramework) {
       Write-Ok "azure connection step done"
     } catch { Write-Err2 "azure connection failed: $($_.Exception.Message)"; throw }
 
-    $global:SpnTenantId         = $global:AzureTenantId
-    $global:SpnClientId         = $global:HighPriv_Modern_ApplicationID_Azure
-    $global:SpnClientSecret     = $global:HighPriv_Modern_Secret_Azure
+    $global:SpnTenantId     = $global:AzureTenantId
+    $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure
+    $global:SpnClientSecret = $global:HighPriv_Modern_Secret_Azure
+
+    if ([bool]$global:ShowConfig) { Show-ResolvedConfig -Stage "after AutomationFramework defaults loaded" }
+
+    if ([string]::IsNullOrWhiteSpace($global:SpnTenantId) -or
+        [string]::IsNullOrWhiteSpace($global:SpnClientId) -or
+        [string]::IsNullOrWhiteSpace($global:SpnClientSecret)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Provide them via wrapper globals or enable -AutomationFramework to load them."
+    }
 
     # ==============================
-    # Graph auth helpers (app+cert)
+    # Graph auth helpers
     # ==============================
     $script:GraphLastConnectUtc = [datetime]::MinValue
-
-    # Graph re-auth settings
-    $GraphReconnectMaxAgeMinutes = 45               # proactive reconnect interval during long bucket loops
-    $GraphQueryMaxRetries        = 4                # retries per bucket/single query
 
     #------------------------------------------------------------------------------------------------------------
     # Graph connect (initial)
     #------------------------------------------------------------------------------------------------------------
     Write-Step "connecting to Microsoft Graph (initial)"
     Tock
-    try {
-      Connect-GraphHighPriv
-    } catch {
-      Write-Err2 "initial graph connect failed: $($_.Exception.Message)"
-      throw
-    }
+    try { Connect-GraphHighPriv } catch { Write-Err2 "initial graph connect failed: $($_.Exception.Message)"; throw }
     Tick "graph connect"
 
     #------------------------------------------------------------------------------------------------------------
     # Output File
     #------------------------------------------------------------------------------------------------------------
-
-    $OutputDir  = Join-Path $global:PathScripts 'OUTPUT'
-    Ensure-Directory -Path $OutputDir
-    $OutputXlsx = Join-Path $OutputDir ("{0}.xlsx" -f $ReportTemplate)
+    $global:OutputDir  = Join-Path $global:PathScripts 'OUTPUT'
+    Ensure-Directory -Path $global:OutputDir
+    $global:OutputXlsx = Join-Path $global:OutputDir ("{0}.xlsx" -f $global:ReportTemplate)
 
     #------------------------------------------------------------------------------------------------------------
     # Mail routing (Summary vs Detailed)
     #------------------------------------------------------------------------------------------------------------
-
-    if ($Detailed -and $Summary) {
+    if ([bool]$global:Detailed -and [bool]$global:Summary) {
       throw "Invalid parameters: Use only one of -Detailed or -Summary."
     }
 
-    if ($Detailed) {
+    if ([bool]$global:Detailed) {
       Write-Info "Mail mode selected: Detailed"
-      $Report_SendMail = $global:Mail_Security_ExposureInsights_Detailed_SendMail
-      $Report_To       = $global:Mail_Security_ExposureInsights_Detailed_To
+      $global:Report_SendMail = [bool]$global:Mail_Security_ExposureInsights_Detailed_SendMail
+      $global:Report_To       = @($global:Mail_Security_ExposureInsights_Detailed_To)
     }
-    elseif ($Summary) {
+    elseif ([bool]$global:Summary) {
       Write-Info "Mail mode selected: Summary"
-      $Report_SendMail = $global:Mail_Security_ExposureInsights_Summary_SendMail
-      $Report_To       = $global:Mail_Security_ExposureInsights_Summary_To
+      $global:Report_SendMail = [bool]$global:Mail_Security_ExposureInsights_Summary_SendMail
+      $global:Report_To       = @($global:Mail_Security_ExposureInsights_Summary_To)
     }
     else {
-      # Default behavior (keep what you want as default)
       Write-Info "Mail mode selected: Default (no -Detailed/-Summary provided)"
-      $Report_SendMail = $global:Mail_Security_ExposureInsights_Detailed_SendMail
-      $Report_To       = $global:Mail_Security_ExposureInsights_Detailed_To
+      $global:Report_SendMail = [bool]$global:Mail_Security_ExposureInsights_Detailed_SendMail
+      $global:Report_To       = @($global:Mail_Security_ExposureInsights_Detailed_To)
     }
 
-    Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $Report_SendMail, ($Report_To -join ', '))
+    Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))
 
     #------------------------------------------------------------------------------------------------------------
     # ExposureInsight settings
     #------------------------------------------------------------------------------------------------------------
+    $global:ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
+    $global:RiskDefinitionsCsvPath = (Join-Path $global:SettingsPath "SecurityInsight_RiskIndex.csv")
 
-    $ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
-    $RiskDefinitionsCsvPath = "$SettingsPath\SecurityInsight_RiskIndex.csv"
-
-} Else {
+} else {
 
     #----------------------
     # Connect Custom Auth
     #----------------------
+
+    if ([string]::IsNullOrWhiteSpace($global:SpnTenantId) -or
+        [string]::IsNullOrWhiteSpace($global:SpnClientId) -or
+        [string]::IsNullOrWhiteSpace($global:SpnClientSecret)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Provide them via wrapper globals or enable -AutomationFramework to load them."
+    }
 
     write-host "Connect using ServicePrincipal with AppId & Secret"
 
     Write-Step "connecting to Azure"
     Tock
     try {
-
-        $SecureSecret = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
-
-        $Credential = New-Object System.Management.Automation.PSCredential (
+        $global:SecureSecret = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
+        $global:Credential = New-Object System.Management.Automation.PSCredential (
             $global:SpnClientId,
-            $SecureSecret
+            $global:SecureSecret
         )
 
-        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $Credential -WarningAction SilentlyContinue
-
+        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $global:Credential -WarningAction SilentlyContinue
         Write-Ok "azure connection step done"
     } catch { Write-Err2 "azure connection failed: $($_.Exception.Message)"; throw }
     Tick "azure connect"
 
     #------------------------------------------------------------------------------------------------------------
-    # Graph auth helpers (app+cert)
+    # Graph auth helpers
     #------------------------------------------------------------------------------------------------------------
     $script:GraphLastConnectUtc = [datetime]::MinValue
-
-    # Graph re-auth settings
-    $GraphReconnectMaxAgeMinutes = 45               # proactive reconnect interval during long bucket loops
-    $GraphQueryMaxRetries        = 4                # retries per bucket/single query
 
     #------------------------------------------------------------------------------------------------------------
     # Graph connect (initial)
     #------------------------------------------------------------------------------------------------------------
     Write-Step "connecting to Microsoft Graph (initial)"
     Tock
-    try {
-      Connect-GraphHighPriv
-    } catch {
-      Write-Err2 "initial graph connect failed: $($_.Exception.Message)"
-      throw
-    }
+    try { Connect-GraphHighPriv } catch { Write-Err2 "initial graph connect failed: $($_.Exception.Message)"; throw }
     Tick "graph connect"
-
 
     #------------------------------------------------------------------------------------------------------------
     # Output File
     #------------------------------------------------------------------------------------------------------------
-
-    Write-Info "Chosen ReportTemplate: $ReportTemplate"
-
+    Write-Info "Chosen ReportTemplate: $($global:ReportTemplate)"
 
     #------------------------------------------------------------------------------------------------------------
-    # Mail routing (Summary vs Detailed)
+    # Mail routing
     #------------------------------------------------------------------------------------------------------------
+    $global:Report_SendMail = [bool]$global:SendMail
+    $global:Report_To       = @($global:MailTo)
 
-      $Report_SendMail = $SendMail
-      $Report_To       = $MailTo
+    if ($global:Report_SendMail -and (-not $global:Report_To -or $global:Report_To.Count -eq 0)) {
+        throw "SendMail was enabled, but no recipients were provided (MailTo is empty)."
+    }
 
-    Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $Report_SendMail, ($Report_To -join ', '))
+    Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))
 
     #------------------------------------------------------------------------------------------------------------
     # ExposureInsight settings
     #------------------------------------------------------------------------------------------------------------
+    $global:OutputDir  = Join-Path $global:SettingsPath 'OUTPUT'
+    Ensure-Directory -Path $global:OutputDir
+    $global:OutputXlsx = Join-Path $global:OutputDir ("{0}.xlsx" -f $global:ReportTemplate)
 
-    $OutputDir  = Join-Path $SettingsPath 'OUTPUT'
-    Ensure-Directory -Path $OutputDir
-    $OutputXlsx = Join-Path $OutputDir ("{0}.xlsx" -f $ReportTemplate)
-
-    $ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
-    $RiskDefinitionsCsvPath = "$SettingsPath\SecurityInsight_RiskIndex.csv"
+    $global:ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
+    $global:RiskDefinitionsCsvPath = (Join-Path $global:SettingsPath "SecurityInsight_RiskIndex.csv")
 }
 
-
 # Generic bucketing configuration (for large queries)
-$UseQueryBucketing      = $false                # global default; can be overridden per report in YAML (report) or per include item (template)
-$DefaultBucketCount     = 2                     # split query into this many buckets (default)
-$BucketPlaceholderToken = "__BUCKET_FILTER__"   # marker string in KQL where bucket filter will be injected (default)
-
+# (kept as GLOBALS only)
 Write-Step "settings overview"
-Write-Info "OutputXlsx: $OutputXlsx"
-Write-Info "SettingsPath: $SettingsPath"
-Write-Info "Risk Analysis Settings File: $ReportSettingsFile"
-Write-Info "Risk Index Csv Path: $RiskDefinitionsCsvPath"
-Write-Info "Chosen ReportTemplate: $ReportTemplate"
-Write-Info "Query bucketing: UseQueryBucketing=$UseQueryBucketing, DefaultBucketCount=$DefaultBucketCount, Placeholder='$BucketPlaceholderToken'"
-Write-Info "Graph reconnect: MaxAgeMinutes=$GraphReconnectMaxAgeMinutes, MaxRetries=$GraphQueryMaxRetries"
-
+Write-Info ("OutputXlsx: {0}" -f $global:OutputXlsx)
+Write-Info ("SettingsPath: {0}" -f $global:SettingsPath)
+Write-Info ("Risk Analysis Settings File: {0}" -f $global:ReportSettingsFile)
+Write-Info ("Risk Index Csv Path: {0}" -f $global:RiskDefinitionsCsvPath)
+Write-Info ("Chosen ReportTemplate: {0}" -f $global:ReportTemplate)
+Write-Info ("Query bucketing: UseQueryBucketing={0}, DefaultBucketCount={1}, Placeholder='{2}'" -f `
+  $global:UseQueryBucketing, $global:DefaultBucketCount, $global:BucketPlaceholderToken)
+Write-Info ("Graph reconnect: MaxAgeMinutes={0}, MaxRetries={1}" -f $global:GraphReconnectMaxAgeMinutes, $global:GraphQueryMaxRetries)
+Write-Info ("AI max_tokens (AI_MaxTokensPerRequest): {0}" -f $global:AI_MaxTokensPerRequest)
 
 #####################################################################################################
 # INITIALIZATION
 #####################################################################################################
 
-Reset-ExcelOutput -Path $OutputXlsx -ForceRemove:([bool]$OverwriteXlsx)
+Reset-ExcelOutput -Path $global:OutputXlsx -ForceRemove:([bool]$global:OverwriteXlsx)
 
 # track sheet first/append state per run (kept for compatibility; export is now single-write)
 if (-not $script:_sheetWritten) { $script:_sheetWritten = @{} }
@@ -1276,27 +1278,27 @@ if (-not $script:_sheetWritten) { $script:_sheetWritten = @{} }
 Write-Step "loading report settings from YAML"
 Tock
 try {
-  $Report_Settings_raw = Get-Content -Raw "$SettingsPath\$ReportSettingsFile" | ConvertFrom-Yaml
-  $Report_Settings     = ConvertTo-PSObjectDeep $Report_Settings_raw
+  $global:Report_Settings_raw = Get-Content -Raw (Join-Path $global:SettingsPath $global:ReportSettingsFile) | ConvertFrom-Yaml
+  $global:Report_Settings     = ConvertTo-PSObjectDeep $global:Report_Settings_raw
   Write-Ok "report settings loaded"
 } catch { Write-Err2 "failed to read/parse report settings yaml: $($_.Exception.Message)"; throw }
 Tick "yaml load"
 
-$Exposure_Reports   = $Report_Settings.Reports
-$Exposure_Template  = $Report_Settings.ReportTemplates | Where-Object { $_.ReportName -eq $ReportTemplate }
+$global:Exposure_Reports  = $global:Report_Settings.Reports
+$global:Exposure_Template = $global:Report_Settings.ReportTemplates | Where-Object { $_.ReportName -eq $global:ReportTemplate }
 
-if (-not $Exposure_Template) {
-  throw "ReportTemplate '$ReportTemplate' not found in YAML under ReportTemplates."
+if (-not $global:Exposure_Template) {
+  throw "ReportTemplate '$($global:ReportTemplate)' not found in YAML under ReportTemplates."
 }
 
-$Exposure_Template_ReportsIncluded = $Exposure_Template.ReportsIncluded
-if (-not $Exposure_Template_ReportsIncluded) {
-  throw "ReportTemplate '$ReportTemplate' has no ReportsIncluded."
+$global:Exposure_Template_ReportsIncluded = $global:Exposure_Template.ReportsIncluded
+if (-not $global:Exposure_Template_ReportsIncluded) {
+  throw "ReportTemplate '$($global:ReportTemplate)' has no ReportsIncluded."
 }
 
 # Log resolved report names
 $incNamesForLog = @()
-foreach ($x in $Exposure_Template_ReportsIncluded) {
+foreach ($x in $global:Exposure_Template_ReportsIncluded) {
   $inc = Resolve-ReportInclude -Item $x
   $incNamesForLog += $inc.Name
 }
@@ -1305,34 +1307,33 @@ Write-Info ("reports in template: {0}" -f ($incNamesForLog -join ', '))
 # ---------- Risk Index --------------------------------------------------------------------
 Write-Section "building risk index (CSV map)"
 
-$CsvSecurityDomainColumnName        = 'SecurityDomain'
-$CsvCategoryColumnName              = 'Category'
-$CsvSubCategoryColumnName           = 'SubCategory'
-$CsvConfigurationIdColumnName       = 'ConfigurationId'
-$CsvSecuritySeverityColumnName      = 'SecuritySeverity'
-$CsvCriticalityTierLevelColumnName  = 'CriticalityTierLevel'
-$CsvConsequenceScoreColumnName      = 'RiskConsequenceScore_SecuritySeverity'
-$CsvProbabilityScoreColumnName      = 'RiskProbablityScore_CriticialityTierLevel'
+$global:CsvSecurityDomainColumnName        = 'SecurityDomain'
+$global:CsvCategoryColumnName              = 'Category'
+$global:CsvSubCategoryColumnName           = 'SubCategory'
+$global:CsvConfigurationIdColumnName       = 'ConfigurationId'
+$global:CsvSecuritySeverityColumnName      = 'SecuritySeverity'
+$global:CsvCriticalityTierLevelColumnName  = 'CriticalityTierLevel'
+$global:CsvConsequenceScoreColumnName      = 'RiskConsequenceScore_SecuritySeverity'
+$global:CsvProbabilityScoreColumnName      = 'RiskProbablityScore_CriticialityTierLevel'
 
 Tock
 try {
-  $RiskDefinitions = Import-Csv -Path $RiskDefinitionsCsvPath
-  Write-Info ("risk rows: {0}" -f ($RiskDefinitions | Measure-Object | Select-Object -ExpandProperty Count))
+  $global:RiskDefinitions = Import-Csv -Path $global:RiskDefinitionsCsvPath
+  Write-Info ("risk rows: {0}" -f ($global:RiskDefinitions | Measure-Object | Select-Object -ExpandProperty Count))
 } catch { Write-Err2 "cannot read risk definitions csv: $($_.Exception.Message)"; throw }
 
-
 Tock
 try {
-  $RiskIndex = New-RiskIndex `
-      -CsvRows $RiskDefinitions `
-      -ColSecurityDomain       $CsvSecurityDomainColumnName `
-      -ColCategory             $CsvCategoryColumnName `
-      -ColSubCategory          $CsvSubCategoryColumnName `
-      -ColConfigId             $CsvConfigurationIdColumnName `
-      -ColSevValue             $CsvSecuritySeverityColumnName `
-      -ColTierValue            $CsvCriticalityTierLevelColumnName `
-      -ColConseqScore          $CsvConsequenceScoreColumnName `
-      -ColProbScore            $CsvProbabilityScoreColumnName
+  $global:RiskIndex = New-RiskIndex `
+      -CsvRows $global:RiskDefinitions `
+      -ColSecurityDomain       $global:CsvSecurityDomainColumnName `
+      -ColCategory             $global:CsvCategoryColumnName `
+      -ColSubCategory          $global:CsvSubCategoryColumnName `
+      -ColConfigId             $global:CsvConfigurationIdColumnName `
+      -ColSevValue             $global:CsvSecuritySeverityColumnName `
+      -ColTierValue            $global:CsvCriticalityTierLevelColumnName `
+      -ColConseqScore          $global:CsvConsequenceScoreColumnName `
+      -ColProbScore            $global:CsvProbabilityScoreColumnName
   Write-Ok "risk index built"
 } catch { Write-Err2 "failed to build risk index: $($_.Exception.Message)"; throw }
 Tick "risk index build"
@@ -1343,16 +1344,16 @@ Tick "risk index build"
 
 Write-Section "executing reports"
 
-$AllShapedRows = New-Object System.Collections.Generic.List[object]
-$FinalRiskScoreColumnName = $null
-$FinalDesiredColumns = $null
+$global:AllShapedRows = New-Object System.Collections.Generic.List[object]
+$global:FinalRiskScoreColumnName = $null
+$global:FinalDesiredColumns = $null
 
-foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
+foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
 
     $inc = Resolve-ReportInclude -Item $includeItem
     $ReportNameFromTemplate = $inc.Name
 
-    $Entry = $Exposure_Reports | Where-Object { $_.ReportName -eq $ReportNameFromTemplate }
+    $Entry = $global:Exposure_Reports | Where-Object { $_.ReportName -eq $ReportNameFromTemplate }
 
     if (-not $Entry) {
         Write-Warn2 ("report '{0}' defined in template but not found in report configurations" -f $ReportNameFromTemplate)
@@ -1382,10 +1383,10 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
 
     $Query                          = $Entry.ReportQuery
 
-    # Bucketing resolution: include item > report entry > script defaults
-    $effectiveUseBucket   = [bool]$UseQueryBucketing
-    $effectiveBucketCount = [int]$DefaultBucketCount
-    $effectivePlaceholder = [string]$BucketPlaceholderToken
+    # Bucketing resolution: include item > report entry > script defaults (GLOBALS)
+    $effectiveUseBucket   = [bool]$global:UseQueryBucketing
+    $effectiveBucketCount = [int]$global:DefaultBucketCount
+    $effectivePlaceholder = [string]$global:BucketPlaceholderToken
 
     if ($Entry.PSObject.Properties['UseBucketFilter'] -and $Entry.UseBucketFilter -ne $null) {
         $effectiveUseBucket = [bool]$Entry.UseBucketFilter
@@ -1417,6 +1418,7 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
     $ResultAll = @()
 
     if ($effectiveUseBucket -and $querySupportsBucket -and $effectiveBucketCount -gt 1) {
+
         Write-Info ("query contains placeholder '{0}' and bucketing is enabled. Running in {1} buckets." -f $effectivePlaceholder,$effectiveBucketCount)
 
         for ($b = 0; $b -lt $effectiveBucketCount; $b++) {
@@ -1428,7 +1430,7 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
             Write-Info ("bucket {0}/{1}: running advanced hunting query against Defender Exposure Management Graph ... Please wait !" -f $bucketNo, $effectiveBucketCount)
             Tock
             try {
-                $resp = Invoke-GraphHuntingQuery -Query $thisQuery -ReconnectMaxAgeMinutes $GraphReconnectMaxAgeMinutes -MaxRetries $GraphQueryMaxRetries
+                $resp = Invoke-GraphHuntingQuery -Query $thisQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
                 Tick ("hunting query bucket {0}/{1}" -f $bucketNo, $effectiveBucketCount)
             } catch {
                 Write-Err2 ("advanced hunting query failed for bucket {0}/{1}: {2}" -f $bucketNo, $effectiveBucketCount, $_.Exception.Message)
@@ -1460,8 +1462,9 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
         Write-Info ("total rows across all buckets before dedupe: {0}" -f $ResultAll.Count)
         $ResultAll = Deduplicate-Rows -Rows $ResultAll
         Write-Info ("total rows after dedupe: {0}" -f ($ResultAll | Measure-Object).Count)
-    }
-    else {
+
+    } else {
+
         if ($effectiveUseBucket -and -not $querySupportsBucket) {
             Write-Warn2 ("bucketing enabled but query does not contain placeholder '{0}'. Running single query." -f $effectivePlaceholder)
         }
@@ -1469,7 +1472,7 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
         Tock
         try {
             Write-Info "running advanced hunting query against Defender Exposure Management Graph ... Please wait !"
-            $resp = Invoke-GraphHuntingQuery -Query $Query -ReconnectMaxAgeMinutes $GraphReconnectMaxAgeMinutes -MaxRetries $GraphQueryMaxRetries
+            $resp = Invoke-GraphHuntingQuery -Query $Query -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
             Tick "hunting query"
         } catch {
             Write-Err2 "advanced hunting query failed: $($_.Exception.Message)"
@@ -1501,11 +1504,8 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
         continue
     }
 
-    # Filters (pass-through if scope is null/empty)
+    # Filters
     $ResultFiltered = @($ResultAll)
-
-    # Debug if filters later remove everything: sample BEFORE filtering
-    $sampleBefore = $ResultFiltered | Select-Object -First 5
 
     Tock
     $ResultFiltered = Apply-ScopeFilter -Rows $ResultFiltered -ColumnName $CriticalityTierLevelInputName -Scope $CriticalityTierLevelScope
@@ -1521,10 +1521,10 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
 
     # Risk calc
     Tock
-    Write-Info "calculating risk scores (trace off)"
+    Write-Info "calculating risk scores"
     $RiskScoreArray = Calculate-RiskScore `
       -Rows @($ResultFiltered) `
-      -RiskIndex $RiskIndex `
+      -RiskIndex $global:RiskIndex `
       -SecurityDomain $SecurityDomain `
       -CategoryInputName $CategoryInputName `
       -SubCategoryInputName $SubcategoryInputName `
@@ -1539,7 +1539,7 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
       -RiskScoreOutputName $RiskScoreOutputName
     Tick "risk scoring"
 
-    # Shape columns: enforce YAML order + computed columns, preserve types
+    # Shape columns
     $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName)
     $DesiredColumns = @()
     if ($OutputPropertyOrder) { $DesiredColumns += $OutputPropertyOrder }
@@ -1553,7 +1553,7 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
 
     $Shaped = $RiskScoreArray | Select-Object -Property $DesiredColumns
 
-    # Ensure RiskScore is numeric for sorting
+    # Ensure RiskScore is numeric
     $Shaped = $Shaped | ForEach-Object {
       if ($_.$RiskScoreOutputName -isnot [double]) {
         $num = 0.0
@@ -1563,42 +1563,43 @@ foreach ($includeItem in $Exposure_Template_ReportsIncluded) {
       $_
     }
 
-    if (-not $FinalRiskScoreColumnName -and -not [string]::IsNullOrWhiteSpace($RiskScoreOutputName)) {
-        $FinalRiskScoreColumnName = $RiskScoreOutputName
+    if (-not $global:FinalRiskScoreColumnName -and -not [string]::IsNullOrWhiteSpace($RiskScoreOutputName)) {
+        $global:FinalRiskScoreColumnName = $RiskScoreOutputName
     }
-    if (-not $FinalDesiredColumns) {
-        $FinalDesiredColumns = $DesiredColumns
+    if (-not $global:FinalDesiredColumns) {
+        $global:FinalDesiredColumns = $DesiredColumns
     }
 
-    foreach ($row in @($Shaped)) { $AllShapedRows.Add($row) | Out-Null }
-    Write-Ok ("added {0} rows to export pool (total now {1})" -f (@($Shaped).Count), $AllShapedRows.Count)
+    foreach ($row in @($Shaped)) { $global:AllShapedRows.Add($row) | Out-Null }
+    Write-Ok ("added {0} rows to export pool (total now {1})" -f (@($Shaped).Count), $global:AllShapedRows.Count)
 }
 
-# Final export (single write, already sorted)
+# Final export
 Write-Section "final excel export"
 
-if ($AllShapedRows.Count -eq 0) {
+if ($global:AllShapedRows.Count -eq 0) {
     Write-Warn2 "no rows collected across reports; nothing to export"
 } else {
-    if ([string]::IsNullOrWhiteSpace($FinalRiskScoreColumnName)) {
-        $FinalRiskScoreColumnName = 'RiskScore'
+
+    if ([string]::IsNullOrWhiteSpace($global:FinalRiskScoreColumnName)) {
+        $global:FinalRiskScoreColumnName = 'RiskScore'
         Write-Warn2 "FinalRiskScoreColumnName not set; using default 'RiskScore'"
     }
-    if (-not $FinalDesiredColumns) {
-        $FinalDesiredColumns = ($AllShapedRows[0] | Get-Member -MemberType NoteProperty).Name
+    if (-not $global:FinalDesiredColumns) {
+        $global:FinalDesiredColumns = ($global:AllShapedRows[0] | Get-Member -MemberType NoteProperty).Name
     }
 
     Write-Step "sorting rows by risk score (descending)"
     Tock
 
     $allRows = @()
-    foreach ($r in $AllShapedRows) { $allRows += ,$r }
+    foreach ($r in $global:AllShapedRows) { $allRows += ,$r }
 
-    $final = $allRows | Sort-Object -Descending -Property @{
+    $global:final = $allRows | Sort-Object -Descending -Property @{
         Expression = {
             $n = 0.0
             $v = $null
-            if ($_.PSObject.Properties[$FinalRiskScoreColumnName]) { $v = $_.$FinalRiskScoreColumnName }
+            if ($_.PSObject.Properties[$global:FinalRiskScoreColumnName]) { $v = $_.$($global:FinalRiskScoreColumnName) }
             [void][double]::TryParse([string]$v, [ref]$n)
             $n
         }
@@ -1606,12 +1607,12 @@ if ($AllShapedRows.Count -eq 0) {
     Tick "final sort"
 
     Write-Step "exporting to excel (single write)"
-    Write-Info ("path: {0}" -f $OutputXlsx)
+    Write-Info ("path: {0}" -f $global:OutputXlsx)
     Tock
-    Export-Worksheet -Path $OutputXlsx -SheetName 'Details' `
-      -Rows @($final) `
-      -SortColumn $FinalRiskScoreColumnName -SortDescending `
-      -DesiredColumns $FinalDesiredColumns `
+    Export-Worksheet -Path $global:OutputXlsx -SheetName 'Details' `
+      -Rows @($global:final) `
+      -SortColumn $global:FinalRiskScoreColumnName -SortDescending `
+      -DesiredColumns $global:FinalDesiredColumns `
       -ColumnsToFlatten @('ImpactedAssets','Logins','Benchmarks','EG_AssetProps','AssetProps','Properties') `
       -TableStyle 'Medium9'
     Tick "excel export"
@@ -1619,58 +1620,66 @@ if ($AllShapedRows.Count -eq 0) {
 }
 
 Write-Host ""
-Write-Ok ("excel file ready: {0}" -f $OutputXlsx)
-
+Write-Ok ("excel file ready: {0}" -f $global:OutputXlsx)
 
 #########################################################################################################
-# BUILD AI SUMMARY CONTEXT (based on the final shaped + sorted export rows)
+# BUILD AI SUMMARY CONTEXT
 #########################################################################################################
 
-if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
+if ([bool]$global:BuildSummaryByAI) {
 
-    Write-Host "[AI] URI = $AI_uri"
-    if ($AI_uri -notmatch '^https?://') { throw "[AI] URI is not absolute: $AI_uri" }
+    # Resolve AI config from GLOBAL OpenAI_* variables (single source of truth)
+    if (-not $global:AI_apiKey -and -not [string]::IsNullOrWhiteSpace($global:OpenAI_apiKey)) {
+        $global:AI_apiKey = $global:OpenAI_apiKey
+    }
+    if (-not $global:AI_deployment -and -not [string]::IsNullOrWhiteSpace($global:OpenAI_deployment)) {
+        $global:AI_deployment = $global:OpenAI_deployment
+    }
 
-    # Make sure we always have a variable for mail body usage
-    $AI_SummaryText = ""
+    # Build URI from endpoint + deployment + apiVersion (unless caller passed AI_Uri explicitly)
+    if ([string]::IsNullOrWhiteSpace($global:AI_Uri)) {
+
+        $endpoint   = $global:OpenAI_endpoint
+        $apiVersion = $global:OpenAI_apiVersion
+
+        if ([string]::IsNullOrWhiteSpace($endpoint))        { throw "BuildSummaryByAI is enabled, but Global:OpenAI_endpoint is missing." }
+        if ([string]::IsNullOrWhiteSpace($global:AI_deployment)) { throw "BuildSummaryByAI is enabled, but Global:OpenAI_deployment is missing." }
+        if ([string]::IsNullOrWhiteSpace($apiVersion))      { throw "BuildSummaryByAI is enabled, but Global:OpenAI_apiVersion is missing." }
+
+        $global:AI_Uri = "$($endpoint.TrimEnd('/'))/openai/deployments/$($global:AI_deployment)/chat/completions?api-version=$apiVersion"
+    }
+
+    # Max tokens
+    if ($null -eq $global:AI_MaxTokensPerRequest -or [int]$global:AI_MaxTokensPerRequest -lt 1) {
+        if ($null -ne $global:OpenAI_MaxTokensPerRequest -and [int]$global:OpenAI_MaxTokensPerRequest -gt 0) {
+          $global:AI_MaxTokensPerRequest = [int]$global:OpenAI_MaxTokensPerRequest
+        } else {
+          $global:AI_MaxTokensPerRequest = 16384
+        }
+    }
+
+    # Validation
+    if ([string]::IsNullOrWhiteSpace($global:AI_apiKey))     { throw "BuildSummaryByAI is enabled, but Global:OpenAI_apiKey is missing." }
+    if ([string]::IsNullOrWhiteSpace($global:AI_deployment)) { throw "BuildSummaryByAI is enabled, but Global:OpenAI_deployment is missing." }
+
+    Write-Host "[AI] URI = $($global:AI_Uri)"
+    Write-Host "[AI] Deployment = $($global:AI_deployment)"
+    Write-Host "[AI] MaxTokensPerRequest = $($global:AI_MaxTokensPerRequest)"
+
+    if ($global:AI_Uri -notmatch '^https?://') { throw "[AI] URI is not absolute: $($global:AI_Uri)" }
+
+    # Always have a variable for mail body usage
+    $global:AI_SummaryText = ""
 
     Write-Section "AI summary"
 
-    if ($null -eq $final -or @($final).Count -eq 0) {
+    if ($null -eq $global:final -or @($global:final).Count -eq 0) {
         Write-Warn2 "BuildSummaryByAI requested, but there are no final rows to summarize."
-        # still continue, but AI will be empty
     }
     else {
 
-        # How many top findings to include in the AI context
         $TopN = 50
-        if ($PSBoundParameters.ContainsKey('AISummaryTopN')) {
-            try { $TopN = [int]$AISummaryTopN } catch { }
-            if ($TopN -lt 10)  { $TopN = 10 }
-            if ($TopN -gt 200) { $TopN = 200 }
-        }
-
-        # How many top assets to include in asset rollup for AI context
         $TopAssetsN = 25
-        if ($PSBoundParameters.ContainsKey('AISummaryTopAssetsN')) {
-            try { $TopAssetsN = [int]$AISummaryTopAssetsN } catch { }
-            if ($TopAssetsN -lt 10)  { $TopAssetsN = 10 }
-            if ($TopAssetsN -gt 200) { $TopAssetsN = 200 }
-        }
-
-        function Get-RowValue {
-            param(
-                [Parameter(Mandatory=$true)] $Row,
-                [Parameter(Mandatory=$true)] [string[]] $Names
-            )
-            foreach ($n in $Names) {
-                if ($Row.PSObject.Properties.Name -contains $n) {
-                    $v = $Row.$n
-                    if ($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v)) { return [string]$v }
-                }
-            }
-            return ""
-        }
 
         function Test-LooksLikeHost {
             param([string]$s)
@@ -1726,12 +1735,12 @@ if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
             return @($expanded | Where-Object { $_ } | Select-Object -Unique)
         }
 
-        $colRiskScore = if ($FinalRiskScoreColumnName) { $FinalRiskScoreColumnName } else { "RiskScore" }
+        $colRiskScore = if ($global:FinalRiskScoreColumnName) { $global:FinalRiskScoreColumnName } else { "RiskScore" }
 
-        $topRows = @($final | Select-Object -First $TopN)
+        $topRows = @($global:final | Select-Object -First $TopN)
 
         $findingLines = @()
-        $assetAgg = @{}  # asset -> object
+        $assetAgg = @{}
 
         function Add-AssetAgg {
             param(
@@ -1788,32 +1797,25 @@ if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
             $confName    = Get-RowValue -Row $r -Names @("ConfigurationName", "RecommendationName", "FindingName", "Title", "Name")
             $confId      = Get-RowValue -Row $r -Names @("ConfigurationId", "RecommendationId", "FindingId", "Id")
             $devices     = Get-RowValue -Row $r -Names @("Devices", "DeviceCount", "ImpactedDevices")
-
-            # Summary mode usually has ImpactedAssets; Detailed mode often doesn't
             $assetsText  = Get-RowValue -Row $r -Names @("ImpactedAssets", "Assets", "AffectedAssets", "Machines")
 
             $findingLines += ("[{0}] RiskScore={1}; Tier={2}; Severity={3}; Domain={4}; Config={5} [{6}]; Category={7}/{8}; Devices={9}; ImpactedAssets={10}" -f `
                 $i, $riskScoreText, $tierLevel, $severity, $domain, $confName, $confId, $category, $subcat, $devices, $assetsText)
 
-            # NEW: resolves assets for BOTH summary + detailed
             $assetList = Resolve-AssetNamesForRow -Row $r -AssetsText $assetsText
 
-            # If still empty, skip aggregation for this row (but keep findingLines for traceability)
             if ($assetList -and @($assetList).Count -gt 0) {
                 foreach ($a in $assetList) {
                     Add-AssetAgg -Asset $a -RiskScore $riskScore -TierLevel $tierLevel -Severity $severity -Domain $domain `
                         -Category $category -Subcat $subcat -ConfName $confName -ConfId $confId
                 }
-            }
-            else {
-                # Optional: enable if you want visibility into rows that cannot be tied to an asset
+            } else {
                 Write-Warn2 ("AI rollup: no asset resolved for row {0}. Config={1} [{2}]" -f $i, $confName, $confId)
             }
         }
 
         $findingsText = $findingLines -join "`n"
 
-        # Rank assets: primary by MaxRiskScore, secondary by RiskScoreTotal, then Findings
         $assetRanked = @()
         if ($assetAgg.Count -gt 0) {
             $assetRanked = $assetAgg.Values |
@@ -1827,14 +1829,10 @@ if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
             $rank++
 
             $domainSummary = ""
-            if ($a.Domains.Count -gt 0) {
-                $domainSummary = (@($a.Domains) | Sort-Object) -join ", "
-            }
+            if ($a.Domains.Count -gt 0) { $domainSummary = (@($a.Domains) | Sort-Object) -join ", " }
 
             $topItems = ""
-            if ($a.TopItems.Count -gt 0) {
-                $topItems = ($a.TopItems | Select-Object -First 8) -join "; "
-            }
+            if ($a.TopItems.Count -gt 0) { $topItems = ($a.TopItems | Select-Object -First 8) -join "; " }
 
             $assetLines += ("{0}. Asset={1}; Tier={2}; Findings={3}; MaxRiskScore={4:N2}; RiskScoreTotal={5:N2}; Domains=[{6}]; TopItems={7}" -f `
                 $rank, $a.Asset, $a.TierLevel, $a.Findings, $a.MaxRiskScore, $a.RiskScoreTotal, $domainSummary, $topItems)
@@ -1843,12 +1841,12 @@ if ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI) {
         $assetsTextForAI = $assetLines -join "`n"
 
         $runMeta = @"
-ReportTemplate: $ReportTemplate
-Final rows:     $(@($final).Count)
+ReportTemplate: $($global:ReportTemplate)
+Final rows:     $(@($global:final).Count)
 Included in AI: $(@($topRows).Count) (TopN findings)
 Asset rollup:   $($assetAgg.Keys.Count) unique assets (TopAssetsN=$TopAssetsN included)
 RiskScore col:  $colRiskScore
-Output file:    $OutputXlsx
+Output file:    $($global:OutputXlsx)
 Generated:      $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')
 "@
 
@@ -1905,16 +1903,18 @@ Rules:
 
         Write-Host "`n[AI SUMMARY RESPONSE]`n" -ForegroundColor Cyan
 
-        # capture streamed output
         $sb = New-Object System.Text.StringBuilder
+
+        $reader = $null
+        $client = $null
 
         try {
             $body = @{
-                model = $AI_deployment
+                model = $global:AI_deployment
                 stream = $true
                 temperature = 0.2
                 top_p = 1.0
-                max_tokens = 16384
+                max_tokens = [int]$global:AI_MaxTokensPerRequest
                 messages = @(
                     @{
                         role = "system"
@@ -1932,10 +1932,10 @@ Rules:
 
             $request = [System.Net.Http.HttpRequestMessage]::new(
                 [System.Net.Http.HttpMethod]::Post,
-                $AI_uri
+                $global:AI_Uri
             )
 
-            $request.Headers.Add("api-key", $AI_apiKey)
+            $request.Headers.Add("api-key", $global:AI_apiKey)
             $request.Headers.Add("Accept", "text/event-stream")
             $request.Content = [System.Net.Http.StringContent]::new(
                 $body,
@@ -1975,16 +1975,13 @@ Rules:
                 }
             }
 
-            $reader.Close()
-            $client.Dispose()
-
-            $AI_SummaryText = ($sb.ToString() -replace "`r`n","`n" -replace "`r","`n").Trim()
+            $global:AI_SummaryText = ($sb.ToString() -replace "`r`n","`n" -replace "`r","`n").Trim()
 
             # Write AI summary into Excel Summary sheet
             try {
               Write-Step "writing AI summary to excel sheet 'Summary'"
               Tock
-              Export-AISummaryWorksheet -Path $OutputXlsx -SheetName 'Summary' -SummaryText $AI_SummaryText
+              Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText
               Tick "excel summary export"
               Write-Ok "AI summary added to Excel (Summary sheet)"
             } catch {
@@ -1993,14 +1990,13 @@ Rules:
 
         } catch {
             Write-Error "Azure OpenAI request failed: $($_.Exception.Message)"
-            if ($reader) { $reader.Close() }
-            if ($client) { $client.Dispose() }
-
-            # still try to write a summary sheet with error note
             try {
-              $AI_SummaryText = "AI summary failed: $($_.Exception.Message)"
-              Export-AISummaryWorksheet -Path $OutputXlsx -SheetName 'Summary' -SummaryText $AI_SummaryText
+              $global:AI_SummaryText = "AI summary failed: $($_.Exception.Message)"
+              Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText
             } catch { }
+        } finally {
+            if ($reader) { try { $reader.Close() } catch {} }
+            if ($client) { try { $client.Dispose() } catch {} }
         }
     }
 }
@@ -2011,29 +2007,26 @@ Rules:
 
 Write-Section "mail dispatch decision"
 
-if ($Report_SendMail -eq $true) {
+if ([bool]$global:Report_SendMail -eq $true) {
 
-    $to          = $Report_To
-    $from        = $SMTPUser
-    $subject     = "Security Insights | Risk Analysis | $ReportTemplate"
-    $attachments = @($OutputXlsx)
+    $to          = @($global:Report_To)
+    $from        = $global:SMTPUser
+    $subject     = "Security Insights | Risk Analysis | $($global:ReportTemplate)"
+    $attachments = @($global:OutputXlsx)
 
-    # Decide body content based on AI enablement + actual output
-    $aiEnabled = ($PSBoundParameters.ContainsKey('BuildSummaryByAI') -or $BuildSummaryByAI)
+    $aiEnabled = [bool]$global:BuildSummaryByAI
 
     if ($aiEnabled) {
 
-        # HTML-safe AI summary (if AI ran but produced nothing, keep message clear)
         $aiHtml = ""
-        if (-not [string]::IsNullOrWhiteSpace($AI_SummaryText)) {
-          $aiHtml = ($AI_SummaryText.Trim() -replace "&","&amp;" -replace "<","&lt;" -replace ">","&gt;")
+        if (-not [string]::IsNullOrWhiteSpace($global:AI_SummaryText)) {
+          $aiHtml = ($global:AI_SummaryText.Trim() -replace "&","&amp;" -replace "<","&lt;" -replace ">","&gt;")
           $aiHtml = $aiHtml -replace "`r`n","`n" -replace "`r","`n"
           $aiHtml = $aiHtml -replace "`n","<br>"
         } else {
           $aiHtml = "AI summary was enabled, but no AI summary output was produced."
         }
 
-        # Body html WITH AI section + disclaimer
         $bodyHtml = @"
 Risk Analysis<br>
 <br>
@@ -2052,7 +2045,6 @@ This summary was generated using AI and may contain mistakes or incomplete concl
 
     } else {
 
-        # Body html WITHOUT AI section (different text)
         $bodyHtml = @"
 Risk Analysis<br>
 <br>
@@ -2060,23 +2052,23 @@ Attached you will find prioritized security risks, ranked by RiskScore.<br>
 The Excel file contains full evidence, raw data, and detailed findings per asset (Details sheet).<br>
 <br>
 AI summary was not included for this run (BuildSummaryByAI was not enabled).<br>
-If you want an AI-based prioritization summary in both the email and the Excel (Summary sheet), run again with -BuildSummaryByAI.<br>
+If you want an AI-based prioritization summary in both the email and the Excel (Summary sheet), set Global:BuildSummaryByAI = `$true in the launcher script and run again.<br>
 <br>
 Security Insight | Risk Analysis | support: Morten Knudsen | mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight.<br>
 "@
     }
 
     try {
-        if ($Mail_SendAnonymous) {
+        if ([bool]$global:Mail_SendAnonymous) {
             Write-Step ("sending mail anonymously to: {0}" -f ($to -join ', '))
-            Send-MailAnonymous -SmtpServer $SmtpServer -Port $SMTPPort -UseSsl $SMTP_UseSSL `
+            Send-MailAnonymous -SmtpServer $global:SmtpServer -Port $global:SMTPPort -UseSsl $global:SMTP_UseSSL `
                 -From $from -To $to -Subject $subject -BodyHtml $bodyHtml -Attachments $attachments
             Write-Ok "anonymous mail sent"
         }
         else {
             Write-Step ("sending mail using secure credentials to: {0}" -f ($to -join ', '))
-            Send-MailSecure -SmtpServer $SmtpServer -Port $SMTPPort -UseSsl $SMTP_UseSSL `
-                -Credential $SecureCredentialsSMTP -From $from -To $to -Subject $subject -BodyHtml $bodyHtml -Attachments $attachments
+            Send-MailSecure -SmtpServer $global:SmtpServer -Port $global:SMTPPort -UseSsl $global:SMTP_UseSSL `
+                -Credential $global:SecureCredentialsSMTP -From $from -To $to -Subject $subject -BodyHtml $bodyHtml -Attachments $attachments
             Write-Ok "secure mail sent"
         }
     }

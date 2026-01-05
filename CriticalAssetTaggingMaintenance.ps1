@@ -311,6 +311,40 @@ function Add-AzureResourceTag {
   }
 }
 
+function RemoveTagForMultipleMachines {
+    param(
+        [Parameter(Mandatory)][hashtable]$AccessHeaders,
+        [Parameter(Mandatory)][string[]]$DeviceInventoryIds,
+        [Parameter(Mandatory)][string]$Tag
+    )
+
+    $uri  = "https://api.securitycenter.microsoft.com/api/machines/AddOrRemoveTagForMultipleMachines"
+    $body = @{
+        Value      = $Tag
+        Action     = "Remove"
+        MachineIds = @($DeviceInventoryIds)
+    } | ConvertTo-Json -Depth 4
+
+    Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
+}
+
+
+function Remove-DefenderTag {
+    param(
+        [Parameter(Mandatory)][hashtable]$AccessHeaders,
+        [Parameter(Mandatory)][string]$DeviceInventoryId,
+        [Parameter(Mandatory)][string]$Tag
+    )
+
+    $uri  = "https://api.securitycenter.microsoft.com/api/machines/$DeviceInventoryId/tags"
+    $body = @{
+        Value  = $Tag
+        Action = "Remove"
+    } | ConvertTo-Json -Depth 4
+
+    Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
+}
+
 function Test-AzModuleInstalled {
     Write-Step "Validating Az modules"
     return $null -ne (Get-Module -ListAvailable -Name 'Az.Accounts' -ErrorAction SilentlyContinue)
@@ -489,7 +523,7 @@ $rows
 
 <# DELETE SPECIFIC TAG from all devices (Defender)
 
-$TagToDelete = 'SecurityManagementServer--tier0--SI'
+$TagToDelete = 'ADCertificateService--tier1--SI'
 
 $Query = @'
 ExposureGraphNodes
@@ -582,5 +616,95 @@ for ($i = 0; $i -lt $deviceInventoryIds.Count; $i += $chunkSize) {
     }
 }
 
+#------------------------------------------------------------------
+
+$TagToDelete = 'createdBy'
+
+$Query = @'
+resourcecontainers
+| where type == "microsoft.resources/subscriptions"
+| where isnotnull(tags["{0}"])
+| project subscriptionId, subscriptionName = name
+| order by subscriptionName asc
+'@ -f $TagToDelete
+
+Write-Host "Querying subscriptions ..." -ForegroundColor Cyan
+$subsWithTag = Search-AzGraph -Query $Query -First 1000
+
+foreach ($sub in $subsWithTag) {
+    Write-Host "Processing subscription: $($sub.subscriptionName) [$($sub.subscriptionId)]" -ForegroundColor Yellow
+
+    try {
+        Set-AzContext -SubscriptionId $sub.subscriptionId -ErrorAction Stop
+
+        # Delete ONLY this tag key on the subscription resource
+        Update-AzTag `
+            -ResourceId "/subscriptions/$($sub.subscriptionId)" `
+            -Tag @{ $TagToDelete = "" } `
+            -Operation Delete `
+            -ErrorAction Stop
+
+        Write-Host "Removed tag [$TagToDelete]" -ForegroundColor Green
+        write-host ""
+    }
+    catch {
+        Write-Host "Failed on subscription $($sub.subscriptionId): $_" -ForegroundColor Red
+    }
+}
+
+#---------------------------------
+
+# DELETE SPECIFIC TAG ON AZURE RESOURCES
+
+$TagToDelete = "dsadas"   # exact key to remove
+$PageSize    = 1000
+
+$query = @'
+Resources
+| where isnotnull(tags["{0}"])
+| project
+    id,
+    name,
+    type,
+    resourceGroup,
+    subscriptionId,
+    location,
+    TagValue = tostring(tags["{0}"])
+| order by subscriptionId asc
+'@ -f $TagToDelete
+
+Write-Host "Querying all resources with tag '$TagToDelete'..." -ForegroundColor Cyan
+
+$all = New-Object System.Collections.Generic.List[object]
+$skipToken = $null
+
+do {
+    $result = Search-AzGraph -Query $query -First $PageSize -SkipToken $skipToken
+    if ($result -and $result.Data) { [void]$all.AddRange($result.Data) }
+    $skipToken = $result.SkipToken
+} while ($skipToken)
+
+Write-Host ("Found {0} resources with tag '{1}'." -f $all.Count, $TagToDelete) -ForegroundColor Yellow
+
+foreach ($r in $all) {
+    Write-Host "Processing: $($r.name) [$($r.type)]" -ForegroundColor Yellow
+    Write-Host "  ResourceId: $($r.id)" -ForegroundColor DarkGray
+    Write-Host "  Current $($TagToDelete): $($r.TagValue)" -ForegroundColor DarkGray
+
+    try {
+        # Delete ONLY this tag key from the resource (no full replace)
+        Update-AzTag `
+            -ResourceId $r.id `
+            -Tag @{ $TagToDelete = "" } `
+            -Operation Delete `
+            -ErrorAction Stop
+
+        Write-Host "  Removed tag [$TagToDelete]" -ForegroundColor Green
+        write-host ""
+    }
+    catch {
+        Write-Host "  FAILED: $($_.Exception.Message)" -ForegroundColor Red
+    }
+}
 
 #>

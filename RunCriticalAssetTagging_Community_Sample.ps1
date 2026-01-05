@@ -32,6 +32,7 @@ $global:SpnClientSecret     = $null
 $AutomationFramework_Default = $false                   # $false = Community edition
 $SettingsPath_Default        = ''                       # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
 $Scope_Default               = @('PROD','TEST')         # Defines which AssetTaggings to include from YAML file
+$WhatIfMode                  = $false
 
 #########################################################################################################
 # Resolve runtime values (CMDLINE WINS, otherwise DEFAULT)
@@ -80,6 +81,7 @@ If (-not $AutomationFramework) {
 $global:SettingsPath        = $SettingsPath
 $global:Scope               = $Scope
 $global:AutomationFramework = $AutomationFramework
+$global:WhatIfMode          = $WhatIfMode
 
 #########################################################################################################
 # Optional: show config right away (helps troubleshooting)

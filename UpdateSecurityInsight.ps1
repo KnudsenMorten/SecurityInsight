@@ -7,9 +7,6 @@ $Files = @("SecurityInsight.ps1",`
            "SecurityInsight_RiskAnalysis.yaml",`
            "SecurityInsight_RiskIndex.csv",`
            "CriticalAssetTagging.ps1",`
-           "CriticalAssetTagging.yaml",`
-           "RunCriticalAssetTagging.ps1",`
-           "RunSecurityInsight.ps1",`
            "CriticalAssetTaggingMaintenance.ps1" `
           )
 

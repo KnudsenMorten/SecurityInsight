@@ -2355,9 +2355,9 @@ Reports:
                 tagsBag1.AssetTier,
                 tagsBag2.AssetTier,
                 tagsBag3.AssetTier,
-                tagsBag1["AssetTier"],
-                tagsBag2["AssetTier"],
-                tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"],
+                tagsBag2["AssetTier--SI"],
+                tagsBag3["AssetTier--SI"]
             ))
 
             // Fallback method  gather tag arrays and scan for tier markers
@@ -2668,9 +2668,9 @@ Reports:
                 tagsBag1.AssetTier,
                 tagsBag2.AssetTier,
                 tagsBag3.AssetTier,
-                tagsBag1["AssetTier"],
-                tagsBag2["AssetTier"],
-                tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"],
+                tagsBag2["AssetTier--SI"],
+                tagsBag3["AssetTier--SI"]
             ))
 
             // Fallback method  gather tag arrays and scan for tier markers
@@ -2975,7 +2975,7 @@ Reports:
             | extend tagsBag3 = todynamic(coalesce(Raw.tags, dynamic({})))
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
             | extend deviceDynamicTags = iff(isnull(RawData.deviceDynamicTags), dynamic([]), todynamic(RawData.deviceDynamicTags))
@@ -3617,7 +3617,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -4204,7 +4204,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -4923,7 +4923,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -5507,7 +5507,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -6154,7 +6154,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -6707,7 +6707,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -7296,7 +7296,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -7803,7 +7803,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -8386,7 +8386,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -8942,7 +8942,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -9531,7 +9531,7 @@ Reports:
 
             | extend AssetTierFromBag = tostring(coalesce(
                 tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
-                tagsBag1["AssetTier"], tagsBag2["AssetTier"], tagsBag3["AssetTier"]
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
             ))
 
             | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
@@ -10034,6 +10034,30 @@ ReportTemplates:
         UseQueryBucketing: false
         DefaultBucketCount: 0
         BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Credential_Based_Lateral_Movement
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Github_to_Azure_Resources
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
 
   - ReportName: RiskAnalysis_Detailed_Bucket_2
     ReportPurpose: Overview
@@ -10047,6 +10071,30 @@ ReportTemplates:
         DefaultBucketCount: 2
         BucketPlaceholderToken: "__BUCKET_FILTER__"
       - Name: Azure_Recommendations_Detailed
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Credential_Based_Lateral_Movement
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Github_to_Azure_Resources
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
         UseQueryBucketing: false
         DefaultBucketCount: 0
         BucketPlaceholderToken: "N/A"
@@ -10067,6 +10115,26 @@ ReportTemplates:
         DefaultBucketCount: 0
         BucketPlaceholderToken: "N/A"
       - Name: Attack_Paths_Summary_Credential_Based_Lateral_Movement
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Summary_Github_to_Azure_Resources
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: false
+        DefaultBucketCount: 0
+        BucketPlaceholderToken: "N/A"
+      - Name: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
         UseQueryBucketing: false
         DefaultBucketCount: 0
         BucketPlaceholderToken: "N/A"

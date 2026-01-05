@@ -36,6 +36,12 @@ $SettingsPath        = $global:SettingsPath
 $AutomationFramework = [bool]$global:AutomationFramework
 $Scope               = @($global:Scope)
 
+# Optional safe defaults if someone runs the main script directly (without launcher)
+if ($null -eq $global:WhatIfMode) { $global:WhatIfMode = $false }
+
+$WhatIfMode = [bool]$global:WhatIfMode
+Write-Info ("WhatIfMode: {0}" -f $WhatIfMode)
+
 #######################################################################################################
 # FUNCTIONS (begin)
 #######################################################################################################
@@ -213,16 +219,30 @@ function AddTagForMultipleMachines {
   param(
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
     [Parameter(Mandatory)][string[]]$DeviceInventoryIds,
-    [Parameter(Mandatory)][string]$Tag
+    [Parameter(Mandatory)][string]$Tag,
+    [bool]$WhatIfMode = $script:WhatIfMode
   )
 
   $uri  = "https://api.securitycenter.microsoft.com/api/machines/AddOrRemoveTagForMultipleMachines"
-  $body = @{
+  $bodyObj = @{
     Value      = $Tag
     Action     = "Add"
     MachineIds = @($DeviceInventoryIds)
-  } | ConvertTo-Json -Depth 4
+  }
 
+  if ($WhatIfMode) {
+    Write-Warn2 ("[WHATIF] Would bulk-tag {0} machines with '{1}'" -f $DeviceInventoryIds.Count, $Tag)
+    Write-Info  ("[WHATIF] POST {0}" -f $uri)
+    return [pscustomobject]@{
+      WhatIf   = $true
+      Uri      = $uri
+      Body     = $bodyObj
+      Count    = $DeviceInventoryIds.Count
+      Tag      = $Tag
+    }
+  }
+
+  $body = $bodyObj | ConvertTo-Json -Depth 4
   Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
 }
 
@@ -230,15 +250,29 @@ function Add-DefenderTag {
   param(
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
     [Parameter(Mandatory)][string]$DeviceInventoryId,
-    [Parameter(Mandatory)][string]$Tag
+    [Parameter(Mandatory)][string]$Tag,
+    [bool]$WhatIfMode = $script:WhatIfMode
   )
 
   $uri  = "https://api.securitycenter.microsoft.com/api/machines/$DeviceInventoryId/tags"
-  $body = @{
+  $bodyObj = @{
     Value  = $Tag
     Action = "Add"
-  } | ConvertTo-Json -Depth 4
+  }
 
+  if ($WhatIfMode) {
+    Write-Warn2 ("[WHATIF] Would tag machine {0} with '{1}'" -f $DeviceInventoryId, $Tag)
+    Write-Info  ("[WHATIF] POST {0}" -f $uri)
+    return [pscustomobject]@{
+      WhatIf = $true
+      Uri    = $uri
+      Body   = $bodyObj
+      Id     = $DeviceInventoryId
+      Tag    = $Tag
+    }
+  }
+
+  $body = $bodyObj | ConvertTo-Json -Depth 4
   Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
 }
 
@@ -284,7 +318,8 @@ function Add-AzureResourceTag {
   param(
     [Parameter(Mandatory)][string]$ResourceId,
     [Parameter(Mandatory)][string]$AssetTagName,
-    [Parameter(Mandatory)][string]$TagKey
+    [Parameter(Mandatory)][string]$TagKey,
+    [bool]$WhatIfMode = $script:WhatIfMode
   )
 
   if ([string]::IsNullOrWhiteSpace($ResourceId))   { throw "ResourceId is empty" }
@@ -299,6 +334,22 @@ function Add-AzureResourceTag {
   $already = $false
   if ($existing -and $existing.ContainsKey($TagKey) -and ([string]$existing[$TagKey]) -eq $AssetTagName) {
     $already = $true
+  }
+
+  if ($WhatIfMode) {
+    if ($already) {
+      Write-Info ("[WHATIF] Azure tag already present: {0} -> {1}='{2}'" -f $rid, $TagKey, $AssetTagName)
+    } else {
+      Write-Warn2 ("[WHATIF] Would set Azure tag: {0} -> {1}='{2}' (Merge)" -f $rid, $TagKey, $AssetTagName)
+    }
+
+    return [pscustomobject]@{
+      WhatIf     = $true
+      Changed    = (-not $already)
+      ResourceId = $rid
+      TagKey     = $TagKey
+      TagValue   = $AssetTagName
+    }
   }
 
   Update-AzTag -ResourceId $rid -Tag @{ $TagKey = $AssetTagName } -Operation Merge -ErrorAction Stop | Out-Null
@@ -542,9 +593,14 @@ foreach ($rule in @($Yaml.AssetTagging)) {
       Write-Info "running hunting query against engine: $queryEngine .... Please wait !"
       $arg = Invoke-AzureResourceGraphQuery -Query $query
 
+      # Force array behavior (prevents scalar string/object issues in PS 5.1)
       $rows = @()
-      if ($arg -and $arg.PSObject.Properties.Name -contains 'Data') { $rows = @($arg.Data) }
-      elseif ($arg) { $rows = @($arg) }
+      if ($arg -and ($arg.PSObject.Properties.Name -contains 'Data')) {
+        $rows = @($arg.Data)
+      } elseif ($arg) {
+        $rows = @($arg)
+      }
+      $rows = @($rows)
 
       if (-not $rows -or $rows.Count -eq 0) { Write-Info "no results"; continue }
 
@@ -558,7 +614,10 @@ foreach ($rule in @($Yaml.AssetTagging)) {
           $rid = Get-ArgResourceIdFromRow -Row $r
           if (-not [string]::IsNullOrWhiteSpace($rid)) { $rid }
         }
-      ) | Select-Object -Unique
+      )
+
+      # IMPORTANT: Select-Object -Unique can output a scalar when only 1 item -> force array again
+      $resourceIds = @($resourceIds | Select-Object -Unique)
 
       if (-not $resourceIds -or $resourceIds.Count -eq 0) {
         Write-Warn2 "ARG results did not include a resource id column (expected id/Id/ResourceId); skipping"

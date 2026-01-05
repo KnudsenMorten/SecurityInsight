@@ -1,6 +1,102 @@
 AssetTagging:
-  - AssetTagName: AutomationServer--tier0--SI
+  - AssetTagName: AzPlatformManagementResources--tier0--SI
     Mode: Prod
+    QueryEngine: AzureResourceGraph
+    Query:
+      - |
+        resourcecontainers
+        | where type == "microsoft.resources/subscriptions"
+        | join kind=inner (
+            resources
+            | where type == "microsoft.operationsmanagement/solutions"
+            | where name startswith "SecurityInsights("
+            | project subscriptionId
+            | distinct subscriptionId
+        ) on subscriptionId
+        | extend
+            Tag_AssetTier = tostring(tags["AssetTier--SI"])
+        | extend
+            AssetTagType   = "AssetTier--SI",
+            AssetTag       = "AzPlatformManagementSub",
+            AssetTierLevel = 0
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        | project
+            subscriptionId,
+            subscriptionName = name,
+            Tag_AssetTier,
+            AssetTagType,
+            AssetTag,
+            AssetTierLevel,
+            AssetTagName,
+            id
+        | order by subscriptionId asc
+        | where Tag_AssetTier != AssetTagName
+
+
+  - AssetTagName: AzPlatformManagementResources--tier0--SI
+    Mode: Prod
+    QueryEngine: AzureResourceGraph
+    Query:
+      - |
+        resources
+        | join kind=inner (
+            resources
+            | where type == "microsoft.operationsmanagement/solutions"
+            | where name startswith "SecurityInsights("
+            | project subscriptionId
+            | distinct subscriptionId
+        ) on subscriptionId
+        | extend Tag_AssetTier = tostring(tags["AssetTier--SI"])
+        | extend
+            AssetTagType   = "AssetTier--SI",
+            AssetTag       = "AzPlatformManagementResources",
+            AssetTierLevel = 0
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        | project
+            subscriptionId,
+            resourceGroup,
+            name,
+            resourceType = type,
+            location,
+            Tag_AssetTier,
+            AssetTagType,
+            AssetTag,
+            AssetTierLevel,
+            AssetTagName,
+            id
+        | order by subscriptionId asc, resourceType asc, resourceGroup asc, name asc
+        | where Tag_AssetTier != AssetTagName
+
+  - AssetTagName: AzCAFHubPlatformSub--tier0--SI
+    Mode: Test
+    QueryEngine: AzureResourceGraph
+    Query:
+      - |
+        resourcecontainers
+        | where type == "microsoft.resources/subscriptions"
+        | where properties.managementGroupAncestorsChain has "mg-platform"
+        | extend Tag_AssetTier = tostring(tags["AssetTier--SI"])
+        | extend
+            AssetTagType   = "AssetTier--SI",
+            AssetTag       = "AzCAFHubPlatformSub--tier0--SI",
+            AssetTierLevel = 0
+        | extend AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        | project
+            subscriptionId,
+            subscriptionName = name,
+            Tag_AssetTier,
+            AssetTagType,
+            AssetTag,
+            AssetTierLevel,
+            AssetTagName,
+            id
+        | where Tag_AssetTier != AssetTagName
+        | order by subscriptionId asc
+
+  - AssetTagName: AutomationServer--tier0--SI
+    Mode: Test
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -10,7 +106,7 @@ AssetTagging:
         | where NodeLabel has "device"
            or NodeLabel has "microsoft.compute/virtualmachines"
            or NodeLabel has "microsoft.hybridcompute/machines"
-        | where NodeName has "MGMT1"
+        | where NodeName has "autosentinel01"
 
         | extend rawData = todynamic(NodeProperties).rawData
         | where tobool(rawData.isExcluded) == false
@@ -44,7 +140,7 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "AutomationServer",
             AssetTierLevel = 0
         | extend    
@@ -102,7 +198,7 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "DomainControllerDNS",
             AssetTierLevel = 0
         | extend    
@@ -159,9 +255,9 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "ADCertificateService",
-            AssetTierLevel = 0
+            AssetTierLevel = 1
         | extend    
             AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
         // Tagging END -----------------
@@ -219,7 +315,7 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "DomainControllerDNS",
             AssetTierLevel = 0
         | extend    
@@ -266,7 +362,7 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "ServerBusinessServices",
             AssetTierLevel = 1
         | extend
@@ -283,7 +379,7 @@ AssetTagging:
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
   - AssetTagName: PAWDevices--tier0--SI
-    Mode: Prod
+    Mode: Test
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -318,7 +414,7 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "PAWDevices",
             AssetTierLevel = 0
         | extend
@@ -366,7 +462,7 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "EmployeeWorkstations",
             AssetTierLevel = 2
         | extend
@@ -418,7 +514,7 @@ AssetTagging:
 
         // Tagging BEGIN ---------------
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "EmployeeMobile",
             AssetTierLevel = 2
         | extend
@@ -436,7 +532,7 @@ AssetTagging:
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
   - AssetTagName: Network_Backbone_Switch--tier0--SI
-    Mode: Prod
+    Mode: Test
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -475,7 +571,7 @@ AssetTagging:
 
             // Tagging logic
             | extend
-                AssetTagType   = "AssetTier",
+                AssetTagType   = "AssetTier--SI",
                 AssetTag       = "Network_Backbone_Switch",
                 AssetTierLevel = 0
             | extend
@@ -513,7 +609,7 @@ AssetTagging:
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
   - AssetTagName: Network_Backbone_Router--tier0--SI
-    Mode: Prod
+    Mode: Test
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -552,7 +648,7 @@ AssetTagging:
 
             // Tagging logic
             | extend
-                AssetTagType   = "AssetTier",
+                AssetTagType   = "AssetTier--SI",
                 AssetTag       = "Network_Backbone_Router",
                 AssetTierLevel = 0
             | extend
@@ -590,7 +686,7 @@ AssetTagging:
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
   - AssetTagName: Network_Backbone_Management--tier0--SI
-    Mode: Prod
+    Mode: Test
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -629,7 +725,7 @@ AssetTagging:
 
             // Tagging logic
             | extend
-                AssetTagType   = "AssetTier",
+                AssetTagType   = "AssetTier--SI",
                 AssetTag       = "Network_Backbone_Management",
                 AssetTierLevel = 0
             | extend
@@ -699,7 +795,7 @@ AssetTagging:
 
         // Tagging logic
         | extend
-            AssetTagType   = "AssetTier",
+            AssetTagType   = "AssetTier--SI",
             AssetTag       = "Network_WLANAccessPoint",
             AssetTierLevel = 2
         | extend
@@ -745,7 +841,7 @@ AssetTagging:
 
             // Tagging logic
             | extend
-                AssetTagType   = "AssetTier",
+                AssetTagType   = "AssetTier--SI",
                 AssetTag       = "IoT",
                 AssetTierLevel = 3
             | extend
@@ -756,99 +852,3 @@ AssetTagging:
 
             // Only assets missing the intended Tier 1 tag
             | where array_index_of(AssetTagsArray, AssetTagName) == -1
-
-  - AssetTagName: AzPlatformManagementSub--tier0--SI
-    Mode: Prod
-    QueryEngine: AzureResourceGraph
-    Query:
-      - |
-        resourcecontainers
-        | where type == "microsoft.resources/subscriptions"
-        | join kind=inner (
-            resources
-            | where type == "microsoft.operationsmanagement/solutions"
-            | where name startswith "SecurityInsights("
-            | project subscriptionId
-            | distinct subscriptionId
-        ) on subscriptionId
-        | extend
-            Tag_AssetTier = tostring(tags["AssetTier"])
-        | extend
-            AssetTagType   = "AssetTier",
-            AssetTag       = "AzPlatformManagementSub",
-            AssetTierLevel = 0
-        | extend
-            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
-        | project
-            subscriptionId,
-            subscriptionName = name,
-            Tag_AssetTier,
-            AssetTagType,
-            AssetTag,
-            AssetTierLevel,
-            AssetTagName,
-            id
-        | order by subscriptionId asc
-        | where Tag_AssetTier != AssetTagName
-
-
-  - AssetTagName: AzPlatformManagementResources--tier0--SI
-    Mode: Prod
-    QueryEngine: AzureResourceGraph
-    Query:
-      - |
-        resources
-        | join kind=inner (
-            resources
-            | where type == "microsoft.operationsmanagement/solutions"
-            | where name startswith "SecurityInsights("
-            | project subscriptionId
-            | distinct subscriptionId
-        ) on subscriptionId
-        | extend Tag_AssetTier = tostring(tags["AssetTier"])
-        | extend
-            AssetTagType   = "AssetTier",
-            AssetTag       = "AzPlatformManagementResources",
-            AssetTierLevel = 0
-        | extend
-            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
-        | project
-            subscriptionId,
-            resourceGroup,
-            name,
-            resourceType = type,
-            location,
-            Tag_AssetTier,
-            AssetTagType,
-            AssetTag,
-            AssetTierLevel,
-            AssetTagName,
-            id
-        | order by subscriptionId asc, resourceType asc, resourceGroup asc, name asc
-        | where Tag_AssetTier != AssetTagName
-
-  - AssetTagName: AzCAFHubPlatformSub--tier0--SI
-    Mode: Prod
-    QueryEngine: AzureResourceGraph
-    Query:
-      - |
-        resourcecontainers
-        | where type == "microsoft.resources/subscriptions"
-        | where properties.managementGroupAncestorsChain has "mg-platform"
-        | extend Tag_AssetTier = tostring(tags["AssetTier"])
-        | extend
-            AssetTagType   = "AssetTier",
-            AssetTag       = "AzCAFHubPlatformSub--tier0--SI",
-            AssetTierLevel = 0
-        | extend AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
-        | project
-            subscriptionId,
-            subscriptionName = name,
-            Tag_AssetTier,
-            AssetTagType,
-            AssetTag,
-            AssetTierLevel,
-            AssetTagName,
-            id
-        //| where Tag_AssetTier != AssetTagName
-        | order by subscriptionId asc

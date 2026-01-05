@@ -1161,18 +1161,18 @@ if ([bool]$global:AutomationFramework) {
 
     if ([bool]$global:Detailed) {
       Write-Info "Mail mode selected: Detailed"
-      $global:Report_SendMail = [bool]$global:Mail_Security_ExposureInsights_Detailed_SendMail
-      $global:Report_To       = @($global:Mail_Security_ExposureInsights_Detailed_To)
+      $global:Report_SendMail = [bool]$global:Mail_SecurityInsight_Detailed_SendMail
+      $global:Report_To       = @($global:Mail_SecurityInsight_Detailed_To)
     }
     elseif ([bool]$global:Summary) {
       Write-Info "Mail mode selected: Summary"
-      $global:Report_SendMail = [bool]$global:Mail_Security_ExposureInsights_Summary_SendMail
-      $global:Report_To       = @($global:Mail_Security_ExposureInsights_Summary_To)
+      $global:Report_SendMail = [bool]$global:Mail_SecurityInsight_Summary_SendMail
+      $global:Report_To       = @($global:Mail_SecurityInsight_Summary_To)
     }
     else {
       Write-Info "Mail mode selected: Default (no -Detailed/-Summary provided)"
-      $global:Report_SendMail = [bool]$global:Mail_Security_ExposureInsights_Detailed_SendMail
-      $global:Report_To       = @($global:Mail_Security_ExposureInsights_Detailed_To)
+      $global:Report_SendMail = [bool]$global:Mail_SecurityInsight_Detailed_SendMail
+      $global:Report_To       = @($global:Mail_SecurityInsight_Detailed_To)
     }
 
     Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))

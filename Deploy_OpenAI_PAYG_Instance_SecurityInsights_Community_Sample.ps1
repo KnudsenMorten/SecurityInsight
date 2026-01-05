@@ -6,7 +6,6 @@ PURPOSE
   Deploy (or reuse) an Azure OpenAI account (PAYG) and a model deployment using
   ON-DEMAND / PAY-PER-USE where possible (NO PTU).
 
-
 USAGE
   Run defaults (edit $ScriptDefaults):
     .\Deploy_OpenAI_PAYG_Instance.ps1
@@ -16,7 +15,6 @@ USAGE
 
   Force a model (still tries SKUs if needed):
     .\Deploy_OpenAI_PAYG_Instance.ps1 -ModelName "gpt-4" -ModelVersion "latest" -Verbose
-
 ================================================================================
 #>
 
@@ -55,19 +53,42 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+#region ================= HOST / PATH SAFETY ======================
+# $PSScriptRoot is only populated when running from a .ps1 file context.
+# If this script is pasted into a console/ISE, it can be empty -> Join-Path fails.
+$ScriptRoot = if ($PSScriptRoot -and -not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+} else {
+    (Get-Location).Path
+}
+#endregion =======================================================
+
+#region ================= API VERSIONING ==========================
+# Management-plane API version (ARM) used for:
+# - accounts
+# - deployments
+# - models listing
+# - listKeys
+$ApiVersion = "2024-10-01"
+
+# Data-plane inference API version (Azure OpenAI inference endpoint).
+# This is NOT used for ARM calls. Kept separate for clarity/output.
+$InferenceApiVersion = "2025-01-01-preview"
+#endregion =======================================================
+
 #region ================= USER-EDITABLE DEFAULTS =================
 $ScriptDefaults = @{
-    SubscriptionId      = "xxxxx"
+    SubscriptionId      = "xxxx"
     ResourceGroupName   = "rg-security-insight"
     Location            = "swedencentral"
-    AccountName         = "security-insight"
-    DeploymentName      = "security-insight"
+    AccountName         = "xxxx-security-insight"
+    DeploymentName      = "xxxx-security-insight"
 
     # Preferred default (may not be supported; script will try others)
     ModelName           = "gpt-4o-mini"
     ModelVersion        = "latest"
 
-    Capacity            = 100   # capacity = 1 → 1,000 TPM and 10 RPM, capacity = 100 → 100,000 TPM and 1,000 RPM
+    Capacity            = 100   # script uses this as "sku.capacity" for the deployment PUT
     PublicNetworkAccess = "Enabled"
     WaitForAccountReady = $true
 
@@ -145,18 +166,20 @@ if (-not $PSBoundParameters.ContainsKey("WriteModelDumps")) {
     $WriteModelDumps = [bool]$ScriptDefaults.WriteModelDumps
 }
 
-Write-Log INFO  "SubscriptionId      : $SubscriptionId"
-Write-Log INFO  "ResourceGroupName   : $ResourceGroupName"
-Write-Log INFO  "Location            : $Location"
-Write-Log INFO  "AccountName         : $AccountName"
-Write-Log INFO  "DeploymentName      : $DeploymentName"
-Write-Log INFO  "Requested Model     : $ModelName ($ModelVersion)"
-Write-Log INFO  "Capacity            : $Capacity"
-Write-Log INFO  "PublicNetworkAccess : $PublicNetworkAccess"
-Write-Log INFO  "WaitForAccountReady : $WaitForAccountReady"
-Write-Log INFO  "SKU order           : $($DeploymentSkuOrder -join ', ')"
-Write-Log INFO  "WriteModelDumps     : $WriteModelDumps"
-Write-Log DEBUG "ApiVersion          : $ApiVersion"
+Write-Log INFO  "SubscriptionId        : $SubscriptionId"
+Write-Log INFO  "ResourceGroupName     : $ResourceGroupName"
+Write-Log INFO  "Location              : $Location"
+Write-Log INFO  "AccountName           : $AccountName"
+Write-Log INFO  "DeploymentName        : $DeploymentName"
+Write-Log INFO  "Requested Model       : $ModelName ($ModelVersion)"
+Write-Log INFO  "Capacity              : $Capacity"
+Write-Log INFO  "PublicNetworkAccess   : $PublicNetworkAccess"
+Write-Log INFO  "WaitForAccountReady   : $WaitForAccountReady"
+Write-Log INFO  "SKU order             : $($DeploymentSkuOrder -join ', ')"
+Write-Log INFO  "WriteModelDumps       : $WriteModelDumps"
+Write-Log DEBUG "Mgmt ApiVersion (ARM) : $ApiVersion"
+Write-Log DEBUG "Infer ApiVersion      : $InferenceApiVersion"
+Write-Log DEBUG "ScriptRoot            : $ScriptRoot"
 #endregion =======================================================
 
 #region ================= SANITY CHECKS ===========================
@@ -471,7 +494,12 @@ Write-Section "6) Model Discovery (Account Scoped)"
 $acctModels = Get-AccountModels -AccountId $AccountId -ApiVersion $ApiVersion
 
 if ($WriteModelDumps) {
-    $dumpRaw = Join-Path -Path $PSScriptRoot -ChildPath ("account-models-raw-" + $AccountName + ".json")
+    # ensure target folder exists
+    if (-not (Test-Path -LiteralPath $ScriptRoot)) {
+        New-Item -ItemType Directory -Path $ScriptRoot -Force | Out-Null
+    }
+
+    $dumpRaw = Join-Path -Path $ScriptRoot -ChildPath ("account-models-raw-" + $AccountName + ".json")
     $acctModels | ConvertTo-Json -Depth 30 | Out-File -FilePath $dumpRaw -Encoding utf8
     Write-Log INFO "Wrote raw account models to: $dumpRaw"
 }
@@ -508,7 +536,11 @@ if ($UserForcedModel) {
     Write-Log INFO ("Top candidates to try: " + $previewText)
 
     if ($WriteModelDumps) {
-        $dumpNorm = Join-Path -Path $PSScriptRoot -ChildPath ("account-models-normalized-" + $AccountName + ".json")
+        if (-not (Test-Path -LiteralPath $ScriptRoot)) {
+            New-Item -ItemType Directory -Path $ScriptRoot -Force | Out-Null
+        }
+
+        $dumpNorm = Join-Path -Path $ScriptRoot -ChildPath ("account-models-normalized-" + $AccountName + ".json")
         $ordered | Select-Object Name,Version,Format | ConvertTo-Json -Depth 5 | Out-File -FilePath $dumpNorm -Encoding utf8
         Write-Log INFO "Wrote normalized candidate list to: $dumpNorm"
     }
@@ -549,8 +581,8 @@ Write-Host "Key2        : $($keys.key2)"
 Write-Host "================================================"
 Write-Host ""
 
-Write-Host "Example API call:"
-Write-Host "POST $($account.properties.endpoint)openai/responses?api-version=$ApiVersion"
+Write-Host "Example API call (Responses API style):"
+Write-Host "POST $($account.properties.endpoint)openai/responses?api-version=$InferenceApiVersion"
 Write-Host "Header: api-key: <key>"
 Write-Host "Body: { `"model`": `"$DeploymentName`", `"input`": `"hello`" }"
 Write-Host ""
@@ -561,7 +593,7 @@ Write-Section "9) PowerShell Variable Output (SecurityInsight - Copy/Paste Ready
 $AI_apiKey     = $keys.key1
 $AI_endpoint   = $account.properties.endpoint.TrimEnd('/')
 $AI_deployment = $DeploymentName
-$AI_apiVersion = "2025-01-01-preview"   # specific API for Chat Completions, used by REST api
+$AI_apiVersion = $InferenceApiVersion
 
 Write-Host "`$AI_apiKey     = `"$AI_apiKey`""
 Write-Host "`$AI_endpoint   = `"$AI_endpoint`""

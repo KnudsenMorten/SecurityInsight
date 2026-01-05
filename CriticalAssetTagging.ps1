@@ -8,21 +8,18 @@ Write-host "********************************************************************
 # GLOBAL-ONLY CONFIG (launcher is source of truth)
 # -------------------------------------------------------------------------------------------------
 
-# Optional safe defaults if someone runs the main script directly (without launcher)
 if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
   $global:SettingsPath = $PSScriptRoot
 }
 if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
 if (-not $global:Scope -or @($global:Scope).Count -eq 0) { $global:Scope = @('PROD') }
 
-# Normalize SettingsPath
 try {
   $global:SettingsPath = (Resolve-Path -LiteralPath $global:SettingsPath).Path
 } catch {
   throw "SettingsPath does not exist or cannot be resolved: $($global:SettingsPath)"
 }
 
-# If NOT AutomationFramework, require SPN globals (launcher should set these)
 if (-not [bool]$global:AutomationFramework) {
   if ([string]::IsNullOrWhiteSpace([string]$global:SpnTenantId) -or
       [string]::IsNullOrWhiteSpace([string]$global:SpnClientId) -or
@@ -31,22 +28,17 @@ if (-not [bool]$global:AutomationFramework) {
   }
 }
 
-# Map globals into locals (rest of file can keep using $SettingsPath etc.)
 $SettingsPath        = $global:SettingsPath
 $AutomationFramework = [bool]$global:AutomationFramework
 $Scope               = @($global:Scope)
 
-# Optional safe defaults if someone runs the main script directly (without launcher)
 if ($null -eq $global:WhatIfMode) { $global:WhatIfMode = $false }
-
 $WhatIfMode = [bool]$global:WhatIfMode
-Write-Info ("WhatIfMode: {0}" -f $WhatIfMode)
 
 #######################################################################################################
-# FUNCTIONS (begin)
+# FUNCTIONS
 #######################################################################################################
 
-# ================= Logging helpers =================
 function Write-Step  ($m){ Write-Host "[STEP] $m" -ForegroundColor Cyan }
 function Write-Info  ($m){ Write-Host "[INFO] $m" -ForegroundColor Gray }
 function Write-Ok    ($m){ Write-Host "[OK]   $m" -ForegroundColor Green }
@@ -215,10 +207,150 @@ function ConvertTo-PSObjectDeep {
   return (_Convert $InputObject $true)
 }
 
+# ==========================================================================================
+# DEFENDER REST INVOKER WITH THROTTLING + RETRY
+# ==========================================================================================
+$script:DefenderMinDelayMs = 750
+$script:DefenderLastCall   = [datetime]::MinValue
+
+function Invoke-DefenderRest {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][ValidateSet('GET','POST','PATCH','PUT','DELETE')]
+    [string]$Method,
+    [Parameter(Mandatory)][string]$Uri,
+    [Parameter(Mandatory)][hashtable]$Headers,
+    [object]$BodyObj = $null,
+    [int]$MaxAttempts = 8
+  )
+
+  $attempt = 0
+  $delaySeconds = 2
+
+  while ($true) {
+    $attempt++
+
+    if ($script:DefenderLastCall -ne [datetime]::MinValue) {
+      $elapsedMs = ([datetime]::UtcNow - $script:DefenderLastCall).TotalMilliseconds
+      if ($elapsedMs -lt $script:DefenderMinDelayMs) {
+        Start-Sleep -Milliseconds ([int]($script:DefenderMinDelayMs - $elapsedMs))
+      }
+    }
+
+    try {
+      $script:DefenderLastCall = [datetime]::UtcNow
+
+      if ($null -ne $BodyObj) {
+        $json = $BodyObj | ConvertTo-Json -Depth 6
+        return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers -ContentType "application/json" -Body $json
+      } else {
+        return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers
+      }
+    }
+    catch {
+      $ex = $_.Exception
+      $resp = $ex.Response
+
+      $statusCode = $null
+      $retryAfter = $null
+
+      if ($resp) {
+        try { $statusCode = [int]$resp.StatusCode } catch {}
+        try { $retryAfter = $resp.Headers['Retry-After'] } catch {}
+      }
+
+      if ($statusCode -eq 429) {
+        $sleep = $null
+        if ($retryAfter -and ($retryAfter -match '^\d+$')) { $sleep = [int]$retryAfter }
+        if (-not $sleep) { $sleep = $delaySeconds }
+
+        Write-Info ("429 throttled. Sleeping {0}s (attempt {1}/{2})" -f $sleep, $attempt, $MaxAttempts)
+        Start-Sleep -Seconds $sleep
+        $delaySeconds = [math]::Min($delaySeconds * 2, 60)
+
+        if ($attempt -lt $MaxAttempts) { continue }
+      }
+
+      if ($statusCode -ge 500 -and $statusCode -le 599 -and $attempt -lt $MaxAttempts) {
+        Write-Info ("{0} server error. Sleeping {1}s (attempt {2}/{3})" -f $statusCode, $delaySeconds, $attempt, $MaxAttempts)
+        Start-Sleep -Seconds $delaySeconds
+        $delaySeconds = [math]::Min($delaySeconds * 2, 60)
+        continue
+      }
+
+      throw
+    }
+  }
+}
+
+# ==========================================================================================
+# Helpers: name + SenseDeviceId extraction (NO DNS RESOLUTION)
+# ==========================================================================================
+function Get-FirstNonEmptyPropertyValue {
+  param(
+    [Parameter(Mandatory)][psobject]$Row,
+    [Parameter(Mandatory)][string[]]$Names
+  )
+  foreach ($n in $Names) {
+    $p = $Row.PSObject.Properties[$n]
+    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return [string]$p.Value }
+  }
+  return $null
+}
+
+function Get-DeviceNameFromRow {
+  param([Parameter(Mandatory)][psobject]$Row)
+
+  $n = Get-FirstNonEmptyPropertyValue -Row $Row -Names @(
+    'DeviceName','deviceName',
+    'ComputerDnsName','computerDnsName',
+    'HostName','hostName',
+    'Name','name'
+  )
+  if ([string]::IsNullOrWhiteSpace($n)) { return "<unknown>" }
+  return $n.Trim()
+}
+
+function Get-SenseDeviceIdFromRow {
+  param([Parameter(Mandatory)][psobject]$Row)
+
+  # primary id to use for Defender machine APIs
+  $id = Get-FirstNonEmptyPropertyValue -Row $Row -Names @('SenseDeviceId','senseDeviceId')
+  if ([string]::IsNullOrWhiteSpace($id)) { return $null }
+  return $id.Trim()
+}
+
+function Test-DefenderMachineExists {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$AccessHeaders,
+    [Parameter(Mandatory)][string]$MachineId
+  )
+
+  if ([string]::IsNullOrWhiteSpace($MachineId)) { return $false }
+
+  $uri = "https://api.securitycenter.microsoft.com/api/machines/$MachineId"
+  try {
+    Invoke-DefenderRest -Method GET -Uri $uri -Headers $AccessHeaders -BodyObj $null -MaxAttempts 3 | Out-Null
+    return $true
+  }
+  catch {
+    $ex = $_.Exception
+    $resp = $ex.Response
+    $statusCode = $null
+    if ($resp) { try { $statusCode = [int]$resp.StatusCode } catch {} }
+    if ($statusCode -eq 404) { return $false }
+    throw
+  }
+}
+
+# ==========================================================================================
+# DEFENDER TAGGING FUNCTIONS
+# ==========================================================================================
 function AddTagForMultipleMachines {
   param(
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
-    [Parameter(Mandatory)][string[]]$DeviceInventoryIds,
+    [Parameter(Mandatory)][string[]]$MachineIds,
     [Parameter(Mandatory)][string]$Tag,
     [bool]$WhatIfMode = $script:WhatIfMode
   )
@@ -227,55 +359,101 @@ function AddTagForMultipleMachines {
   $bodyObj = @{
     Value      = $Tag
     Action     = "Add"
-    MachineIds = @($DeviceInventoryIds)
+    MachineIds = @($MachineIds)
   }
 
   if ($WhatIfMode) {
-    Write-Warn2 ("[WHATIF] Would bulk-tag {0} machines with '{1}'" -f $DeviceInventoryIds.Count, $Tag)
+    Write-Warn2 ("[WHATIF] Would bulk-tag {0} machines with '{1}'" -f $MachineIds.Count, $Tag)
     Write-Info  ("[WHATIF] POST {0}" -f $uri)
-    return [pscustomobject]@{
-      WhatIf   = $true
-      Uri      = $uri
-      Body     = $bodyObj
-      Count    = $DeviceInventoryIds.Count
-      Tag      = $Tag
-    }
+    return
   }
 
-  $body = $bodyObj | ConvertTo-Json -Depth 4
-  Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
+  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj | Out-Null
 }
 
 function Add-DefenderTag {
   param(
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
-    [Parameter(Mandatory)][string]$DeviceInventoryId,
+    [Parameter(Mandatory)][string]$MachineId,
     [Parameter(Mandatory)][string]$Tag,
+    [string]$DeviceName = "<unknown>",
     [bool]$WhatIfMode = $script:WhatIfMode
   )
 
-  $uri  = "https://api.securitycenter.microsoft.com/api/machines/$DeviceInventoryId/tags"
+  $uri  = "https://api.securitycenter.microsoft.com/api/machines/$MachineId/tags"
   $bodyObj = @{
     Value  = $Tag
     Action = "Add"
   }
 
   if ($WhatIfMode) {
-    Write-Warn2 ("[WHATIF] Would tag machine {0} with '{1}'" -f $DeviceInventoryId, $Tag)
+    Write-Warn2 ("[WHATIF] Would tag machine {0} ({1}) with '{2}'" -f $DeviceName, $MachineId, $Tag)
     Write-Info  ("[WHATIF] POST {0}" -f $uri)
-    return [pscustomobject]@{
-      WhatIf = $true
-      Uri    = $uri
-      Body   = $bodyObj
-      Id     = $DeviceInventoryId
-      Tag    = $Tag
-    }
+    return
   }
 
-  $body = $bodyObj | ConvertTo-Json -Depth 4
-  Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
+  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj | Out-Null
 }
 
+# ==========================================================================================
+# BULK APPLY WITH SPLIT-AND-RETRY + NAME LOGGING
+# ==========================================================================================
+function Apply-TagBulkWithSplit {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][hashtable]$AccessHeaders,
+    [Parameter(Mandatory)][pscustomobject[]]$Devices, # objects: Id, Name
+    [Parameter(Mandatory)][string]$Tag,
+    [int]$MaxSplitDepth = 10
+  )
+
+  if (-not $Devices -or $Devices.Count -eq 0) { return }
+
+  $stack = New-Object System.Collections.Stack
+  $stack.Push([pscustomobject]@{ Items = @($Devices); Depth = 0 })
+
+  while ($stack.Count -gt 0) {
+    $work  = $stack.Pop()
+    $items = @($work.Items)
+    $depth = [int]$work.Depth
+
+    $ids = @($items | ForEach-Object { $_.Id })
+
+    try {
+      AddTagForMultipleMachines -AccessHeaders $AccessHeaders -MachineIds $ids -Tag $Tag
+      Write-Ok ("bulk tag applied to {0} machines" -f $ids.Count)
+      continue
+    }
+    catch {
+      Write-Err2 ("bulk tagging failed for {0} machines (depth {1}): {2}" -f $ids.Count, $depth, $_.Exception.Message)
+
+      if ($items.Count -le 1 -or $depth -ge $MaxSplitDepth) {
+        $one = $items[0]
+        try {
+          Add-DefenderTag -AccessHeaders $AccessHeaders -MachineId $one.Id -Tag $Tag -DeviceName $one.Name | Out-Null
+          Write-Ok ("tag '{0}' added (single): {1} ({2})" -f $Tag, $one.Name, $one.Id)
+        }
+        catch {
+          Write-Err2 ("unprocessable machine: {0} ({1}): {2}" -f $one.Name, $one.Id, $_.Exception.Message)
+        }
+        continue
+      }
+
+      $mid = [math]::Floor($items.Count / 2)
+      if ($mid -lt 1) { $mid = 1 }
+
+      $left  = @($items[0..($mid-1)])
+      $right = @($items[$mid..($items.Count-1)])
+
+      $stack.Push([pscustomobject]@{ Items = $right; Depth = ($depth + 1) })
+      $stack.Push([pscustomobject]@{ Items = $left;  Depth = ($depth + 1) })
+    }
+  }
+}
+
+# ==========================================================================================
+# Azure tagging functions unchanged
+# ==========================================================================================
 function Get-ArgResourceIdFromRow {
   param([Parameter(Mandatory)][psobject]$Row)
   foreach ($name in @('ResourceId','resourceId','id','Id')) {
@@ -363,13 +541,13 @@ function Add-AzureResourceTag {
 }
 
 function Test-AzModuleInstalled {
-    Write-Step "Validating Az modules"
-    return $null -ne (Get-Module -ListAvailable -Name 'Az.Accounts' -ErrorAction SilentlyContinue)
+  Write-Step "Validating Az modules"
+  return $null -ne (Get-Module -ListAvailable -Name 'Az.Accounts' -ErrorAction SilentlyContinue)
 }
 
 function Test-MicrosoftGraphInstalled {
-    Write-Step "Validating Microsoft Graph modules"
-    return $null -ne (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue)
+  Write-Step "Validating Microsoft Graph modules"
+  return $null -ne (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue)
 }
 
 #####################################################################################################
@@ -377,15 +555,16 @@ function Test-MicrosoftGraphInstalled {
 #####################################################################################################
 
 Write-Step "initializing"
+Write-Info ("WhatIfMode: {0}" -f $WhatIfMode)
 
 if (-not (Test-AzModuleInstalled)) {
-    Write-Step "Installing Az modules ... Please Wait !"
-    Install-Module Az -Scope AllUsers -Force -AllowClobber
+  Write-Step "Installing Az modules ... Please Wait !"
+  Install-Module Az -Scope AllUsers -Force -AllowClobber
 }
 
 if (-not (Test-MicrosoftGraphInstalled)) {
-    Write-Step "Installing Microsoft Graph modules ... Please Wait !"
-    Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
+  Write-Step "Installing Microsoft Graph modules ... Please Wait !"
+  Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
 }
 
 Ensure-Module Az.Accounts
@@ -401,10 +580,6 @@ Ensure-Module powershell-yaml
 #####################################################################################################
 
 if ($AutomationFramework) {
-
-  #----------------------
-  # AUTOMATION FRAMEWORK
-  #----------------------
 
   $ScriptDirectory = $PSScriptRoot
   $global:PathScripts = Split-Path -parent $ScriptDirectory
@@ -453,10 +628,6 @@ if ($AutomationFramework) {
 
 } else {
 
-  #----------------------
-  # Connect Custom Auth
-  #----------------------
-
   Write-Host "Connect using ServicePrincipal with AppId & Secret"
 
   Write-Step "connecting to Azure"
@@ -484,8 +655,6 @@ if ($AutomationFramework) {
 # INITIALIZATION
 #####################################################################################################
 
-# ================= Scope handling ==================
-
 $Scope = @(
   $Scope |
   ForEach-Object { ([string]$_).Trim().ToUpperInvariant() } |
@@ -497,8 +666,6 @@ if ($null -eq $Scope -or @($Scope).Count -eq 0) { $Scope = @('PROD') }
 
 Write-Step "execution scope initialized"
 Write-Info ("Active Scope(s): {0}" -f ($Scope -join ', '))
-
-# ================= Load YAML ========================
 
 $TaggingYaml = "CriticalAssetTagging.yaml"
 
@@ -547,45 +714,56 @@ foreach ($rule in @($Yaml.AssetTagging)) {
       $assetTagName = [string]($rows | Select-Object -First 1).AssetTagName
       if ([string]::IsNullOrWhiteSpace($assetTagName)) { Write-Warn2 "query returned rows but AssetTagName is empty; skipping"; continue }
 
-      $deviceInventoryIds = @(
-        $rows |
-        ForEach-Object { [string]$_.DeviceInventoryId } |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        Select-Object -Unique
-      )
+      # Build list from SenseDeviceId + DeviceName (no DNS resolution)
+      $devices = @()
+      $skippedNoSenseId = 0
+      $skippedNotFound  = 0
 
-      if ($deviceInventoryIds.Count -eq 0) { Write-Warn2 "no DeviceInventoryId values found; skipping"; continue }
+      foreach ($r in $rows) {
+        $name = Get-DeviceNameFromRow -Row $r
+        $id   = Get-SenseDeviceIdFromRow -Row $r
+
+        if ([string]::IsNullOrWhiteSpace($id)) {
+          $skippedNoSenseId++
+          Write-Warn2 ("Skipping row: missing SenseDeviceId for {0}" -f $name)
+          continue
+        }
+
+        # optional: skip dead/offboarded machines early
+        $exists = $true
+        try { $exists = Test-DefenderMachineExists -AccessHeaders $AccessHeaders -MachineId $id } catch { throw }
+        if (-not $exists) {
+          $skippedNotFound++
+          Write-Warn2 ("Skipping device: not found in Defender (404): {0} ({1})" -f $name, $id)
+          continue
+        }
+
+        $devices += [pscustomobject]@{ Id = $id; Name = $name }
+      }
+
+      if ($skippedNoSenseId -gt 0) { Write-Warn2 ("Skipped {0} row(s): missing SenseDeviceId" -f $skippedNoSenseId) }
+      if ($skippedNotFound  -gt 0) { Write-Warn2 ("Skipped {0} row(s): SenseDeviceId not found in Defender (404)" -f $skippedNotFound) }
+
+      # de-dupe by id (keep first name)
+      $devices = @($devices | Group-Object Id | ForEach-Object { $_.Group | Select-Object -First 1 })
+
+      if (-not $devices -or $devices.Count -eq 0) { Write-Warn2 "no taggable devices found; skipping"; continue }
 
       $chunkSize   = 500
-      $totalChunks = [math]::Ceiling($deviceInventoryIds.Count / $chunkSize)
+      $totalChunks = [math]::Ceiling($devices.Count / $chunkSize)
 
-      for ($i = 0; $i -lt $deviceInventoryIds.Count; $i += $chunkSize) {
+      for ($i = 0; $i -lt $devices.Count; $i += $chunkSize) {
 
         $currentChunk = [math]::Floor($i / $chunkSize) + 1
-        $endIndex     = [math]::Min($i + $chunkSize - 1, $deviceInventoryIds.Count - 1)
-        $chunk        = $deviceInventoryIds[$i..$endIndex]
+        $endIndex     = [math]::Min($i + $chunkSize - 1, $devices.Count - 1)
+        $chunk        = @($devices[$i..$endIndex])
 
-        Write-Info ("tagging {0} machines with '{1}' (chunk {2}/{3})" -f $chunk.Count, $assetTagName, $currentChunk, $totalChunks)
+        $namesPreview = @($chunk | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ', '
+        if ($chunk.Count -gt 5) { $namesPreview = "$namesPreview, ..." }
 
-        try {
-          AddTagForMultipleMachines -AccessHeaders $AccessHeaders -DeviceInventoryIds $chunk -Tag $assetTagName | Out-Null
-          Write-Ok ("bulk tag applied to {0} machines" -f $chunk.Count)
-        }
-        catch {
-          Write-Err2 ("bulk tagging failed (chunk {0}/{1}): {2}" -f $currentChunk, $totalChunks, $_.Exception.Message)
-          Write-Host ""
-          Write-Info "Fall-back to add tag individually"
+        Write-Info ("tagging {0} machines with '{1}' (chunk {2}/{3}) -> {4}" -f $chunk.Count, $assetTagName, $currentChunk, $totalChunks, $namesPreview)
 
-          foreach ($id in $chunk) {
-            try {
-              Add-DefenderTag -AccessHeaders $AccessHeaders -DeviceInventoryId $id -Tag $assetTagName | Out-Null
-              Write-Ok ("tag '{0}' added: {1}" -f $assetTagName, $id)
-            }
-            catch {
-              Write-Err2 ("failed tagging {0}: {1}" -f $id, $_.Exception.Message)
-            }
-          }
-        }
+        Apply-TagBulkWithSplit -AccessHeaders $AccessHeaders -Devices $chunk -Tag $assetTagName
       }
     }
     elseif ($queryEngine -eq 'AZURERESOURCEGRAPH') {
@@ -593,7 +771,6 @@ foreach ($rule in @($Yaml.AssetTagging)) {
       Write-Info "running hunting query against engine: $queryEngine .... Please wait !"
       $arg = Invoke-AzureResourceGraphQuery -Query $query
 
-      # Force array behavior (prevents scalar string/object issues in PS 5.1)
       $rows = @()
       if ($arg -and ($arg.PSObject.Properties.Name -contains 'Data')) {
         $rows = @($arg.Data)
@@ -615,8 +792,6 @@ foreach ($rule in @($Yaml.AssetTagging)) {
           if (-not [string]::IsNullOrWhiteSpace($rid)) { $rid }
         }
       )
-
-      # IMPORTANT: Select-Object -Unique can output a scalar when only 1 item -> force array again
       $resourceIds = @($resourceIds | Select-Object -Unique)
 
       if (-not $resourceIds -or $resourceIds.Count -eq 0) {

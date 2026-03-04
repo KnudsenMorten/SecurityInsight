@@ -9507,6 +9507,14 @@ ReportTemplates:
         UseQueryBucketing: true
         DefaultBucketCount: 2
         BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
       - Name: Attack_Paths_Detailed_BucketFilter_Credential_Based_Lateral_Movement
         UseQueryBucketing: true
         DefaultBucketCount: 2
@@ -9516,41 +9524,10 @@ ReportTemplates:
         DefaultBucketCount: 2
         BucketPlaceholderToken: __BUCKET_FILTER__
       - Name: Attack_Paths_Detailed_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Detailed_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
         UseQueryBucketing: true
         DefaultBucketCount: 2
         BucketPlaceholderToken: __BUCKET_FILTER__
 
-    - ReportName: AttackPaths_Detailed_Bucket
-      ReportPurpose: Overview
-      ReportsIncluded:
-      - Name: Attack_Paths_Detailed_BucketFilter_Credential_Based_Lateral_Movement
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Detailed_BucketFilter_Github_to_Azure_Resources
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Detailed_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Detailed_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
 
     - ReportName: RiskAnalysis_Summary_Bucket
       ReportPurpose: Overview
@@ -9575,68 +9552,16 @@ ReportTemplates:
         UseQueryBucketing: true
         DefaultBucketCount: 2
         BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-
-    - ReportName: RiskAnalysis_Summary_with_AttackPaths_Bucket
-      ReportPurpose: Overview
-      ReportsIncluded:
-      - Name: Attack_Paths_Summary_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Device_Recommendations_Summary_BucketFilter
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Device_Missing_CVEs_Summary_BucketFilter
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Azure_Recommendations_Summary_BucketFilter
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-
-    - ReportName: AttackPaths_Detailed_Dev_Bucket
-      ReportPurpose: Overview
-      ReportsIncluded:
-      - Name: Attack_Paths_Detailed_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
-
-
-    - ReportName: AttackPaths_Summary_Dev_Bucket
-      ReportPurpose: Overview
-      ReportsIncluded:
       - Name: Attack_Paths_Summary_BucketFilter_Credential_Based_Lateral_Movement
         UseQueryBucketing: true
         DefaultBucketCount: 2
         BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+

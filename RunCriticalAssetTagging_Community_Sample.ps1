@@ -16,9 +16,8 @@
 #########################################################################################################
 
 # Core execution globals
-$global:SettingsPath        = $null
-$global:AutomationFramework = $null
-$global:Scope               = $null
+$global:SettingsPath        = $PSScriptRoot
+$global:Scope               = @('PROD')
 
 # SPN globals
 $global:SpnTenantId         = $null

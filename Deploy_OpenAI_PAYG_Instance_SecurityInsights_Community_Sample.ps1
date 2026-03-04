@@ -78,14 +78,14 @@ $InferenceApiVersion = "2025-01-01-preview"
 
 #region ================= USER-EDITABLE DEFAULTS =================
 $ScriptDefaults = @{
-    SubscriptionId      = "xxxx"
+    SubscriptionId      = "xxxxxxxxx"
     ResourceGroupName   = "rg-security-insight"
     Location            = "swedencentral"
-    AccountName         = "xxxx-security-insight"
-    DeploymentName      = "xxxx-security-insight"
+    AccountName         = "oai-xxxxx-security-insight"
+    DeploymentName      = "oai-xxxxx-security-insight"
 
     # Preferred default (may not be supported; script will try others)
-    ModelName           = "gpt-4o-mini"
+    ModelName           = "gpt-4.1-mini"
     ModelVersion        = "latest"
 
     Capacity            = 100   # script uses this as "sku.capacity" for the deployment PUT
@@ -520,8 +520,6 @@ if ($UserForcedModel) {
 } else {
     # Preference list (edit freely)
     $preference = @(
-        "gpt-4o-mini",
-        "gpt-4o",
         "gpt-4.1-mini",
         "gpt-4.1",
         "gpt-4",
@@ -595,7 +593,9 @@ $AI_endpoint   = $account.properties.endpoint.TrimEnd('/')
 $AI_deployment = $DeploymentName
 $AI_apiVersion = $InferenceApiVersion
 
-Write-Host "`$AI_apiKey     = `"$AI_apiKey`""
-Write-Host "`$AI_endpoint   = `"$AI_endpoint`""
-Write-Host "`$AI_deployment = `"$AI_deployment`""
-Write-Host "`$AI_apiVersion = `"$AI_apiVersion`""
+Write-Host "`$Global:OpenAI_apiKey              = `"$AI_apiKey`""
+Write-Host "`$Global:OpenAI_endpoint            = `"$AI_endpoint`""
+Write-Host "`$Global:OpenAI_deployment          = `"$AI_deployment`""
+Write-Host "`$Global:OpenAI_apiVersion          = `"$AI_apiVersion`""
+Write-Host "`$Global:OpenAI_MaxTokensPerRequest = 16384"
+

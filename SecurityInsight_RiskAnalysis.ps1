@@ -9,6 +9,55 @@ Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
 
+# Disable StrictMode (script designed for non-StrictMode environments)
+try {
+    Set-StrictMode -Off
+} catch {}
+
+# ===============================================================================================
+# POWERSHELL 5.1 + STRICTMODE SAFE INITIALIZATION
+# ===============================================================================================
+
+# Ensure script-scope variables exist
+if (-not (Get-Variable -Name AutoBucketMemo -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:AutoBucketMemo = @{}
+}
+
+if (-not (Get-Variable -Name _sheetWritten -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:_sheetWritten = @{}
+}
+
+if (-not (Get-Variable -Name GraphLastConnectUtc -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:GraphLastConnectUtc = [datetime]::MinValue
+}
+
+# Ensure optional global variables exist (StrictMode safe)
+$optionalGlobals = @(
+    "DedupeKeyCandidates",
+    "DedupePriorityRules",
+    "DedupeCompletenessColumns",
+    "EnableFilterAudit",
+    "AutoBucketCount",
+    "AutoBucketMax",
+    "AutoBucketCache",
+    "ResetCache",
+    "UseQueryBucketing",
+    "DefaultBucketCount",
+    "BucketPlaceholderToken",
+    "GraphReconnectMaxAgeMinutes",
+    "GraphQueryMaxRetries",
+    "OpenAI_MaxTokensPerRequest",
+    "AI_MaxTokensPerRequest",
+    "DebugQueryHash"
+)
+
+foreach ($g in $optionalGlobals) {
+    if (-not (Get-Variable -Name $g -Scope Global -ErrorAction SilentlyContinue)) {
+        Set-Variable -Name $g -Scope Global -Value $null
+    }
+}
+
+
 # -------------------------------------------------------------------------------------------------
 # GLOBAL-ONLY CONFIG (launcher is source of truth)
 # -------------------------------------------------------------------------------------------------
@@ -27,6 +76,34 @@ if ($null -eq $global:Detailed)              { $global:Detailed = $false }
 if ($null -eq $global:SendMail)              { $global:SendMail = $false }
 if ($null -eq $global:BuildSummaryByAI)      { $global:BuildSummaryByAI = $false }
 if ($null -eq $global:ShowConfig)            { $global:ShowConfig = $false }
+
+# NEW: AutoBucket defaults (adaptive bucketing)
+if ($null -eq $global:AutoBucketCount) { $global:AutoBucketCount = $false }   # enable adaptive bucket selection (probe bucketCount=1..N)
+if ($null -eq $global:AutoBucketMax)   { $global:AutoBucketMax = 64 }        # safety cap for probing
+if ($null -eq $global:AutoBucketCache) { $global:AutoBucketCache = $true }   # cache discovered bucket counts to disk
+
+# Optional: force rebuild of AutoBucket cache file
+# Supports:
+#   - Launcher sets $global:ResetCache
+#   - OR set $script:ResetCache_Override / $script:ResetCache when running this script directly
+#   - OR set env var SECURITYINSIGHT_RESETCACHE=true|1
+if ($null -eq $global:ResetCache) {
+  $rc = $null
+  try {
+    if (Get-Variable -Name 'ResetCache_Override' -Scope Script -ErrorAction SilentlyContinue) { $rc = $script:ResetCache_Override }
+    elseif (Get-Variable -Name 'ResetCache' -Scope Script -ErrorAction SilentlyContinue) { $rc = $script:ResetCache }
+  } catch { }
+
+  if ($null -eq $rc -and -not [string]::IsNullOrWhiteSpace($env:SECURITYINSIGHT_RESETCACHE)) {
+    $v = $env:SECURITYINSIGHT_RESETCACHE.Trim().ToLowerInvariant()
+    if ($v -in @('1','true','yes','y')) { $rc = $true }
+    elseif ($v -in @('0','false','no','n')) { $rc = $false }
+  }
+
+  if ($null -ne $rc) { $global:ResetCache = [bool]$rc }
+  else { $global:ResetCache = $false }
+}
+
 
 if ($null -eq $global:AI_MaxTokensPerRequest -or [int]$global:AI_MaxTokensPerRequest -lt 1) {
   $global:AI_MaxTokensPerRequest = 16384
@@ -110,32 +187,51 @@ function Resolve-AssetNamesForRow {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)] $Row,
-        [Parameter()][string] $AssetsText
+        [Parameter()][AllowNull()] [object] $AssetsText
     )
 
-    # 1) Summary mode path: parse ImpactedAssets text (json array or comma list)
-    if (-not [string]::IsNullOrWhiteSpace($AssetsText)) {
-        $list = Split-ImpactedAssets -AssetsText $AssetsText
+    function _ToText([AllowNull()][object]$v) {
+        if ($null -eq $v) { return "" }
+
+        # Already a string
+        if ($v -is [string]) { return $v }
+
+        # Arrays / IEnumerable (but not string) -> try JSON first, else join
+        if (($v -is [System.Collections.IEnumerable]) -and -not ($v -is [string])) {
+            try { return ($v | ConvertTo-Json -Compress -Depth 12) } catch {}
+            try {
+                $parts = @()
+                foreach ($x in $v) { if ($null -ne $x) { $parts += ("" + $x) } }
+                return ($parts -join ",")
+            } catch {
+                return ("" + $v)
+            }
+        }
+
+        # PSCustomObject / Hashtable -> JSON
+        if ($v -is [pscustomobject] -or $v -is [hashtable] -or $v -is [System.Collections.IDictionary]) {
+            try { return ($v | ConvertTo-Json -Compress -Depth 12) } catch { return ("" + $v) }
+        }
+
+        return ("" + $v)
+    }
+
+    $assetsTextNorm = (_ToText $AssetsText).Trim()
+
+    # 1) Summary mode: parse ImpactedAssets text (json array or comma list)
+    if (-not [string]::IsNullOrWhiteSpace($assetsTextNorm)) {
+        $list = Split-ImpactedAssets -AssetsText $assetsTextNorm
         if ($list -and @($list).Count -gt 0) { return @($list) }
     }
 
-    # 2) Detailed mode path: one asset per row in a dedicated column
+    # 2) Detailed mode: one asset per row in a dedicated column
     $fallback = Get-RowValue -Row $Row -Names @(
-        "AssetName",
-        "DeviceName",
-        "Device",
-        "MachineName",
-        "Computer",
-        "HostName",
-        "DnsName",
-        "FQDN",
-        "Endpoint",
-        "Asset"
+        "AssetName","DeviceName","Device","MachineName","Computer",
+        "HostName","DnsName","FQDN","Endpoint","Asset"
     )
 
-    if (-not [string]::IsNullOrWhiteSpace($fallback)) {
-        # handle cases where detailed column accidentally contains multiple values separated by ; or ,
-        $val = $fallback.Trim()
+    if (-not [string]::IsNullOrWhiteSpace([string]$fallback)) {
+        $val = ([string]$fallback).Trim()
         if ($val -match '[,;]') {
             $parts = @($val -split '\s*[,;]\s*' | Where-Object { $_ -and $_.Trim() })
             return @($parts | ForEach-Object { $_.Trim() } | Select-Object -Unique)
@@ -224,7 +320,7 @@ function Invoke-GraphHuntingQuery {
         Ensure-GraphAuth -MaxAgeMinutes $ReconnectMaxAgeMinutes
 
         try {
-            return Start-MgSecurityHuntingQuery -Query $Query
+            return Start-MgSecurityHuntingQuery -Query $Query -ErrorAction Stop
         } catch {
             $msg = $_.Exception.Message
 
@@ -232,12 +328,20 @@ function Invoke-GraphHuntingQuery {
             $looksAuth      = ($msg -match 'InvalidAuthenticationToken|Access token|Authentication|Unauthorized|401')
             $looksThrottle  = ($msg -match 'Too Many Requests|429|throttl|temporar')
 
-            if ($looksAuth) {
+            
+            $looksOverflow  = (Test-IsBucketOverflowError -Err $_) -or ($msg -match 'exceeded the allowed result size|exceeded the allowed limits|preempted')
+if ($looksAuth) {
                 Write-Warn2 "Graph auth issue detected. Reconnecting and retrying..."
                 try { Connect-GraphHighPriv } catch { Write-Err2 "Graph reconnect failed: $($_.Exception.Message)"; throw }
             }
 
-            if ($attempt -lt $MaxRetries) {
+            
+            if ($looksOverflow) {
+                Write-Warn2 "Query exceeded allowed limits/result size; not retrying (deterministic failure)."
+                throw
+            }
+
+if ($attempt -lt $MaxRetries) {
                 $sleepSec = if ($looksThrottle) { [math]::Min(60, 5 * $attempt) }
                             elseif ($isTaskCanceled) { [math]::Min(90, 15 * $attempt) }
                             else { [math]::Min(20, 2 * $attempt) }
@@ -289,6 +393,47 @@ function Export-AISummaryWorksheet {
   Close-ExcelPackage $excel
 }
 
+# =================================================================================================
+# ASSETNAME-SAFE KQL HELPERS (FULL FIX)
+# =================================================================================================
+
+function New-DeviceKeyKql {
+@"
+| extend DeviceKey = coalesce(
+    tostring(column_ifexists('AadDeviceId','')),
+    tostring(column_ifexists('DeviceId','')),
+    tostring(column_ifexists('MachineId','')),
+    tostring(column_ifexists('AssetName','')),
+    tostring(column_ifexists('DeviceName','')),
+    tostring(column_ifexists('Computer','')),
+    tostring(column_ifexists('DnsName','')),
+    tostring(column_ifexists('HostName','')),
+    tostring(column_ifexists('FQDN','')),
+    tostring(column_ifexists('Id','')),
+    'unknown'
+)
+"@
+}
+
+function Ensure-QueryIsAssetNameSafe {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $Query
+    )
+
+    $safeDeviceKeyBlock = (New-DeviceKeyKql).TrimEnd()
+
+    # Replace only DeviceKey assignments that reference AssetName (the common failure)
+    # Example (your YAML):
+    # | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+    $Query = $Query -replace '(?im)^\s*\|\s*extend\s+DeviceKey\s*=\s*iif\s*\(\s*isnotempty\s*\(\s*AadDeviceId\s*\)\s*,\s*AadDeviceId\s*,\s*AssetName\s*\)\s*$', $safeDeviceKeyBlock
+
+    # Also cover minor formatting variations where AssetName is used on the DeviceKey line
+    $Query = $Query -replace '(?im)^\s*\|\s*extend\s+DeviceKey\s*=.*\bAssetName\b.*$', $safeDeviceKeyBlock
+
+    return $Query
+}
+
 function New-BucketFilterKql {
     param(
         [int]$BucketCount,
@@ -297,12 +442,17 @@ function New-BucketFilterKql {
 
 @"
 | extend __bucket_key = coalesce(
+    tostring(column_ifexists('DeviceKey','')),
     tostring(column_ifexists('AadDeviceId','')),
     tostring(column_ifexists('DeviceId','')),
     tostring(column_ifexists('MachineId','')),
     tostring(column_ifexists('AssetName','')),
-    tostring(column_ifexists('Computer','')),
     tostring(column_ifexists('DeviceName','')),
+    tostring(column_ifexists('Computer','')),
+    tostring(column_ifexists('DnsName','')),
+    tostring(column_ifexists('HostName','')),
+    tostring(column_ifexists('FQDN','')),
+    tostring(column_ifexists('Id','')),
     'unknown'
 )
 | extend __bucket = abs(hash(__bucket_key)) % $BucketCount
@@ -310,41 +460,332 @@ function New-BucketFilterKql {
 "@
 }
 
-function Deduplicate-Rows {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory=$true)]
-        $Rows   # accept list/array/anything enumerable
-    )
+function Get-RowValue {
+  param(
+    [Parameter(Mandatory=$true)] $Row,
+    [Parameter(Mandatory=$true)] [string[]] $Names
+  )
+  foreach ($n in $Names) {
+    if ($Row -and ($Row.PSObject.Properties.Name -contains $n)) {
+      $v = $Row.$n
+      if ($null -ne $v -and ("" + $v).Trim() -ne "") { return $v }
+    }
+  }
+  return $null
+}
 
-    if ($null -eq $Rows) { return @() }
+function ConvertTo-NormalizedString {
+  param([AllowNull()] $Value)
 
-    # Normalize input to array
-    $rowsArr = @()
-    foreach ($r in $Rows) { if ($null -ne $r) { $rowsArr += ,$r } }
-    if ($rowsArr.Count -eq 0) { return @() }
+  if ($null -eq $Value) { return "" }
 
-    $seen = @{}
-    $out  = New-Object System.Collections.Generic.List[object]
+  # arrays / IEnumerable -> stable string
+  if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+    $items = New-Object System.Collections.Generic.List[string]
+    foreach ($x in $Value) {
+      if ($null -eq $x) { continue }
+      $s = ("" + $x).Trim()
+      if ($s -ne "") { [void]$items.Add($s) }
+    }
+    if ($items.Count -eq 0) { return "" }
+    $arr = $items.ToArray()
+    [array]::Sort($arr)
+    return ($arr -join ";").ToLowerInvariant()
+  }
 
-    foreach ($r in $rowsArr) {
-        $aad   = if ($r.PSObject.Properties['AadDeviceId'])     { [string]$r.AadDeviceId } else { "" }
-        $asset = if ($r.PSObject.Properties['AssetName'])       { [string]$r.AssetName } else { "" }
-        $cfg   = if ($r.PSObject.Properties['ConfigurationId']) { [string]$r.ConfigurationId } else { "" }
-        $cat   = if ($r.PSObject.Properties['Category'])        { [string]$r.Category } else { "" }
-        $sub   = if ($r.PSObject.Properties['SubCategory'])     { [string]$r.SubCategory } else { "" }
+  return (("" + $Value).Trim()).ToLowerInvariant()
+}
 
-        $key = ("{0}|{1}|{2}|{3}|{4}" -f $aad,$asset,$cfg,$cat,$sub).ToLowerInvariant()
+function New-DedupeKey {
+  <#
+    Generic key builder.
 
-        if (-not $seen.ContainsKey($key)) {
-            $seen[$key] = $true
-            $out.Add($r) | Out-Null
-        }
+    KeyCandidates is tried in order. Each candidate is an array of "field alternatives".
+    Example:
+      @(
+        @(@("DeviceId","MachineId"), @("ConfigurationId","Id")),
+        @(@("EventId","RecordId","Id"))
+      )
+    Meaning:
+      - For the first candidate, we need one value from (DeviceId OR MachineId) AND one value from (ConfigurationId OR Id)
+      - If any part is missing/blank, the candidate fails and we try next.
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)] $Row,
+    [Parameter(Mandatory=$true)] [object[]] $KeyCandidates
+  )
+
+  foreach ($candidate in $KeyCandidates) {
+    $parts = New-Object System.Collections.Generic.List[string]
+    $ok = $true
+
+    foreach ($fieldAlternatives in $candidate) {
+      $v = Get-RowValue -Row $Row -Names @($fieldAlternatives)
+      $s = ConvertTo-NormalizedString $v
+      if ($s -eq "") { $ok = $false; break }
+      [void]$parts.Add($s)
     }
 
-    # return a plain object[]
-    return @($out.ToArray())
+    if ($ok -and $parts.Count -gt 0) {
+      return ($parts.ToArray() -join "|")
+    }
+  }
+
+  return ""
 }
+
+function Get-GenericCompletenessScore {
+  param(
+    [Parameter(Mandatory=$true)] $Row,
+    [string[]] $ColumnsToConsider = @()
+  )
+
+  $props =
+    if ($ColumnsToConsider.Count -gt 0) {
+      $Row.PSObject.Properties | Where-Object { $ColumnsToConsider -contains $_.Name }
+    } else {
+      $Row.PSObject.Properties
+    }
+
+  $filled = 0
+  $total = 0
+  $stringLen = 0
+
+  foreach ($p in $props) {
+    $total++
+    $v = $p.Value
+    if ($null -eq $v) { continue }
+
+    if ($v -is [string]) {
+      $t = $v.Trim()
+      if ($t -eq "") { continue }
+      $filled++
+      $stringLen += $t.Length
+      continue
+    }
+
+    if ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) {
+      $any = $false
+      foreach ($x in $v) {
+        if ($null -ne $x -and ("" + $x).Trim() -ne "") { $any = $true; break }
+      }
+      if (-not $any) { continue }
+      $filled++
+      continue
+    }
+
+    $filled++
+  }
+
+  return [pscustomobject]@{
+    Filled    = $filled
+    Total     = $total
+    StringLen = $stringLen
+  }
+}
+
+function Select-BestRow {
+  <#
+    Generic "best row" selector.
+
+    PriorityRules (optional) are evaluated first (in order). If a rule can decide, it wins.
+    If not, we fall back to generic completeness.
+
+    PriorityRules examples:
+      @{ Column="CriticalityTier"; Type="int"; Direction="asc"; MissingLast=$true }
+      @{ Column="Impact"; Type="int"; Direction="desc"; MissingLast=$true }
+
+    Supported Type: int | double | string
+    Direction: asc | desc
+  #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)] [object[]] $Rows,
+    [object[]] $PriorityRules = @(),
+    [string[]] $CompletenessColumns = @()
+  )
+
+  if ($Rows.Count -eq 1) { return $Rows[0] }
+
+  $best = $null
+  foreach ($r in $Rows) {
+    if ($null -eq $best) { $best = $r; continue }
+
+    $picked = $false
+
+    foreach ($rule in $PriorityRules) {
+      if ($null -eq $rule) { continue }
+      $col = $rule.Column
+      if (-not $col) { continue }
+
+      $hasA = ($r.PSObject.Properties.Name -contains $col)
+      $hasB = ($best.PSObject.Properties.Name -contains $col)
+
+      $a = if ($hasA) { $r.$col } else { $null }
+      $b = if ($hasB) { $best.$col } else { $null }
+
+      $aEmpty = ($null -eq $a -or ("" + $a).Trim() -eq "")
+      $bEmpty = ($null -eq $b -or ("" + $b).Trim() -eq "")
+
+      if ($aEmpty -and $bEmpty) { continue }
+
+      $missingLast = $true
+      if ($rule.ContainsKey("MissingLast")) { $missingLast = [bool]$rule.MissingLast }
+
+      if ($aEmpty -ne $bEmpty) {
+        if ($missingLast) {
+          if (-not $aEmpty) { $best = $r }
+        } else {
+          if ($aEmpty) { $best = $r }
+        }
+        $picked = $true
+        break
+      }
+
+      $type = ("" + $rule.Type).ToLowerInvariant()
+      $dir  = ("" + $rule.Direction).ToLowerInvariant()
+
+      $cmp = 0
+      try {
+        if ($type -eq "int") {
+          $ai = [int]$a; $bi = [int]$b
+          $cmp = $ai.CompareTo($bi)
+        } elseif ($type -eq "double") {
+          $ad = [double]$a; $bd = [double]$b
+          $cmp = $ad.CompareTo($bd)
+        } else {
+          $as = ConvertTo-NormalizedString $a
+          $bs = ConvertTo-NormalizedString $b
+          $cmp = [string]::Compare($as, $bs, $true)
+        }
+      } catch { $cmp = 0 }
+
+      if ($cmp -ne 0) {
+        if ($dir -eq "asc") {
+          if ($cmp -lt 0) { $best = $r }
+        } else {
+          if ($cmp -gt 0) { $best = $r }
+        }
+        $picked = $true
+        break
+      }
+    }
+
+    if ($picked) { continue }
+
+    $sA = Get-GenericCompletenessScore -Row $r -ColumnsToConsider $CompletenessColumns
+    $sB = Get-GenericCompletenessScore -Row $best -ColumnsToConsider $CompletenessColumns
+
+    if ($sA.Filled -gt $sB.Filled) { $best = $r; continue }
+    if ($sA.Filled -lt $sB.Filled) { continue }
+
+    if ($sA.StringLen -gt $sB.StringLen) { $best = $r; continue }
+    if ($sA.StringLen -lt $sB.StringLen) { continue }
+
+    # stable final tie-breaker
+    $sigA = ConvertTo-NormalizedString (($r.PSObject.Properties | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join "|")
+    $sigB = ConvertTo-NormalizedString (($best.PSObject.Properties | Sort-Object Name | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join "|")
+    if ([string]::Compare($sigA, $sigB, $true) -lt 0) { $best = $r }
+  }
+
+  return $best
+}
+
+function Deduplicate-RowsGeneric {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)] $Rows,
+    [Parameter(Mandatory=$true)] [object[]] $KeyCandidates,
+    [object[]] $PriorityRules = @(),
+    [string[]] $CompletenessColumns = @(),
+    [switch] $KeepUnkeyed
+  )
+
+  $rowsArr = @()
+  foreach ($r in $Rows) { if ($null -ne $r) { $rowsArr += ,$r } }
+  if ($rowsArr.Count -eq 0) { return @() }
+
+  foreach ($r in $rowsArr) {
+    $k = New-DedupeKey -Row $r -KeyCandidates $KeyCandidates
+    $r | Add-Member -NotePropertyName "__DedupeKey" -NotePropertyValue $k -Force
+  }
+
+  $out = New-Object System.Collections.Generic.List[object]
+
+  $groups = $rowsArr | Group-Object "__DedupeKey"
+  foreach ($g in $groups) {
+    $key = $g.Name
+
+    if ($key -eq "" -and -not $KeepUnkeyed) {
+      foreach ($r in $g.Group) { [void]$out.Add($r) }
+      continue
+    }
+
+    if ($g.Count -eq 1) {
+      [void]$out.Add($g.Group[0])
+      continue
+    }
+
+    $best = Select-BestRow -Rows $g.Group -PriorityRules $PriorityRules -CompletenessColumns $CompletenessColumns
+    [void]$out.Add($best)
+  }
+
+  return @($out.ToArray())
+}
+
+function Deduplicate-Rows {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)] $Rows
+  )
+
+  # ----- StrictMode-safe global checks -----
+
+  $KeyCandidates = $null
+  if (Get-Variable -Name DedupeKeyCandidates -Scope Global -ErrorAction SilentlyContinue) {
+      $KeyCandidates = $global:DedupeKeyCandidates
+  }
+
+  if (-not $KeyCandidates) {
+      $KeyCandidates = @(
+        @(@("DeviceId","DeviceGuid","MachineId","HostId"), @("ConfigurationId","ControlId","RuleId","RecommendationId","Id")),
+        @(@("AadDeviceId","AzureAdDeviceId","DeviceKey"), @("ConfigurationId","ControlId","RuleId","RecommendationId","Id")),
+        @(@("EventId","AlertId","IncidentId","RecordId","Id")),
+        @(@("DeviceId","MachineId","AadDeviceId","DeviceKey","AssetName","DeviceName","Computer","HostName"), @("Title","Name","DisplayName"))
+      )
+  }
+
+  $PriorityRules = $null
+  if (Get-Variable -Name DedupePriorityRules -Scope Global -ErrorAction SilentlyContinue) {
+      $PriorityRules = $global:DedupePriorityRules
+  }
+
+  if (-not $PriorityRules) {
+      $PriorityRules = @(
+        @{ Column="CriticalityTier"; Type="int"; Direction="asc"; MissingLast=$true },
+        @{ Column="Impact";         Type="int"; Direction="desc"; MissingLast=$true }
+      )
+  }
+
+  $CompletenessColumns = $null
+  if (Get-Variable -Name DedupeCompletenessColumns -Scope Global -ErrorAction SilentlyContinue) {
+      $CompletenessColumns = $global:DedupeCompletenessColumns
+  }
+
+  if (-not $CompletenessColumns) {
+      $CompletenessColumns = @()
+  }
+
+  return Deduplicate-RowsGeneric `
+    -Rows $Rows `
+    -KeyCandidates $KeyCandidates `
+    -PriorityRules $PriorityRules `
+    -CompletenessColumns $CompletenessColumns `
+    -KeepUnkeyed
+}
+
+
 
 function Apply-ScopeFilter {
   [CmdletBinding()]
@@ -391,13 +832,19 @@ function ConvertTo-PSObjectDeep {
         [string] $ArrayJoinChar = ', ',
         [switch] $PreserveRootArray = $true
     )
+
     function _IsPrimitive([object]$x) {
         if ($null -eq $x) { return $true }
         $t = $x.GetType()
-        return ($t.IsPrimitive -or $t.FullName -in @('System.String','System.Decimal','System.DateTime','System.Guid','System.TimeSpan'))
+        return ($t.IsPrimitive -or $t.FullName -in @(
+            'System.String','System.Decimal','System.DateTime','System.Guid','System.TimeSpan'
+        ))
     }
+
     function _Convert([object]$obj, [bool]$isRoot = $false) {
+
         if ($null -eq $obj) { return $null }
+
         if ($obj -is [pscustomobject]) {
             $ordered = [ordered]@{}
             foreach ($p in $obj.PSObject.Properties) {
@@ -406,6 +853,7 @@ function ConvertTo-PSObjectDeep {
             }
             return [pscustomobject]$ordered
         }
+
         if ($obj -is [System.Collections.IDictionary]) {
             $ordered = [ordered]@{}
             foreach ($k in $obj.Keys) {
@@ -414,37 +862,56 @@ function ConvertTo-PSObjectDeep {
             }
             return [pscustomobject]$ordered
         }
+
         if (($obj -is [System.Collections.IEnumerable]) -and -not ($obj -is [string])) {
+
             $items = @()
             foreach ($item in $obj) { $items += ,(_Convert $item $false) }
+
             if ($ConvertArraysToString -and -not ($isRoot -and $PreserveRootArray)) {
-                $pieces = foreach ($e in $items) { if (_IsPrimitive $e) { $e } else { ($e | ConvertTo-Json -Compress -Depth 12) } }
+                $pieces = foreach ($e in $items) {
+                    if (_IsPrimitive $e) { $e }
+                    else {
+                        try { ($e | ConvertTo-Json -Compress -Depth 12) }
+                        catch { [string]$e }
+                    }
+                }
                 return ($pieces -join $ArrayJoinChar)
             }
+
             if ($CastPrimitiveArrays -and -not $ConvertArraysToString -and $items.Count -gt 0) {
-                $nonNull   = $items | Where-Object { $_ -ne $null }
-                $typeNames = $nonNull | ForEach-Object { $_.GetType().FullName } | Select-Object -Unique
-                $allPrim   = ($nonNull | ForEach-Object { _IsPrimitive $_ } | Where-Object { -not $_ } | Measure-Object).Count -eq 0
+
+                # StrictMode-safe: always force arrays from pipelines
+                $nonNull   = @($items | Where-Object { $_ -ne $null })
+                $typeNames = @($nonNull | ForEach-Object { $_.GetType().FullName } | Select-Object -Unique)
+
+                $allPrim = (@($nonNull | ForEach-Object { _IsPrimitive $_ } | Where-Object { -not $_ }).Count -eq 0)
+
                 if ($allPrim -and $typeNames.Count -eq 1) {
                     switch ($typeNames[0]) {
-                        'System.String'  { return [string[]]  $items }
-                        'System.Int32'   { return [int[]]     $items }
-                        'System.Int64'   { return [long[]]    $items }
-                        'System.Double'  { return [double[]]  $items }
-                        'System.Boolean' { return [bool[]]    $items }
+                        'System.String'  { return [string[]] $items }
+                        'System.Int32'   { return [int[]]    $items }
+                        'System.Int64'   { return [long[]]   $items }
+                        'System.Double'  { return [double[]] $items }
+                        'System.Boolean' { return [bool[]]   $items }
                     }
                 }
             }
+
             return @($items)
         }
+
         return $obj
     }
+
     $rootIsArray = (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string]))
+
     if ($rootIsArray -and $PreserveRootArray) {
         $out = @()
         foreach ($i in $InputObject) { $out += ,(_Convert $i $false) }
         return @($out)
     }
+
     return (_Convert $InputObject $true)
 }
 
@@ -697,11 +1164,28 @@ function Filter-ObjectsByColumn {
     [Parameter(Mandatory)][AllowNull()]
     [object[]] $InScopeData,
 
-    [switch] $CaseInsensitive
+    [switch] $CaseInsensitive,
+
+    # If true (default), blank/null values are treated as "in scope" and kept.
+    [bool] $IncludeBlank = $true,
+
+    # If set, return a PSCustomObject with Kept/Removed arrays (and mark removed with __FilterReason)
+    [switch] $ReturnAudit,
+
+    # Optional label used in __FilterReason
+    [string] $FilterName = "Filter"
   )
 
-  if ($null -eq $InputObject -or $InputObject.Count -eq 0) { return @() }
-  if ($null -eq $InScopeData -or $InScopeData.Count -eq 0) { return @($InputObject) }
+  if ($null -eq $InputObject -or $InputObject.Count -eq 0) {
+    if ($ReturnAudit) { return [pscustomobject]@{ Kept=@(); Removed=@() } }
+    return @()
+  }
+
+  # If scope is empty, everything is in scope
+  if ($null -eq $InScopeData -or $InScopeData.Count -eq 0) {
+    if ($ReturnAudit) { return [pscustomobject]@{ Kept=@($InputObject); Removed=@() } }
+    return @($InputObject)
+  }
 
   function _Normalize([object] $val, [bool] $ci) {
     if ($null -eq $val) { return $null }
@@ -710,50 +1194,110 @@ function Filter-ObjectsByColumn {
     return $s
   }
 
+  # normalize scope (ignore blanks)
   $normalizedScope = @()
   foreach ($x in $InScopeData) {
     $nx = _Normalize -val $x -ci:$CaseInsensitive.IsPresent
     if ($null -ne $nx -and $nx -ne '') { $normalizedScope += $nx }
   }
-  if ($normalizedScope.Count -eq 0) { return @($InputObject) }
+  if ($normalizedScope.Count -eq 0) {
+    if ($ReturnAudit) { return [pscustomobject]@{ Kept=@($InputObject); Removed=@() } }
+    return @($InputObject)
+  }
 
-  $out = New-Object System.Collections.Generic.List[object]
+  $kept    = New-Object System.Collections.Generic.List[object]
+  $removed = New-Object System.Collections.Generic.List[object]
 
   foreach ($obj in $InputObject) {
-
     if ($null -eq $obj) { continue }
 
+    # Missing column => keep (generic safe default)
     if (-not ($obj.PSObject.Properties.Name -contains $ColumnToFilter)) {
-      $out.Add($obj) | Out-Null
+      $kept.Add($obj) | Out-Null
       continue
     }
 
     $val = $obj.$ColumnToFilter
 
-    $candidates = @()
+    # Null/blank => keep when IncludeBlank
     if ($null -eq $val) {
-      $candidates = @()
+      if ($IncludeBlank) { $kept.Add($obj) | Out-Null }
+      else {
+        if ($ReturnAudit) {
+          $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} is null" -f $FilterName,$ColumnToFilter) -Force
+          $removed.Add($obj) | Out-Null
+        }
+      }
+      continue
     }
-    elseif ($val -is [System.Collections.IEnumerable] -and -not ($val -is [string])) {
+
+    if ($val -is [string]) {
+      if ($val.Trim() -eq "") {
+        if ($IncludeBlank) { $kept.Add($obj) | Out-Null }
+        else {
+          if ($ReturnAudit) {
+            $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} is blank" -f $FilterName,$ColumnToFilter) -Force
+            $removed.Add($obj) | Out-Null
+          }
+        }
+        continue
+      }
+    }
+
+    # Build candidates (array, comma-separated string, or scalar)
+    $candidates = @()
+    if ($val -is [System.Collections.IEnumerable] -and -not ($val -is [string])) {
       foreach ($item in $val) { $candidates += $item }
-    }
-    else {
+    } else {
       $s = [string]$val
       if ($s -like "*,*") { $candidates = $s -split '\s*,\s*' }
       else { $candidates = @($s) }
     }
 
+    # If candidates are effectively empty, treat as blank
+    $hasNonEmptyCandidate = $false
+    foreach ($cand in $candidates) {
+      $ncTmp = _Normalize -val $cand -ci:$CaseInsensitive.IsPresent
+      if ($null -ne $ncTmp -and $ncTmp -ne '') { $hasNonEmptyCandidate = $true; break }
+    }
+    if (-not $hasNonEmptyCandidate) {
+      if ($IncludeBlank) { $kept.Add($obj) | Out-Null }
+      else {
+        if ($ReturnAudit) {
+          $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} has no non-empty candidates" -f $FilterName,$ColumnToFilter) -Force
+          $removed.Add($obj) | Out-Null
+        }
+      }
+      continue
+    }
+
+    # Match if any candidate is in scope
     $match = $false
     foreach ($cand in $candidates) {
       $nc = _Normalize -val $cand -ci:$CaseInsensitive.IsPresent
-      if ($null -ne $nc -and $normalizedScope -contains $nc) { $match = $true; break }
+      if ($null -ne $nc -and $nc -ne '' -and $normalizedScope -contains $nc) { $match = $true; break }
     }
 
-    if ($match) { $out.Add($obj) | Out-Null }
+    if ($match) {
+      $kept.Add($obj) | Out-Null
+    } else {
+      if ($ReturnAudit) {
+        $obj | Add-Member -NotePropertyName "__FilterReason" -NotePropertyValue ("{0}:{1} out-of-scope (value='{2}')" -f $FilterName,$ColumnToFilter,([string]$val)) -Force
+        $removed.Add($obj) | Out-Null
+      }
+    }
   }
 
-  return @($out.ToArray())
+  if ($ReturnAudit) {
+    return [pscustomobject]@{
+      Kept    = @($kept.ToArray())
+      Removed = @($removed.ToArray())
+    }
+  }
+
+  return @($kept.ToArray())
 }
+
 
 function Write-Section($text) {
   Write-Host ""
@@ -862,6 +1406,7 @@ function Export-Worksheet {
 }
 
 function New-RiskIndex {
+    [CmdletBinding()]
     param(
         [Parameter(Mandatory=$true)][object[]] $CsvRows,
         [Parameter(Mandatory=$true)][string] $ColSecurityDomain,
@@ -873,14 +1418,36 @@ function New-RiskIndex {
         [Parameter(Mandatory=$true)][string] $ColConseqScore,
         [Parameter(Mandatory=$true)][string] $ColProbScore
     )
-    if (-not $CsvRows) { throw "Risk definitions CSV is empty." }
-    $firstCols = $CsvRows[0].PSObject.Properties.Name
-    $required  = @($ColCategory,$ColSubCategory,$ColConfigId,$ColSevValue,$ColTierValue,$ColConseqScore,$ColProbScore)
-    $missing   = $required | Where-Object { $firstCols -notcontains $_ }
-    if ($missing.Count) { throw "CSV missing required columns: $($missing -join ', ')" }
 
-    function _MakeKey([object]$Row,[string[]]$Pattern){
-        $vals = foreach ($c in $Pattern){
+    # StrictMode-safe normalization
+    $CsvRows = @($CsvRows)
+    if ($CsvRows.Count -eq 0) { throw "Risk definitions CSV is empty." }
+
+    $firstCols = @($CsvRows[0].PSObject.Properties.Name)
+
+    # Validate required columns (StrictMode-safe even when only 1 is missing)
+    $required = @(
+        $ColCategory,
+        $ColSubCategory,
+        $ColConfigId,
+        $ColSevValue,
+        $ColTierValue,
+        $ColConseqScore,
+        $ColProbScore
+    )
+
+    $missing = @($required | Where-Object { $firstCols -notcontains $_ })
+    if ($missing.Count -gt 0) {
+        throw "CSV missing required columns: $($missing -join ', ')"
+    }
+
+    function _MakeKey {
+        param(
+            [Parameter(Mandatory=$true)][object] $Row,
+            [Parameter(Mandatory=$true)][string[]] $Pattern
+        )
+
+        $vals = foreach ($c in @($Pattern)) {
             $v = $Row.$c
             if ([string]::IsNullOrWhiteSpace([string]$v)) { return $null }
             [string]$v
@@ -889,6 +1456,7 @@ function New-RiskIndex {
         (($vals -join '|').ToLowerInvariant())
     }
 
+    # Matching sequences (ordered from most-specific to least-specific)
     $seqWithDomain_Conseq = @(
         @($ColSecurityDomain,$ColCategory,$ColSubCategory,$ColConfigId,$ColSevValue),
         @($ColSecurityDomain,$ColCategory,$ColSubCategory,$ColSevValue),
@@ -899,6 +1467,7 @@ function New-RiskIndex {
         @($ColSecurityDomain,$ColCategory),
         @($ColSecurityDomain)
     )
+
     $seqNoDomain_Conseq = @(
         @($ColCategory,$ColSubCategory,$ColConfigId,$ColSevValue),
         @($ColCategory,$ColSubCategory,$ColSevValue),
@@ -908,6 +1477,7 @@ function New-RiskIndex {
         @($ColCategory,$ColSubCategory),
         @($ColCategory)
     )
+
     $seqWithDomain_Prob = @(
         @($ColSecurityDomain,$ColCategory,$ColSubCategory,$ColConfigId,$ColTierValue),
         @($ColSecurityDomain,$ColCategory,$ColSubCategory,$ColTierValue),
@@ -918,6 +1488,7 @@ function New-RiskIndex {
         @($ColSecurityDomain,$ColCategory),
         @($ColSecurityDomain)
     )
+
     $seqNoDomain_Prob = @(
         @($ColCategory,$ColSubCategory,$ColConfigId,$ColTierValue),
         @($ColCategory,$ColSubCategory,$ColTierValue),
@@ -928,27 +1499,39 @@ function New-RiskIndex {
         @($ColCategory)
     )
 
-    $mapsConseq_With = foreach ($pat in $seqWithDomain_Conseq) { @{} }
-    $mapsConseq_No   = foreach ($pat in $seqNoDomain_Conseq)   { @{} }
-    $mapsProb_With   = foreach ($pat in $seqWithDomain_Prob)   { @{} }
-    $mapsProb_No     = foreach ($pat in $seqNoDomain_Prob)     { @{} }
+    # Maps per pattern (StrictMode-safe creation)
+    $mapsConseq_With = @()
+    foreach ($pat in $seqWithDomain_Conseq) { $mapsConseq_With += ,@{} }
+
+    $mapsConseq_No = @()
+    foreach ($pat in $seqNoDomain_Conseq) { $mapsConseq_No += ,@{} }
+
+    $mapsProb_With = @()
+    foreach ($pat in $seqWithDomain_Prob) { $mapsProb_With += ,@{} }
+
+    $mapsProb_No = @()
+    foreach ($pat in $seqNoDomain_Prob) { $mapsProb_No += ,@{} }
 
     foreach ($row in $CsvRows) {
-        for ($i=0; $i -lt $seqWithDomain_Conseq.Count; $i++){
-            $k = _MakeKey $row $seqWithDomain_Conseq[$i]
-            if ($k -and -not $mapsConseq_With[$i].ContainsKey($k)) { $mapsConseq_With[$i][$k]=$row }
+
+        for ($i = 0; $i -lt @($seqWithDomain_Conseq).Count; $i++) {
+            $k = _MakeKey -Row $row -Pattern $seqWithDomain_Conseq[$i]
+            if ($k -and -not $mapsConseq_With[$i].ContainsKey($k)) { $mapsConseq_With[$i][$k] = $row }
         }
-        for ($i=0; $i -lt $seqNoDomain_Conseq.Count; $i++){
-            $k = _MakeKey $row $seqNoDomain_Conseq[$i]
-            if ($k -and -not $mapsConseq_No[$i].ContainsKey($k)) { $mapsConseq_No[$i][$k]=$row }
+
+        for ($i = 0; $i -lt @($seqNoDomain_Conseq).Count; $i++) {
+            $k = _MakeKey -Row $row -Pattern $seqNoDomain_Conseq[$i]
+            if ($k -and -not $mapsConseq_No[$i].ContainsKey($k)) { $mapsConseq_No[$i][$k] = $row }
         }
-        for ($i=0; $i -lt $seqWithDomain_Prob.Count; $i++){
-            $k = _MakeKey $row $seqWithDomain_Prob[$i]
-            if ($k -and -not $mapsProb_With[$i].ContainsKey($k)) { $mapsProb_With[$i][$k]=$row }
+
+        for ($i = 0; $i -lt @($seqWithDomain_Prob).Count; $i++) {
+            $k = _MakeKey -Row $row -Pattern $seqWithDomain_Prob[$i]
+            if ($k -and -not $mapsProb_With[$i].ContainsKey($k)) { $mapsProb_With[$i][$k] = $row }
         }
-        for ($i=0; $i -lt $seqNoDomain_Prob.Count; $i++){
-            $k = _MakeKey $row $seqNoDomain_Prob[$i]
-            if ($k -and -not $mapsProb_No[$i].ContainsKey($k)) { $mapsProb_No[$i][$k]=$row }
+
+        for ($i = 0; $i -lt @($seqNoDomain_Prob).Count; $i++) {
+            $k = _MakeKey -Row $row -Pattern $seqNoDomain_Prob[$i]
+            if ($k -and -not $mapsProb_No[$i].ContainsKey($k)) { $mapsProb_No[$i][$k] = $row }
         }
     }
 
@@ -961,10 +1544,12 @@ function New-RiskIndex {
         TierValueColumn      = $ColTierValue
         ConseqScoreColumn    = $ColConseqScore
         ProbScoreColumn      = $ColProbScore
+
         Conseq_WithDomainPatterns = $seqWithDomain_Conseq
         Conseq_NoDomainPatterns   = $seqNoDomain_Conseq
         Prob_WithDomainPatterns   = $seqWithDomain_Prob
         Prob_NoDomainPatterns     = $seqNoDomain_Prob
+
         Conseq_WithDomainMaps = $mapsConseq_With
         Conseq_NoDomainMaps   = $mapsConseq_No
         Prob_WithDomainMaps   = $mapsProb_With
@@ -1178,9 +1763,12 @@ if ([bool]$global:AutomationFramework) {
     Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))
 
     #------------------------------------------------------------------------------------------------------------
-    # ExposureInsight settings
+    # RiskAnalysis query settings
     #------------------------------------------------------------------------------------------------------------
-    $global:ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
+    # The locked YAML is centrally maintained.
+    # Customers can optionally add/override in the custom YAML.
+    if ($null -eq $global:ReportSettingsFileLocked) { $global:ReportSettingsFileLocked = "SecurityInsight_RiskAnalysis_Queries_Locked.yaml" }
+    if ($null -eq $global:ReportSettingsFileCustom) { $global:ReportSettingsFileCustom = "SecurityInsight_RiskAnalysis_Queries_Custom.yaml" }
     $global:RiskDefinitionsCsvPath = (Join-Path $global:SettingsPath "SecurityInsight_RiskIndex.csv")
 
 } else {
@@ -1248,7 +1836,11 @@ if ([bool]$global:AutomationFramework) {
     Ensure-Directory -Path $global:OutputDir
     $global:OutputXlsx = Join-Path $global:OutputDir ("{0}.xlsx" -f $global:ReportTemplate)
 
-    $global:ReportSettingsFile     = "SecurityInsight_RiskAnalysis.yaml"
+    #------------------------------------------------------------------------------------------------------------
+    # RiskAnalysis query settings
+    #------------------------------------------------------------------------------------------------------------
+    if ($null -eq $global:ReportSettingsFileLocked) { $global:ReportSettingsFileLocked = "SecurityInsight_RiskAnalysis_Queries_Locked.yaml" }
+    if ($null -eq $global:ReportSettingsFileCustom) { $global:ReportSettingsFileCustom = "SecurityInsight_RiskAnalysis_Queries_Custom.yaml" }
     $global:RiskDefinitionsCsvPath = (Join-Path $global:SettingsPath "SecurityInsight_RiskIndex.csv")
 }
 
@@ -1257,19 +1849,53 @@ if ([bool]$global:AutomationFramework) {
 Write-Step "settings overview"
 Write-Info ("OutputXlsx: {0}" -f $global:OutputXlsx)
 Write-Info ("SettingsPath: {0}" -f $global:SettingsPath)
-Write-Info ("Risk Analysis Settings File: {0}" -f $global:ReportSettingsFile)
+Write-Info ("Risk Analysis Settings Files: Locked='{0}', Custom='{1}'" -f $global:ReportSettingsFileLocked, $global:ReportSettingsFileCustom)
 Write-Info ("Risk Index Csv Path: {0}" -f $global:RiskDefinitionsCsvPath)
 Write-Info ("Chosen ReportTemplate: {0}" -f $global:ReportTemplate)
 Write-Info ("Query bucketing: UseQueryBucketing={0}, DefaultBucketCount={1}, Placeholder='{2}'" -f `
   $global:UseQueryBucketing, $global:DefaultBucketCount, $global:BucketPlaceholderToken)
 Write-Info ("Graph reconnect: MaxAgeMinutes={0}, MaxRetries={1}" -f $global:GraphReconnectMaxAgeMinutes, $global:GraphQueryMaxRetries)
-Write-Info ("AI max_tokens (AI_MaxTokensPerRequest): {0}" -f $global:AI_MaxTokensPerRequest)
+# Token budget: canonical is $Global:OpenAI_MaxTokensPerRequest (back-compat alias: $Global:AI_MaxTokensPerRequest)
+if (-not (Get-Variable -Name OpenAI_MaxTokensPerRequest -Scope Global -ErrorAction SilentlyContinue)) {
+  if (Get-Variable -Name AI_MaxTokensPerRequest -Scope Global -ErrorAction SilentlyContinue) {
+    $Global:OpenAI_MaxTokensPerRequest = [int]$Global:AI_MaxTokensPerRequest
+  } else {
+    $Global:OpenAI_MaxTokensPerRequest = 16384
+  }
+}
+if (-not (Get-Variable -Name AI_MaxTokensPerRequest -Scope Global -ErrorAction SilentlyContinue)) {
+  $Global:AI_MaxTokensPerRequest = [int]$Global:OpenAI_MaxTokensPerRequest
+}
+
+# Debug flag (optional)
+if (-not (Get-Variable -Name DebugQueryHash -Scope Global -ErrorAction SilentlyContinue)) {
+  $Global:DebugQueryHash = $false
+}
+
+Write-Info ("AI max_tokens (OpenAI_MaxTokensPerRequest): {0}" -f $Global:OpenAI_MaxTokensPerRequest)
+Write-Info ("DebugQueryHash: {0}" -f [bool]$Global:DebugQueryHash)
+Write-Info ("DebugQueryHash: {0}" -f [bool]$Global:DebugQueryHash)
 
 #####################################################################################################
 # INITIALIZATION
 #####################################################################################################
 
 Reset-ExcelOutput -Path $global:OutputXlsx -ForceRemove:([bool]$global:OverwriteXlsx)
+
+# Optional: reset AutoBucket cache so it rebuilds
+if ([bool]$global:ResetCache) {
+  try {
+    $cachePath = Join-Path $global:SettingsPath "OUTPUT\AutoBucketCache.json"
+    if (Test-Path -LiteralPath $cachePath) {
+      Remove-Item -LiteralPath $cachePath -Force -ErrorAction Stop
+      Write-Info ("AutoBucket cache reset: deleted '{0}'" -f $cachePath)
+    } else {
+      Write-Info ("AutoBucket cache reset requested, but file did not exist: '{0}'" -f $cachePath)
+    }
+  } catch {
+    Write-Warn ("AutoBucket cache reset requested, but delete failed: {0}" -f $_.Exception.Message)
+  }
+}
 
 # track sheet first/append state per run (kept for compatibility; export is now single-write)
 if (-not $script:_sheetWritten) { $script:_sheetWritten = @{} }
@@ -1278,9 +1904,176 @@ if (-not $script:_sheetWritten) { $script:_sheetWritten = @{} }
 Write-Step "loading report settings from YAML"
 Tock
 try {
-  $global:Report_Settings_raw = Get-Content -Raw (Join-Path $global:SettingsPath $global:ReportSettingsFile) | ConvertFrom-Yaml
+  function Read-YamlFileOrNull {
+    param([Parameter(Mandatory=$true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    return ($raw | ConvertFrom-Yaml)
+  }
+
+  function Merge-ByReportName {
+    param(
+      [Parameter(Mandatory=$false)][object]$Locked,
+      [Parameter(Mandatory=$false)][object]$Custom
+    )
+
+    function Convert-ToItemList {
+      param([object]$InputObject)
+      if ($null -eq $InputObject) { return @() }
+
+      # If a dictionary (hashtable/ordered dictionary), merge its values
+      if ($InputObject -is [System.Collections.IDictionary]) {
+        return @($InputObject.Values)
+      }
+
+      # If it's an enumerable (array/list/arraylist), return items
+      if (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string])) {
+        return @($InputObject)
+      }
+
+      # Single object
+      return @($InputObject)
+    }
+
+    function Get-ItemAndName {
+      param([object]$Obj)
+
+      $item = $Obj
+
+      # If we got a DictionaryEntry, use its Value as the item
+      if ($Obj -is [System.Collections.DictionaryEntry]) {
+        $item = $Obj.Value
+      }
+
+      # Try property first
+      $name = $null
+      try { $name = $item.ReportName } catch {}
+
+      # If it's a hashtable-like, try key lookup
+      if ([string]::IsNullOrWhiteSpace([string]$name)) {
+        if ($item -is [System.Collections.IDictionary]) {
+          if ($item.Contains('ReportName')) { $name = $item['ReportName'] }
+        }
+      }
+
+      return @($item, $name)
+    }
+
+    $lockedList = Convert-ToItemList $Locked
+    $customList = Convert-ToItemList $Custom
+
+    # Build a map of custom items by ReportName
+    $customMap = @{}
+    foreach ($c in $customList) {
+      if ($null -eq $c) { continue }
+      $pair = Get-ItemAndName $c
+      $item = $pair[0]
+      $name = $pair[1]
+      if ([string]::IsNullOrWhiteSpace([string]$name)) { continue }
+      $customMap[[string]$name] = $item
+    }
+
+    # Start with locked order; replace with custom on name-conflict
+    $out = New-Object System.Collections.ArrayList
+    $seen = @{}
+    foreach ($l in $lockedList) {
+      if ($null -eq $l) { continue }
+      $pair = Get-ItemAndName $l
+      $item = $pair[0]
+      $lname = $pair[1]
+      if ([string]::IsNullOrWhiteSpace([string]$lname)) { continue }
+
+      $key = [string]$lname
+      if ($customMap.ContainsKey($key)) {
+        [void]$out.Add($customMap[$key])
+        $seen[$key] = $true
+      } else {
+        [void]$out.Add($item)
+        $seen[$key] = $true
+      }
+    }
+
+    # Append custom-only
+    foreach ($c in $customList) {
+      if ($null -eq $c) { continue }
+      $pair = Get-ItemAndName $c
+      $item = $pair[0]
+      $cname = $pair[1]
+      if ([string]::IsNullOrWhiteSpace([string]$cname)) { continue }
+      $key = [string]$cname
+      if (-not $seen.ContainsKey($key)) {
+        [void]$out.Add($item)
+        $seen[$key] = $true
+      }
+    }
+
+    return $out
+  }
+
+function Merge-ReportSettings {
+    param(
+      [Parameter(Mandatory=$true)][object]$LockedSettings,
+      [Parameter(Mandatory=$false)][object]$CustomSettings
+    )
+
+    if ($null -eq $LockedSettings) { throw "Locked settings is null" }
+
+    # Shallow copy locked root object
+    $merged = [ordered]@{}
+    foreach ($p in $LockedSettings.PSObject.Properties) {
+      $merged[$p.Name] = $p.Value
+    }
+
+    if ($null -ne $CustomSettings) {
+      $merged['Reports'] = Merge-ByReportName -Locked $LockedSettings.Reports -Custom $CustomSettings.Reports
+      $merged['ReportTemplates'] = Merge-ByReportName -Locked $LockedSettings.ReportTemplates -Custom $CustomSettings.ReportTemplates
+
+      # Copy any additional top-level keys from custom that don't exist in locked
+      foreach ($p in $CustomSettings.PSObject.Properties) {
+        if (-not $merged.Contains($p.Name)) {
+          $merged[$p.Name] = $p.Value
+        }
+      }
+    } else {
+      # Ensure keys exist
+      if (-not $merged.Contains('Reports')) { $merged['Reports'] = @() }
+      if (-not $merged.Contains('ReportTemplates')) { $merged['ReportTemplates'] = @() }
+    }
+
+    return [pscustomobject]$merged
+  }
+
+  $lockedPath = Join-Path $global:SettingsPath $global:ReportSettingsFileLocked
+  $customPath = Join-Path $global:SettingsPath $global:ReportSettingsFileCustom
+
+  if (-not (Test-Path -LiteralPath $lockedPath)) {
+    throw "Locked YAML not found: $lockedPath"
+  }
+
+  $lockedYaml = Read-YamlFileOrNull -Path $lockedPath
+  if ($null -eq $lockedYaml) {
+    throw "Locked YAML was empty or could not be parsed: $lockedPath"
+  }
+
+  $customYaml = Read-YamlFileOrNull -Path $customPath
+
+  $global:Report_Settings_raw = Merge-ReportSettings -LockedSettings $lockedYaml -CustomSettings $customYaml
   $global:Report_Settings     = ConvertTo-PSObjectDeep $global:Report_Settings_raw
-  Write-Ok "report settings loaded"
+
+  $lockedReportCount = @($lockedYaml.Reports).Count
+  $lockedTplCount    = @($lockedYaml.ReportTemplates).Count
+  $customReportCount = if ($customYaml) { @($customYaml.Reports).Count } else { 0 }
+  $customTplCount    = if ($customYaml) { @($customYaml.ReportTemplates).Count } else { 0 }
+  $mergedReportCount = @($global:Report_Settings_raw.Reports).Count
+  $mergedTplCount    = @($global:Report_Settings_raw.ReportTemplates).Count
+
+  Write-Info ("YAML merge: Locked Reports={0}, Locked Templates={1}, Custom Reports={2}, Custom Templates={3}, Merged Reports={4}, Merged Templates={5}" -f `
+    $lockedReportCount, $lockedTplCount, $customReportCount, $customTplCount, $mergedReportCount, $mergedTplCount)
+
+  if ($customYaml) { Write-Ok "report settings loaded (locked + custom merged; custom wins on name conflicts)" }
+  else { Write-Ok "report settings loaded (locked only; custom file missing/empty)" }
 } catch { Write-Err2 "failed to read/parse report settings yaml: $($_.Exception.Message)"; throw }
 Tick "yaml load"
 
@@ -1337,6 +2130,357 @@ try {
   Write-Ok "risk index built"
 } catch { Write-Err2 "failed to build risk index: $($_.Exception.Message)"; throw }
 Tick "risk index build"
+
+#######################################################################################################
+# AUTO BUCKETING HELPERS (adaptive bucketing)
+#######################################################################################################
+
+# Per-run memo (StrictMode-safe)
+if (-not (Get-Variable -Name AutoBucketMemo -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:AutoBucketMemo = @{}
+}
+
+function Test-IsBucketOverflowError {
+  param(
+    [Parameter(Mandatory=$true)]
+    [object] $Err
+  )
+
+  $msg = ""
+
+  if ($Err -is [System.Management.Automation.ErrorRecord]) {
+    $detailMsg = ""
+    try { if ($Err.ErrorDetails) { $detailMsg = [string]$Err.ErrorDetails.Message } } catch {}
+    $msg = [string]($Err.Exception.Message + " " + $detailMsg)
+  } else {
+    $msg = [string]$Err
+  }
+
+  $m = $msg.ToLowerInvariant()
+
+  # Signatures for "too many rows / result limit / response too large"
+  if (
+    $m -match "too many" -or
+    $m -match "result.*limit" -or
+    $m -match "exceed" -or
+    $m -match "response.*too large" -or
+    $m -match "a task was canceled" -or
+    $m -match "taskcanceledexception" -or
+    $m -match "timed out" -or
+    $m -match "timeout" -or
+    $m -match "payload.*too large" -or
+    $m -match "request entity too large" -or
+    ($m -match "rows" -and $m -match "limit")
+  ) { return $true }
+
+  return $false
+}
+
+function Get-AutoBucketCachePath {
+  param([Parameter(Mandatory=$true)][string]$SettingsPath)
+  Join-Path $SettingsPath "OUTPUT\AutoBucketCache.json"
+}
+
+function ConvertTo-HashtableDeep {
+  param([Parameter(Mandatory=$true)]$InputObject)
+
+  if ($null -eq $InputObject) { return $null }
+
+  # Hashtable / IDictionary
+  if ($InputObject -is [System.Collections.IDictionary]) {
+    $out = @{}
+    foreach ($k in $InputObject.Keys) {
+      $out[[string]$k] = ConvertTo-HashtableDeep -InputObject $InputObject[$k]
+    }
+    return $out
+  }
+
+  # PSCustomObject
+  if ($InputObject -is [pscustomobject]) {
+    $out = @{}
+    foreach ($p in $InputObject.PSObject.Properties) {
+      $out[[string]$p.Name] = ConvertTo-HashtableDeep -InputObject $p.Value
+    }
+    return $out
+  }
+
+  # IEnumerable (but not string)
+  if (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string])) {
+    $list = @()
+    foreach ($i in $InputObject) {
+      $list += ,(ConvertTo-HashtableDeep -InputObject $i)
+    }
+    return $list
+  }
+
+  return $InputObject
+}
+
+function Read-AutoBucketCache {
+  param([Parameter(Mandatory=$true)][string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) { return @{} }
+
+  try {
+    $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+    if ([string]::IsNullOrWhiteSpace($raw)) { return @{} }
+
+    $obj = ($raw | ConvertFrom-Json -ErrorAction Stop)
+    if ($null -eq $obj) { return @{} }
+
+    $ht = ConvertTo-HashtableDeep -InputObject $obj
+    if ($null -eq $ht) { return @{} }
+
+    # Support both flat and wrapped cache formats
+    foreach ($wrapper in @('Entries','Cache','Data','AutoBucket')) {
+      if (($ht -is [hashtable]) -and $ht.ContainsKey($wrapper) -and ($ht[$wrapper] -is [hashtable])) {
+        return $ht[$wrapper]
+      }
+    }
+
+    if ($ht -is [hashtable]) { return $ht }
+
+    # If the root isn't a hashtable, treat it as empty (unexpected format)
+    return @{}
+  } catch {
+    return @{}
+  }
+}
+
+function Get-AutoBucketCacheFallbackValue {
+  param(
+    [Parameter(Mandatory=$true)][hashtable]$Cache,
+    [Parameter(Mandatory=$true)][string]$QueryKey,
+    [Parameter(Mandatory=$true)][int]$MaxBucketCount
+  )
+
+  # PowerShell 5.1 compatibility + cache format migration:
+  # - New cache key format is: <ReportName>|<QueryHash>
+  # - Older cache files may still contain keys like: <ReportName>|<QueryHash>|cap<Max>
+  #
+  # If the exact key is missing, try to reuse any legacy cap-key for the same base key.
+  $base = [string]$QueryKey
+  if ([string]::IsNullOrWhiteSpace($base)) { return $null }
+
+  $legacyPrefix = ($base + '|cap')
+  $candidates = New-Object System.Collections.Generic.List[int]
+
+  foreach ($k in $Cache.Keys) {
+    $ks = [string]$k
+    if ($ks -eq $base -or $ks -like ($legacyPrefix + '*')) {
+      $v = $Cache[$k]
+      $vi = 0
+      if ([int]::TryParse([string]$v, [ref]$vi)) {
+        if ($vi -ge 1) { $candidates.Add($vi) }
+      }
+    }
+  }
+
+  if ($candidates.Count -eq 0) { return $null }
+
+  # Use the largest cached "working" bucket count to avoid re-probing.
+  $best = ($candidates | Measure-Object -Maximum).Maximum
+  $best = [int]$best
+  if ($best -lt 1) { return $null }
+  if ($best -gt $MaxBucketCount) { $best = $MaxBucketCount }
+  return $best
+}
+
+function Get-StableQueryHash32 {
+  param(
+    [Parameter(Mandatory=$true)][string]$Text
+  )
+
+  # NOTE: .NET string.GetHashCode() is not stable across processes.
+  # We use SHA256 and take the first 4 bytes as an unsigned 32-bit integer.
+  $norm = ($Text -replace '\s+', ' ').Trim()
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($norm)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $hashBytes = $sha.ComputeHash($bytes)
+  } finally {
+    if ($sha -and ($sha -is [System.IDisposable])) { $sha.Dispose() }
+  }
+
+  return [System.BitConverter]::ToUInt32($hashBytes, 0)
+}
+
+function Write-AutoBucketCache {
+  param(
+    [Parameter(Mandatory=$true)][string]$Path,
+    [Parameter(Mandatory=$true)][object]$CacheObject
+  )
+
+  $dir = Split-Path -Parent $Path
+  if (-not (Test-Path -LiteralPath $dir)) {
+    New-Item -Path $dir -ItemType Directory -Force | Out-Null
+  }
+
+  $CacheObject | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Get-CacheValue {
+  param([Parameter(Mandatory=$true)][object]$Cache,[Parameter(Mandatory=$true)][string]$Key)
+
+  if ($Cache -is [hashtable]) {
+    if ($Cache.ContainsKey($Key)) { return $Cache[$Key] }
+    return $null
+  }
+
+  try {
+    $p = $Cache.PSObject.Properties[$Key]
+    if ($p) { return $p.Value }
+  } catch {}
+
+  return $null
+}
+
+function Set-CacheValue {
+  param([Parameter(Mandatory=$true)][ref]$Cache,[Parameter(Mandatory=$true)][string]$Key,[Parameter(Mandatory=$true)][int]$Value)
+
+  if ($Cache.Value -is [hashtable]) {
+    $Cache.Value[$Key] = $Value
+    return
+  }
+
+  try {
+    $Cache.Value | Add-Member -NotePropertyName $Key -NotePropertyValue $Value -Force
+  } catch {
+    $ht = @{}
+    foreach ($prop in $Cache.Value.PSObject.Properties) { $ht[$prop.Name] = $prop.Value }
+    $ht[$Key] = $Value
+    $Cache.Value = $ht
+  }
+}
+
+function Get-OptimalBucketCount {
+  param(
+    [Parameter(Mandatory=$true)][string]$QueryKey,
+    [Parameter(Mandatory=$false)][string[]]$LegacyKeys,
+    [Parameter(Mandatory=$true)][int]$MaxBucketCount,
+    [Parameter(Mandatory=$true)][scriptblock]$ProbeScript
+  )
+
+  if ($MaxBucketCount -lt 1) { return 1 }
+
+  # Memo
+  if ($script:AutoBucketMemo.ContainsKey($QueryKey)) {
+    return [int]$script:AutoBucketMemo[$QueryKey]
+  }
+  if ($LegacyKeys) {
+    foreach ($lk in $LegacyKeys) {
+      if (-not [string]::IsNullOrWhiteSpace($lk) -and $script:AutoBucketMemo.ContainsKey($lk)) {
+        $val = [int]$script:AutoBucketMemo[$lk]
+        $script:AutoBucketMemo[$QueryKey] = $val
+        return $val
+      }
+    }
+  }
+
+  # Cache on disk (optional)
+  $cachePath = $null
+  $cache = $null
+  if ([bool]$global:AutoBucketCache -and -not [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
+    $cachePath = Get-AutoBucketCachePath -SettingsPath $global:SettingsPath
+    $cache = Read-AutoBucketCache -Path $cachePath
+    # Read-AutoBucketCache returns a hashtable, but keep the older getter for safety
+    $cached = Get-CacheValue -Cache $cache -Key $QueryKey
+    if ($null -ne $cached) {
+      $ci = [int]$cached
+      if ($ci -ge 1 -and $ci -le $MaxBucketCount) {
+        Write-Info ("AutoBucket cache hit: '{0}' => {1}" -f $QueryKey, $ci)
+        $script:AutoBucketMemo[$QueryKey] = $ci
+        return $ci
+      }
+    }
+
+    # Try legacy keys (e.g., old unstable GetHashCode-based identity)
+    if ($LegacyKeys) {
+      foreach ($lk in $LegacyKeys) {
+        if ([string]::IsNullOrWhiteSpace($lk)) { continue }
+        $cached2 = Get-CacheValue -Cache $cache -Key $lk
+        if ($null -ne $cached2) {
+          $ci2 = [int]$cached2
+          if ($ci2 -ge 1 -and $ci2 -le $MaxBucketCount) {
+            Write-Info ("AutoBucket cache hit (legacy): '{0}' => {1}" -f $lk, $ci2)
+            # Migrate in-memory to new key
+            $script:AutoBucketMemo[$QueryKey] = $ci2
+            # Persist migration best-effort
+            if ($cachePath) {
+              $cacheRef = [ref]$cache
+              Set-CacheValue -Cache $cacheRef -Key $QueryKey -Value $ci2
+              $cache = $cacheRef.Value
+              try { Write-AutoBucketCache -Path $cachePath -CacheObject $cache } catch {}
+            }
+            return $ci2
+          }
+        }
+      }
+    }
+
+    # Fallback for old cache formats (cap in key) and other key mismatches
+    if ($cache -is [hashtable]) {
+      $fallback = Get-AutoBucketCacheFallbackValue -Cache $cache -QueryKey $QueryKey -MaxBucketCount $MaxBucketCount
+      if ($null -ne $fallback) {
+        Write-Info ("AutoBucket cache fallback: '{0}' => {1}" -f $QueryKey, $fallback)
+        $script:AutoBucketMemo[$QueryKey] = [int]$fallback
+        return [int]$fallback
+      }
+    }
+  }
+
+  # Exponential probe: 1,2,4,8...
+  $try = 1
+  $lastFail = 0
+  $firstOk = 0
+
+  while ($try -le $MaxBucketCount) {
+    try {
+      Write-Info ("AutoBucket probing '{0}' with bucketCount={1}" -f $QueryKey, $try)
+      & $ProbeScript -BucketCount $try | Out-Null
+      $firstOk = $try
+      break
+    } catch {
+      if (-not (Test-IsBucketOverflowError $_)) { throw }
+      $lastFail = $try
+      $try = $try * 2
+    }
+  }
+
+  if ($firstOk -eq 0) {
+    throw ("AutoBucket: query '{0}' did not succeed up to MaxBucketCount={1}" -f $QueryKey, $MaxBucketCount)
+  }
+
+  # Binary search: (lastFail, firstOk]
+  $low = [Math]::Max($lastFail + 1, 1)
+  $high = $firstOk
+
+  while ($low -lt $high) {
+    $mid = [int][Math]::Floor(($low + $high) / 2)
+    try {
+      Write-Info ("AutoBucket binary probe '{0}' with bucketCount={1}" -f $QueryKey, $mid)
+      & $ProbeScript -BucketCount $mid | Out-Null
+      $high = $mid
+    } catch {
+      if (-not (Test-IsBucketOverflowError $_)) { throw }
+      $low = $mid + 1
+    }
+  }
+
+  $optimal = $low
+  Write-Info ("AutoBucket chosen for '{0}': {1}" -f $QueryKey, $optimal)
+
+  $script:AutoBucketMemo[$QueryKey] = $optimal
+
+  if ($cachePath) {
+    $cacheRef = [ref]$cache
+    Set-CacheValue -Cache $cacheRef -Key $QueryKey -Value $optimal
+    $cache = $cacheRef.Value
+    try { Write-AutoBucketCache -Path $cachePath -CacheObject $cache } catch {}
+  }
+
+  return $optimal
+}
 
 #####################################################################################################
 # MAIN LOOP
@@ -1407,6 +2551,17 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
         $effectivePlaceholder = [string]$inc.BucketPlaceholderToken
     }
 
+    # -----------------------------------------------------------------------------------------
+    # FULL FIX: make the KQL AssetName-safe BEFORE we decide bucketing and BEFORE execution
+    # -----------------------------------------------------------------------------------------
+    $Query = Ensure-QueryIsAssetNameSafe -Query $Query
+
+    # If bucketing is used and the query has the placeholder token, ensure DeviceKey exists
+    # before the token (so bucket filter can use it).
+    if ($Query -like "*$effectivePlaceholder*" -and $Query -notmatch '(?im)\bDeviceKey\b') {
+        $Query = $Query.Replace($effectivePlaceholder, ("`n" + (New-DeviceKeyKql) + "`n" + $effectivePlaceholder))
+    }
+
     $querySupportsBucket = ($Query -like "*$effectivePlaceholder*")
 
     Write-Step ("report '{0}' - {1}" -f $ReportName,$ReportPurpose)
@@ -1419,48 +2574,174 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
 
     if ($effectiveUseBucket -and $querySupportsBucket -and $effectiveBucketCount -gt 1) {
 
-        Write-Info ("query contains placeholder '{0}' and bucketing is enabled. Running in {1} buckets." -f $effectivePlaceholder,$effectiveBucketCount)
+        # AutoBucket: try bucketCount=1 first, then increase until the query succeeds.
+        # MaxBucketCount is allowed to grow beyond the configured BucketCount for this report,
+        # up to AutoBucketMax (if set). This is required when BucketCount=2 still exceeds result size.
+        $capBucket = [int]$effectiveBucketCount
+        if ([int]$global:AutoBucketMax -gt 0) {
+          $capBucket = [Math]::Max($capBucket, [int]$global:AutoBucketMax)
+        }
+        if ($capBucket -lt 1) { $capBucket = 1 }
 
-        for ($b = 0; $b -lt $effectiveBucketCount; $b++) {
+        $bucketCountToUse = $effectiveBucketCount
 
-            $bucketNo = $b + 1
-            $bucketFilter = New-BucketFilterKql -BucketCount $effectiveBucketCount -BucketIndex $b
-            $thisQuery    = $Query.Replace($effectivePlaceholder, $bucketFilter)
+        if ([bool]$global:AutoBucketCount) {
 
-            Write-Info ("bucket {0}/{1}: running advanced hunting query against Defender Exposure Management Graph ... Please wait !" -f $bucketNo, $effectiveBucketCount)
-            Tock
+          # Cache key: report name + STABLE hash of the PRE-BUCKET query.
+          # NOTE:
+          #  - We intentionally do NOT include MaxBucketCount/cap in the cache key.
+          #  - We hash the query BEFORE bucket filter injection so the identity remains stable.
+          #  - We do NOT use string.GetHashCode() for the primary identity because it is not
+          #    stable across PowerShell sessions/processes.
+          $queryForHash = $Query
+          $queryForHashNorm = ($queryForHash -replace '\s+', ' ').Trim()
+          $stableHash = Get-StableQueryHash32 -Text $queryForHashNorm
+          $legacyHash = [Math]::Abs(($queryForHashNorm.GetHashCode()))
+
+          $queryKey = ("{0}|{1}" -f $ReportName, $stableHash)
+          $legacyKey = ("{0}|{1}" -f $ReportName, $legacyHash)
+
+          if ([bool]$global:DebugQueryHash) {
+            Write-Info ("AutoBucket hash identity for '{0}': stable={1}, legacy={2}" -f $ReportName, $stableHash, $legacyHash)
             try {
-                $resp = Invoke-GraphHuntingQuery -Query $thisQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
-                Tick ("hunting query bucket {0}/{1}" -f $bucketNo, $effectiveBucketCount)
-            } catch {
-                Write-Err2 ("advanced hunting query failed for bucket {0}/{1}: {2}" -f $bucketNo, $effectiveBucketCount, $_.Exception.Message)
-                continue
-            }
+              $dbgDir = Join-Path (Join-Path $global:SettingsPath 'OUTPUT') 'Debug'
+              if (-not (Test-Path -LiteralPath $dbgDir)) { New-Item -Path $dbgDir -ItemType Directory -Force | Out-Null }
+              $safeName = ($ReportName -replace '[^a-zA-Z0-9_.-]', '_')
+              $dbgPath = Join-Path $dbgDir ("QueryHash_{0}_{1}.kql" -f $safeName, $stableHash)
+              Set-Content -LiteralPath $dbgPath -Value $queryForHash -Encoding UTF8
+              Write-Info ("AutoBucket hash debug query written: {0}" -f $dbgPath)
+            } catch { }
+          }
 
-            $rawResults = $null
-            if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
+          $probe = {
+            param([int]$BucketCount)
 
-            if ($null -eq $rawResults) {
-                Write-Info ("bucket {0}/{1}: no results" -f $bucketNo, $effectiveBucketCount)
-                continue
-            }
+            # Probe only bucket 0. If this bucket still exceeds limits, smaller buckets are needed.
+            $bucketFilter = New-BucketFilterKql -BucketCount $BucketCount -BucketIndex 0
+            $probeQuery   = $Query.Replace($effectivePlaceholder, $bucketFilter)
 
-            Tock
-            try {
-                $bucketResult = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
-            } catch {
-                Write-Err2 ("result conversion failed for bucket {0}/{1}: {2}" -f $bucketNo, $effectiveBucketCount, $_.Exception.Message)
-                continue
-            }
-            $bucketCount  = ($bucketResult | Measure-Object).Count
-            Tick ("result conversion (bucket {0}/{1})" -f $bucketNo, $effectiveBucketCount)
+            $null = Invoke-GraphHuntingQuery -Query $probeQuery `
+              -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes `
+              -MaxRetries 1
+          }
 
-            Write-Info ("bucket {0}/{1}: {2} rows" -f $bucketNo, $effectiveBucketCount, $bucketCount)
-            foreach ($row in $bucketResult) { $ResultAll += ,$row }
+          try {
+            $bucketCountToUse = Get-OptimalBucketCount -QueryKey $queryKey -LegacyKeys @($legacyKey) -MaxBucketCount $capBucket -ProbeScript $probe
+          } catch {
+            Write-Warn2 ("AutoBucket failed for report '{0}'. Falling back to configured BucketCount={1}. Error: {2}" -f `
+              $ReportName, $effectiveBucketCount, $_.Exception.Message)
+            $bucketCountToUse = $effectiveBucketCount
+          }
         }
 
-        Write-Info ("total rows across all buckets before dedupe: {0}" -f $ResultAll.Count)
-        $ResultAll = Deduplicate-Rows -Rows $ResultAll
+        if ($bucketCountToUse -lt 1) { $bucketCountToUse = 1 }
+
+        
+# -------------------------------------------------------------------------------------------------
+# Buckets execution with escalation:
+# If ANY bucket fails due to deterministic overflow/limits/timeout, re-run the WHOLE report with
+# a higher bucket count (e.g., 4 -> 8) until success or cap is reached.
+# -------------------------------------------------------------------------------------------------
+
+$bucketRunSucceeded = $false
+$lastBucketRunError = $null
+
+while (-not $bucketRunSucceeded) {
+
+  # Reset results on each (re)run so we don't keep partial data from a failing bucket count
+  $ResultAll = @()
+
+  Write-Info ("query contains placeholder '{0}' and bucketing is enabled. Using {1} bucket(s)." -f $effectivePlaceholder,$bucketCountToUse)
+
+  $needEscalation = $false
+
+  for ($b = 0; $b -lt $bucketCountToUse; $b++) {
+
+      $bucketNo = $b + 1
+      $bucketFilter = New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $b
+      $thisQuery    = $Query.Replace($effectivePlaceholder, $bucketFilter)
+
+      Write-Info ("bucket {0}/{1}: running advanced hunting query against Defender Exposure Management Graph ... Please wait !" -f $bucketNo, $bucketCountToUse)
+      Tock
+      try {
+          $resp = Invoke-GraphHuntingQuery -Query $thisQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
+          Tick ("hunting query bucket {0}/{1}" -f $bucketNo, $bucketCountToUse)
+      } catch {
+
+          # If a single bucket exceeds limits/timeouts, the current bucket count is not safe.
+          # Escalate and restart the WHOLE run with more buckets.
+          if (Test-IsBucketOverflowError $_) {
+              $lastBucketRunError = $_.Exception.Message
+              Write-Warn2 ("bucket {0}/{1} exceeded limits/timeout. Escalating bucket count and restarting this report. Error: {2}" -f `
+                $bucketNo, $bucketCountToUse, $lastBucketRunError)
+
+              $needEscalation = $true
+              break
+          }
+
+          Write-Err2 ("advanced hunting query failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $_.Exception.Message)
+          continue
+      }
+
+      $rawResults = $null
+      if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
+
+      if ($null -eq $rawResults) {
+          Write-Info ("bucket {0}/{1}: no results" -f $bucketNo, $bucketCountToUse)
+          continue
+      }
+
+      Tock
+      try {
+          $bucketResult = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
+      } catch {
+          Write-Err2 ("result conversion failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $_.Exception.Message)
+          continue
+      }
+      $bucketCount  = ($bucketResult | Measure-Object).Count
+      Tick ("result conversion (bucket {0}/{1})" -f $bucketNo, $bucketCountToUse)
+
+      Write-Info ("bucket {0}/{1}: {2} rows" -f $bucketNo, $bucketCountToUse, $bucketCount)
+      foreach ($row in $bucketResult) { $ResultAll += ,$row }
+  }
+
+  if ($needEscalation) {
+
+      if ($bucketCountToUse -ge $capBucket) {
+          Write-Err2 ("bucket escalation reached cap {0}. Unable to complete report '{1}'. Last error: {2}" -f `
+            $capBucket, $ReportName, $lastBucketRunError)
+          break
+      }
+
+      # Growth strategy: prefer doubling (4->8) but ensure it increases at least +1.
+      $nextBucket = [Math]::Min($capBucket, [Math]::Max(($bucketCountToUse * 2), ($bucketCountToUse + 1)))
+
+      Write-Warn2 ("AutoBucket escalation: rerunning report '{0}' with BucketCount {1} -> {2}" -f `
+        $ReportName, $bucketCountToUse, $nextBucket)
+
+      $bucketCountToUse = [int]$nextBucket
+      continue
+  }
+
+  # Success: all buckets executed without deterministic overflow/timeout
+  $bucketRunSucceeded = $true
+}
+
+# If we succeeded with a higher bucket count than the initial AutoBucket probe, update memo/cache so next run starts smarter.
+if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
+  try {
+    $script:AutoBucketMemo[$queryKey] = [int]$bucketCountToUse
+    if ([bool]$global:AutoBucketCache -and -not [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
+      $cachePath2 = Get-AutoBucketCachePath -SettingsPath $global:SettingsPath
+      $cache2 = Read-AutoBucketCache -Path $cachePath2
+      if ($null -eq $cache2) { $cache2 = @{} }
+      $cache2[$queryKey] = [int]$bucketCountToUse
+      Write-AutoBucketCache -Path $cachePath2 -CacheObject $cache2
+    }
+  } catch { }
+}Write-Info ("total rows across all buckets before dedupe: {0}" -f $ResultAll.Count)
+        # $ResultAll = @(Deduplicate-Rows -Rows $ResultAll)
+        $ResultAll = @($ResultAll)   # enforce array
         Write-Info ("total rows after dedupe: {0}" -f ($ResultAll | Measure-Object).Count)
 
     } else {
@@ -1499,7 +2780,7 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
         Write-Info ("rows before filters: {0}" -f $ResultAll.Count)
     }
 
-    if ($ResultAll.Count -eq 0) {
+if ($ResultAll.Count -eq 0) {
         Write-Warn2 "no rows returned from query; skipping this report"
         continue
     }
@@ -1507,12 +2788,53 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     # Filters
     $ResultFiltered = @($ResultAll)
 
+    $EnableFilterAudit = $false
+    if (Get-Variable -Name EnableFilterAudit -Scope Global -ErrorAction SilentlyContinue) {
+        $EnableFilterAudit = [bool]$global:EnableFilterAudit
+    }
+    $FilteredOut = @()
+
+    $filterSpecs = @(
+      @{ Name="CriticalityTierLevel"; Column=$CriticalityTierLevelInputName; Scope=$CriticalityTierLevelScope },
+      @{ Name="SecuritySeverity";     Column=$SecuritySeverityInputName;     Scope=$SecuritySeverityScope }
+    )
+
     Tock
-    $ResultFiltered = Apply-ScopeFilter -Rows $ResultFiltered -ColumnName $CriticalityTierLevelInputName -Scope $CriticalityTierLevelScope
-    $ResultFiltered = Apply-ScopeFilter -Rows $ResultFiltered -ColumnName $SecuritySeverityInputName     -Scope $SecuritySeverityScope
+    foreach ($fs in $filterSpecs) {
+      if ($null -eq $fs.Column -or [string]::IsNullOrWhiteSpace([string]$fs.Column)) { continue }
+      if ($null -eq $fs.Scope -or @($fs.Scope).Count -eq 0) { continue }
+
+      if ($EnableFilterAudit) {
+        $r = Filter-ObjectsByColumn -InputObject @($ResultFiltered) -ColumnToFilter $fs.Column -InScopeData @($fs.Scope) -CaseInsensitive -IncludeBlank:$true -ReturnAudit -FilterName $fs.Name
+        $ResultFiltered = @($r.Kept)
+        $FilteredOut += @($r.Removed)
+      } else {
+        $ResultFiltered = @(Filter-ObjectsByColumn -InputObject @($ResultFiltered) -ColumnToFilter $fs.Column -InScopeData @($fs.Scope) -CaseInsensitive -IncludeBlank:$true -FilterName $fs.Name)
+      }
+    }
+
     $totalAfter = ($ResultFiltered | Measure-Object).Count
     Tick "apply filters"
     Write-Info ("rows after filters:  {0}" -f $totalAfter)
+
+    if ($EnableFilterAudit -and $FilteredOut.Count -gt 0) {
+      Write-Info ("filtered away (out-of-scope only; blanks are kept): {0}" -f $FilteredOut.Count)
+
+      $summary = $FilteredOut | Group-Object "__FilterReason" | Sort-Object Count -Descending | Select-Object Count, Name
+      foreach ($s in $summary) { Write-Info ("  {0} - {1}" -f $s.Count, $s.Name) }
+
+      try {
+        $auditDir = Join-Path (Join-Path $global:SettingsPath 'OUTPUT') 'Debug'
+        if (-not (Test-Path $auditDir)) { New-Item -ItemType Directory -Path $auditDir -Force | Out-Null }
+        $safeReport = ($ReportName -replace '[^a-zA-Z0-9_.-]', '_')
+        $auditPath = Join-Path $auditDir ("{0}_filtered_out.csv" -f $safeReport)
+        $FilteredOut | Export-Csv -NoTypeInformation -Encoding UTF8 -Path $auditPath
+        Write-Info ("filter audit exported: {0}" -f $auditPath)
+      } catch {
+        Write-Warn2 ("failed to export filter audit: {0}" -f $_.Exception.Message)
+      }
+    }
+
 
     if ($totalAfter -eq 0) {
       Write-Warn2 "no rows after filtering; skipping risk calculation for this report"
@@ -1691,11 +3013,15 @@ if ([bool]$global:BuildSummaryByAI) {
         }
 
         function Split-ImpactedAssets {
-            param([string]$AssetsText)
+            param([AllowNull()][object]$AssetsText)
 
-            if ([string]::IsNullOrWhiteSpace($AssetsText)) { return @() }
+            if ($null -eq $AssetsText) { return @() }
+            $t = if ($AssetsText -is [string]) { $AssetsText } else {
+                try { $AssetsText | ConvertTo-Json -Compress -Depth 12 } catch { "" + $AssetsText }
+            }
+            if ([string]::IsNullOrWhiteSpace($t)) { return @() }
 
-            $t = $AssetsText.Trim()
+            $t = $t.Trim()
 
             if ($t.StartsWith('[') -and $t.EndsWith(']')) {
                 try {

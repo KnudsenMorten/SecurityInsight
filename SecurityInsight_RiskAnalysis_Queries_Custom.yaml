@@ -1,0 +1,468 @@
+﻿Reports:
+    - ReportName: Device_Missing_CVEs_Summary_BucketFilter_Test
+      ReportPurpose: This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes
+        them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most
+        critical and likely exploitable vulnerabilities.
+      SecurityDomain: Endpoint
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbablityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability_DetailedScore
+      - RiskConsequenceScore
+      - RiskProbablityScore
+      - RiskScoreTotal
+      - AssetCount
+      - TotalIssues
+      - ImpactedAssets
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |-
+        // Report Purpose
+        // This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most critical and likely exploitable vulnerabilities.
+
+        // Step 0  Define legacy operating systems that should increase probability
+        let LegacyWindowsOSPlatforms = dynamic([
+          "WindowsServer2008",
+          "WindowsServer2008R2",
+          "WindowsServer2012",
+          "WindowsServer2012R2",
+          "Windows7",
+          "Windows8",
+          "Windows8.1"
+        ]);
+
+        let LegacyMacOSMajorVersions = dynamic([10, 11, 12]);
+
+        let LegacyLinuxMatchers = dynamic([
+          "CentOS 7",
+          "Ubuntu 18.04",
+          "Debian 10",
+          "RHEL 7",
+          "SLES 12"
+        ]);
+
+        // Step 1  Build asset list and attach metadata used later in joins and scoring
+        // Only endpoints are included
+        // Excluded endpoints are removed
+        // Customer facing flag is normalized from rawData or raw
+        // Existing criticality fields are kept exactly as-is
+        // Asset tags are collected from multiple rawData locations and combined into one list
+        // AssetTags is the semicolon separated tag string
+        // AssetTierByTag is extracted from AssetTags using regex and sorted for stable output
+        // LegacyEndOfSupport is derived from AssetProps rawData OS platform and version fields when present
+        let Assets =
+            ExposureGraphNodes
+            | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+            | extend EG_IsCustomerFacing = tobool(coalesce(
+                NodeProperties.rawData.isCustomerFacing,
+                NodeProperties.raw.isCustomerFacing
+              ))
+            | extend EG_IsExcluded = tobool(coalesce(
+                NodeProperties.rawData.isExcluded,
+                NodeProperties.raw.isExcluded
+              ))
+            | where EG_IsExcluded == false
+            | extend CriticalityLevel = toint(coalesce(
+                tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+                tostring(NodeProperties.rawData.criticalityLevel.criticalityLevel),
+                tostring(NodeProperties.criticalityLevel.criticalityLevel)
+            ))
+            , CriticalityRuleBased = toint(coalesce(
+                tostring(NodeProperties.criticalityLevelProps[0].ruleBasedCriticalityLevel),
+                tostring(NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel),
+                tostring(NodeProperties.criticalityLevel.ruleBasedCriticalityLevel)
+            ))
+            , CriticalityRuleNames = coalesce(
+                strcat_array(NodeProperties.criticalityLevelProps[0].ruleNames, ", "),
+                strcat_array(NodeProperties.rawData.criticalityLevel.ruleNames, ", ")
+            )
+            , AadDeviceId = tostring(coalesce(
+                NodeProperties.rawData.aadDeviceId,
+                NodeProperties.raw.aadDeviceId,
+                NodeProperties.aadDeviceId
+            ))
+            | extend NoderawData = todynamic(NodeProperties).rawData
+            | extend
+                deviceManualTags  = iff(isnull(NoderawData.deviceManualTags),  dynamic([]), todynamic(NoderawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(NoderawData.deviceDynamicTags), dynamic([]), todynamic(NoderawData.deviceDynamicTags)),
+                tags              = iff(isnull(NoderawData.tags.tags),         dynamic([]), todynamic(NoderawData.tags.tags))
+            | extend _AllTags = array_concat(array_concat(deviceManualTags, deviceDynamicTags), tags)
+            | extend AssetTags = strcat_array(_AllTags, ";")
+            | extend _TierTags = extract_all(@"([^;]*--tier[0-3]--SI[^;]*)", AssetTags)
+            | extend AssetTierByTag = strcat_array(array_sort_asc(coalesce(_TierTags, dynamic([]))), ";")
+            | extend NodeAssetTags = _AllTags
+            | extend AssetOSPlatform = tostring(coalesce(NoderawData.osPlatform, NoderawData.OSPlatform, NoderawData.platform, NoderawData.operatingSystem, NoderawData.os))
+            | extend AssetOSVersion  = tostring(coalesce(NoderawData.osVersion,  NoderawData.OSVersion,  NoderawData.version,  NoderawData.operatingSystemVersion))
+            | extend AssetOSDistribution = tostring(coalesce(NoderawData.osDistribution, NoderawData.OSDistribution, NoderawData.distribution))
+            | extend MacMajor = toint(extract(@"^(\d+)", 1, AssetOSVersion))
+            | extend IsLegacyWindows = iff(AssetOSPlatform in~ (LegacyWindowsOSPlatforms), 1, 0)
+            | extend IsLegacyMacOS = iff(tolower(AssetOSPlatform) has "mac" and MacMajor in~ (LegacyMacOSMajorVersions), 1, 0)
+            | extend IsLegacyLinux = iff(
+                tolower(AssetOSPlatform) has "linux"
+                and (AssetOSDistribution has_any (LegacyLinuxMatchers) or AssetOSVersion has_any (LegacyLinuxMatchers)),
+                1, 0
+              )
+            | extend LegacyEndOfSupport = iff(IsLegacyWindows == 1 or IsLegacyMacOS == 1 or IsLegacyLinux == 1, 1, 0)
+            | project
+                AssetNodeId = NodeId,
+                AssetName   = NodeName,
+                AssetLabel  = NodeLabel,
+                AssetProps  = NodeProperties,
+                CriticalityLevel,
+                CriticalityRuleBased,
+                CriticalityRuleNames,
+                AadDeviceId,
+                EG_IsCustomerFacing,
+                EG_IsExcluded,
+                NodeAssetTags,
+                AssetTags,
+                AssetTierByTag,
+                LegacyEndOfSupport;
+
+        // Step 2  Build finding list
+        // Each node can have multiple categories so Categories is expanded to one row per category
+        // Only nodes with a category containing finding are included
+        let Findings =
+            ExposureGraphNodes
+            | mv-expand Category = Categories
+            | where tostring(Category) contains "finding"
+            | project
+                FindingNodeId     = NodeId,
+                FindingName       = NodeName,
+                FindingLabel      = NodeLabel,
+                FindingCategories = Categories,
+                FindingProps      = NodeProperties;
+
+        // Step 3  Build edge list
+        // Only edges whose label contains affecting are included
+        // Edge properties are included when present otherwise an empty object is used
+        let Edges =
+            ExposureGraphEdges
+            | where tostring(EdgeLabel) contains "affecting"
+            | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
+            | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
+
+        // Step 4  Relate assets and findings using edges
+        // Edges can point in either direction so both directions are joined and then unioned
+        // The result is summarized per AssetName AssetLabel FindingName to de-duplicate
+        let AF_edges_oneway =
+            Edges
+            | join kind=inner (Assets)   on $left.SourceNodeId == $right.AssetNodeId
+            | join kind=inner (Findings) on $left.TargetNodeId == $right.FindingNodeId
+            | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+                      FindingName, FindingLabel, FindingCategories, FindingProps,
+                      EdgeLabel, EdgeProps,
+                      AssetProps, CriticalityLevel, CriticalityRuleBased, CriticalityRuleNames,
+                      NodeAssetTags, AssetTags, AssetTierByTag, LegacyEndOfSupport;
+
+        let AF_edges_otherway =
+            Edges
+            | join kind=inner (Assets)   on $left.TargetNodeId == $right.AssetNodeId
+            | join kind=inner (Findings) on $left.SourceNodeId == $right.FindingNodeId
+            | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+                      FindingName, FindingLabel, FindingCategories, FindingProps,
+                      EdgeLabel, EdgeProps,
+                      AssetProps, CriticalityLevel, CriticalityRuleBased, CriticalityRuleNames,
+                      NodeAssetTags, AssetTags, AssetTierByTag, LegacyEndOfSupport;
+
+        let AF_edges = union AF_edges_oneway, AF_edges_otherway;
+
+        AF_edges
+            // Bucket filter support
+            // DeviceKey is used for bucket filtering and distinct counting
+            | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+            __BUCKET_FILTER__
+
+            | summarize
+                DeviceKey             = any(DeviceKey),
+                EdgeLabels            = make_set(EdgeLabel),
+                EdgePropsAll          = make_bag(EdgeProps),
+                FindingLabel          = any(FindingLabel),
+                FindingCategories     = any(FindingCategories),
+                FindingProps          = any(FindingProps),
+                AssetProps            = any(AssetProps),
+                CriticalityLevel      = any(CriticalityLevel),
+                CriticalityRuleBased  = any(CriticalityRuleBased),
+                CriticalityRuleNames  = any(CriticalityRuleNames),
+                AadDeviceId           = any(AadDeviceId),
+                EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
+                EG_IsExcluded         = any(EG_IsExcluded),
+                NodeAssetTags         = any(NodeAssetTags),
+                AssetTags             = any(AssetTags),
+                AssetTierByTag        = any(AssetTierByTag),
+                LegacyEndOfSupport    = any(LegacyEndOfSupport)
+              by AssetName, AssetLabel, FindingName
+
+        // Step 5  Build a unified Properties bag for simpler lookups
+        // finding holds the full finding node properties
+        // raw holds rawData if present otherwise an empty object
+        // edge holds combined edge properties from all related edges
+            | extend Properties =
+                bag_merge(
+                    bag_pack("finding", FindingProps),
+                    bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData)),
+                    bag_pack("edge", EdgePropsAll)
+                )
+
+        // Step 6  Extract scoring and filter to CVE findings
+        // Impact is derived from multiple possible cvss locations
+        // Severity comes from raw severity
+        // Only findings where FindingLabel contains CVE are kept
+            | extend Impact = todouble(coalesce(
+                    Properties.raw.cvssScore,
+                    Properties.finding.raw.cvssScore,
+                    Properties.raw.cvss.cvssScore
+                ))
+            | extend SecuritySeverity = tostring(Properties.raw.severity)
+            | where FindingLabel contains "CVE"
+
+        // Step 7  Extract exploit related booleans from multiple locations
+            | extend HasExploit = tobool(coalesce(
+                Properties.finding.rawData.hasExploit,
+                Properties.raw.hasExploit,
+                Properties.finding.raw.hasExploit
+            ))
+            | extend IsExploitVerified = tobool(coalesce(
+                Properties.finding.rawData.isExploitVerified,
+                Properties.raw.isExploitVerified,
+                Properties.finding.raw.isExploitVerified
+            ))
+            | extend IsInExploitKit = tobool(coalesce(
+                Properties.finding.rawData.isInExploitKit,
+                Properties.raw.isInExploitKit,
+                Properties.finding.raw.isInExploitKit
+            ))
+            | extend IsZeroDay = tobool(coalesce(
+                Properties.finding.rawData.isZeroDay,
+                Properties.raw.isZeroDay,
+                Properties.finding.raw.isZeroDay
+            ))
+
+        // Step 8  Compute risk factor scores at row level and build detailed strings
+        // RiskFactor_Consequence is defaulted to 0 for compatibility
+        // RiskFactor_Probability is a 0 to 3 score
+        // Add 1 if any exploit signal is true
+        // Add 1 if the asset is customer facing
+        // Add 1 if the asset is legacy end-of-support
+        // RiskFactor_Probability_Detailed is a semicolon separated list of factor names
+        // RiskFactor_Probability_DetailedScore is a semicolon separated key value string of sub scores
+            | extend RiskFactor_Consequence = 0
+            | extend RF_P_ExploitSignals =
+                iff(HasExploit == true or IsExploitVerified == true or IsInExploitKit == true or IsZeroDay == true, 1, 0)
+            | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
+            | extend RF_P_LegacyEoS = iff(LegacyEndOfSupport == 1, 1, 0)
+            | extend RiskFactor_Probability = RF_P_ExploitSignals + RF_P_InternetExposed + RF_P_LegacyEoS
+            | extend RiskFactor_Probability_Detailed =
+                strcat_array(
+                    array_concat(
+                        iff(RF_P_ExploitSignals == 1,   dynamic(["ExploitSignals"]), dynamic([])),
+                        iff(RF_P_InternetExposed == 1,  dynamic(["Internet-Exposed"]), dynamic([])),
+                        iff(RF_P_LegacyEoS == 1,        dynamic(["LegacyEndOfSupport"]), dynamic([]))
+                    ),
+                    ";"
+                )
+            | extend RiskFactor_Probability_DetailedScore =
+                strcat(
+                    "ExploitSignals=", tostring(RF_P_ExploitSignals), ";",
+                    "Internet-Exposed=", tostring(RF_P_InternetExposed), ";",
+                    "LegacyEndOfSupport=", tostring(RF_P_LegacyEoS)
+                )
+
+        // Step 9  Compute criticality tier with fallback to tags
+        // CriticalityTierFromTag maps tier tags to a numeric tier
+        // CriticalityTier prefers CriticalityLevel
+        // If CriticalityLevel is missing then tier tags are used
+        // If both are missing then default is 3
+            | extend CriticalityTierFromTag =
+                case(
+                    AssetTierByTag has "--tier0--SI", 0,
+                    AssetTierByTag has "--tier1--SI", 1,
+                    AssetTierByTag has "--tier2--SI", 2,
+                    AssetTierByTag has "--tier3--SI", 3,
+                    int(null)
+                )
+            | extend CriticalityTier = toint(coalesce(CriticalityLevel, CriticalityTierFromTag, 3))
+            | extend CriticalityTierLevel =
+                case(
+                    CriticalityTier == 0, "Critical - tier 0",
+                    CriticalityTier == 1, "High - tier 1",
+                    CriticalityTier == 2, "Medium - tier 2",
+                    CriticalityTier == 3, "Low - tier 3",
+                    "Unknown - unmapped"
+                )
+
+        // Step 10  Set fixed classification fields for the report output
+            | extend SecurityDomain = "Endpoint"
+            | extend ConfigurationName = "Update vulnerable software"
+            | extend ConfigurationId = "CVE"
+            | extend Category    = "Vulnerabilities"
+            | extend Subcategory = "CVEs (Missing Updates)"
+
+        // Step 11  Filter out recently updated CVEs
+        // last modified is extracted from two possible locations
+            | extend CVELastModified = todatetime(coalesce(Properties.finding.raw.lastModifiedDate, Properties.raw.lastModifiedDate))
+            | where CVELastModified < ago(40d)
+
+        // Step 12  Build device key used for distinct counting
+        // Prefer AadDeviceId when present otherwise fall back to AssetName
+        // (DeviceKey already carried forward via Option A fix)
+
+        // Step 13  Aggregate to report level
+        // Risk factors use max so the group reflects the highest score observed
+        // Detailed columns use any to keep string output compatible with CSV and Excel
+            | summarize
+                AssetCount      = dcount(DeviceKey),
+                TotalIssues     = count(),
+                AvgImpact       = avg(Impact),
+                MaxImpact       = max(Impact),
+                ImpactedAssets  = make_set(AssetName),
+                SampleCVEs      = make_set(FindingLabel),
+                RiskFactor_Consequence = max(RiskFactor_Consequence),
+                RiskFactor_Probability = max(RiskFactor_Probability),
+                RiskFactor_Probability_Detailed = any(RiskFactor_Probability_Detailed),
+                RiskFactor_Probability_DetailedScore = any(RiskFactor_Probability_DetailedScore)
+              by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId, CriticalityTier, CriticalityTierLevel, SecuritySeverity
+
+        // Step 14  Final shape and sorting
+            | project
+                SecurityDomain,
+                Category,
+                Subcategory,
+                ConfigurationName,
+                ConfigurationId,
+                CriticalityTier,
+                CriticalityTierLevel,
+                SecuritySeverity,
+                RiskFactor_Consequence,
+                RiskFactor_Probability,
+                RiskFactor_Probability_Detailed,
+                RiskFactor_Probability_DetailedScore,
+                AssetCount,
+                TotalIssues,
+                AvgImpact = round(AvgImpact, 1),
+                MaxImpact = toint(ceiling(MaxImpact)),
+                ImpactedAssets,
+                SampleCVEs
+            | order by CriticalityTier asc, MaxImpact desc, AvgImpact desc, AssetCount desc, TotalIssues desc
+
+
+ReportTemplates:
+    - ReportName: RiskAnalysis_Detailed_Bucket_Test
+      ReportPurpose: Overview
+      ReportsIncluded:
+      - Name: Device_Recommendations_Detailed_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Device_Missing_CVEs_Detailed_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Azure_Recommendations_Detailed_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Credential_Based_Lateral_Movement
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Github_to_Azure_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+
+    - ReportName: RiskAnalysis_Summary_Bucket_Test
+      ReportPurpose: Overview
+      ReportsIncluded:
+      - Name: Device_Recommendations_Summary_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Device_Missing_CVEs_Summary_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Azure_Recommendations_Summary_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Credential_Based_Lateral_Movement
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+
+
+    - ReportName: RiskAnalysis_Summary_Bucket_Test_Index
+      ReportPurpose: Overview
+      ReportsIncluded:
+      - Name: Device_Recommendations_Summary_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+

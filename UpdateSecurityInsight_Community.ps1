@@ -3,11 +3,14 @@
 #########################################################################################################
 
 $global:GitHubUri = "https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main"
-$Files = @("SecurityInsight.ps1",`
-           "SecurityInsight_RiskAnalysis.yaml",`
-           "SecurityInsight_RiskIndex.csv",`
-           "CriticalAssetTagging.ps1",`
-           "CriticalAssetTaggingMaintenance.ps1" `
+$Files = @("SecurityInsight_RiskAnalysis.ps1", `
+           "RunRiskAnalysis_Automation_Framework.ps1", `
+           "SecurityInsight_RiskAnalysis_Queries_Locked.yaml", `
+           "CriticalAssetTagging.ps1", `
+           "RunCriticalAssetTagging_Automation_Framework.ps1", `
+           "SecurityInsight_CriticalAssetTagging_Locked.yaml", `
+           "CriticalAssetTaggingMaintenance.ps1", `
+           "RunCriticalAssetTaggingMaintenance_Automation_Framework.ps1" `
           )
 
 Write-Host "SecurityInsight"

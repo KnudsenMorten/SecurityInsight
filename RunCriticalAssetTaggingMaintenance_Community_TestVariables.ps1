@@ -16,8 +16,9 @@
 #########################################################################################################
 
 # Core execution globals
-$global:SettingsPath        = $PSScriptRoot
-$global:Scope               = @('PROD')
+$global:SettingsPath        = $null
+$global:AutomationFramework = $null
+$global:Scope               = $null
 
 # SPN globals
 $global:SpnTenantId         = $null
@@ -31,7 +32,6 @@ $global:SpnClientSecret     = $null
 $AutomationFramework_Default = $false                   # $false = Community edition
 $SettingsPath_Default        = ''                       # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
 $Scope_Default               = @('PROD','TEST')         # Defines which AssetTaggings to include from YAML file
-$WhatIfMode                  = $false
 
 #########################################################################################################
 # Resolve runtime values (CMDLINE WINS, otherwise DEFAULT)
@@ -68,9 +68,9 @@ $SettingsPath = (Resolve-Path -LiteralPath $SettingsPath).Path
 
 If (-not $AutomationFramework) {
 
-    $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
-    $global:SpnClientId         = "<APP/CLIENT ID GUID>"
-    $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
+    $global:SpnTenantId         = "f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e"     # override per your SPN tenant if different
+    $global:SpnClientId         = "416ef8bc-1cbf-4d06-a759-6943fbde946a"
+    $global:SpnClientSecret     = "1Ko8Q~Xxn4pG6Mq4ew4DWHarPFNDdp0FTdjstdqc"
 }
 
 #########################################################################################################
@@ -80,7 +80,6 @@ If (-not $AutomationFramework) {
 $global:SettingsPath        = $SettingsPath
 $global:Scope               = $Scope
 $global:AutomationFramework = $AutomationFramework
-$global:WhatIfMode          = $WhatIfMode
 
 #########################################################################################################
 # Optional: show config right away (helps troubleshooting)
@@ -95,7 +94,7 @@ Write-Host ""
 # Running Main program
 #########################################################################################################
 
-$ScriptPath = Join-Path $global:SettingsPath 'CriticalAssetTagging.ps1'
+$ScriptPath = Join-Path $global:SettingsPath "CriticalAssetTaggingMaintenance.ps1"
 if (-not (Test-Path -LiteralPath $ScriptPath)) {
   throw "Main script not found: $ScriptPath"
 }

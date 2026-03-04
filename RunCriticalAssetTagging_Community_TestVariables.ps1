@@ -68,9 +68,9 @@ $SettingsPath = (Resolve-Path -LiteralPath $SettingsPath).Path
 
 If (-not $AutomationFramework) {
 
-    $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
-    $global:SpnClientId         = "<APP/CLIENT ID GUID>"
-    $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
+    $global:SpnTenantId         = "f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e"     # override per your SPN tenant if different
+    $global:SpnClientId         = "416ef8bc-1cbf-4d06-a759-6943fbde946a"
+    $global:SpnClientSecret     = "1Ko8Q~Xxn4pG6Mq4ew4DWHarPFNDdp0FTdjstdqc"
 }
 
 #########################################################################################################

@@ -1,4 +1,4 @@
-﻿Write-host "***********************************************************************************************"
+Write-host "***********************************************************************************************"
 Write-host "Critical Asset Tagging using YAML-file"
 Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
@@ -667,13 +667,81 @@ if ($null -eq $Scope -or @($Scope).Count -eq 0) { $Scope = @('PROD') }
 Write-Step "execution scope initialized"
 Write-Info ("Active Scope(s): {0}" -f ($Scope -join ', '))
 
-$TaggingYaml = "CriticalAssetTagging.yaml"
+# -------------------------------------------------------------------------------------------------
+# YAML SOURCES (Locked + Custom)
+# -------------------------------------------------------------------------------------------------
 
-Write-Step "loading $TaggingYaml"
-$Yaml = Get-Content -Raw "$SettingsPath\$TaggingYaml" | ConvertFrom-Yaml
-if (-not $Yaml.AssetTagging) {
-  throw "CriticalAssetTagging.yaml missing AssetTagging root"
+function Import-AssetTaggingYaml {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Path
+  )
+
+  if (-not (Test-Path -LiteralPath $Path)) {
+    return @()
+  }
+
+  $y = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Yaml
+  if (-not $y -or -not $y.AssetTagging) {
+    throw "YAML file is missing AssetTagging root: $Path"
+  }
+
+  return @($y.AssetTagging)
 }
+
+# Defaults can be overridden by launcher globals
+$LockedYamlFile = if ($global:LockedYamlFile -and -not [string]::IsNullOrWhiteSpace([string]$global:LockedYamlFile)) { [string]$global:LockedYamlFile } else { 'SecurityInsight_CriticalAssetTagging_Locked.yaml' }
+$CustomYamlFile = if ($global:CustomYamlFile -and -not [string]::IsNullOrWhiteSpace([string]$global:CustomYamlFile)) { [string]$global:CustomYamlFile } else { 'SecurityInsight_CriticalAssetTagging_Custom.yaml' }
+$LegacyYamlFile = if ($global:LegacyYamlFile -and -not [string]::IsNullOrWhiteSpace([string]$global:LegacyYamlFile)) { [string]$global:LegacyYamlFile } else { 'CriticalAssetTagging.yaml' }
+
+$lockedPath = Join-Path $SettingsPath $LockedYamlFile
+$customPath = Join-Path $SettingsPath $CustomYamlFile
+$legacyPath = Join-Path $SettingsPath $LegacyYamlFile
+
+$lockedExists = Test-Path -LiteralPath $lockedPath
+$customExists = Test-Path -LiteralPath $customPath
+$legacyExists = Test-Path -LiteralPath $legacyPath
+
+$rulesLocked = @()
+$rulesCustom = @()
+
+if ($lockedExists -or $customExists) {
+
+  Write-Step ("loading Locked YAML: {0}" -f $LockedYamlFile)
+  $rulesLocked = Import-AssetTaggingYaml -Path $lockedPath
+
+  Write-Step ("loading Custom YAML: {0}" -f $CustomYamlFile)
+  $rulesCustom = Import-AssetTaggingYaml -Path $customPath
+
+} elseif ($legacyExists) {
+
+  Write-Warn2 ("Locked/Custom YAML not found. Falling back to legacy YAML: {0}" -f $LegacyYamlFile)
+  $rulesLocked = Import-AssetTaggingYaml -Path $legacyPath
+
+} else {
+
+  throw "No YAML found. Expected either Locked+Custom or legacy file in SettingsPath: $SettingsPath"
+
+}
+
+# Merge: Custom wins on duplicate AssetTagName (case-insensitive)
+$ruleMap = [ordered]@{}
+foreach ($r in @($rulesLocked)) {
+  $k = ([string]$r.AssetTagName).Trim().ToUpperInvariant()
+  if ([string]::IsNullOrWhiteSpace($k)) { continue }
+  $ruleMap[$k] = $r
+}
+foreach ($r in @($rulesCustom)) {
+  $k = ([string]$r.AssetTagName).Trim().ToUpperInvariant()
+  if ([string]::IsNullOrWhiteSpace($k)) { continue }
+  $ruleMap[$k] = $r
+}
+
+$mergedRules = @($ruleMap.Values)
+
+$Yaml = [pscustomobject]@{ AssetTagging = $mergedRules }
+
+Write-Info ("AssetTagging rules loaded: Locked={0}, Custom={1}, Effective={2}" -f (@($rulesLocked).Count), (@($rulesCustom).Count), (@($mergedRules).Count))
 
 #####################################################################################################
 # MAIN LOOP

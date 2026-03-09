@@ -435,26 +435,21 @@ function Ensure-QueryIsAssetNameSafe {
 }
 
 function New-BucketFilterKql {
-    param(
-        [int]$BucketCount,
-        [int]$BucketIndex
-    )
+  param([int]$BucketCount,[int]$BucketIndex)
 
 @"
 | extend __bucket_key = coalesce(
     tostring(column_ifexists('DeviceKey','')),
+    tostring(column_ifexists('NodeId','')),
+    tostring(column_ifexists('DeviceNodeId','')),
     tostring(column_ifexists('AadDeviceId','')),
     tostring(column_ifexists('DeviceId','')),
     tostring(column_ifexists('MachineId','')),
-    tostring(column_ifexists('AssetName','')),
-    tostring(column_ifexists('DeviceName','')),
-    tostring(column_ifexists('Computer','')),
-    tostring(column_ifexists('DnsName','')),
-    tostring(column_ifexists('HostName','')),
-    tostring(column_ifexists('FQDN','')),
     tostring(column_ifexists('Id','')),
-    'unknown'
+    tostring(column_ifexists('SourceNodeId','')),
+    tostring(column_ifexists('TargetNodeId',''))
 )
+| where isnotempty(__bucket_key)
 | extend __bucket = abs(hash(__bucket_key)) % $BucketCount
 | where __bucket == $BucketIndex
 "@

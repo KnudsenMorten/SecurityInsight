@@ -7138,10 +7138,6 @@ ReportTemplates:
         UseQueryBucketing: true
         DefaultBucketCount: 2
         BucketPlaceholderToken: __BUCKET_FILTER__
-      - Name: Attack_Paths_Summary_BucketFilter_Credential_Based_Lateral_Movement
-        UseQueryBucketing: true
-        DefaultBucketCount: 2
-        BucketPlaceholderToken: __BUCKET_FILTER__
       - Name: Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources
         UseQueryBucketing: true
         DefaultBucketCount: 2

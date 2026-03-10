@@ -58,6 +58,8 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
   - [Step 5.3B. Run deployment script](#step-53b-run-risk-deploy_openai_payg_instance_securityinsightsps1-to-deploy-ai-instance)
   - [Step 5.3C. Adjust Risk Analysis launcher to enable AI summary](#step-53c-adjust-the-risk-analysis-launcher-file-to-enable-ai-summary-support-runsecurityinsightps1)
 
+------
+
 
 
 ## The Challenge: Too Many Security Recommendations
@@ -87,6 +89,8 @@ In practice, remediation work is often prioritized according to:
 
  This often leads organizations to spend resources resolving issues with limited real risk while more critical exposures remain unaddressed.
 
+------
+
 
 
 ## A Risk-Based Prioritization Model
@@ -110,6 +114,8 @@ The model can also be influenced by **contextual risk factors** such as:
 
 These factors will each increase the probability score with +1 - and therefore indirectly increasing the overall risk score.
 
+------
+
 
 
 ## Why We Use a Graph — Understanding Exposure Graph Architecture
@@ -131,6 +137,8 @@ These lists help with management and reporting, but they **do not show how syste
 This is why modern security platforms like **Microsoft Exposure Graph** represent security data as a **graph of connected entities** rather than isolated lists.
 
 A graph structure allows security tools such as **Microsoft Defender** and **Microsoft Security Copilot** to map relationships between users, devices, applications, and privileges.
+
+------
 
 
 
@@ -168,6 +176,8 @@ By following this chain of relationships, the attacker can eventually gain contr
 ![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-5.png)
 
 ![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-6.png)
+
+------
 
 
 

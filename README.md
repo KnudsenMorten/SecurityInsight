@@ -5,9 +5,6 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
 
 [TOC]
 
-  
-
-
 ## The Challenge: Too Many Security Recommendations
 
 Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings. Security teams are often faced with:
@@ -37,9 +34,6 @@ In practice, remediation work is often prioritized according to:
 
 
 
-  
-
-
 ## A Risk-Based Prioritization Model
 
 The **Security Insight** framework introduces a **risk-based prioritization model** that evaluates security findings based on both consequence and probability.
@@ -63,9 +57,6 @@ These factors will each increase the probability score with +1 - and therefore i
 
 
 
-  
-
-
 ## Why We Use a Graph — Understanding Exposure Graph Architecture
 
 **Defenders typically think in lists.** Security tools often present data as separate inventories such as:
@@ -86,7 +77,6 @@ This is why modern security platforms like **Microsoft Exposure Graph** represen
 
 A graph structure allows security tools such as **Microsoft Defender** and **Microsoft Security Copilot** to map relationships between users, devices, applications, and privileges.
 
-  
 
 
 ## Example of an Attack Path
@@ -126,9 +116,6 @@ By following this chain of relationships, the attacker can eventually gain contr
 
 
 
-  
-
-
 ## Why Graph Architecture Matters
 
 A **graph model** allows security platforms to:
@@ -156,8 +143,6 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
  These datasets allow analysis of relationships between systems and security findings.
 
-
-  
 
 
 ## Risk Score Model
@@ -188,9 +173,6 @@ This score is used to prioritize remediation activities.
 
 
 
-  
-
-
 ## Reporting
 
 The framework generates both summary and detailed reports.
@@ -208,9 +190,6 @@ The framework generates both summary and detailed reports.
 | [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
 | [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
 
-
-
-  
 
 
 ## Governance and Compliance
@@ -242,9 +221,6 @@ The model aligns with several CIS controls, including:
 
  
 
-  
-
-
 ## Operational Benefits
 
 The risk-based model provides several advantages:
@@ -256,9 +232,6 @@ The risk-based model provides several advantages:
 
 
 
-  
-
-
 ## Future Opportunities
 
 Potential future developments include:
@@ -268,9 +241,6 @@ Potential future developments include:
 - integration with ticketing and risk management platforms.
 
 
-
-
-  
 
 
 ## Transparency and Flexibility
@@ -292,9 +262,6 @@ This approach ensures that the model is **100% transparent and open**.
 
  
 
-  
-
-
 ## Collaboration with Microsoft
 
 The development of the Security Insight model is conducted in close dialogue with Microsoft.
@@ -305,9 +272,6 @@ The risk-based approach to prioritizing security recommendations—based on asse
 
 The goal of this collaboration is to explore how the principles behind the Security Insight model can influence the future development of the **Microsoft Defender platform**.
 
-
-
-  
 
 
 ## Files Overview

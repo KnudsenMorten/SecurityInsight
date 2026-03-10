@@ -83,6 +83,7 @@ A graph structure allows security tools such as **Microsoft Defender** and **Mic
 
 
 
+
 ## Example of an Attack Path
 
 A typical attack rarely targets the most critical system directly. Instead, attackers move through connected systems step by step.
@@ -152,7 +153,6 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
 
 
-
 ## Risk Score Model
 
 **Risk Score** is calculated using two dimensions:
@@ -179,7 +179,7 @@ The **final risk score** is calculated as:
 
 This score is used to prioritize remediation activities.
 
- 
+
 
 
 
@@ -208,6 +208,8 @@ The framework generates both summary and detailed reports.
 
 The model supports several important security frameworks.
 
+
+
 ### NIS2 Directive
 
 NIS2 requires organizations to implement:
@@ -217,6 +219,8 @@ NIS2 requires organizations to implement:
 - preventive security measures.
 
 The described model supports these requirements by prioritizing protection of the organization’s most critical systems.
+
+
 
 ### CIS Critical Security Controls
 
@@ -253,7 +257,7 @@ Potential future developments include:
 - integration with ticketing and risk management platforms.
 
 
- 
+
 
 
 

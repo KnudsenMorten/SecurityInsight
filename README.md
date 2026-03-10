@@ -57,6 +57,8 @@ The model can also be influenced by **contextual risk factors** such as:
 
 ·     legacy systems.
 
+
+
 ## Challenges with Traditional Vulnerability Prioritization
 
 Traditional vulnerability management often focuses on CVSS scores or severity classifications.
@@ -89,9 +91,357 @@ These datasets allow analysis of relationships between systems and security find
 
  
 
-## Asset Classification
+## Step 1: Setting Asset Tier Level using tagging
+
+**Assets** are automatically classified using tagging rules based on system roles. Examples include:
+
+- Domain Controllers
+- Entra synchronization services
+- employee devices
+- IoT devices
+
+
+
+**Asset tagging** is done using asset taging engine that queries resources against **Defender Graph** or **Azure Resource Graph** using **Kusto KQL**. 
+
+Each query also includes the Asset Tag to set. 
+
+Query shows only deltas (missing assets). 
+
+Asset Tagging runs with defined frequency like every 4 hours.
+
+
+
+#### Structure of query in YAML-file
+
+| Property                                                     | Purpose                                                      |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| AssetTagName                                                 | Description                                                  |
+| Mode                                                         | Implementation scope <br />(can be defined in launcher or commandline)<br /><br />Supported:<br />Prod<br />Test |
+| QueryEngine                                                  | Select query engine<br /><br />Sopported:<br />DefenderGraph = ExposureGraph<br />AzureResourceGraph = Azure Resource Graph |
+| Query structure<br /><br />Step 1: Scoping - what to find ?<br />Step 2: Get existing Tags "as-is"<br />Step 3: Define Value for tag to set "to-be"<br />Step 4: Write resources<br />Step 5: Filter resources to show only resources in scope with missing tag (delta) | Query the Graph<br /><br />AssetTagType supported values: <br />AssetTier--SI = shows asset is in-scope with tier-info<br />Asset--Excluded--SI = shows asset must be excluded<br /><br />AssetTag = any value that makes the asset unique<br /><br />AssetTierLevel = 0,1,2,3 |
+
+
+
+#### Asset Tagging files
+
+| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
+| [RunCriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTagging.ps1) | Engine Launcher for Asset Tagging<br />Includes parameters for starting asset tagging engine | No (custom file)                                   |
+| [CriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTagging.ps1) | Main Engine for Asset Tagging<br />Uses YAML-files as data repo | Yes <br />                                         |
+| [SecurityInsight_CriticalAssetTagging_Custom.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Custom.yaml) | Data file (custom tags)<br />Kusto queries against graph-engines | No <br />(custom asset tags)                       |
+| [SecurityInsight_CriticalAssetTagging_Locked.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Locked.yaml) | Data file (recommended tags)<br />Kusto queries against graph-engines | Yes                                                |
+
+
+
+#### Example of recommended query to detect Sentinel resources
+
+```
+  - AssetTagName: AzPlatformManagementResources--tier0--SI
+    Mode: Prod
+    QueryEngine: AzureResourceGraph
+    Query:
+      - |
+        resourcecontainers
+        | where type == "microsoft.resources/subscriptions"
+        | join kind=inner (
+            resources
+            | where type == "microsoft.operationsmanagement/solutions"
+            | where name startswith "SecurityInsights("
+            | project subscriptionId
+            | distinct subscriptionId
+        ) on subscriptionId
+        | extend
+            Tag_AssetTier = tostring(tags["AssetTier--SI"])
+        | extend
+            AssetTagType   = "AssetTier--SI",
+            AssetTag       = "AzPlatformManagementSub",
+            AssetTierLevel = 0
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        | project
+            subscriptionId,
+            subscriptionName = name,
+            Tag_AssetTier,
+            AssetTagType,
+            AssetTag,
+            AssetTierLevel,
+            AssetTagName,
+            id
+        | order by subscriptionId asc
+        | where Tag_AssetTier != AssetTagName
+```
+
+
+
+#### Example of recommended query to detect Domain controller resources
+
+```
+  - AssetTagName: DomainControllerDNS--tier0--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+           or NodeLabel has "microsoft.compute/virtualmachines"
+           or NodeLabel has "microsoft.hybridcompute/machines"
+
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Server"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+        | extend
+            confidenceHigh = iff(isnull(rawData.criticalityConfidenceHigh), dynamic([]), todynamic(rawData.criticalityConfidenceHigh)),
+            confidenceLow  = iff(isnull(rawData.criticalityConfidenceLow),  dynamic([]), todynamic(rawData.criticalityConfidenceLow))
+        | extend
+            DetectedRoles  = strcat_array(array_concat(confidenceHigh, confidenceLow), ";"),
+            osPlatform     = tostring(rawData.osPlatform),
+            osVersion      = tostring(rawData.osVersion),
+            onboardingStatus = tostring(rawData.onboardingStatus)
+
+        | where DetectedRoles has "DomainController"
+            or DetectedRoles has "Dns"
+
+        // Output Required Columns
+        | extend
+            deviceManualTags = iff(isnull(rawData.deviceManualTags), dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags = iff(isnull(rawData.tags.tags), dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+             AssetTags  = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier--SI",
+            AssetTag       = "DomainControllerDNS",
+            AssetTierLevel = 0
+        | extend    
+            AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only Assets in the output, which doesn't have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+```
+
+
+
+#### Example of recommended query to detect Employee Workstations
+
+```
+- AssetTagName: EmployeeWorkstations--tier2--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+            or NodeLabel has "microsoft.compute/virtualmachines"
+            or NodeLabel has "microsoft.hybridcompute/machines"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Workstation"
+        | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+        // Output Required Columns
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+            AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "AssetTier--SI",
+            AssetTag       = "EmployeeWorkstations",
+            AssetTierLevel = 2
+        | extend
+            AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+        // Tagging END -----------------
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Exclude devices already marked Tier 0 or Tier 1 (--tier0--SI & --tier1--SI)
+        | where AssetTags !has "--tier0--SI"
+        | where AssetTags !has "--tier1--SI"
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+```
+
+
+
+#### Example of custom query to backbone network switch
+
+```
+  - AssetTagName: Network_Backbone_Switch--tier0--SI
+    Mode: Test
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        let TargetSubnet = "192.168.1.0/24";
+
+        let SwitchNodes =
+            ExposureGraphNodes
+            // Filter
+            | where NodeLabel has "device"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceSubtype) == "Switch"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+            // Output Required Columns
+            | extend
+                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+            | extend
+                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+            // Extract device IDs
+            | extend entityIds_dyn = todynamic(EntityIds)
+            | mv-apply e = entityIds_dyn on (
+                summarize
+                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+            )
+            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+            // Normalize DeviceId for join
+            | extend DeviceId = DeviceInventoryId
+            | where isnotempty(DeviceId)
+
+            // Tagging logic
+            | extend
+                AssetTagType   = "AssetTier--SI",
+                AssetTag       = "Network_Backbone_Switch",
+                AssetTierLevel = 0
+            | extend
+                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI");
+
+        SwitchNodes
+        | join kind=inner (
+            DeviceNetworkInfo
+            | mv-expand ip = IPAddresses
+            | extend
+                IPAddress    = tostring(ip.IPAddress),
+                AddressType  = tostring(ip.AddressType),
+                SubnetPrefix = tostring(ip.SubnetPrefix)
+            | where isnotempty(IPAddress)
+            | where AddressType =~ "Private"
+            | where ipv4_is_in_range(IPAddress, TargetSubnet)
+            | project DeviceId, DeviceName, NetworkAdapterName, IPAddress, AddressType, SubnetPrefix
+        ) on DeviceId
+
+        | project
+            NodeName,
+            NodeLabel,
+            DeviceId,
+            DeviceInventoryId = DeviceId,
+            IPAddress,
+            NetworkAdapterName,
+            AssetTagName,
+            AssetTags
+        | distinct NodeName, NodeLabel, DeviceId, DeviceInventoryId, IPAddress, NetworkAdapterName, AssetTagName, AssetTags
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+```
+
+
+
+#### Example of custom query to tag temporary autopilot objects that should be excluded, as they will be renamed
+
+```
+  - AssetTagName: Temp-Client-Devices--excluded--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+
+        // Filter
+        | where NodeLabel has "device"
+            or NodeLabel has "microsoft.compute/virtualmachines"
+            or NodeLabel has "microsoft.hybridcompute/machines"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tostring(rawData.deviceType) == "Workstation"
+        | where NodeName startswith "fvf-"
+        | where NodeName !has "cloud"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+        // Output Required Columns
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+            tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+        | extend
+            AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e = entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+        )
+        | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+        // Tagging BEGIN ---------------
+        | extend
+            AssetTagType   = "Asset--Excluded--SI",
+            AssetTag       = "Temp-Client-Devices"
+        | extend
+            AssetTagName = strcat(AssetTag, "--Excluded--SI")
+        // Tagging END -----------------
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+```
+
+
+
+## Step 2: Setting Asset Criticality Level Classification
 
 Not all systems in an organization are equally important. Assets are therefore classified into **4 criticality tiers**.
+
+Not all types of resources in Defender Critical Asset Management supports 'Criticality Tier'. The tags are used in the risk model when native criticality data is not available.
 
 | **Criticality Level** **(Defender)** | **Tier** | **Category**              | **Examples of systems**                                      |
 | ------------------------------------ | -------- | ------------------------- | ------------------------------------------------------------ |
@@ -105,21 +455,11 @@ Not all systems in an organization are equally important. Assets are therefore c
 Assets are classified using 2 methods in Defender Critical Asset Management:
 
 - **Automatic classification** “Predefined classifications”
-- **Custom classification** using tags in Defender & Azure
+- **Custom classification** using tags in Defender & Azure. 
 
 
 
- ![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/CriticalityLevel-Defender-overview.png)
-
-
-
-
-
- 
-
- **Custom classification in Defender Critical Asset Management**
-
-Custom classifications are translated into tier tags such as:
+**Custom classification in Defender Critical Asset Management**
 
 - AzPlatformManagementResources--tier0--SI
 - DomainControllerDNS--tier0--SI
@@ -129,76 +469,22 @@ Custom classifications are translated into tier tags such as:
 - EmployeeMobile--tier2--SI
 - IoT--tier3--SI
 - AzHubPlatformManagementSub--tier0--SI
-- AzHubPlatformSecuritySub--tier0--SI     (custom detection)
-- AzLZDatacenterSub--tier0--SI     (custom detection)
-- AutomationServer--tier0--SI     (custom detection)
-- ServerBusinessServices--tier1--SI     (custom detection)
-- PAWDevices--tier0--SI (custom     detection)
-- Network_Backbone_Switch--tier0--SI     (custom detection)
-- Network_Backbone_Router--tier0--SI     (custom detection)
-- Network_Backbone_Management--tier0--SI     (custom detection)
-- Network_WLANAccessPoint--tier2--SI     (custom detection)
-- Temp-Client-Devices--excluded--SI     (custom detection)
+- AzHubPlatformSecuritySub--tier0--SI
+- AzLZDatacenterSub--tier0--SI
+- AutomationServer--tier0--SI
+- ServerBusinessServices--tier1--SI
+- PAWDevices--tier0--SI
+- Network_Backbone_Switch--tier0--SI
+- Network_Backbone_Router--tier0--SI
+- Network_Backbone_Management--tier0--SI
+- Network_WLANAccessPoint--tier2--SI
+- Temp-Client-Devices--excluded--SI
+
+
+
+![CriticalityLevel-Defender-overview](/CriticalityLevel-Defender-overview.png)
 
  
-
-The tags are used in the risk model when native criticality data is not available.
-
- 
-
-![img](data:image/png;base64,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A+YynByGOB7/ACkVMmsWzzLFiZXJCsGjI2EnADemT/OnDSLILt8gEY24JJHf36/M3PvT49NtY/uxc5ByWJJIOQST15oAtUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQBHcS+RbSy7d3loWx64Gazne6trNb1rsyH5WeLaNhBI4Xv34Oa1OtVE0u2jkVlV9qHckZclFPqF6UAO1O5ez0y5uIgC8cZZcjIzisi38SSj91LayTTKGMhjXbsALAZGTg4U5GfT1roGUMpVgCD1Bpht4TKJDFH5gzhtozz15oAx28SoJFEVvLMJGHl7Bncn94fUYIqex16K+ujAsToyqWYsRgAcN+TZX6g1oG2gYKGhjIUggFRxjp+VOWJFbcqKDzyB6nJ/WgDFj8URysQtsxVT87BxgKSgBHc53g03+3bia01GeGKMGGBJIVLg/eBOWI6dBxW0ltBGMRwxqPRUAoS2hjVgkMah+WAUDd9aAMd/EBgR1khZjGCryZHDZcDjv/AKs/nRJ4gdLkgW/yReZ5qFgGAUphvyYnHf1rZMERzmNDnk/KOf8AOT+dIttCoIWGMbiScKOc9aAJaKKKACiiigAooooAKKKKACiiigAooooAKKKKACkP3TS0h+6aAFooooAKgtekv/XVqnqC16S/9dWoAnooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACkP3TS0h+6aAFooooAKha0hdyzJyeuCRmpqKAK/2KD+5/wCPGj7FB/c/8eNWKKAK/wBig/uf+PGj7FB/c/8AHjViigCv9ig/uf8Ajxo+xQf3P/HjViigCv8AYoP7n/jxo+xQf3P/AB41YooAr/YoP7n/AI8aPsUH9z/x41YooAr/AGKD+5/48aPsUH9z/wAeNWKKAK/2KD+5/wCPGj7FB/c/8eNWKKAK/wBig/uf+PGj7FB/c/8AHjViigCv9ig/uf8Ajxo+xQf3P/Hj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re6hBDThgTKdpBbPXJz39ac1lrTPEgndUEe1n8wBjkg9OfmHIz+tdFRUlGJq1lqNzcLHbEfZvKKNuk+/lWHI9c7efrWjp0D21mscgAYM54PqxI/nVqigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACkP3TS0h+6aAFooooAKjCBmYnnn1qSucuvtmq+JLjTob+ayt7aBJWMAXfIzk9SQcABenvUydjWlT9o3rZLU6Dyl9P1o8pfT9axD4cuQMnxFqwH+/H/wDEU3+wJv8AoZdU/wC/kf8A8RSvLsX7Kl/z8X3P/I3fKX0/Wjyl9P1rC/sCb/oZdU/7+R//ABFH9gTf9DLqn/fyP/4ineX8oeypf8/F9z/yN3yl9P1o8pfT9awv7Am/6GXVP+/kf/xFH9gTf9DLqn/fyP8A+IovL+UPZUv+fi+5/wCRu+Uvp+tHlL6frWF/YE3/AEMuqf8AfyP/AOIo/sCb/oZdU/7+R/8AxFF5fyh7Kl/z8X3P/I3fKX0/Wjyl9P1rnEN1ouu6dAdVnvba9MkbrcbSUKqWBBAHpjHvXR+bH/fX86cXfoRVpqnazumrr77foHlL6frR5S+n60ebH/fX86PNj/vr+dVYxuHlL6frR5S+n60ebH/fX86PNj/vr+dFguHlL6frR5S+n60ebH/fX86PNT++v50rDuHlL6frR5S+n60+kLBRliB9aAG+Uvp+tHlL6frR5sf99fzo82P++v507CuHlL6frR5S+n60ebH/AH1/OjzY/wC+v50WC4eUvp+tHlL6frR5sf8AfX86PNj/AL6/nRYLh5S+n60eUvp+tHmx/wB9fzo82P8Avr+dFguHlL6frR5S+n60ebH/AH1/OjzY/wC+v50WC4eUvp+tHlL6frSiRCcB1J9jTqQxnlL6frR5S+n60rMq/eYD6mk82P8Avr+dFguHlL6frR5S+n60ebH/AH1/OjzY/wC+v507CuHlL6frR5S+n60ebH/fX86PNj/vr+dFguHlL6frR5S+n60ebH/fX86PNj/vr+dFguHlL6fr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)
-
- 
-
-![img](data:image/png;base64,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n3eqzWl/KrIjQhV2AttycEnnHXjAHeluNVuBp0dzHCib5HTEjcgANg9OpKjj3oAv/aD/AM8JvyH+NH2g/wDPCb8h/jWautyJIiTQBW3Kj/PwCe44ye3GP8akutXMM7LtRUikKvlvmI2E5xjgZxz9aAL32g/88JvyH+NH2g/88JvyH+NZcfiMSBCbfbu29ZM4BJBPA9R9T1xjmmxa1cLKzTIvlttEeW2hchCSxxxy3vQBrfaD/wA8JvyH+NH2g/8APCb8h/jWVJ4gdp2SGJNiMVZyxyeCRjjrkHg1IdeY52Wu4AFjiT7oGcg8cNx933HNAGj9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40faD/zwm/If41PRQBB9oP8Azwm/If40faD/AM8JvyH+NT0UAQfaD/zwm/If40VPRQAVS04Kq3G2SN907P8AI2cAnjNP1GN5rGRI1LE4yoOCy5GR+IyKrQiOa/ge1t3iWNWEjGMxgjHC4I5559sUAadFZWs6dPfSW7QlcQ7mIJxuOVwAex4PI6VWS01swMstwrM+4OCFAXjI29eCeOegNAG9RWD9m14CRluELGQ4UgBdo5GO/OAvPqTUt9DrDC3W0lAKx4kcsOWIOeMeuCPxoA2aSsUWWpNqNuZpGkghmLAlx935xyMcnlf89WJpmowNKLecoHd5M7gSzEuVBOOnKUAb1FYB0/VJXVXlKKh3KyOBtba44GPUjOa3Id/kp5uPM2jdjpnvQA+iiigAooooAKKKKACiiigAooooAKKKKACkPb60tIe31oAWiiigCC56w/8AXQf1qeoLnrD/ANdB/Wp6AExRS0UAJgelFLRQAyKJIYwkahVHQCnUtFACUtFFACUUtFACYHpRS0UAJRS0UAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABSHt9aWkPb60ALRRRQBDcKzKhRdxVw2M4zSedL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40edL/AM+7/wDfS/41PRQBB50v/Pu//fS/40edL/z7v/30v+NT0UAQedL/AM+7/wDfS/40VPRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABSHt9aWkPb60ALRRRQAh47Zoyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7poyf7ppaKAEyf7popaKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKQ9vrS0h7fWgBaKKpapqcWlWfnyI8jM6xxxRjLSOxwFFJu2rKjFzajHdi6rff2bp0tyEDlNoALbRkkAEnsOck+lZ0XiaKFp4b9VWaBgrNCdyNkqMrnnjcMjtg0NqmsSIVfw07KwwVa7iII9DzVWI3cG3yvCEabW3qFuIRtPGSPToOlTzr+kzb6tPuv8AwKP+Zah8WWcyhxb3SxBBI8joFVELYDHnpznjPAPpTrjxIltc2/mQSC3mtxNnA3plgoyM/wC0OmTVOZr+a0e2/wCEWaOKQbXEd1Cu5c5K8djzn6mpnvNTklSSTwtukj+4zXMJK/Q9qOdf0mH1afdf+BR/zCfxZAJIzCMx4RpN46KwRsjB6gOOPWkj8XwLLKlxbzqVYlVRQ5VAqnc2CR1btTY57+Ifu/CSJg5+W4hHP+QKtaRLZXxmt30uOzubRsSQPGh2bhwQRwQQOo9Kamm7Eyw84rm0suzT/Jmpa3H2q1in8t4xIoYI+NwB9cE1NSABQAAABwAKWqMQooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACkPb60tIe31oAWsPxP10f/ALCcP/s1blYfifro/wD2E4f/AGaon8J0YX+Kv66G07qilmICjkk1GLhSwDK65OAWXANFwCYwQC21gxA7gVymjaFqFlrd7cz6kLmK4DBUVmJYk5BYHhcV006cZRbbtY4alSUZJJXudhkAgZGT0FHSsrUdNmu78SRxxYMaqszH5oiGJyBj+oqvHpur+QVkvdzOG35bjOPl28dCeoPasTY3qw9P/wCRx1n/AK4W3/tSnLY6p9qhZroiNZS0m187xkY4I4GMjb+PvUMCNJ4o11F+81rbgflJUS3X9dDoo/BU9P8A26Jr/bosbsP5f/PTadv5+nv0qxmq/wBtg8vqQ3TysfNn0xVO6sLqSG1MDBXhQhhu2kg4yAe3AIzVnOagIIyDkUVz9po+qRbY2vCkIx8qSdt2WGcZz1596P7H1AhvMnZiWR2InYFiPLyBxx9xunXNAHQ1FLOkRCnczt0VRkmq2krcfZC127s7Mdu4YO0cKSOxIGT7mpWdbe7Z5eEdQA56AjPBPbrQBJFOkpIGQy9VYYIqTcu7GRn0zVdHWe7DxcoiEFx0JJHA9elZK6RdpHGI0hSaIndMrkNNkcknGQT+OM0Ab9ICCMg5rENnq4XYJwUzu5lO4LjGzOOv+1Srpl+mmwwwXHlSosp4ckFmOVycc4yfxoA26KwhYaqowbh5F2ruBmKsevAIHHUc9TjrT1stWZkSW6G1Dkur4L9+mOAOBjPNAG1RWPZ2WpJfQST3DeSqYaPzN2W5yTkc5yCPTGK2KACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKQ9vrS0h7fWgBapappkeq2fkyO8bK6yRyxnDRupyGFXaKTV9GVGTg1KO6MP+ydb/wChjf8A8A4qP7J1v/oYn/8AAOKtyo5naOJnSMyEc7QeT9KXIv6bNvrM+y/8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)
-
- 
-
-
-
- 
-
-#### Example of query to detect Sentinel resources & set tag
-
-  AssetTagging:   - AssetTagName: **AzPlatformManagementResources--tier0--SI**    Mode: Prod    QueryEngine: **AzureResourceGraph**    Query:     - |      resourcecontainers      | where type ==  "microsoft.resources/subscriptions"      | join kind=inner (        resources        | where type ==  "microsoft.operationsmanagement/solutions"        | where name startswith  "SecurityInsights("        | project subscriptionId        | distinct subscriptionId      ) on subscriptionId      | extend        Tag_AssetTier =  tostring(tags["AssetTier--SI"])      | extend        AssetTagType  =  "AssetTier--SI",        AssetTag    =  "AzPlatformManagementSub",        AssetTierLevel = 0      | extend        AssetTagName = strcat(AssetTag,  "--tier", tostring(AssetTierLevel), "--SI")      | project        subscriptionId,        subscriptionName = name,        Tag_AssetTier,        AssetTagType,        AssetTag,        AssetTierLevel,        AssetTagName,        id      | order by subscriptionId asc      | where Tag_AssetTier != AssetTagName  
-
-**Assets** are automatically classified using tagging rules based on system roles.
-
-Examples include:
-
-- Domain Controllers
-
-- Entra synchronization services
-
-- employee devices
-
-- IoT devices
-
-
- 
-
-These classifications are translated into tier tags such as:
-
-- AzPlatformManagementResources--tier0--SI
-- DomainControllerDNS--tier0--SI
-- ADCertificateService--tier0--SI
-- EntraSyncService--tier0--SI
-- EmployeeWorkstations--tier2--SI
-- EmployeeMobile--tier2--SI
-- IoT--tier3--SI
-- AzHubPlatformManagementSub--tier0--SI
-- AzHubPlatformSecuritySub--tier0--SI (custom detection)
-- AzLZDatacenterSub--tier0--SI (custom detection)
-- AutomationServer--tier0--SI (custom detection)
-- ServerBusinessServices--tier1--SI (custom detection)
-- PAWDevices--tier0--SI (custom detection)
-- Network_Backbone_Switch--tier0--SI (custom detection)
-- Network_Backbone_Router--tier0--SI (custom detection)
-- Network_Backbone_Management--tier0--SI (custom detection)
-- Network_WLANAccessPoint--tier2--SI (custom detection)
-- Temp-Client-Devices--excluded--SI (custom detection)
-
-
 
 The tags are used in the risk model when native criticality data is not available.
 
@@ -338,8 +624,6 @@ Step 1:
 
 ## Files Overview (Asset Tagging)
 
-
-
 | File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
 | [RunCriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTagging.ps1) | Engine Launcher for Asset Tagging<br />Includes parameters for starting asset tagging engine | No (custom file)                                   |
@@ -351,8 +635,6 @@ Step 1:
 
 ## Files Overview (Asset Tagging Maintenance - Clean-up/Remove orphaned tags)
 
-
-
 | File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
 | [RunCriticalAssetTaggingMaintenance.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTaggingMaintenance.ps1) | Maintenance Launcher<br />Includes parameters for starting maintenance engine | No (custom file)                                   |
@@ -361,8 +643,6 @@ Step 1:
 
 
 ## Files Overview (Risk Analysis)
-
-
 
 | File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
@@ -378,8 +658,6 @@ Step 1:
 
 ## Files Overview (Support file)
 
-
-
 | File Name                                                    | Purpose                                                      | Comment                        |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------ |
 | [UpdateSecurityInsight.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/UpdateSecurityInsight.ps1) | Update Engine<br />Backup local files + Update files from Github repo<br />https://github.com/KnudsenMorten/SecurityInsight | Can be modified to your needs  |
@@ -388,8 +666,6 @@ Step 1:
 
 
 ## Files Overview (Sample Output files)
-
-
 
 | File Name                                                    | Purpose                                         |
 | ------------------------------------------------------------ | ----------------------------------------------- |

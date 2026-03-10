@@ -55,11 +55,11 @@ $global:AI_Uri                      = $null
 # Defaults (single source of truth)
 #########################################################################################################
 
-$AutomationFramework_Default = $false                   # $false = Community edition
-$SettingsPath_Default        = ''                       # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
-$ReportTemplate_Default      = 'RiskAnalysis_Summary'   # default report template to use, if nothing specified
-$OverwriteXlsx_Default       = $true                    # $true = overwrite excel output file
-$BuildSummaryByAI_Default    = $false                   # $true = enable AI summary integration (require OpenAI PAYG instance deployment)
+$AutomationFramework_Default = $false                        # $false = Community edition
+$SettingsPath_Default        = ''                            # you can hardcode folder, fx "C:\SCRIPTS\SecurityInsights_Test" - or leave as '', then it uses folder from script launch
+$ReportTemplate_Default      = 'RiskAnalysis_Summary_Bucket' # default report template to use, if nothing specified
+$OverwriteXlsx_Default       = $true                         # $true = overwrite excel output file
+$BuildSummaryByAI_Default    = $false                        # $true = enable AI summary integration (require OpenAI PAYG instance deployment)
 
 #########################################################################################################
 # Resolve runtime values (CMDLINE WINS, otherwise DEFAULT)

@@ -5,6 +5,9 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
 
 [TOC]
 
+  
+
+
 ## The Challenge: Too Many Security Recommendations
 
 Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings. Security teams are often faced with:
@@ -34,6 +37,7 @@ In practice, remediation work is often prioritized according to:
 
 
 
+  
 
 
 ## A Risk-Based Prioritization Model
@@ -59,6 +63,7 @@ These factors will each increase the probability score with +1 - and therefore i
 
 
 
+  
 
 
 ## Why We Use a Graph — Understanding Exposure Graph Architecture
@@ -81,7 +86,7 @@ This is why modern security platforms like **Microsoft Exposure Graph** represen
 
 A graph structure allows security tools such as **Microsoft Defender** and **Microsoft Security Copilot** to map relationships between users, devices, applications, and privileges.
 
-
+  
 
 
 ## Example of an Attack Path
@@ -121,6 +126,7 @@ By following this chain of relationships, the attacker can eventually gain contr
 
 
 
+  
 
 
 ## Why Graph Architecture Matters
@@ -151,6 +157,7 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
  These datasets allow analysis of relationships between systems and security findings.
 
 
+  
 
 
 ## Risk Score Model
@@ -181,6 +188,7 @@ This score is used to prioritize remediation activities.
 
 
 
+  
 
 
 ## Reporting
@@ -202,6 +210,7 @@ The framework generates both summary and detailed reports.
 
 
 
+  
 
 
 ## Governance and Compliance
@@ -233,6 +242,7 @@ The model aligns with several CIS controls, including:
 
  
 
+  
 
 
 ## Operational Benefits
@@ -246,6 +256,7 @@ The risk-based model provides several advantages:
 
 
 
+  
 
 
 ## Future Opportunities
@@ -259,6 +270,7 @@ Potential future developments include:
 
 
 
+  
 
 
 ## Transparency and Flexibility
@@ -280,6 +292,7 @@ This approach ensures that the model is **100% transparent and open**.
 
  
 
+  
 
 
 ## Collaboration with Microsoft
@@ -294,6 +307,7 @@ The goal of this collaboration is to explore how the principles behind the Secur
 
 
 
+  
 
 
 ## Files Overview
@@ -352,6 +366,7 @@ The goal of this collaboration is to explore how the principles behind the Secur
 
  
 
+  
 
 
 # High-level Overview of Implementation

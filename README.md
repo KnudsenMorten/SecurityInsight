@@ -133,18 +133,43 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
 # High-level Overview of Implementation
 
+Detailed actions for each steps are outlined in the sections below the High-level Overview of Implementation table.
+
 | Step                                                         | Detailed actions                                             |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Step 1: **Onboarding** of Entra App registration - to be used with SecurityInsight | 1. Create Entra App registration (SPN) with **Secret**<br />2. Delegate permissions in API permissions<br />3. Delegate permissions in Azure |
-| Step 2: Setting **Asset Tier Level** using tagging (using script from SecurityInsight)<br /><br />**See detailed steps below in the section** | 1. Adjust the authentication details in launcher file <br /><br />2. Run asset launcher to tag recommended tags (locked, prod)<br /><br />3. Adjust custom yaml-file to tag resources<br />Start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI') |
+| Step 1: **Prepare** SecurityInsight **files** on automation-server | 1. Download all files from Github and create folder on automation/batch-server<br />2. Installation of necessary Powershell modules on server |
+| Step 2: **Onboarding** of Entra App registration - to be used with SecurityInsight | 1. Create Entra App registration (SPN) with **Secret**<br />2. Delegate permissions in API permissions<br />3. Delegate permissions in Azure |
+| Step 3: Setting **Asset Tier Level** using tagging (using script from SecurityInsight) | 1. Adjust the authentication details in launcher file <br /><br />2. Run asset launcher to tag recommended tags (locked, prod)<br /><br />3. Adjust custom yaml-file to tag resources<br />Start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI') |
 | Step 3: Setting **Asset Criticality Level** Classification (in Defender) | 1. Add custom classifications based on Tags and configure Criticality Level in Defender Critical Asset Management<br /><br /<br /><br />NOTE: I'm working with Microsoft to include new features in Defender Critical Asset Management:<br />* Kusto cmdlets - instead of using static fields<br />* Missing fields like "not contains"<br />* API to automate onboarding<br /><br />NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in Defender Critical Asset Management. This is due to syncing delays. |
 | Step 4: Run **Risk Analysis**                                | Summary mode:<br />                                          |
 
 
 
+## Step 1: **Prepare** SecurityInsight **files** on automation-server
+
+1. [Download all files from Github site](https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip) and create folder on automation/batch-server, like 
+
+```
+<drive>\SCRIPS\SecurityInsight
+```
 
 
-## Step 1: **Onboarding** of Entra App registration - to be used with SecurityInsight
+
+2. Install necessary PowerShell modules on server (optional, as the script will also do this if missing)
+
+```
+Install-Module Az -Scope AllUsers -Force -AllowClobber
+Install-Module Az.ResourceGraph -Scope AllUsers -Force -AllowClobber
+Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
+Install-Module Microsoft.Graph.Security -Scope AllUsers -Force -AllowClobber
+Install-Module MicrosoftGraphPS -Scope AllUsers -Force -AllowClobber
+Install-Module ImportExcel -Scope AllUsers -Force -AllowClobber
+Install-Module powershell-yaml -Scope AllUsers -Force -AllowClobber
+```
+
+
+
+## Step 2: **Onboarding** of Entra App registration - to be used with SecurityInsight
 
 1. Create Entra App registration (SPN) and set **Secret** (note it down!)<br />By default, Authentication is done with Secret. 
    Feel free to adjust login in the launcher files to store data in Keyvault, use certificate, etc. <br />
@@ -159,15 +184,15 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
 
 
-3. Delegate tag contributor permissions in Azure to Entra App SPN<br />
+3. Delegate '**Tag Contributor**' permissions in Azure to Entra App SPN on **Tenant Root-level** to ensure the possibility to tag all Azure resources<br />
 
 ```
-Least privilege: **Tag Contributor**
+**Tag Contributor** (least privilege)
 ```
 
 
 
-## Step 2: Setting **Asset Tier Level** using tagging 
+## Step 3: Setting **Asset Tier Level** using tagging 
 
 1. Adjust the **authentication details** in launcher file, **RunCriticalAssetTagging.ps1** (SpnTenantId, SpnClientId, SpnClientSecret)
 
@@ -182,11 +207,237 @@ If (-not $AutomationFramework) {
 
 
 
-2. Run asset launcher to tag recommended tags (locked, prod)
+2. Adjust the **WhatIfMode** to **$true**, if you are only testing. Otherwise leave it as $false to set the tags
+
+```
+$WhatIfMode                  = $false
+```
+
+
+
+3. [PROD]  Run Critical Asset launcher to tag recommended tags in **PROD mode**
+
+```
+RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+```
+
+
+
+You will now get the following tags applied, based on the data file **SecurityInsight_CriticalAssetTagging_Locked.yaml**:
+
+- AzPlatformManagementResources--tier0--SI
+- AzPlatformManagementResources--tier0--SI
+- DomainControllerDNS--tier0--SI
+- ADCertificateService--tier0--SI
+- EntraSyncService--tier0--SI
+- EmployeeWorkstations--tier2--SI
+- EmployeeMobile--tier2--SI
+- IoT--tier3--SI
+
+
+
+> **IMPORTANT:**
+> Tagging Engine will take any queries in PROD-mode, aggregating queries from both data files:
+> SecurityInsight_CriticalAssetTagging_Custom.yaml
+>
+> SecurityInsight_CriticalAssetTagging_Locked.yaml
+
+
+
+4. [PROD]  Setup Recurring job to run every x hours using task scheduler or 3rd party software like VisualCron. This job should only run the queries, that have been tested and validated and moved into PROD status
+
+```
+RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+```
+
+
+
+5. [Test]  Adjust custom yaml-file to tag resources in Test-mode
+
+You can choose to modify sample TEST-queries and fine-tune the queries to match your environment.
+
+Fine-tuning often requires adjustment according to **naming convention (Defender)**, **management-group naming (Azure)** or **IP subnets (backbone/network)**
+
+| AssetTagName                                | What needs to be changed in Query?                           |
+| ------------------------------------------- | ------------------------------------------------------------ |
+| AzHubPlatformManagementSub--tier0--SI       | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-management" |
+| AzHubPlatformManagementResources--tier0--SI | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-management" |
+| AzHubPlatformSecuritySub--tier0--SI         | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-security" |
+| AzHubPlatformSecurityResources--tier0--SI   | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-security" |
+| AzLZDatacenterSub--tier0--SI                | Name of management group ?<b<br /><br /> where (properties.managementGroupAncestorsChain has "platform-prod") or (properties.managementGroupAncestorsChain has "platform-test") |
+| AutomationServer--tier0--SI                 | Name of server?<br /><br /> where NodeName has "MGMT1"       |
+| ServerBusinessServices--tier1--SI           | Fine-tune query to proper filter of which servers should be tier-0, tier-1, tier-2<br /><br />If you do nothing, as servers will be tagged as 'ServerBusinessServices--tier1--SI' - except if they already have a tier-0 tag (like DCs, Entra Connect, etc) |
+| PAWDevices--tier0--SI                       | Adjust naming convention for PAW-devices or use other method to detect them<br /><br /> where NodeName has "PAW-" |
+| Network_Backbone_Switch--tier0--SI          | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
+| Network_Backbone_Router--tier0--SI          | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
+| Network_Backbone_Management--tier0--SI      | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
+| Network_WLANAccessPoint--tier2--SI          | Filter option<br /><br /> where tostring(rawData.deviceSubtype) == "WLANAccessPoint" |
+| Temp-Client-Devices--excluded--SI           | Filter devices that should be excluded using tag<br /><br /> where tostring(rawData.deviceType) == "Workstation"<br /> where NodeName startswith "fvf-"<br /> where NodeName !has "cloud" |
+
+
+
+#### Testing Queries - Azure Resource Graph
+
+
+
+#### Testing Queries - Defender
+
+
+
+#### Defender: How can I validate & Show all tagged resources when I test ?
+
+Find this line
+
+```
+| where array_index_of(AssetTagsArray, AssetTagName) == -1
+```
+
+
+
+Change to (add // in front)
+
+```
+// | where array_index_of(AssetTagsArray, AssetTagName) == -1
+```
+
+
+
+#### Azure: How can I validate & Show all tagged resources when I test ?
+
+Find this line
+
+```
+| where Tag_AssetTier != AssetTagName
+```
+
+
+
+Change to (add // in front)
+
+```
+// | where Tag_AssetTier != AssetTagName
+```
+
+
+
+If you want to test a 
+
+Sample query in Mode: TEST
+
+```
+  - AssetTagName: Network_Backbone_Switch--tier0--SI
+    Mode: Test
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        let TargetSubnet = "192.168.1.0/24";
+
+        let SwitchNodes =
+            ExposureGraphNodes
+            // Filter
+            | where NodeLabel has "device"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceSubtype) == "Switch"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+            // Output Required Columns
+            | extend
+                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+            | extend
+                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+            // Extract device IDs
+            | extend entityIds_dyn = todynamic(EntityIds)
+            | mv-apply e = entityIds_dyn on (
+                summarize
+                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+            )
+            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+            // Normalize DeviceId for join
+            | extend DeviceId = DeviceInventoryId
+            | where isnotempty(DeviceId)
+
+            // Tagging logic
+            | extend
+                AssetTagType   = "AssetTier--SI",
+                AssetTag       = "Network_Backbone_Switch",
+                AssetTierLevel = 0
+            | extend
+                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI");
+
+        SwitchNodes
+        | join kind=inner (
+            DeviceNetworkInfo
+            | mv-expand ip = IPAddresses
+            | extend
+                IPAddress    = tostring(ip.IPAddress),
+                AddressType  = tostring(ip.AddressType),
+                SubnetPrefix = tostring(ip.SubnetPrefix)
+            | where isnotempty(IPAddress)
+            | where AddressType =~ "Private"
+            | where ipv4_is_in_range(IPAddress, TargetSubnet)
+            | project DeviceId, DeviceName, NetworkAdapterName, IPAddress, AddressType, SubnetPrefix
+        ) on DeviceId
+
+        | project
+            NodeName,
+            NodeLabel,
+            DeviceId,
+            DeviceInventoryId = DeviceId,
+            IPAddress,
+            NetworkAdapterName,
+            AssetTagName,
+            AssetTags
+        | distinct NodeName, NodeLabel, DeviceId, DeviceInventoryId, IPAddress, NetworkAdapterName, AssetTagName, AssetTags
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
 ```
 
+
+
+5. [TEST]  Run Critical Asset launcher to tag recommended tags in TEST mode
+
 ```
+RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
+```
+
+
+
+You will now get the following tags applied, based on the data file **SecurityInsight_CriticalAssetTagging_Custom.yaml**:
+
+- AzHubPlatformManagementSub--tier0--SI
+- AzHubPlatformManagementResources--tier0--SI
+- AzHubPlatformSecuritySub--tier0--SI
+- AzHubPlatformSecurityResources--tier0--SI
+- AzLZDatacenterSub--tier0--SI
+- AutomationServer--tier0--SI
+- ServerBusinessServices--tier1--SI
+- PAWDevices--tier0--SI
+- Network_Backbone_Switch--tier0--SI
+- Network_Backbone_Router--tier0--SI
+- Network_Backbone_Management--tier0--SI
+- Network_WLANAccessPoint--tier2--SI
+- Temp-Client-Devices--excluded--SI
 
 
 

@@ -7,6 +7,8 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
 
 
 
+[TOC]
+
 ## The Challenge: Too Many Security Recommendations
 
 Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings. Security teams are often faced with:
@@ -81,7 +83,7 @@ A graph structure allows security tools such as **Microsoft Defender** and **Mic
 
 
 
-#### Example of an Attack Path
+## Example of an Attack Path
 
 A typical attack rarely targets the most critical system directly. Instead, attackers move through connected systems step by step.
 
@@ -102,7 +104,23 @@ By following this chain of relationships, the attacker can eventually gain contr
 
 
 
-### Why Graph Architecture Matters
+### Example of Attack Path
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-1.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-2.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-3.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-4.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-5.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/AttackPath-Sample-EntraCookie-6.png)
+
+
+
+## Why Graph Architecture Matters
 
 A **graph model** allows security platforms to:
 
@@ -129,6 +147,187 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
  These datasets allow analysis of relationships between systems and security findings.
 
+
+
+## Risk Score Model
+
+**Risk Score** is calculated using two dimensions:
+
+**Consequence Score** – the potential impact if exploitation occurs.
+
+**Probability Score** – the likelihood of exploitation based on asset tier and exposure context.
+
+
+
+**Probability Score** may be adjusted using **contextual risk indicators (risk factors)**, that increase the likelihood of exploitation. such as:
+
+- exploit availability
+- internet exposure
+- legacy systems
+
+ Each of these influence the score by increasing the probability score with +1 due to the risk factor
+
+
+
+The **final risk score** is calculated as:
+
+**Risk Score = Consequence Score × Probability Score**
+
+This score is used to prioritize remediation activities.
+
+ 
+
+## Reporting
+
+The framework generates both summary and detailed reports.
+
+**Summary reports** include number of findings per tier, overall risk levels, configuration status
+
+**Detailed reports** include affected assets, vulnerability identifiers and remediation guidance.
+
+
+
+| File Name                                                    | Purpose                                         |
+| ------------------------------------------------------------ | ----------------------------------------------- |
+| [Sample mail - Detailed report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Detailed%20report%20with%20AI%20summary.pdf) | Sample mail for Detailed report with AI summary |
+| [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file               |
+| [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
+| [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
+
+
+
+## Governance and Compliance
+
+The model supports several important security frameworks.
+
+### NIS2 Directive
+
+NIS2 requires organizations to implement:
+
+- risk-based cybersecurity management
+- protection of critical infrastructure
+- preventive security measures.
+
+The described model supports these requirements by prioritizing protection of the organization’s most critical systems.
+
+### CIS Critical Security Controls
+
+The model aligns with several CIS controls, including:
+
+- CIS Control 1 – Asset Inventory
+- CIS Control 4 – Secure Configuration
+- CIS Control 7 – Vulnerability Management
+- CIS Control 12 – Network Infrastructure Management.
+
+ 
+
+## Operational Benefits
+
+The risk-based model provides several advantages:
+
+- **Clear security priorities** - Security teams can focus on the most critical risks.
+- **Reduced operational noise** - Low-risk issues do not dominate remediation efforts.
+- **Faster risk reduction** - The most dangerous vulnerabilities are addressed first.
+- **Improved executive communication** - Risk scores translate technical findings into **business risk**.
+
+
+
+## Future Opportunities
+
+Potential future developments include:
+
+- automated attack path analysis - more queries
+
+- integration with ticketing and risk management platforms.
+
+
+ 
+
+## Transparency and Flexibility
+
+A key strength of the Security Insight model is its **transparent and flexible architecture**.
+
+Unlike many traditional security solutions, where prioritization logic is embedded in proprietary algorithms, this model is designed to be **fully open and configurable**.
+
+The architecture is based on widely available technologies, allowing organizations to understand and adjust the prioritization model according to their own needs.
+
+Core components include:
+
+- **Kusto Queries (KQL)** for security data analysis
+- **PowerShell** for automation and report generation
+- **CSV-based index files** defining risk scoring
+- **Asset tagging** for classification of critical systems.
+
+This approach ensures that the model is **100% transparent and open**.
+
+ 
+
+## Collaboration with Microsoft
+
+The development of the Security Insight model is conducted in close dialogue with Microsoft.
+
+The risk-based approach to prioritizing security recommendations—based on asset criticality and exposure analysis—has attracted significant interest within Microsoft’s security organization.
+
+**Morten Knudsen works closely with Microsoft, including Raviv Tamir, Corporate Vice President for Microsoft Defender, and his team.**
+
+The goal of this collaboration is to explore how the principles behind the Security Insight model can influence the future development of the **Microsoft Defender platform**.
+
+
+
+## Files Overview
+
+### Asset Tagging
+
+| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
+| [RunCriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTagging.ps1) | Engine Launcher for Asset Tagging<br />Includes parameters for starting asset tagging engine | No (custom file)                                   |
+| [CriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTagging.ps1) | Main Engine for Asset Tagging<br />Uses YAML-files as data repo | Yes <br />                                         |
+| [SecurityInsight_CriticalAssetTagging_Custom.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Custom.yaml) | Data file (custom tags)<br />Kusto queries against graph-engines | No <br />(individual asset tags)                   |
+| [SecurityInsight_CriticalAssetTagging_Locked.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Locked.yaml) | Data file (recommended tags)<br />Kusto queries against graph-engines | Yes                                                |
+
+
+
+### Asset Tagging Maintenance - Clean-up/Remove orphaned tags
+
+| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
+| [RunCriticalAssetTaggingMaintenance.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTaggingMaintenance.ps1) | Maintenance Launcher<br />Includes parameters for starting maintenance engine | No (custom file)                                   |
+| [CriticalAssetTaggingMaintenance.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTaggingMaintenance.ps1) | Main Engine for Asset Tag Maintenance<br /><br />Note: <br />Samples are provided that can be run after modifcation to your needs, like which tags to remove | Yes                                                |
+
+
+
+### Risk Analysis
+
+| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
+| [RunSecurityInsight.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunSecurityInsight.ps1) | Engine Launcher<br />Includes parameters for starting risk analysis engine | No (custom file)                                   |
+| [SecurityInsight_RiskAnalysis.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_RiskAnalysis.ps1) | Main Engine <br />Engine file for Risk Analysis<br />Uses YAML-files as data repo<br />Uses RiskIndex-file to prioritize score | Yes <br />                                         |
+| [SecurityInsight_RiskIndex.csv](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_RiskIndex.csv) | Risk Index data file                                         | No (*)<br />(custom priority file)                 |
+| [SecurityInsight_RiskAnalysis_Queries_Custom.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_RiskAnalysis_Queries_Custom.yaml) | Report data file (custom tags)<br />Kusto queries against graph-engine | No <br />(custom queries)                          |
+| [SecurityInsight_RiskAnalysis_Queries_Locked.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_RiskAnalysis_Queries_Locked.yaml) | Report data file (recommended tags)<br />Kusto queries against graph-engine | Yes                                                |
+
+(*) If you don't make custom changes in RiskIndex file, you can add the file into UpdateSecurityInsight.ps1 script to subscribe to my recommendations in priority.
+
+
+
+### Support file
+
+| File Name                                                    | Purpose                                                      | Comment                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------ |
+| [UpdateSecurityInsight.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/UpdateSecurityInsight.ps1) | Update Engine<br />Backup local files + Update files from Github repo<br />https://github.com/KnudsenMorten/SecurityInsight | Can be modified to your needs  |
+| [Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1) | Deploy OpenAI PAYG instance (optional)<br />Used for AI summary based on context from risk analysis | Must be modified to your needs |
+
+
+
+### Sample Output files
+
+| File Name                                                    | Purpose                                         |
+| ------------------------------------------------------------ | ----------------------------------------------- |
+| [Sample mail - Detailed report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Detailed%20report%20with%20AI%20summary.pdf) | Sample mail for Detailed report with AI summary |
+| [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file               |
+| [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
+| [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
+
  
 
 # High-level Overview of Implementation
@@ -137,17 +336,17 @@ Detailed actions for each steps are outlined in the sections below the High-leve
 
 | Step                                                         | Detailed actions                                             |
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Step 1: **Prepare** SecurityInsight **files** on automation-server | 1. Download all files from Github and create folder on automation/batch-server<br />2. Installation of necessary Powershell modules on server |
-| Step 2: **Onboarding** of Entra App registration - to be used with SecurityInsight | 1. Create Entra App registration (SPN) with **Secret**<br />2. Delegate permissions in API permissions<br />3. Delegate permissions in Azure |
-| Step 3: Setting **Asset Tier Level** using tagging (using script from SecurityInsight) | 1. Adjust the authentication details in launcher file <br /><br />2. Run asset launcher to tag recommended tags (locked, prod)<br /><br />3. Adjust custom yaml-file to tag resources<br />Start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI') |
-| Step 3: Setting **Asset Criticality Level** Classification (in Defender) | 1. Add custom classifications based on Tags and configure Criticality Level in Defender Critical Asset Management<br /><br /<br /><br />NOTE: I'm working with Microsoft to include new features in Defender Critical Asset Management:<br />* Kusto cmdlets - instead of using static fields<br />* Missing fields like "not contains"<br />* API to automate onboarding<br /><br />NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in Defender Critical Asset Management. This is due to syncing delays. |
-| Step 4: Run **Risk Analysis**                                | Summary mode:<br />                                          |
+| Step 1: **Prepare** SecurityInsight **files** on automation-server | 1.1. Download all files from Github and create folder on automation/batch-server<br /><br />1.2. Installation of necessary Powershell modules on server |
+| Step 2: **Onboarding** of Entra App registration - to be used with SecurityInsight | 2.1. Create Entra App registration (SPN) with Secret<br /><br />2.2. Delegate permissions in API permissions<br /><br />2.3. Delegate permissions in Azure |
+| Step 3: Setting **Asset Tier Level** using tagging <br />(using script from SecurityInsight) | 3.1. Adjust the authentication details in launcher file<br /><br />3.2. Validate WhatIfMode<br /><br />3.3. Run Critical Asset launcher to tag recommended tags in PROD mode<br /><br />3.4. [PROD]  Setup Recurring job to run every x hours<br /><br />3.5. [TEST]  Adjust custom yaml-file to tag resources in Test-mode<br /><br />3.6. [TEST]  Run Critical Asset launcher to tag recommended tags in TEST mode<br /><br />3.7. [PROD]  Adjust queries to Prod-mode once happy |
+| Step 4: Setting **Asset Criticality Level** Classification (in Defender) | Step 4.1 - How to setup Criticality Tier Level against Azure resources?<br /><br />Step 4.2 - How to setup Criticality Tier Level against Defender device resources?<br /><br />What am I missing in Critical Asset Management - Dialog with Microsoft in progress ? |
+| Step 5: Run **Risk Analysis**                                | Step 5.1. Adjust the **authentication + smtp details** in launcher file, RunSecurityInsight.ps1<br/><br />Step 5.2A.  Run Risk Analysis launcher in SUMMARY mode (cmdline)<br/><br />Step 5.2B.  Run Risk Analysis launcher in DETAILED mode (GUI/ISE mode, alternative)<br/><br />Step 5.2C.  Run Risk Analysis launcher in DETAILED mode (cmdline)<br/><br />Step 5.2D.  Run Risk Analysis launcher in DETAILED mode (GUI/ISE mode, alternative)<br/><br />Step 5.2E.  Run Risk Analysis launcher for Custom Report Template (cmdline)<br/><br />Step 5.3A. Deploy OpenAI instance to enable AI Support, Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1<br/><br />Step 5.3B. Run Risk Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1 to deploy AI instance<br/><br />Step 5.3C. Adjust the Risk Analysis launcher file to enable AI summary support (RunSecurityInsight.ps1) |
 
 
 
-## Step 1: **Prepare** SecurityInsight **files** on automation-server
+## Step 1: Prepare SecurityInsight files on automation-server
 
-1. [Download all files from Github site](https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip) and create folder on automation/batch-server, like 
+### 1.1. [Download all files from Github site](https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip) and create folder on automation/batch-server
 
 ```
 <drive>\SCRIPS\SecurityInsight
@@ -155,7 +354,7 @@ Detailed actions for each steps are outlined in the sections below the High-leve
 
 
 
-2. Install necessary PowerShell modules on server (optional, as the script will also do this if missing)
+### 1.2. Install necessary PowerShell modules on server (optional, as the script will also do this if missing)
 
 ```
 Install-Module Az -Scope AllUsers -Force -AllowClobber
@@ -169,32 +368,84 @@ Install-Module powershell-yaml -Scope AllUsers -Force -AllowClobber
 
 
 
-## Step 2: **Onboarding** of Entra App registration - to be used with SecurityInsight
+## Step 2: Onboarding of Entra App registration - to be used with SecurityInsight
 
-1. Create Entra App registration (SPN) and set **Secret** (note it down!)<br />By default, Authentication is done with Secret. 
-   Feel free to adjust login in the launcher files to store data in Keyvault, use certificate, etc. <br />
+### 2.1. Create Entra App registration (SPN) and set Secret (note it down!)
 
-2. Delegate **API permissions** to Entra App SPN - found under 'APIs my organization uses'. <br />Remember: **Grant Admin Control**<br />
+By default, Authentication is done with Secret. 
 
-```
-**Microsoft Threat Protection** -> **AdvancedHunting.Read.All**
-**Microsoft Graph** -> **ThreatHunting.Read.All**
-**WindowsDefenderATP** -> **Machine.ReadWrite.All**
-```
+Feel free to adjust login in the launcher files to store data in Keyvault, use certificate, etc. <br />
 
+### 2.2. Delegate API permissions to Entra App SPN
 
-
-3. Delegate '**Tag Contributor**' permissions in Azure to Entra App SPN on **Tenant Root-level** to ensure the possibility to tag all Azure resources<br />
+Add the below mentioned API permissions -  found under 'APIs my organization uses' <br />Remember: **Grant Admin Control**<br />
 
 ```
-**Tag Contributor** (least privilege)
+Microsoft Threat Protection -> AdvancedHunting.Read.All
+Microsoft Graph -> ThreatHunting.Read.All
+WindowsDefenderATP -> Machine.ReadWrite.All
 ```
 
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/EntraApp-API-Permissions.png)
 
 
-## Step 3: Setting **Asset Tier Level** using tagging 
 
-1. Adjust the **authentication details** in launcher file, **RunCriticalAssetTagging.ps1** (SpnTenantId, SpnClientId, SpnClientSecret)
+### 2.3. Delegate 'Tag Contributor' permissions in Azure to Entra App SPN on Tenant Root-level to ensure the possibility to tag all Azure resources<br />
+
+```
+Tag Contributor (least privilege)
+```
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/EntraApp-Azure-Permissions.png)
+
+
+
+## Step 3: Setting Asset Tier Level using tagging 
+
+Assets** are automatically classified using tagging rules based on system roles. Examples include:
+
+- Domain Controllers
+- Entra synchronization services
+- employee devices
+- IoT devices
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/MDE-Asset-Tag-Recommended-Samples.png)
+
+
+
+**Asset tagging** is done using asset taging engine that queries resources against **Defender Graph** or **Azure Resource Graph** using **Kusto KQL**. 
+
+Each query also includes the Asset Tag to set. 
+
+Query shows only deltas (missing assets). 
+
+Asset Tagging runs with defined frequency like every 4 hours.
+
+
+
+### Structure of query in YAML-file
+
+| Property                                                     | Purpose                                                      |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| AssetTagName                                                 | Description                                                  |
+| Mode                                                         | Implementation scope <br />(can be defined in launcher or commandline)<br /><br />Supported values:<br />Prod<br />Test |
+| QueryEngine                                                  | Select query engine<br /><br />Supported values:<br />DefenderGraph = ExposureGraph<br />AzureResourceGraph = Azure Resource Graph |
+| Query structure<br /><br />Step 1: Scoping - what to find ?<br />Step 2: Get existing Tags "as-is"<br />Step 3: Define Value for tag to set "to-be"<br />Step 4: Write resources<br />Step 5: Filter resources to show only resources in scope with missing tag (delta) | Query the Graph<br /><br />AssetTagType supported values: <br />AssetTier--SI = shows asset is in-scope with tier-info<br />Asset--Excluded--SI = shows asset must be excluded<br /><br />AssetTag = any value that makes the asset unique<br /><br />AssetTierLevel = 0,1,2,3 |
+
+
+
+### Asset Tagging files
+
+| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
+| [RunCriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTagging.ps1) | Engine Launcher for Asset Tagging<br />Includes parameters for starting asset tagging engine | No (custom file)                                   |
+| [CriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTagging.ps1) | Main Engine for Asset Tagging<br />Uses YAML-files as data repo | Yes <br />                                         |
+| [SecurityInsight_CriticalAssetTagging_Custom.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Custom.yaml) | Data file (custom tags)<br />Kusto queries against graph-engines | No <br />(custom asset tags)                       |
+| [SecurityInsight_CriticalAssetTagging_Locked.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Locked.yaml) | Data file (recommended tags)<br />Kusto queries against graph-engines | Yes                                                |
+
+
+
+### Step 3.1. Adjust the authentication details in launcher file, RunCriticalAssetTagging.ps1 (SpnTenantId, SpnClientId, SpnClientSecret)
 
 ```
 If (-not $AutomationFramework) {
@@ -207,7 +458,7 @@ If (-not $AutomationFramework) {
 
 
 
-2. Adjust the **WhatIfMode** to **$true**, if you are only testing. Otherwise leave it as $false to set the tags
+### Step 3.2. Adjust the WhatIfMode to $true, if you are only testing. Otherwise leave it as $false to set the tags
 
 ```
 $WhatIfMode                  = $false
@@ -215,7 +466,7 @@ $WhatIfMode                  = $false
 
 
 
-3. [PROD]  Run Critical Asset launcher to tag recommended tags in **PROD mode**
+### Step 3.3. [PROD]  Run Critical Asset launcher to tag recommended tags in PROD mode
 
 ```
 RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
@@ -244,267 +495,6 @@ You will now get the following tags applied, based on the data file **SecurityIn
 > SecurityInsight_CriticalAssetTagging_Custom.yaml
 >
 > SecurityInsight_CriticalAssetTagging_Locked.yaml
-
-
-
-4. [PROD]  Setup Recurring job to run every x hours using task scheduler or 3rd party software like VisualCron. This job should only run the queries, that have been tested and validated and moved into PROD status
-
-```
-RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
-
-Sample:
-<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
-```
-
-
-
-5. [Test]  Adjust custom yaml-file to tag resources in Test-mode
-
-You can choose to modify sample TEST-queries and fine-tune the queries to match your environment.
-
-Fine-tuning often requires adjustment according to **naming convention (Defender)**, **management-group naming (Azure)** or **IP subnets (backbone/network)**
-
-| AssetTagName                                | What needs to be changed in Query?                           |
-| ------------------------------------------- | ------------------------------------------------------------ |
-| AzHubPlatformManagementSub--tier0--SI       | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-management" |
-| AzHubPlatformManagementResources--tier0--SI | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-management" |
-| AzHubPlatformSecuritySub--tier0--SI         | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-security" |
-| AzHubPlatformSecurityResources--tier0--SI   | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-security" |
-| AzLZDatacenterSub--tier0--SI                | Name of management group ?<b<br /><br /> where (properties.managementGroupAncestorsChain has "platform-prod") or (properties.managementGroupAncestorsChain has "platform-test") |
-| AutomationServer--tier0--SI                 | Name of server?<br /><br /> where NodeName has "MGMT1"       |
-| ServerBusinessServices--tier1--SI           | Fine-tune query to proper filter of which servers should be tier-0, tier-1, tier-2<br /><br />If you do nothing, as servers will be tagged as 'ServerBusinessServices--tier1--SI' - except if they already have a tier-0 tag (like DCs, Entra Connect, etc) |
-| PAWDevices--tier0--SI                       | Adjust naming convention for PAW-devices or use other method to detect them<br /><br /> where NodeName has "PAW-" |
-| Network_Backbone_Switch--tier0--SI          | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
-| Network_Backbone_Router--tier0--SI          | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
-| Network_Backbone_Management--tier0--SI      | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
-| Network_WLANAccessPoint--tier2--SI          | Filter option<br /><br /> where tostring(rawData.deviceSubtype) == "WLANAccessPoint" |
-| Temp-Client-Devices--excluded--SI           | Filter devices that should be excluded using tag<br /><br /> where tostring(rawData.deviceType) == "Workstation"<br /> where NodeName startswith "fvf-"<br /> where NodeName !has "cloud" |
-
-
-
-#### Testing Queries - Azure Resource Graph
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/TestingQueries-Azure.png)
-
-
-
-#### Testing Queries - Defender
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/TestingQueries-Defender.png)
-
-
-
-#### Defender: How can I validate & Show all tagged resources when I test ?
-
-Find this line
-
-```
-| where array_index_of(AssetTagsArray, AssetTagName) == -1
-```
-
-
-
-Change to (add // in front)
-
-```
-// | where array_index_of(AssetTagsArray, AssetTagName) == -1
-```
-
-
-
-#### Azure: How can I validate & Show all tagged resources when I test ?
-
-Find this line
-
-```
-| where Tag_AssetTier != AssetTagName
-```
-
-
-
-Change to (add // in front)
-
-```
-// | where Tag_AssetTier != AssetTagName
-```
-
-
-
-If you want to test a 
-
-Sample query in Mode: TEST
-
-```
-  - AssetTagName: Network_Backbone_Switch--tier0--SI
-    Mode: Test
-    QueryEngine: DefenderGraph
-    Query:
-      - |
-        let TargetSubnet = "192.168.1.0/24";
-
-        let SwitchNodes =
-            ExposureGraphNodes
-            // Filter
-            | where NodeLabel has "device"
-            | extend rawData = todynamic(NodeProperties).rawData
-            | where tobool(rawData.isExcluded) == false
-            | where tostring(rawData.deviceSubtype) == "Switch"
-            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
-
-            // Output Required Columns
-            | extend
-                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
-                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
-                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
-            | extend
-                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
-
-            // Extract device IDs
-            | extend entityIds_dyn = todynamic(EntityIds)
-            | mv-apply e = entityIds_dyn on (
-                summarize
-                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
-                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
-                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
-            )
-            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
-
-            // Normalize DeviceId for join
-            | extend DeviceId = DeviceInventoryId
-            | where isnotempty(DeviceId)
-
-            // Tagging logic
-            | extend
-                AssetTagType   = "AssetTier--SI",
-                AssetTag       = "Network_Backbone_Switch",
-                AssetTierLevel = 0
-            | extend
-                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI");
-
-        SwitchNodes
-        | join kind=inner (
-            DeviceNetworkInfo
-            | mv-expand ip = IPAddresses
-            | extend
-                IPAddress    = tostring(ip.IPAddress),
-                AddressType  = tostring(ip.AddressType),
-                SubnetPrefix = tostring(ip.SubnetPrefix)
-            | where isnotempty(IPAddress)
-            | where AddressType =~ "Private"
-            | where ipv4_is_in_range(IPAddress, TargetSubnet)
-            | project DeviceId, DeviceName, NetworkAdapterName, IPAddress, AddressType, SubnetPrefix
-        ) on DeviceId
-
-        | project
-            NodeName,
-            NodeLabel,
-            DeviceId,
-            DeviceInventoryId = DeviceId,
-            IPAddress,
-            NetworkAdapterName,
-            AssetTagName,
-            AssetTags
-        | distinct NodeName, NodeLabel, DeviceId, DeviceInventoryId, IPAddress, NetworkAdapterName, AssetTagName, AssetTags
-
-        // Show only assets that don't already have the tag
-        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
-
-        // Only assets missing the intended Tier 1 tag
-        | where array_index_of(AssetTagsArray, AssetTagName) == -1
-
-```
-
-
-
-5. [TEST]  Run Critical Asset launcher to tag recommended tags in TEST mode
-
-```
-RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
-
-Sample:
-<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
-```
-
-
-
-You will now get the following tags applied, based on the data file **SecurityInsight_CriticalAssetTagging_Custom.yaml**:
-
-- AzHubPlatformManagementSub--tier0--SI
-- AzHubPlatformManagementResources--tier0--SI
-- AzHubPlatformSecuritySub--tier0--SI
-- AzHubPlatformSecurityResources--tier0--SI
-- AzLZDatacenterSub--tier0--SI
-- AutomationServer--tier0--SI
-- ServerBusinessServices--tier1--SI
-- PAWDevices--tier0--SI
-- Network_Backbone_Switch--tier0--SI
-- Network_Backbone_Router--tier0--SI
-- Network_Backbone_Management--tier0--SI
-- Network_WLANAccessPoint--tier2--SI
-- Temp-Client-Devices--excluded--SI
-
-
-
-1. Adjust custom yaml-file to tag resources<br />Start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI')
-
-2. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI')
-
-3. Create Entra App registration (SPN) and set **Secret** (note it down!)<br />
-
-   By defau
-
-
-
-- - | Step                                                         | Detailed actions                                             |
-    | ------------------------------------------------------------ | ------------------------------------------------------------ |
-    | Step 1: Onboarding of Entra App registration                 | 1. Create Entra App registration<br /><br />2. Delegate permissions in API permissions - found under 'APIs my organization uses'. <br />**Microsoft Threat Protection** -> **AdvancedHunting.Read.All**<br />**Microsoft Graph** -> **ThreatHunting.Read.All** <br />**WindowsDefenderATP** -> **Machine.ReadWrite.All**<br /><br />Remember: **Grant Admin Control**<br /><br />3. Delegate permissions in Azure<br /> |
-    | Step 1: Setting Asset Tier Level using tagging (using script from SecurityInsight) | 1. Use Recommended Queries against Graph<br /><br />2. Tag resources, start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI') |
-    | Step 2: Setting Asset Criticality Level Classification (in Defender) | 1. Add custom classifications based on Tags and configure Criticality Level in Defender Critical Asset Management<br /><br /<br /><br />NOTE: I'm working with Microsoft to include new features in Defender Critical Asset Management:<br />* Kusto cmdlets - instead of using static fields<br />* Missing fields like "not contains"<br />* API to automate onboarding<br /><br />NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in Defender Critical Asset Management. This is due to syncing delays. |
-    | Step 3: Run Risk Analysis                                    |                                                              |
-    |                                                              |                                                              |
-
-
-
-## Step 1: Setting Asset Tier Level using tagging
-
-**Assets** are automatically classified using tagging rules based on system roles. Examples include:
-
-- Domain Controllers
-- Entra synchronization services
-- employee devices
-- IoT devices
-
-
-
-**Asset tagging** is done using asset taging engine that queries resources against **Defender Graph** or **Azure Resource Graph** using **Kusto KQL**. 
-
-Each query also includes the Asset Tag to set. 
-
-Query shows only deltas (missing assets). 
-
-Asset Tagging runs with defined frequency like every 4 hours.
-
-
-
-#### Structure of query in YAML-file
-
-| Property                                                     | Purpose                                                      |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| AssetTagName                                                 | Description                                                  |
-| Mode                                                         | Implementation scope <br />(can be defined in launcher or commandline)<br /><br />Supported:<br />Prod<br />Test |
-| QueryEngine                                                  | Select query engine<br /><br />Supported:<br />DefenderGraph = ExposureGraph<br />AzureResourceGraph = Azure Resource Graph |
-| Query structure<br /><br />Step 1: Scoping - what to find ?<br />Step 2: Get existing Tags "as-is"<br />Step 3: Define Value for tag to set "to-be"<br />Step 4: Write resources<br />Step 5: Filter resources to show only resources in scope with missing tag (delta) | Query the Graph<br /><br />AssetTagType supported values: <br />AssetTier--SI = shows asset is in-scope with tier-info<br />Asset--Excluded--SI = shows asset must be excluded<br /><br />AssetTag = any value that makes the asset unique<br /><br />AssetTierLevel = 0,1,2,3 |
-
-
-
-#### Asset Tagging files
-
-| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
-| [RunCriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTagging.ps1) | Engine Launcher for Asset Tagging<br />Includes parameters for starting asset tagging engine | No (custom file)                                   |
-| [CriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTagging.ps1) | Main Engine for Asset Tagging<br />Uses YAML-files as data repo | Yes <br />                                         |
-| [SecurityInsight_CriticalAssetTagging_Custom.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Custom.yaml) | Data file (custom tags)<br />Kusto queries against graph-engines | No <br />(custom asset tags)                       |
-| [SecurityInsight_CriticalAssetTagging_Locked.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Locked.yaml) | Data file (recommended tags)<br />Kusto queries against graph-engines | Yes                                                |
 
 
 
@@ -672,6 +662,204 @@ Asset Tagging runs with defined frequency like every 4 hours.
 
 
 
+### Step 3.4. [PROD]  Setup Recurring job to run every x hours using task scheduler or 3rd party software like VisualCron. This job should only run the queries, that have been tested and validated and moved into PROD status
+
+```
+RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+```
+
+
+
+### Step 3.5. [TEST]  Adjust custom yaml-file to tag resources in Test-mode
+
+You can choose to modify sample TEST-queries and fine-tune the queries to match your environment.
+
+Fine-tuning often requires adjustment according to **naming convention (Defender)**, **management-group naming (Azure)** or **IP subnets (backbone/network)**
+
+| AssetTagName                                | What needs to be changed in Query?                           |
+| ------------------------------------------- | ------------------------------------------------------------ |
+| AzHubPlatformManagementSub--tier0--SI       | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-management" |
+| AzHubPlatformManagementResources--tier0--SI | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-management" |
+| AzHubPlatformSecuritySub--tier0--SI         | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-security" |
+| AzHubPlatformSecurityResources--tier0--SI   | Name of management group ?<br /><br /> where properties.managementGroupAncestorsChain has "mg-platform-security" |
+| AzLZDatacenterSub--tier0--SI                | Name of management group ?<b<br /><br /> where (properties.managementGroupAncestorsChain has "platform-prod") or (properties.managementGroupAncestorsChain has "platform-test") |
+| AutomationServer--tier0--SI                 | Name of server?<br /><br /> where NodeName has "MGMT1"       |
+| ServerBusinessServices--tier1--SI           | Fine-tune query to proper filter of which servers should be tier-0, tier-1, tier-2<br /><br />If you do nothing, as servers will be tagged as 'ServerBusinessServices--tier1--SI' - except if they already have a tier-0 tag (like DCs, Entra Connect, etc) |
+| PAWDevices--tier0--SI                       | Adjust naming convention for PAW-devices or use other method to detect them<br /><br /> where NodeName has "PAW-" |
+| Network_Backbone_Switch--tier0--SI          | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
+| Network_Backbone_Router--tier0--SI          | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
+| Network_Backbone_Management--tier0--SI      | Adjust IP segment/subnet for backbone<br /><br />let TargetSubnet = "192.168.1.0/24"; |
+| Network_WLANAccessPoint--tier2--SI          | Filter option<br /><br /> where tostring(rawData.deviceSubtype) == "WLANAccessPoint" |
+| Temp-Client-Devices--excluded--SI           | Filter devices that should be excluded using tag<br /><br /> where tostring(rawData.deviceType) == "Workstation"<br /> where NodeName startswith "fvf-"<br /> where NodeName !has "cloud" |
+
+
+
+#### Sample query in Mode: TEST - Network_Backbone_Switch--tier0--SI
+
+```
+  - AssetTagName: Network_Backbone_Switch--tier0--SI
+    Mode: Test
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        let TargetSubnet = "192.168.1.0/24";
+
+        let SwitchNodes =
+            ExposureGraphNodes
+            // Filter
+            | where NodeLabel has "device"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceSubtype) == "Switch"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+
+            // Output Required Columns
+            | extend
+                deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
+                tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+            | extend
+                AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+
+            // Extract device IDs
+            | extend entityIds_dyn = todynamic(EntityIds)
+            | mv-apply e = entityIds_dyn on (
+                summarize
+                    DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                    SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+                    AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+            )
+            | extend AzureResourceId = strcat_array(AzureResourceId, ";")
+
+            // Normalize DeviceId for join
+            | extend DeviceId = DeviceInventoryId
+            | where isnotempty(DeviceId)
+
+            // Tagging logic
+            | extend
+                AssetTagType   = "AssetTier--SI",
+                AssetTag       = "Network_Backbone_Switch",
+                AssetTierLevel = 0
+            | extend
+                AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI");
+
+        SwitchNodes
+        | join kind=inner (
+            DeviceNetworkInfo
+            | mv-expand ip = IPAddresses
+            | extend
+                IPAddress    = tostring(ip.IPAddress),
+                AddressType  = tostring(ip.AddressType),
+                SubnetPrefix = tostring(ip.SubnetPrefix)
+            | where isnotempty(IPAddress)
+            | where AddressType =~ "Private"
+            | where ipv4_is_in_range(IPAddress, TargetSubnet)
+            | project DeviceId, DeviceName, NetworkAdapterName, IPAddress, AddressType, SubnetPrefix
+        ) on DeviceId
+
+        | project
+            NodeName,
+            NodeLabel,
+            DeviceId,
+            DeviceInventoryId = DeviceId,
+            IPAddress,
+            NetworkAdapterName,
+            AssetTagName,
+            AssetTags
+        | distinct NodeName, NodeLabel, DeviceId, DeviceInventoryId, IPAddress, NetworkAdapterName, AssetTagName, AssetTags
+
+        // Show only assets that don't already have the tag
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+
+        // Only assets missing the intended Tier 1 tag
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+
+```
+
+
+
+#### Testing Queries - Azure Resource Graph
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/TestingQueries-Azure.png)
+
+
+
+#### Testing Queries - Defender
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/TestingQueries-Defender.png)
+
+
+
+#### Defender: How can I validate & Show all tagged resources when I test ?
+
+Find this line
+
+```
+| where array_index_of(AssetTagsArray, AssetTagName) == -1
+```
+
+
+
+Change to (add // in front)
+
+```
+// | where array_index_of(AssetTagsArray, AssetTagName) == -1
+```
+
+
+
+#### Azure: How can I validate & Show all tagged resources when I test ?
+
+Find this line
+
+```
+| where Tag_AssetTier != AssetTagName
+```
+
+
+
+Change to (add // in front)
+
+```
+// | where Tag_AssetTier != AssetTagName
+```
+
+
+
+### Step 3.6. [TEST]  Run Critical Asset launcher to tag recommended tags in TEST mode
+
+```
+RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
+```
+
+
+
+You will now get the following tags applied, based on the data file **SecurityInsight_CriticalAssetTagging_Custom.yaml**:
+
+- AzHubPlatformManagementSub--tier0--SI
+- AzHubPlatformManagementResources--tier0--SI
+- AzHubPlatformSecuritySub--tier0--SI
+- AzHubPlatformSecurityResources--tier0--SI
+- AzLZDatacenterSub--tier0--SI
+- AutomationServer--tier0--SI
+- ServerBusinessServices--tier1--SI
+- PAWDevices--tier0--SI
+- Network_Backbone_Switch--tier0--SI
+- Network_Backbone_Router--tier0--SI
+- Network_Backbone_Management--tier0--SI
+- Network_WLANAccessPoint--tier2--SI
+- Temp-Client-Devices--excluded--SI      <--this query is special as this query find resources that should be excluded (special tag)
+
+
+
+This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview
+
 #### Example of custom query to backbone network switch
 
 ```
@@ -811,9 +999,27 @@ Asset Tagging runs with defined frequency like every 4 hours.
 
 
 
-## Step 2: Setting Asset Criticality Level Classification
+### Step 3.7. [PROD]  Adjust queries to Prod-mode once happy. Now they will be included in the recurring job
+
+```
+    Mode: Test
+```
+
+Change to
+
+```
+    Mode: Prod
+```
+
+
+
+
+
+## Step 4: Setting Asset Criticality Level Classification
 
 Not all systems in an organization are equally important. Assets are therefore classified into **4 criticality tiers**.
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/MDE-Criticality-Sample.png)
 
 Not all types of resources in Defender Critical Asset Management supports 'Criticality Tier'. The tags are used in the risk model when native criticality data is not available.
 
@@ -830,6 +1036,10 @@ Assets are classified using 2 methods in Defender Critical Asset Management:
 
 - **Automatic classification** “Predefined classifications”
 - **Custom classification** using tags in Defender & Azure. 
+
+
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/CriticalityLevel-Defender-overview.png)
 
 
 
@@ -856,163 +1066,45 @@ Assets are classified using 2 methods in Defender Critical Asset Management:
 
 
 
-![CriticalityLevel-Defender-overview](/CriticalityLevel-Defender-overview.png)
-
- 
-
 The tags are used in the risk model when native criticality data is not available.
 
 
 
-## Risk Score Model
+### Step 4.1 - How to setup Criticality Tier Level against Azure resources ?
 
-**Risk Score** is calculated using two dimensions:
-
-**Consequence Score** – the potential impact if exploitation occurs.
-
-**Probability Score** – the likelihood of exploitation based on asset tier and exposure context.
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/CriticalityLevel-Defender-Azure-tags.png)
 
 
 
-**Probability Score** may be adjusted using **contextual risk indicators (risk factors)**, that increase the likelihood of exploitation. such as:
-
-- exploit availability
-
-- internet exposure
-
-- legacy systems
-
-
- Each of these influence the score by increasing the probability score with +1 due to the risk factor
+NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in Defender Critical Asset Management. This is due to syncing delays.
 
 
 
-The **final risk score** is calculated as:
+### Step 4.2 - How to setup Criticality Tier Level against Defender device resources ?
 
-#### **Risk Score = Consequence Score × Probability Score**
-
-This score is used to prioritize remediation activities.
-
- 
-
-## Reporting
-
-The framework generates both summary and detailed reports.
-
-**Summary reports** include number of findings per tier, overall risk levels, configuration status
-
-**Detailed reports** include affected assets, vulnerability identifiers and remediation guidance.
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/CriticalityLevel-Defender-MDE-tags.png)
 
 
 
-| File Name                                                    | Purpose                                         |
-| ------------------------------------------------------------ | ----------------------------------------------- |
-| [Sample mail - Detailed report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Detailed%20report%20with%20AI%20summary.pdf) | Sample mail for Detailed report with AI summary |
-| [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file               |
-| [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
-| [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
+### What am I missing in Critical Asset Management - Dialog with Microsoft in progress ?
+
+| Area                      | What is missing ?                                            |
+| ------------------------- | ------------------------------------------------------------ |
+| Critical Asset Management | Ability to run Kusto query, instead of having to choose static field. Much more efficient and will also overcome limitations, where I can correlate tables<br /><br />Lots of field are missing like device roles, internal ip address |
+| Critical Asset Management | API for onboarding of custom classifications. We have t manually create today |
+| Device (custom query)     | Internal IP Address is not an option                         |
+| Identity (custom query)   | Operator 'not contains' is missing<br /><br />Impossible to make a query like<br />Find all Admins that starts with Admin- AND doesn't contain ""-T0-T0-id" |
+| Identity (custom query)   | extensionAttibute1-15 is missing<br /><br />Many tag users like<br />extensionAttribute6 (Classification) = Internal_User, Service_Account<br />extensionAttibute7 (AuthenticationMethod) = Internal_User_AD_Synced_MFA, Service_Account_Cloud_FIDO |
 
 
 
-## Implementation Architecture
+## Step 5: Run the Risk Analysis
 
 The solution consists of three main components:
 
 | Data collection (Input)                                      | Analysis                                                     | Reporting (Output)               |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------- |
 | Microsoft Defender<br />Exposure Graph<br />Azure Resource Graph | Kusto queries<br />YAML report definitions<br />Risk score calculations | Excel reports<br />Summary Email |
-
-
-
-## Governance and Compliance
-
-The model supports several regulatory and security frameworks including:
-
-·     NIS2 Directive
-
-·     CIS Critical Security Controls
-
-·     ISO 27001 risk management principles.
-
- 
-
-## Operational Benefits
-
-Organizations implementing the model gain:
-
-·     improved vulnerability prioritization
-
-·     reduced remediation backlog
-
-·     improved visibility into attack paths.
-
- 
-
-## Future Opportunities
-
-Potential future developments include:
-
-·     automated attack path analysis
-
-·     integration with threat intelligence
-
-·     integration with ticketing and risk management platforms.
-
- 
-
-## Transparency and Flexibility
-
-The Security Insight architecture is fully open and transparent and is based on:
-
-​     PowerShell automation
-
-·     Kusto Queries for data analysis
-
-·     CSV files defining scoring models
-
-·     YAML report definitions
-
-·     asset tagging
-
- 
-
-This ensures the prioritization model can be inspected, validated and adapted to organizational requirements.
-
- 
-
-## Collaboration with Microsoft
-
-The development of the Security Insight model is conducted in close dialogue with Microsoft.
-
-Morten Knudsen collaborates with Microsoft, including Raviv Tamir, Corporate Vice President for Microsoft Defender, and his team to explore how the risk‑based prioritization concepts can influence the future strategy of the Microsoft Defender platform.
-
-
-
-## How to setup SecurityInsight in your environment ?
-
-
-
-Step 1: 
-
-
-
-## Files Overview (Asset Tagging)
-
-| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
-| [RunCriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTagging.ps1) | Engine Launcher for Asset Tagging<br />Includes parameters for starting asset tagging engine | No (custom file)                                   |
-| [CriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTagging.ps1) | Main Engine for Asset Tagging<br />Uses YAML-files as data repo | Yes <br />                                         |
-| [SecurityInsight_CriticalAssetTagging_Custom.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Custom.yaml) | Data file (custom tags)<br />Kusto queries against graph-engines | No <br />(individual asset tags)                   |
-| [SecurityInsight_CriticalAssetTagging_Locked.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Locked.yaml) | Data file (recommended tags)<br />Kusto queries against graph-engines | Yes                                                |
-
-
-
-## Files Overview (Asset Tagging Maintenance - Clean-up/Remove orphaned tags)
-
-| File Name                                                    | Purpose                                                      | Continues Updates via UpdateSecurityInsight-script |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
-| [RunCriticalAssetTaggingMaintenance.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/RunCriticalAssetTaggingMaintenance.ps1) | Maintenance Launcher<br />Includes parameters for starting maintenance engine | No (custom file)                                   |
-| [CriticalAssetTaggingMaintenance.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTaggingMaintenance.ps1) | Main Engine for Asset Tag Maintenance<br /><br />Note: <br />Samples are provided that can be run after modifcation to your needs, like which tags to remove | Yes                                                |
 
 
 
@@ -1030,20 +1122,1554 @@ Step 1:
 
 
 
-## Files Overview (Support file)
+### Step 5.1. Adjust the authentication + smtp details in launcher file, RunSecurityInsight.ps1
 
-| File Name                                                    | Purpose                                                      | Comment                        |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------ |
-| [UpdateSecurityInsight.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/UpdateSecurityInsight.ps1) | Update Engine<br />Backup local files + Update files from Github repo<br />https://github.com/KnudsenMorten/SecurityInsight | Can be modified to your needs  |
-| [Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1) | Deploy OpenAI PAYG instance (optional)<br />Used for AI summary based on context from risk analysis | Must be modified to your needs |
+```
+if (-not $global:AutomationFramework) {
+
+    # SPN
+    $global:SpnTenantId        = "<Your TenantId>"     # override per your SPN tenant if different
+    $global:SpnClientId        = "<APP/CLIENT ID GUID>"
+    $global:SpnClientSecret    = "<CLIENT SECRET VALUE>"
+
+    # Email Notifications
+    $global:SendMail           = $false # true/false
+    $global:MailTo             = @()    # array of recipients
+    $global:Mail_SendAnonymous = $false # $true = anonymous login against SMTP server
+    $global:SMTPUser           = "<SMTP from address>"   # Default FROM address
+    $global:SmtpServer         = "<SMTP server>"
+    $global:SMTPPort           = 587
+    $global:SMTP_UseSSL        = $true  # or $false
+
+    if (-not $global:Mail_SendAnonymous) {
+
+        # Consider to use an Azure Keyvault and retrieve credentials from there !
+        $global:SmtpUsername   = "<SMTP username>"
+        $global:SmtpPassword   = "<SMTP password>"
+
+        $SecurePassword = ConvertTo-SecureString $global:SmtpPassword -AsPlainText -Force
+        $global:SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
+            $global:SmtpUsername,
+            $SecurePassword
+        )
+    }
+}
+```
 
 
 
-## Files Overview (Sample Output files)
+### Step 5.2A.  Run Risk Analysis launcher in SUMMARY mode (cmdline)
 
-| File Name                                                    | Purpose                                         |
-| ------------------------------------------------------------ | ----------------------------------------------- |
-| [Sample mail - Detailed report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Detailed%20report%20with%20AI%20summary.pdf) | Sample mail for Detailed report with AI summary |
-| [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file               |
-| [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
-| [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
+```
+RunRiskAnalysis.ps1 -Summary
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunRiskAnalysis.ps1 -Summary
+```
+
+
+
+### Step 5.2B.  Run Risk Analysis launcher in DETAILED mode (GUI/ISE mode, alternative)
+
+```
+Verify / Adjust this line
+$ReportTemplate_Default      = 'RiskAnalysis_Summary_Bucket'
+```
+
+
+
+### Step 5.2C.  Run Risk Analysis launcher in DETAILED mode (cmdline)
+
+```
+RunRiskAnalysis.ps1 -Detailed
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunRiskAnalysis.ps1 -Detailed
+```
+
+
+
+### Step 5.2D.  Run Risk Analysis launcher in DETAILED mode (GUI/ISE mode, alternative)
+
+```
+Verify / Adjust this line
+$ReportTemplate_Default      = 'RiskAnalysis_Detailed_Bucket'
+```
+
+
+
+### Step 5.2E.  Run Risk Analysis launcher for Custom Report Template (cmdline)
+
+```
+RunRiskAnalysis.ps1 -Detailed -ReportTemplate "RiskAnalysis_Detailed_Bucket_Test"
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\RunRiskAnalysis.ps1 -Detailed
+```
+
+
+
+### Step 5.3A. Deploy OpenAI instance to enable AI Support, Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+
+Adjust the parameters: SubscriptionId, ResourceGroupName, Location, AccountName, DeploymentName
+
+```
+$ScriptDefaults = @{
+    SubscriptionId      = "xxxxxxxxx"
+    ResourceGroupName   = "rg-security-insight"
+    Location            = "swedencentral"
+    AccountName         = "oai-xxxxx-security-insight"
+    DeploymentName      = "oai-xxxxx-security-insight"
+
+    # Preferred default (may not be supported; script will try others)
+    ModelName           = "gpt-4.1-mini"
+    ModelVersion        = "latest"
+
+    Capacity            = 100   # script uses this as "sku.capacity" for the deployment PUT
+    PublicNetworkAccess = "Enabled"
+    WaitForAccountReady = $true
+
+    DeploymentSkuOrder  = @("GlobalStandard")
+
+    WriteModelDumps     = $true
+}
+
+```
+
+
+
+### Step 5.3B. Run Risk Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1 to deploy AI instance
+
+```
+Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+
+Sample:
+<Drive>:\SCRIPTS\SecurityInsights\Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+```
+
+
+
+### Step 5.3C. Adjust the Risk Analysis launcher file to enable AI summary support (RunSecurityInsight.ps1)
+
+Find the value
+
+```
+$BuildSummaryByAI_Default    = $false # $true = enable AI summary integration (require OpenAI PAYG instance deployment)
+```
+
+
+
+Change to
+
+```
+$BuildSummaryByAI_Default    = $true
+```
+
+
+
+Adjust the AI section with the details from step 5.3B
+
+```
+if ($global:BuildSummaryByAI) {
+
+    $global:OpenAI_apiKey              = "<API Key>"     # sample: "xxxxxxxxxxxxxxxxxxxxx"
+    $global:OpenAI_endpoint            = "<URL>"     # sample: "https://xxxxx.openai.azure.com"
+    $global:OpenAI_deployment          = "<Open AI Deployment Name>"     # sample: "security-insight"
+    $global:OpenAI_apiVersion          = "<OPEN AI Deployment API version for REST api>"     # sample: "2025-01-01-preview"
+    $global:OpenAI_MaxTokensPerRequest = 16384  # Recommended: 16384 - Azure OpenAI max_tokens default - modify to your needs
+
+  $global:AI_MaxTokensPerRequest = [int]$global:OpenAI_MaxTokensPerRequest
+  Write-Host ("[LAUNCHER] AI Max Tokens Per Request: {0}" -f $global:AI_MaxTokensPerRequest)
+}
+```
+
+
+
+### Example of Query - Device_Missing_CVEs_Summary_BucketFilter
+
+```
+    - ReportName: Device_Missing_CVEs_Summary_BucketFilter
+      ReportPurpose: This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes
+        them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most
+        critical and likely exploitable vulnerabilities.
+      SecurityDomain: Endpoint
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbablityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability_DetailedScore
+      - RiskConsequenceScore
+      - RiskProbablityScore
+      - RiskScoreTotal
+      - AssetCount
+      - TotalIssues
+      - ImpactedAssets
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |-
+        // Report Purpose
+        // This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most critical and likely exploitable vulnerabilities.
+
+        // Step 0  Define legacy operating systems that should increase probability
+        let LegacyWindowsOSPlatforms = dynamic([
+          "WindowsServer2008",
+          "WindowsServer2008R2",
+          "WindowsServer2012",
+          "WindowsServer2012R2",
+          "Windows7",
+          "Windows8",
+          "Windows8.1"
+        ]);
+
+        let LegacyMacOSMajorVersions = dynamic([10, 11, 12]);
+
+        let LegacyLinuxMatchers = dynamic([
+          "CentOS 7",
+          "Ubuntu 18.04",
+          "Debian 10",
+          "RHEL 7",
+          "SLES 12"
+        ]);
+
+        // Step 1  Build asset list and attach metadata used later in joins and scoring
+        // Only endpoints are included
+        // Excluded endpoints are removed
+        // Customer facing flag is normalized from rawData or raw
+        // Existing criticality fields are kept exactly as-is
+        // Asset tags are collected from multiple rawData locations and combined into one list
+        // AssetTags is the semicolon separated tag string
+        // AssetTierByTag is extracted from AssetTags using regex and sorted for stable output
+        // LegacyEndOfSupport is derived from AssetProps rawData OS platform and version fields when present
+        let Assets =
+            ExposureGraphNodes
+            | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+            | extend EG_IsCustomerFacing = tobool(coalesce(
+                NodeProperties.rawData.isCustomerFacing,
+                NodeProperties.raw.isCustomerFacing
+              ))
+            | extend EG_IsExcluded = tobool(coalesce(
+                NodeProperties.rawData.isExcluded,
+                NodeProperties.raw.isExcluded
+              ))
+            | where EG_IsExcluded == false
+            | extend CriticalityLevel = toint(coalesce(
+                tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+                tostring(NodeProperties.rawData.criticalityLevel.criticalityLevel),
+                tostring(NodeProperties.criticalityLevel.criticalityLevel)
+            ))
+            , CriticalityRuleBased = toint(coalesce(
+                tostring(NodeProperties.criticalityLevelProps[0].ruleBasedCriticalityLevel),
+                tostring(NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel),
+                tostring(NodeProperties.criticalityLevel.ruleBasedCriticalityLevel)
+            ))
+            , CriticalityRuleNames = coalesce(
+                strcat_array(NodeProperties.criticalityLevelProps[0].ruleNames, ", "),
+                strcat_array(NodeProperties.rawData.criticalityLevel.ruleNames, ", ")
+            )
+            , AadDeviceId = tostring(coalesce(
+                NodeProperties.rawData.aadDeviceId,
+                NodeProperties.raw.aadDeviceId,
+                NodeProperties.aadDeviceId
+            ))
+            | extend NoderawData = todynamic(NodeProperties).rawData
+            | extend
+                deviceManualTags  = iff(isnull(NoderawData.deviceManualTags),  dynamic([]), todynamic(NoderawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(NoderawData.deviceDynamicTags), dynamic([]), todynamic(NoderawData.deviceDynamicTags)),
+                tags              = iff(isnull(NoderawData.tags.tags),         dynamic([]), todynamic(NoderawData.tags.tags))
+            | extend _AllTags = array_concat(array_concat(deviceManualTags, deviceDynamicTags), tags)
+            | extend AssetTags = strcat_array(_AllTags, ";")
+            | extend _TierTags = extract_all(@"([^;]*--tier[0-3]--SI[^;]*)", AssetTags)
+            | extend AssetTierByTag = strcat_array(array_sort_asc(coalesce(_TierTags, dynamic([]))), ";")
+            | extend NodeAssetTags = _AllTags
+            
+            // Exclude Devices, which includes tag with '--Excluded--SI'
+            | where AssetTags !has "--Excluded--SI"
+            
+            | extend AssetOSPlatform = tostring(coalesce(NoderawData.osPlatform, NoderawData.OSPlatform, NoderawData.platform, NoderawData.operatingSystem, NoderawData.os))
+            | extend AssetOSVersion  = tostring(coalesce(NoderawData.osVersion,  NoderawData.OSVersion,  NoderawData.version,  NoderawData.operatingSystemVersion))
+            | extend AssetOSDistribution = tostring(coalesce(NoderawData.osDistribution, NoderawData.OSDistribution, NoderawData.distribution))
+            | extend MacMajor = toint(extract(@"^(\d+)", 1, AssetOSVersion))
+            | extend IsLegacyWindows = iff(AssetOSPlatform in~ (LegacyWindowsOSPlatforms), 1, 0)
+            | extend IsLegacyMacOS = iff(tolower(AssetOSPlatform) has "mac" and MacMajor in~ (LegacyMacOSMajorVersions), 1, 0)
+            | extend IsLegacyLinux = iff(
+                tolower(AssetOSPlatform) has "linux"
+                and (AssetOSDistribution has_any (LegacyLinuxMatchers) or AssetOSVersion has_any (LegacyLinuxMatchers)),
+                1, 0
+              )
+            | extend LegacyEndOfSupport = iff(IsLegacyWindows == 1 or IsLegacyMacOS == 1 or IsLegacyLinux == 1, 1, 0)
+            | project
+                AssetNodeId = NodeId,
+                AssetName   = NodeName,
+                AssetLabel  = NodeLabel,
+                AssetProps  = NodeProperties,
+                CriticalityLevel,
+                CriticalityRuleBased,
+                CriticalityRuleNames,
+                AadDeviceId,
+                EG_IsCustomerFacing,
+                EG_IsExcluded,
+                NodeAssetTags,
+                AssetTags,
+                AssetTierByTag,
+                LegacyEndOfSupport;
+
+        // Step 2  Build finding list
+        // Each node can have multiple categories so Categories is expanded to one row per category
+        // Only nodes with a category containing finding are included
+        let Findings =
+            ExposureGraphNodes
+            | mv-expand Category = Categories
+            | where tostring(Category) contains "finding"
+            | project
+                FindingNodeId     = NodeId,
+                FindingName       = NodeName,
+                FindingLabel      = NodeLabel,
+                FindingCategories = Categories,
+                FindingProps      = NodeProperties;
+
+        // Step 3  Build edge list
+        // Only edges whose label contains affecting are included
+        // Edge properties are included when present otherwise an empty object is used
+        let Edges =
+            ExposureGraphEdges
+            | where tostring(EdgeLabel) contains "affecting"
+            | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
+            | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
+
+        // Step 4  Relate assets and findings using edges
+        // Edges can point in either direction so both directions are joined and then unioned
+        // The result is summarized per AssetName AssetLabel FindingName to de-duplicate
+        let AF_edges_oneway =
+            Edges
+            | join kind=inner (Assets)   on $left.SourceNodeId == $right.AssetNodeId
+            | join kind=inner (Findings) on $left.TargetNodeId == $right.FindingNodeId
+            | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+                      FindingName, FindingLabel, FindingCategories, FindingProps,
+                      EdgeLabel, EdgeProps,
+                      AssetProps, CriticalityLevel, CriticalityRuleBased, CriticalityRuleNames,
+                      NodeAssetTags, AssetTags, AssetTierByTag, LegacyEndOfSupport;
+
+        let AF_edges_otherway =
+            Edges
+            | join kind=inner (Assets)   on $left.TargetNodeId == $right.AssetNodeId
+            | join kind=inner (Findings) on $left.SourceNodeId == $right.FindingNodeId
+            | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+                      FindingName, FindingLabel, FindingCategories, FindingProps,
+                      EdgeLabel, EdgeProps,
+                      AssetProps, CriticalityLevel, CriticalityRuleBased, CriticalityRuleNames,
+                      NodeAssetTags, AssetTags, AssetTierByTag, LegacyEndOfSupport;
+
+        let AF_edges = union AF_edges_oneway, AF_edges_otherway;
+
+        AF_edges
+            // Bucket filter support
+            // DeviceKey is used for bucket filtering and distinct counting
+            | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+            __BUCKET_FILTER__
+
+            | summarize
+                DeviceKey             = any(DeviceKey),
+                EdgeLabels            = make_set(EdgeLabel),
+                EdgePropsAll          = make_bag(EdgeProps),
+                FindingLabel          = any(FindingLabel),
+                FindingCategories     = any(FindingCategories),
+                FindingProps          = any(FindingProps),
+                AssetProps            = any(AssetProps),
+                CriticalityLevel      = any(CriticalityLevel),
+                CriticalityRuleBased  = any(CriticalityRuleBased),
+                CriticalityRuleNames  = any(CriticalityRuleNames),
+                AadDeviceId           = any(AadDeviceId),
+                EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
+                EG_IsExcluded         = any(EG_IsExcluded),
+                NodeAssetTags         = any(NodeAssetTags),
+                AssetTags             = any(AssetTags),
+                AssetTierByTag        = any(AssetTierByTag),
+                LegacyEndOfSupport    = any(LegacyEndOfSupport)
+              by AssetName, AssetLabel, FindingName
+
+        // Step 5  Build a unified Properties bag for simpler lookups
+        // finding holds the full finding node properties
+        // raw holds rawData if present otherwise an empty object
+        // edge holds combined edge properties from all related edges
+            | extend Properties =
+                bag_merge(
+                    bag_pack("finding", FindingProps),
+                    bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData)),
+                    bag_pack("edge", EdgePropsAll)
+                )
+
+        // Step 6  Extract scoring and filter to CVE findings
+        // Impact is derived from multiple possible cvss locations
+        // Severity comes from raw severity
+        // Only findings where FindingLabel contains CVE are kept
+            | extend Impact = todouble(coalesce(
+                    Properties.raw.cvssScore,
+                    Properties.finding.raw.cvssScore,
+                    Properties.raw.cvss.cvssScore
+                ))
+            | extend SecuritySeverity = tostring(Properties.raw.severity)
+            | where FindingLabel contains "CVE"
+
+        // Step 7  Extract exploit related booleans from multiple locations
+            | extend HasExploit = tobool(coalesce(
+                Properties.finding.rawData.hasExploit,
+                Properties.raw.hasExploit,
+                Properties.finding.raw.hasExploit
+            ))
+            | extend IsExploitVerified = tobool(coalesce(
+                Properties.finding.rawData.isExploitVerified,
+                Properties.raw.isExploitVerified,
+                Properties.finding.raw.isExploitVerified
+            ))
+            | extend IsInExploitKit = tobool(coalesce(
+                Properties.finding.rawData.isInExploitKit,
+                Properties.raw.isInExploitKit,
+                Properties.finding.raw.isInExploitKit
+            ))
+            | extend IsZeroDay = tobool(coalesce(
+                Properties.finding.rawData.isZeroDay,
+                Properties.raw.isZeroDay,
+                Properties.finding.raw.isZeroDay
+            ))
+
+        // Step 8  Compute risk factor scores at row level and build detailed strings
+        // RiskFactor_Consequence is defaulted to 0 for compatibility
+        // RiskFactor_Probability is a 0 to 3 score
+        // Add 1 if any exploit signal is true
+        // Add 1 if the asset is customer facing
+        // Add 1 if the asset is legacy end-of-support
+        // RiskFactor_Probability_Detailed is a semicolon separated list of factor names
+        // RiskFactor_Probability_DetailedScore is a semicolon separated key value string of sub scores
+            | extend RiskFactor_Consequence = 0
+            | extend RF_P_ExploitSignals =
+                iff(HasExploit == true or IsExploitVerified == true or IsInExploitKit == true or IsZeroDay == true, 1, 0)
+            | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
+            | extend RF_P_LegacyEoS = iff(LegacyEndOfSupport == 1, 1, 0)
+            | extend RiskFactor_Probability = RF_P_ExploitSignals + RF_P_InternetExposed + RF_P_LegacyEoS
+            | extend RiskFactor_Probability_Detailed =
+                strcat_array(
+                    array_concat(
+                        iff(RF_P_ExploitSignals == 1,   dynamic(["ExploitSignals"]), dynamic([])),
+                        iff(RF_P_InternetExposed == 1,  dynamic(["Internet-Exposed"]), dynamic([])),
+                        iff(RF_P_LegacyEoS == 1,        dynamic(["LegacyEndOfSupport"]), dynamic([]))
+                    ),
+                    ";"
+                )
+            | extend RiskFactor_Probability_DetailedScore =
+                strcat(
+                    "ExploitSignals=", tostring(RF_P_ExploitSignals), ";",
+                    "Internet-Exposed=", tostring(RF_P_InternetExposed), ";",
+                    "LegacyEndOfSupport=", tostring(RF_P_LegacyEoS)
+                )
+
+        // Step 9  Compute criticality tier with fallback to tags
+        // CriticalityTierFromTag maps tier tags to a numeric tier
+        // CriticalityTier prefers CriticalityLevel
+        // If CriticalityLevel is missing then tier tags are used
+        // If both are missing then default is 3
+            | extend CriticalityTierFromTag =
+                case(
+                    AssetTierByTag has "--tier0--SI", 0,
+                    AssetTierByTag has "--tier1--SI", 1,
+                    AssetTierByTag has "--tier2--SI", 2,
+                    AssetTierByTag has "--tier3--SI", 3,
+                    int(null)
+                )
+            | extend CriticalityTier = toint(coalesce(CriticalityLevel, CriticalityTierFromTag, 3))
+            | extend CriticalityTierLevel =
+                case(
+                    CriticalityTier == 0, "Critical - tier 0",
+                    CriticalityTier == 1, "High - tier 1",
+                    CriticalityTier == 2, "Medium - tier 2",
+                    CriticalityTier == 3, "Low - tier 3",
+                    "Unknown - unmapped"
+                )
+
+        // Step 10  Set fixed classification fields for the report output
+            | extend SecurityDomain = "Endpoint"
+            | extend ConfigurationName = "Update vulnerable software"
+            | extend ConfigurationId = "CVE"
+            | extend Category    = "Vulnerabilities"
+            | extend Subcategory = "CVEs (Missing Updates)"
+
+        // Step 11  Filter out recently updated CVEs
+        // last modified is extracted from two possible locations
+            | extend CVELastModified = todatetime(coalesce(Properties.finding.raw.lastModifiedDate, Properties.raw.lastModifiedDate))
+            | where CVELastModified < ago(40d)
+
+        // Step 12  Build device key used for distinct counting
+        // Prefer AadDeviceId when present otherwise fall back to AssetName
+        // (DeviceKey already carried forward via Option A fix)
+
+        // Step 13  Aggregate to report level
+        // Risk factors use max so the group reflects the highest score observed
+        // Detailed columns use any to keep string output compatible with CSV and Excel
+            | summarize
+                AssetCount      = dcount(DeviceKey),
+                TotalIssues     = count(),
+                AvgImpact       = avg(Impact),
+                MaxImpact       = max(Impact),
+                ImpactedAssets  = make_set(AssetName),
+                SampleCVEs      = make_set(FindingLabel),
+                RiskFactor_Consequence = max(RiskFactor_Consequence),
+                RiskFactor_Probability = max(RiskFactor_Probability),
+                RiskFactor_Probability_Detailed = any(RiskFactor_Probability_Detailed),
+                RiskFactor_Probability_DetailedScore = any(RiskFactor_Probability_DetailedScore)
+              by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId, CriticalityTier, CriticalityTierLevel, SecuritySeverity
+
+        // Step 14  Final shape and sorting
+            | project
+                SecurityDomain,
+                Category,
+                Subcategory,
+                ConfigurationName,
+                ConfigurationId,
+                CriticalityTier,
+                CriticalityTierLevel,
+                SecuritySeverity,
+                RiskFactor_Consequence,
+                RiskFactor_Probability,
+                RiskFactor_Probability_Detailed,
+                RiskFactor_Probability_DetailedScore,
+                AssetCount,
+                TotalIssues,
+                AvgImpact = round(AvgImpact, 1),
+                MaxImpact = toint(ceiling(MaxImpact)),
+                ImpactedAssets,
+                SampleCVEs
+            | order by CriticalityTier asc, MaxImpact desc, AvgImpact desc, AssetCount desc, TotalIssues desc
+
+```
+
+
+
+### Example of Query - Device_Missing_CVEs_Detailed_BucketFilter
+
+```
+    - ReportName: Device_Missing_CVEs_Detailed_BucketFilter
+      ReportPurpose: This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes
+        them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most
+        critical and likely exploitable vulnerabilities.
+      SecurityDomain: Endpoint
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbablityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - AssetName
+      - AssetLabel
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability_DetailedScore
+      - RiskConsequenceScore
+      - RiskProbablityScore
+      - RiskScoreTotal
+      - AadDeviceId
+      - CVELastModified
+      - CVSSDesc
+      - CVE_ID
+      - CriticalityRuleBased
+      - CriticalityRuleNames
+      - CriticalityLevel
+      - AssetTierByTag
+      - AssetTags
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |
+        // Report Purpose
+        // This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most critical and likely exploitable vulnerabilities.
+
+        // Step 0  Define legacy operating systems that should increase probability
+        let LegacyWindowsOSPlatforms = dynamic([
+          "WindowsServer2008",
+          "WindowsServer2008R2",
+          "WindowsServer2012",
+          "WindowsServer2012R2",
+          "Windows7",
+          "Windows8",
+          "Windows8.1"
+        ]);
+
+        let LegacyMacOSMajorVersions = dynamic([10, 11, 12]);
+
+        let LegacyLinuxMatchers = dynamic([
+          "CentOS 7",
+          "Ubuntu 18.04",
+          "Debian 10",
+          "RHEL 7",
+          "SLES 12"
+        ]);
+
+        // Step 1  Build asset list for endpoints and attach fields used later
+        // Only Endpoint assets are included
+        // Customer facing and excluded flags are normalized from rawData or raw
+        // Excluded assets are filtered out early
+        // Existing criticality fields are kept exactly as-is
+        // Tags are collected from multiple rawData locations and combined into one list
+        // AssetTags is a semicolon separated string of all tags
+        // AssetTierByTag is extracted from AssetTags using regex and stable sorting
+        // LegacyEndOfSupport is derived from AssetProps rawData OS fields when present
+        let Assets =
+            ExposureGraphNodes
+            | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+            | extend EG_IsCustomerFacing = tobool(coalesce(
+                NodeProperties.rawData.isCustomerFacing,
+                NodeProperties.raw.isCustomerFacing
+              ))
+            | extend EG_IsExcluded = tobool(coalesce(
+                NodeProperties.rawData.isExcluded,
+                NodeProperties.raw.isExcluded
+              ))
+            | where EG_IsExcluded == false
+            | extend CriticalityLevel = toint(coalesce(
+                tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+                tostring(NodeProperties.rawData.criticalityLevel.criticalityLevel),
+                tostring(NodeProperties.criticalityLevel.criticalityLevel)
+            ))
+            , CriticalityRuleBased = toint(coalesce(
+                tostring(NodeProperties.criticalityLevelProps[0].ruleBasedCriticalityLevel),
+                tostring(NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel),
+                tostring(NodeProperties.criticalityLevel.ruleBasedCriticalityLevel)
+            ))
+            , CriticalityRuleNames = coalesce(
+                strcat_array(NodeProperties.criticalityLevelProps[0].ruleNames, ", "),
+                strcat_array(NodeProperties.rawData.criticalityLevel.ruleNames, ", ")
+            )
+            , AadDeviceId = tostring(coalesce(
+                NodeProperties.rawData.aadDeviceId,
+                NodeProperties.raw.aadDeviceId,
+                NodeProperties.aadDeviceId
+            ))
+            | extend NoderawData = todynamic(NodeProperties).rawData
+            | extend
+                deviceManualTags  = iff(isnull(NoderawData.deviceManualTags),  dynamic([]), todynamic(NoderawData.deviceManualTags)),
+                deviceDynamicTags = iff(isnull(NoderawData.deviceDynamicTags), dynamic([]), todynamic(NoderawData.deviceDynamicTags)),
+                tags              = iff(isnull(NoderawData.tags.tags),         dynamic([]), todynamic(NoderawData.tags.tags))
+            | extend _AllTags = array_concat(array_concat(deviceManualTags, deviceDynamicTags), tags)
+            | extend AssetTags = strcat_array(_AllTags, ";")
+            
+            // Exclude Devices, which includes tag with '--Excluded--SI'
+            | where AssetTags !has "--Excluded--SI"
+            
+            | extend _TierTags = extract_all(@"([^;]*--tier[0-3]--SI[^;]*)", AssetTags)
+            | extend AssetTierByTag = strcat_array(array_sort_asc(coalesce(_TierTags, dynamic([]))), ";")
+            | extend NodeAssetTags = _AllTags
+            | extend AssetOSPlatform = tostring(coalesce(NoderawData.osPlatform, NoderawData.OSPlatform, NoderawData.platform, NoderawData.operatingSystem, NoderawData.os))
+            | extend AssetOSVersion  = tostring(coalesce(NoderawData.osVersion,  NoderawData.OSVersion,  NoderawData.version,  NoderawData.operatingSystemVersion))
+            | extend AssetOSDistribution = tostring(coalesce(NoderawData.osDistribution, NoderawData.OSDistribution, NoderawData.distribution))
+            | extend MacMajor = toint(extract(@"^(\d+)", 1, AssetOSVersion))
+            | extend IsLegacyWindows = iff(AssetOSPlatform in~ (LegacyWindowsOSPlatforms), 1, 0)
+            | extend IsLegacyMacOS = iff(tolower(AssetOSPlatform) has "mac" and MacMajor in~ (LegacyMacOSMajorVersions), 1, 0)
+            | extend IsLegacyLinux = iff(
+                tolower(AssetOSPlatform) has "linux"
+                and (AssetOSDistribution has_any (LegacyLinuxMatchers) or AssetOSVersion has_any (LegacyLinuxMatchers)),
+                1, 0
+              )
+            | extend LegacyEndOfSupport = iff(IsLegacyWindows == 1 or IsLegacyMacOS == 1 or IsLegacyLinux == 1, 1, 0)
+            | project
+                AssetNodeId = NodeId,
+                AssetName   = NodeName,
+                AssetLabel  = NodeLabel,
+                AssetProps  = NodeProperties,
+                CriticalityLevel,
+                CriticalityRuleBased,
+                CriticalityRuleNames,
+                AadDeviceId,
+                EG_IsCustomerFacing,
+                EG_IsExcluded,
+                NodeAssetTags,
+                AssetTags,
+                AssetTierByTag,
+                LegacyEndOfSupport;
+
+        // Step 2  Build finding list
+        // Categories is expanded to allow filtering on any category value
+        // Only nodes with a category containing finding are included
+        let Findings =
+            ExposureGraphNodes
+            | mv-expand Category = Categories
+            | where tostring(Category) contains "finding"
+            | project
+                FindingNodeId     = NodeId,
+                FindingName       = NodeName,
+                FindingLabel      = NodeLabel,
+                FindingCategories = Categories,
+                FindingProps      = NodeProperties;
+
+        // Step 3  Build edge list
+        // Only edges with labels containing affecting are used
+        // Edge properties are included when present otherwise an empty object is used
+        let Edges =
+            ExposureGraphEdges
+            | where tostring(EdgeLabel) contains "affecting"
+            | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
+            | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
+
+        // Step 4  Relate assets and findings using edges in both directions
+        // Both directions are needed because source and target can be swapped
+        // The union is later de-duplicated using summarize by asset and finding identifiers
+        let AF_edges_oneway =
+            Edges
+            | join kind=inner (Assets)   on $left.SourceNodeId == $right.AssetNodeId
+            | join kind=inner (Findings) on $left.TargetNodeId == $right.FindingNodeId
+            | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+                      FindingName, FindingLabel, FindingCategories, FindingProps,
+                      EdgeLabel, EdgeProps,
+                      AssetProps, CriticalityLevel, CriticalityRuleBased, CriticalityRuleNames,
+                      NodeAssetTags, AssetTags, AssetTierByTag, LegacyEndOfSupport;
+
+        let AF_edges_otherway =
+            Edges
+            | join kind=inner (Assets)   on $left.TargetNodeId == $right.AssetNodeId
+            | join kind=inner (Findings) on $left.SourceNodeId == $right.FindingNodeId
+            | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+                      FindingName, FindingLabel, FindingCategories, FindingProps,
+                      EdgeLabel, EdgeProps,
+                      AssetProps, CriticalityLevel, CriticalityRuleBased, CriticalityRuleNames,
+                      NodeAssetTags, AssetTags, AssetTierByTag, LegacyEndOfSupport;
+
+        let AF_edges = union AF_edges_oneway, AF_edges_otherway;
+
+        // Step 5  De-duplicate asset to finding rows and merge edge properties
+        // One row per AssetName AssetLabel FindingName is kept
+        // Edge labels and edge properties across duplicates are combined
+        AF_edges
+        | summarize
+            EdgeLabels           = make_set(EdgeLabel),
+            EdgePropsAll         = make_bag(EdgeProps),
+            FindingLabel         = any(FindingLabel),
+            FindingCategories    = any(FindingCategories),
+            FindingProps         = any(FindingProps),
+            AssetProps           = any(AssetProps),
+            CriticalityLevel     = any(CriticalityLevel),
+            CriticalityRuleBased = any(CriticalityRuleBased),
+            CriticalityRuleNames = any(CriticalityRuleNames),
+            AadDeviceId          = any(AadDeviceId),
+            EG_IsCustomerFacing  = any(EG_IsCustomerFacing),
+            EG_IsExcluded        = any(EG_IsExcluded),
+            NodeAssetTags        = any(NodeAssetTags),
+            AssetTags            = any(AssetTags),
+            AssetTierByTag       = any(AssetTierByTag),
+            LegacyEndOfSupport   = any(LegacyEndOfSupport)
+          by AssetName, AssetLabel, FindingName
+
+        // Step 6  Build a unified Properties bag for simpler lookups
+        // finding holds the full finding node properties
+        // raw holds rawData if present otherwise an empty object
+        // edge holds combined edge properties from all related edges
+        | extend Properties =
+            bag_merge(
+                bag_pack("finding", FindingProps),
+                bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData)),
+                bag_pack("edge", EdgePropsAll)
+            )
+
+        // Step 7  Extract scoring fields and filter to CVE findings
+        // Impact is derived from multiple possible cvss locations
+        // Severity comes from raw severity
+        // Only findings where FindingLabel contains CVE are kept
+        | extend Impact = todouble(coalesce(
+                Properties.raw.cvssScore,
+                Properties.finding.raw.cvssScore,
+                Properties.raw.cvss.cvssScore
+            ))
+        | extend SecuritySeverity = tostring(Properties.raw.severity)
+        | where FindingLabel contains "CVE"
+
+        // Step 8  Compute criticality tier with fallback to tier tags
+        // CriticalityLevel is preferred when present
+        // When CriticalityLevel is missing tier tags are mapped to a numeric tier
+        // When both are missing tier 3 is used as default
+        | extend CriticalityTierFromTag =
+            case(
+                AssetTierByTag has "--tier0--SI", 0,
+                AssetTierByTag has "--tier1--SI", 1,
+                AssetTierByTag has "--tier2--SI", 2,
+                AssetTierByTag has "--tier3--SI", 3,
+                int(null)
+            )
+        | extend CriticalityTier = toint(coalesce(CriticalityLevel, CriticalityTierFromTag, 3))
+        | extend CriticalityTierLevel =
+            case(
+                CriticalityTier == 0, "Critical - tier 0",
+                CriticalityTier == 1, "High - tier 1",
+                CriticalityTier == 2, "Medium - tier 2",
+                CriticalityTier == 3, "Low - tier 3",
+                "Unknown - unmapped"
+            )
+
+        // Step 9  Set fixed domain and category values for this dataset
+        | extend SecurityDomain = "Endpoint"
+        | extend ConfigurationId = "CVE"
+        | extend Category    = "Vulnerabilities"
+        | extend Subcategory = "CVEs (Missing Updates)"
+
+        // Step 10  Filter by CVE last modified date
+        | extend CVELastModified = todatetime(coalesce(Properties.finding.raw.lastModifiedDate, Properties.raw.lastModifiedDate))
+        | where CVELastModified < ago(40d)
+
+        // Step 11  Extract exploit related flags from finding rawData and raw
+        | extend HasExploit = tobool(coalesce(
+            Properties.finding.rawData.hasExploit,
+            Properties.raw.hasExploit,
+            Properties.finding.raw.hasExploit
+        ))
+        | extend IsExploitVerified = tobool(coalesce(
+            Properties.finding.rawData.isExploitVerified,
+            Properties.raw.isExploitVerified,
+            Properties.finding.raw.isExploitVerified
+        ))
+        | extend IsInExploitKit = tobool(coalesce(
+            Properties.finding.rawData.isInExploitKit,
+            Properties.raw.isInExploitKit,
+            Properties.finding.raw.isInExploitKit
+        ))
+        | extend IsZeroDay = tobool(coalesce(
+            Properties.finding.rawData.isZeroDay,
+            Properties.raw.isZeroDay,
+            Properties.finding.raw.isZeroDay
+        ))
+
+        // Step 12  Compute risk factor fields at row level and provide detailed strings
+        // RiskFactor_Consequence is defaulted to 0
+        // RiskFactor_Probability is a 0 to 3 score
+        // Add 1 when any exploit signal is present
+        // Add 1 when the asset is customer facing
+        // Add 1 when the asset is legacy end-of-support
+        // RiskFactor_Probability_Detailed and RiskFactor_Probability_DetailedScore are semicolon separated strings
+        | extend RiskFactor_Consequence = 0
+        | extend RF_P_ExploitSignals =
+            iff(HasExploit == true or IsExploitVerified == true or IsInExploitKit == true or IsZeroDay == true, 1, 0)
+        | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
+        | extend RF_P_LegacyEoS = iff(LegacyEndOfSupport == 1, 1, 0)
+        | extend RiskFactor_Probability = RF_P_ExploitSignals + RF_P_InternetExposed + RF_P_LegacyEoS
+        | extend RiskFactor_Probability_Detailed =
+            strcat_array(
+                array_concat(
+                    iff(RF_P_ExploitSignals == 1,   dynamic(["ExploitSignals"]), dynamic([])),
+                    iff(RF_P_InternetExposed == 1,  dynamic(["Internet-Exposed"]), dynamic([])),
+                    iff(RF_P_LegacyEoS == 1,        dynamic(["LegacyEndOfSupport"]), dynamic([]))
+                ),
+                ";"
+            )
+        | extend RiskFactor_Probability_DetailedScore =
+            strcat(
+                "ExploitSignals=", tostring(RF_P_ExploitSignals), ";",
+                "Internet-Exposed=", tostring(RF_P_InternetExposed), ";",
+                "LegacyEndOfSupport=", tostring(RF_P_LegacyEoS)
+            )
+
+        // Step 13  Extra safety filter to ensure excluded assets do not appear
+        | where EG_IsExcluded == false
+
+        // Step 14  Bucket filter support
+        // DeviceKey is used for bucket filtering and distinct counting
+        | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+        __BUCKET_FILTER__
+
+        // Step 15  Final projection and ordering for detailed output
+        | project
+            SecurityDomain,
+            Category,
+            Subcategory,
+            AssetName,
+            AssetLabel,
+            AadDeviceId,
+            EG_IsCustomerFacing,
+            EG_IsExcluded,
+
+            ConfigurationName = FindingName,
+            CVE_ID = FindingLabel,
+            ConfigurationId,
+
+            CriticalityLevel,
+            CriticalityRuleBased,
+            CriticalityRuleNames,
+            CriticalityTier,
+            CriticalityTierLevel,
+
+            AssetTierByTag,
+            AssetTags,
+            LegacyEndOfSupport,
+
+            Impact,
+            SecuritySeverity,
+            CVELastModified,
+
+            HasExploit,
+            IsExploitVerified,
+            IsInExploitKit,
+            IsZeroDay,
+
+            RiskFactor_Consequence,
+            RiskFactor_Probability,
+            RiskFactor_Probability_Detailed,
+            RiskFactor_Probability_DetailedScore,
+
+            CVSSDesc = tostring(coalesce(
+                Properties.finding.rawData.description,
+                Properties.raw.description,
+                Properties.finding.raw.description
+            )),
+            AssetProps,
+            Properties
+        | order by CriticalityTier asc, Impact desc, AssetName asc, CVE_ID asc
+
+```
+
+
+
+### Example of Query - Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
+
+```
+    - ReportName: Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
+      ReportPurpose: Identify identities that are members of groups and where those groups have permissions or roles on privileged
+        Azure targets. Enrich each path with the standard node context and prioritize by the business impact of the FINAL TARGET.
+      SecurityDomain: Azure
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbablityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - AssetName
+      - AssetLabel
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability_DetailedScore
+      - RiskConsequenceScore
+      - RiskProbablityScore
+      - RiskScoreTotal
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |
+        // =================================================================================================
+        // REPORT  Group membership privilege paths to Azure resources using Exposure Graph
+        // =================================================================================================
+        //
+        // Report purpose
+        // Identify identities that are members of groups and where those groups have permissions or roles on
+        // privileged Azure targets. Enrich each path with the standard node context and prioritize by the
+        // business impact of the FINAL TARGET.
+        //
+        // Interpretation guard and priority rules
+        // - Priority is driven by the TARGET criticality tier first
+        // - Then by tier escalation where source tier is higher than target tier
+        // - Then by internet exposure where target exposure is weighted higher than source exposure
+        // - The source identity matters as an amplifier but the target drives the priority
+        //
+        // Output description detailed rows
+        // One row per unique path
+        // Identity -> Group -> Target
+        // Enriched with
+        // - IsInternetExposed for source and target
+        // - AssetTierByTag for source and target
+        // - LegacyEndOfSupport for source and target
+        // - RiskFactor probability fields including detailed breakdown for source and target
+        // - AttackPathPriorityScore components and mapped severity label
+        // - Human readable AttackPath and AttackPathDetailed strings
+        //
+        // Query steps overview
+        // Step 0  Define legacy operating system reference lists
+        // Step 1  Build Nodes catalog as enrichment backbone using standard context fields
+        // Step 2  Find identities in groups and de duplicate to a stable group membership grain
+        // Step 3  Find group permissions or roles on Azure targets
+        // Step 4  Assemble Identity -> Group -> Target paths and de duplicate
+        // Step 5  Enrich source identity and target using Nodes catalog
+        // Step 6  Apply standard prioritization logic and build attack path strings
+        // Step 7  Project detailed output columns and apply ordering
+        // =================================================================================================
+
+        // Step 0  Define legacy operating systems that should increase probability
+        let LegacyWindowsOSPlatforms = dynamic([
+          "WindowsServer2008",
+          "WindowsServer2008R2",
+          "WindowsServer2012",
+          "WindowsServer2012R2",
+          "Windows7",
+          "Windows8",
+          "Windows8.1"
+        ]);
+
+        let LegacyMacOSMajorVersions = dynamic([10, 11, 12]);
+
+        let LegacyLinuxMatchers = dynamic([
+          "CentOS 7",
+          "Ubuntu 18.04",
+          "Debian 10",
+          "RHEL 7",
+          "SLES 12"
+        ]);
+
+        // Step 1  Build node catalog used to enrich attack paths
+        let Nodes =
+            ExposureGraphNodes
+            | extend CategoriesStr = tolower(tostring(Categories))
+            | extend NodeNameNorm  = coalesce(NodeName, tostring(EntityIds[0].id), tostring(NodeId))
+            | extend RawData = todynamic(NodeProperties).rawData
+            | extend Raw     = todynamic(todynamic(NodeProperties).raw)
+            | extend AadDeviceId =
+                tostring(coalesce(
+                    RawData.aadDeviceId,
+                    Raw.aadDeviceId,
+                    NodeProperties.aadDeviceId
+                ))
+
+            | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+            __BUCKET_FILTER__
+
+            | extend CriticalityLevel =
+                toint(coalesce(
+                    tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+                    tostring(NodeProperties.rawData.criticalityLevel.criticalityLevel),
+                    tostring(NodeProperties.criticalityLevel.criticalityLevel)
+                ))
+            | extend CriticalityRuleBased =
+                toint(coalesce(
+                    tostring(NodeProperties.criticalityLevelProps[0].ruleBasedCriticalityLevel),
+                    tostring(NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel),
+                    tostring(NodeProperties.criticalityLevel.ruleBasedCriticalityLevel)
+                ))
+            | extend CriticalityRuleNames =
+                coalesce(
+                    strcat_array(NodeProperties.criticalityLevelProps[0].ruleNames, ", "),
+                    strcat_array(NodeProperties.rawData.criticalityLevel.ruleNames, ", "),
+                    ""
+                )
+
+            | extend IsInternetExposed =
+                tobool(coalesce(
+                    NodeProperties.rawData.isCustomerFacing,
+                    NodeProperties.raw.isCustomerFacing,
+                    false
+                ))
+
+            | extend IsExcluded =
+                tobool(coalesce(
+                    NodeProperties.rawData.isExcluded,
+                    NodeProperties.raw.isExcluded,
+                    false
+                ))
+
+            | extend RawData = todynamic(NodeProperties).rawData
+            | extend Raw     = todynamic(todynamic(NodeProperties).raw)
+
+            | extend tagsBag1 = todynamic(coalesce(RawData.tags, dynamic({})))
+            | extend tagsBag2 = todynamic(coalesce(todynamic(NodeProperties).tags, dynamic({})))
+            | extend tagsBag3 = todynamic(coalesce(Raw.tags, dynamic({})))
+
+            | extend AssetTierFromBag = tostring(coalesce(
+                tagsBag1.AssetTier, tagsBag2.AssetTier, tagsBag3.AssetTier,
+                tagsBag1["AssetTier--SI"], tagsBag2["AssetTier--SI"], tagsBag3["AssetTier--SI"]
+            ))
+
+            | extend deviceManualTags  = iff(isnull(RawData.deviceManualTags),  dynamic([]), todynamic(RawData.deviceManualTags))
+            | extend deviceDynamicTags = iff(isnull(RawData.deviceDynamicTags), dynamic([]), todynamic(RawData.deviceDynamicTags))
+            | extend tagsArray1        = iff(isnull(RawData.tags.tags),         dynamic([]), todynamic(RawData.tags.tags))
+
+            | extend _AllTags          = array_concat(array_concat(deviceManualTags, deviceDynamicTags), tagsArray1)
+            | extend AssetTags         = strcat_array(_AllTags, ";")
+            
+            // Exclude Devices, which includes tag with '--Excluded--SI'
+            | where AssetTags !has "--Excluded--SI"
+            
+            | extend _TierTagsFromText = extract_all(@"([^;]*--tier[0-3]--SI[^;]*)", AssetTags)
+
+            | extend AssetTierByTag =
+                case(
+                    isnotempty(AssetTierFromBag), AssetTierFromBag,
+                    array_length(_TierTagsFromText) > 0, strcat_array(array_sort_asc(_TierTagsFromText), ";"),
+                    ""
+                )
+
+            | extend CriticalityTierFromTag =
+                case(
+                    AssetTierByTag has "--tier0--SI" or tolower(AssetTierByTag) has "tier0" or AssetTierByTag == "0", 0,
+                    AssetTierByTag has "--tier1--SI" or tolower(AssetTierByTag) has "tier1" or AssetTierByTag == "1", 1,
+                    AssetTierByTag has "--tier2--SI" or tolower(AssetTierByTag) has "tier2" or AssetTierByTag == "2", 2,
+                    AssetTierByTag has "--tier3--SI" or tolower(AssetTierByTag) has "tier3" or AssetTierByTag == "3", 3,
+                    int(null)
+                )
+
+            | extend CriticalityTier = toint(coalesce(CriticalityLevel, CriticalityTierFromTag, 3))
+            | extend CriticalityTierLevel =
+                case(
+                    CriticalityTier == 0, "Critical - tier 0",
+                    CriticalityTier == 1, "High - tier 1",
+                    CriticalityTier == 2, "Medium - tier 2",
+                    "Low - tier 3"
+                )
+
+            | extend AssetOSPlatform =
+                tostring(coalesce(RawData.osPlatform, RawData.OSPlatform, RawData.platform, RawData.operatingSystem, RawData.os))
+            | extend AssetOSVersion =
+                tostring(coalesce(RawData.osVersion, RawData.OSVersion, RawData.version, RawData.operatingSystemVersion))
+            | extend AssetOSDistribution =
+                tostring(coalesce(RawData.osDistribution, RawData.OSDistribution, RawData.distribution))
+            | extend MacMajor = toint(extract(@"^(\d+)", 1, AssetOSVersion))
+
+            | extend IsLegacyWindows = iff(AssetOSPlatform in~ (LegacyWindowsOSPlatforms), 1, 0)
+            | extend IsLegacyMacOS   = iff(tolower(AssetOSPlatform) has "mac" and MacMajor in~ (LegacyMacOSMajorVersions), 1, 0)
+            | extend IsLegacyLinux   = iff(
+                    tolower(AssetOSPlatform) has "linux"
+                    and (AssetOSDistribution has_any (LegacyLinuxMatchers) or AssetOSVersion has_any (LegacyLinuxMatchers)),
+                    1, 0
+                )
+            | extend LegacyEndOfSupport = iff(IsLegacyWindows == 1 or IsLegacyMacOS == 1 or IsLegacyLinux == 1, 1, 0)
+
+            | extend RiskFactorsArray =
+                todynamic(coalesce(
+                    NodeProperties.rawData.risk.riskFactors,
+                    NodeProperties.risk.riskFactors,
+                    dynamic([])
+                ))
+            | extend RiskFactorsArray = iff(isnull(RiskFactorsArray), dynamic([]), RiskFactorsArray)
+
+            | mv-apply rf = RiskFactorsArray on (
+                where isnotempty(trim(" ", tostring(rf)))
+                | summarize RiskFactorSet = make_set(tostring(rf))
+            )
+            | extend RiskFactorSet = coalesce(RiskFactorSet, dynamic([]))
+            | extend RF_P_RiskFactorsCount = array_length(RiskFactorSet)
+            | extend RF_P_InternetExposed  = iff(IsInternetExposed == true, 1, 0)
+            | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
+
+            | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
+            | extend RiskFactor_Consequence = 0
+
+            | extend RiskFactor_Probability_Detailed =
+                strcat_array(
+                    array_sort_asc(
+                        array_concat(
+                            RiskFactorSet,
+                            iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])),
+                            iff(RF_P_LegacyEoS == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))
+                        )
+                    ),
+                    ";"
+                )
+
+            | mv-apply rf = array_concat(
+                    RiskFactorSet,
+                    iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])),
+                    iff(RF_P_LegacyEoS == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))
+                ) on (
+                where isnotempty(trim(" ", tostring(rf)))
+                | summarize ScoreParts = make_set(strcat(tostring(rf), "=1"))
+            )
+            | extend RiskFactor_Probability_DetailedScore =
+                strcat_array(array_sort_asc(coalesce(ScoreParts, dynamic([]))), ";")
+
+            | project
+                NodeId,
+                NodeName          = NodeNameNorm,
+                NodeLabel,
+                Categories        = CategoriesStr,
+                NodeProperties,
+                CriticalityLevel,
+                CriticalityTier,
+                CriticalityTierLevel,
+                CriticalityRuleBased,
+                CriticalityRuleNames,
+                IsInternetExposed,
+                IsExcluded,
+                AssetTags,
+                AssetTierByTag,
+                LegacyEndOfSupport,
+                RiskFactorsArray,
+                RiskFactor_Probability,
+                RiskFactor_Probability_Detailed,
+                RiskFactor_Probability_DetailedScore,
+                RiskFactor_Consequence;
+
+        // Step 2  Find identities in groups and de duplicate
+        let IdentityGroupMembership =
+            ExposureGraphEdges
+            | where EdgeLabel == "member of"
+            | where SourceNodeLabel in ("user", "serviceprincipal", "managedidentity")
+            | where TargetNodeLabel == "group"
+            | project
+                IdentityNodeId    = SourceNodeId,
+                IdentityNodeName  = SourceNodeName,
+                IdentityNodeLabel = SourceNodeLabel,
+                GroupNodeId       = TargetNodeId,
+                GroupNodeName     = TargetNodeName
+            | summarize
+                Identities        = make_set(IdentityNodeName),
+                IdentityTypes     = make_set(IdentityNodeLabel),
+                IdentityCount     = dcount(IdentityNodeId),
+                FirstIdentityId   = any(IdentityNodeId),
+                FirstIdentityName = any(IdentityNodeName),
+                FirstIdentityLabel= any(IdentityNodeLabel)
+              by GroupNodeId, GroupNodeName;
+
+        // Step 3  Find group permissions or roles on Azure targets
+        let GroupAccessToTargets =
+            ExposureGraphEdges
+            | where EdgeLabel in ("has role on", "has permissions to")
+            | where SourceNodeLabel == "group"
+            | where TargetNodeLabel in (
+                "subscriptions",
+                "resourcegroups",
+                "microsoft.keyvault/vaults",
+                "microsoft.storage/storageaccounts",
+                "microsoft.sql/servers",
+                "microsoft.compute/virtualmachines",
+                "microsoft.cognitiveservices/accounts"
+            )
+            | project
+                GroupNodeId      = SourceNodeId,
+                EdgeLabel        = EdgeLabel,
+                FinalTargetId    = TargetNodeId,
+                FinalTargetName  = TargetNodeName,
+                FinalTargetLabel = TargetNodeLabel;
+
+        // Step 4  Assemble Identity -> Group -> Target paths and de duplicate
+        let Paths =
+            IdentityGroupMembership
+            | join kind=inner (GroupAccessToTargets) on GroupNodeId
+            | summarize
+                Identities         = any(Identities),
+                IdentityTypes      = any(IdentityTypes),
+                IdentityCount      = any(IdentityCount),
+                FirstIdentityId    = any(FirstIdentityId),
+                FirstIdentityName  = any(FirstIdentityName),
+                FirstIdentityLabel = any(FirstIdentityLabel),
+                GroupNodeName      = any(GroupNodeName),
+                EdgeLabel          = any(EdgeLabel),
+                FinalTargetName    = any(FinalTargetName),
+                FinalTargetLabel   = any(FinalTargetLabel)
+              by FinalTargetId, GroupNodeId;
+
+        // Step 5-7  Enrich source and target and apply standard prioritization logic
+        Paths
+        | join kind=leftouter (
+            Nodes
+            | project-rename
+                SourceNodeId                = NodeId,
+                SourceNodeName              = NodeName,
+                SourceNodeLabel             = NodeLabel,
+                SourceCriticalityTier       = CriticalityTier,
+                SourceCriticalityTierLevel  = CriticalityTierLevel,
+                SourceIsInternetExposed     = IsInternetExposed,
+                SourceIsExcluded            = IsExcluded,
+                SourceAssetTierByTag        = AssetTierByTag,
+                SourceLegacyEndOfSupport    = LegacyEndOfSupport,
+                SourceRiskProb              = RiskFactor_Probability,
+                SourceRiskProbDetailed      = RiskFactor_Probability_Detailed,
+                SourceRiskProbDetailedScore = RiskFactor_Probability_DetailedScore,
+                SourceNodeProperties        = NodeProperties
+        ) on $left.FirstIdentityId == $right.SourceNodeId
+
+        | join kind=leftouter (
+            Nodes
+            | project-rename
+                TargetNodeId                = NodeId,
+                TargetNodeName              = NodeName,
+                TargetNodeLabel             = NodeLabel,
+                TargetCriticalityTier       = CriticalityTier,
+                TargetCriticalityTierLevel  = CriticalityTierLevel,
+                TargetCriticalityRuleBased  = CriticalityRuleBased,
+                TargetCriticalityRuleNames  = CriticalityRuleNames,
+                TargetIsInternetExposed     = IsInternetExposed,
+                TargetIsExcluded            = IsExcluded,
+                TargetAssetTierByTag        = AssetTierByTag,
+                TargetLegacyEndOfSupport    = LegacyEndOfSupport,
+                TargetRiskProb              = RiskFactor_Probability,
+                TargetRiskProbDetailed      = RiskFactor_Probability_Detailed,
+                TargetRiskProbDetailedScore = RiskFactor_Probability_DetailedScore,
+                TargetNodeProperties        = NodeProperties
+        ) on $left.FinalTargetId == $right.TargetNodeId
+
+        // Step 6  Attack path prioritization logic
+        | extend TierEscalation =
+            case(
+                isnotempty(SourceCriticalityTier) and isnotempty(TargetCriticalityTier) and SourceCriticalityTier > TargetCriticalityTier,
+                    SourceCriticalityTier - TargetCriticalityTier,
+                0
+            )
+        | extend IsLateralMovement = TierEscalation > 0
+        | extend LateralMovementType =
+            case(
+                TierEscalation >= 3, "Privilege escalation large tier jump",
+                TierEscalation == 2, "Privilege escalation two tiers",
+                TierEscalation == 1, "Privilege escalation one tier",
+                "Direct access same tier"
+            )
+
+        | extend TargetTierWeight =
+            case(
+                TargetCriticalityTier == 0, 100,
+                TargetCriticalityTier == 1, 60,
+                TargetCriticalityTier == 2, 30,
+                10
+            )
+        | extend EscalationWeight = TierEscalation * 10
+        | extend ExposureWeight   = iff(TargetIsInternetExposed == true, 8, 0) + iff(SourceIsInternetExposed == true, 3, 0)
+        | extend SourceTierAmplifier =
+            case(
+                SourceCriticalityTier == 0, 8,
+                SourceCriticalityTier == 1, 5,
+                SourceCriticalityTier == 2, 2,
+                0
+            )
+        | extend AttackPathPriorityScore = TargetTierWeight + EscalationWeight + ExposureWeight + SourceTierAmplifier
+
+        | extend AttackPathPriority =
+            case(
+                AttackPathPriorityScore >= 120, "Critical",
+                AttackPathPriorityScore >= 90,  "Very High",
+                AttackPathPriorityScore >= 60,  "High",
+                AttackPathPriorityScore >= 30,  "Medium-High",
+                AttackPathPriorityScore >= 15,  "Medium",
+                "Low"
+            )
+
+        // Step 7  Human readable paths
+        | extend InternetExposureTarget = iff(TargetIsInternetExposed == true, "Internet-Exposed", "Not Internet-Exposed")
+        | extend InternetExposureSource = iff(SourceIsInternetExposed == true, "Internet-Exposed", "Not Internet-Exposed")
+
+        | extend AttackPath =
+            strcat(
+                FirstIdentityLabel, " [", FirstIdentityName, "] -> ",
+                "group [", GroupNodeName, "] -> ",
+                TargetNodeLabel, " [", FinalTargetName, "]"
+            )
+
+        | extend AttackPathDetailed =
+            strcat(
+                "SOURCE ", FirstIdentityLabel, " [", FirstIdentityName, "] ",
+                "tier ", tostring(SourceCriticalityTier), " ", tostring(SourceCriticalityTierLevel), " | ", InternetExposureSource,
+                iff(IdentityCount > 1, strcat(" | + ", tostring(IdentityCount - 1), " other identity/ies"), ""),
+                " -> GROUP [", GroupNodeName, "] ",
+                " -> TARGET ", TargetNodeLabel, " [", FinalTargetName, "] ",
+                "tier ", tostring(TargetCriticalityTier), " ", tostring(TargetCriticalityTierLevel), " | ", InternetExposureTarget,
+                " | escalation ", tostring(TierEscalation),
+                " | ", LateralMovementType
+            )
+
+        | extend SecurityDomain = "Azure"
+        | extend Category = "Attack Paths"
+        | extend SubCategory = "GroupMembershipPrivilege"
+        | extend ConfigurationName = tostring(LateralMovementType)
+        | extend ConfigurationId = "group_membership"
+
+        | project
+            SecurityDomain,
+            Category,
+            SubCategory,
+            ConfigurationName,
+            ConfigurationId,
+
+            AttackPathPriority,
+            AttackPathPriorityScore,
+            TierEscalation,
+            IsLateralMovement,
+            LateralMovementType,
+            EscalationWeight,
+            ExposureWeight,
+
+            GroupNodeId,
+            GroupNodeName,
+            EdgeLabel,
+
+            FirstIdentityId,
+            FirstIdentityName,
+            FirstIdentityLabel,
+            TotalIdentitiesInGroup = IdentityCount,
+            AllIdentities = Identities,
+            IdentityTypes,
+
+            FinalTargetId,
+            FinalTarget = FinalTargetName,
+            FinalTargetType = FinalTargetLabel,
+
+            TargetCriticalityTier,
+            TargetCriticalityTierLevel,
+            TargetCriticalityRuleBased,
+            TargetCriticalityRuleNames,
+
+            TargetAssetTierByTag,
+            TargetIsInternetExposed,
+            TargetLegacyEndOfSupport,
+            TargetRiskProb,
+            TargetRiskProbDetailed,
+            TargetRiskProbDetailedScore,
+
+            SourceCriticalityTier,
+            SourceCriticalityTierLevel,
+            SourceAssetTierByTag,
+            SourceIsInternetExposed,
+            SourceLegacyEndOfSupport,
+            SourceRiskProb,
+            SourceRiskProbDetailed,
+            SourceRiskProbDetailedScore,
+
+            AttackPath,
+            AttackPathDetailed,
+
+            SourceNodeProperties,
+            TargetNodeProperties
+
+        | order by AttackPathPriorityScore desc, TierEscalation desc, TargetCriticalityTier asc, FinalTarget asc
+
+```
+
+
+
+### Example of Report Templates
+
+```
+ReportTemplates:
+    - ReportName: RiskAnalysis_Detailed_Bucket
+      ReportPurpose: Overview
+      ReportsIncluded:
+      - Name: Device_Recommendations_Detailed_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Device_Missing_CVEs_Detailed_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Azure_Recommendations_Detailed_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Credential_Based_Lateral_Movement
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Github_to_Azure_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Detailed_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+
+
+    - ReportName: RiskAnalysis_Summary_Bucket
+      ReportPurpose: Overview
+      ReportsIncluded:
+      - Name: Device_Recommendations_Summary_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Device_Missing_CVEs_Summary_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Azure_Recommendations_Summary_BucketFilter
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Identity_Group_Membership_to_Privileged_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Data_Sensitivity_to_Exposed_Credentials
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Attack_Paths_Summary_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation
+        UseQueryBucketing: true
+        DefaultBucketCount: 2
+        BucketPlaceholderToken: __BUCKET_FILTER__
+
+
+```
+

@@ -399,7 +399,7 @@ The goal of this collaboration is to explore how the principles behind the Secur
 
 | File Name                                                    | Purpose                                                      | Comment                        |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------ |
-| [UpdateSecurityInsight.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/UpdateSecurityInsight.ps1) | Update Engine<br />Backup local files + Update files from Github repo<br />https://github.com/KnudsenMorten/SecurityInsight | Can be modified to your needs  |
+| [UpdateSecurityInsight.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/UpdateSecurityInsight.ps1) | Update Engine<br />Backup local files + Update files from [Github repo](https://github.com/KnudsenMorten/SecurityInsight) | Can be modified to your needs  |
 | [Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1) | Deploy OpenAI PAYG instance (optional)<br />Used for AI summary based on context from risk analysis | Must be modified to your needs |
 
 

@@ -34,6 +34,8 @@ In practice, remediation work is often prioritized according to:
 
 
 
+
+
 ## A Risk-Based Prioritization Model
 
 The **Security Insight** framework introduces a **risk-based prioritization model** that evaluates security findings based on both consequence and probability.
@@ -54,6 +56,8 @@ The model can also be influenced by **contextual risk factors** such as:
 - +more can be added along the way !
 
 These factors will each increase the probability score with +1 - and therefore indirectly increasing the overall risk score.
+
+
 
 
 
@@ -116,6 +120,8 @@ By following this chain of relationships, the attacker can eventually gain contr
 
 
 
+
+
 ## Why Graph Architecture Matters
 
 A **graph model** allows security platforms to:
@@ -142,6 +148,8 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 - configuration assessments
 
  These datasets allow analysis of relationships between systems and security findings.
+
+
 
 
 
@@ -173,6 +181,8 @@ This score is used to prioritize remediation activities.
 
  
 
+
+
 ## Reporting
 
 The framework generates both summary and detailed reports.
@@ -189,6 +199,8 @@ The framework generates both summary and detailed reports.
 | [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file               |
 | [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
 | [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
+
+
 
 
 
@@ -217,6 +229,8 @@ The model aligns with several CIS controls, including:
 
  
 
+
+
 ## Operational Benefits
 
 The risk-based model provides several advantages:
@@ -225,6 +239,8 @@ The risk-based model provides several advantages:
 - **Reduced operational noise** - Low-risk issues do not dominate remediation efforts.
 - **Faster risk reduction** - The most dangerous vulnerabilities are addressed first.
 - **Improved executive communication** - Risk scores translate technical findings into **business risk**.
+
+
 
 
 
@@ -238,6 +254,8 @@ Potential future developments include:
 
 
  
+
+
 
 ## Transparency and Flexibility
 
@@ -258,6 +276,8 @@ This approach ensures that the model is **100% transparent and open**.
 
  
 
+
+
 ## Collaboration with Microsoft
 
 The development of the Security Insight model is conducted in close dialogue with Microsoft.
@@ -267,6 +287,8 @@ The risk-based approach to prioritizing security recommendations—based on asse
 **Morten Knudsen works closely with Microsoft, including Raviv Tamir, Corporate Vice President for Microsoft Defender, and his team.**
 
 The goal of this collaboration is to explore how the principles behind the Security Insight model can influence the future development of the **Microsoft Defender platform**.
+
+
 
 
 
@@ -325,6 +347,8 @@ The goal of this collaboration is to explore how the principles behind the Secur
 | [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
 
  
+
+
 
 # High-level Overview of Implementation
 

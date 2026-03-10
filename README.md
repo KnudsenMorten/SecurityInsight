@@ -45,7 +45,7 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
 - [Step 4: Setting Asset Criticality Level Classification](#step-4-setting-asset-criticality-level-classification)
   - [Step 4.1 - How to setup Criticality Tier Level against Azure resources](#step-41---how-to-setup-criticality-tier-level-against-azure-resources)
   - [Step 4.2 - How to setup Criticality Tier Level against Defender device resources](#step-42---how-to-setup-criticality-tier-level-against-defender-device-resources)
-  - [What am I missing in Critical Asset Management - Dialog with Microsoft in progress](#what-am-i-missing-in-critical-asset-management---dialog-with-microsoft-in-progress)
+  - [What am I missing in Critical Asset Management - Dialog with Microsoft in progress](#what-am-i-missing-in-critical-asset-management)
 - [Step 5: Run the Risk Analysis](#step-5-run-the-risk-analysis)
   - [Files Overview (Risk Analysis)](#files-overview-risk-analysis)
   - [Step 5.1. Adjust the authentication + smtp details](#step-51-adjust-the-authentication--smtp-details-in-launcher-file-runsecurityinsightps1)
@@ -1180,7 +1180,7 @@ NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in
 
 
 
-### What am I missing in Critical Asset Management - Dialog with Microsoft in progress ?
+### What am I missing in Critical Asset Management
 
 | Area                      | What is missing ?                                            |
 | ------------------------- | ------------------------------------------------------------ |

@@ -284,9 +284,13 @@ Fine-tuning often requires adjustment according to **naming convention (Defender
 
 #### Testing Queries - Azure Resource Graph
 
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/TestingQueries-Azure.png)
+
 
 
 #### Testing Queries - Defender
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/TestingQueries-Defender.png)
 
 
 

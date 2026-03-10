@@ -208,6 +208,8 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
  These datasets allow analysis of relationships between systems and security findings.
 
+------
+
 
 
 ## Risk Score Model
@@ -236,6 +238,8 @@ The **final risk score** is calculated as:
 
 This score is used to prioritize remediation activities.
 
+------
+
 
 
 ## Reporting
@@ -254,6 +258,8 @@ The framework generates both summary and detailed reports.
 | [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file               |
 | [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
 | [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
+
+------
 
 
 
@@ -286,6 +292,10 @@ The model aligns with several CIS controls, including:
 
  
 
+------
+
+
+
 ## Operational Benefits
 
 The risk-based model provides several advantages:
@@ -294,6 +304,8 @@ The risk-based model provides several advantages:
 - **Reduced operational noise** - Low-risk issues do not dominate remediation efforts.
 - **Faster risk reduction** - The most dangerous vulnerabilities are addressed first.
 - **Improved executive communication** - Risk scores translate technical findings into **business risk**.
+
+------
 
 
 
@@ -304,6 +316,8 @@ Potential future developments include:
 - automated attack path analysis - more queries
 
 - integration with ticketing and risk management platforms.
+
+------
 
 
 
@@ -327,6 +341,10 @@ This approach ensures that the model is **100% transparent and open**.
 
  
 
+------
+
+
+
 ## Collaboration with Microsoft
 
 The development of the Security Insight model is conducted in close dialogue with Microsoft.
@@ -336,6 +354,8 @@ The risk-based approach to prioritizing security recommendations—based on asse
 **Morten Knudsen works closely with Microsoft, including Raviv Tamir, Corporate Vice President for Microsoft Defender, and his team.**
 
 The goal of this collaboration is to explore how the principles behind the Security Insight model can influence the future development of the **Microsoft Defender platform**.
+
+------
 
 
 
@@ -393,7 +413,7 @@ The goal of this collaboration is to explore how the principles behind the Secur
 | [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary  |
 | [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file                |
 
- 
+------
 
   
 
@@ -409,6 +429,8 @@ Detailed actions for each steps are outlined in the sections below the High-leve
 | Step 3: Setting **Asset Tier Level** using tagging <br />(using script from SecurityInsight) | 3.1. Adjust the authentication details in launcher file<br /><br />3.2. Validate WhatIfMode<br /><br />3.3. Run Critical Asset launcher to tag recommended tags in PROD mode<br /><br />3.4. [PROD]  Setup Recurring job to run every x hours<br /><br />3.5. [TEST]  Adjust custom yaml-file to tag resources in Test-mode<br /><br />3.6. [TEST]  Run Critical Asset launcher to tag recommended tags in TEST mode<br /><br />3.7. [PROD]  Adjust queries to Prod-mode once happy |
 | Step 4: Setting **Asset Criticality Level** Classification (in Defender) | Step 4.1 - How to setup Criticality Tier Level against Azure resources?<br /><br />Step 4.2 - How to setup Criticality Tier Level against Defender device resources?<br /><br />What am I missing in Critical Asset Management - Dialog with Microsoft in progress ? |
 | Step 5: Run **Risk Analysis**                                | Step 5.1. Adjust the **authentication + smtp details** in launcher file, RunSecurityInsight.ps1<br/><br />Step 5.2A.  Run Risk Analysis launcher in SUMMARY mode (cmdline)<br/><br />Step 5.2B.  Run Risk Analysis launcher in DETAILED mode (GUI/ISE mode, alternative)<br/><br />Step 5.2C.  Run Risk Analysis launcher in DETAILED mode (cmdline)<br/><br />Step 5.2D.  Run Risk Analysis launcher in DETAILED mode (GUI/ISE mode, alternative)<br/><br />Step 5.2E.  Run Risk Analysis launcher for Custom Report Template (cmdline)<br/><br />Step 5.3A. Deploy OpenAI instance to enable AI Support, Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1<br/><br />Step 5.3B. Run Risk Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1 to deploy AI instance<br/><br />Step 5.3C. Adjust the Risk Analysis launcher file to enable AI summary support (RunSecurityInsight.ps1) |
+
+------
 
 
 
@@ -433,6 +455,8 @@ Install-Module MicrosoftGraphPS -Scope AllUsers -Force -AllowClobber
 Install-Module ImportExcel -Scope AllUsers -Force -AllowClobber
 Install-Module powershell-yaml -Scope AllUsers -Force -AllowClobber
 ```
+
+------
 
 
 
@@ -465,6 +489,8 @@ Tag Contributor (least privilege)
 ```
 
 ![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/EntraApp-Azure-Permissions.png)
+
+------
 
 
 
@@ -1079,7 +1105,7 @@ Change to
     Mode: Prod
 ```
 
-
+------
 
 
 
@@ -1163,6 +1189,8 @@ NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in
 | Device (custom query)     | Internal IP Address is not an option                         |
 | Identity (custom query)   | Operator 'not contains' is missing<br /><br />Impossible to make a query like<br />Find all Admins that starts with Admin- AND doesn't contain ""-T0-T0-id" |
 | Identity (custom query)   | extensionAttibute1-15 is missing<br /><br />Many tag users like<br />extensionAttribute6 (Classification) = Internal_User, Service_Account<br />extensionAttibute7 (AuthenticationMethod) = Internal_User_AD_Synced_MFA, Service_Account_Cloud_FIDO |
+
+------
 
 
 

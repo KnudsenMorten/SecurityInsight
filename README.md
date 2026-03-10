@@ -3,93 +3,212 @@ typora-root-url: ./Images
 ---
 
 # SecurityInsight
-Rethink Secure Score into a new risk-based security risk score, based on consequence, probability and risk factors. Solution includes critical asset tagging, ready-to-use reports (based on Defender Exposure Graph and Azure Resource Graphs), automation-scripts, risk index and more
+Rethink **Secure Score** into a **new risk-based security risk score**, based on **consequence, probability** and **risk factors**. Solution includes **critical asset tagging**, **ready-to-use reports** (based on Defender Exposure Graph and Azure Resource Graphs Kusto queries), **automation-scripts,** **risk index** and more
 
 
 
 ## The Challenge: Too Many Security Recommendations
 
-Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings.
-
-Security teams are often faced with:
+Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings. Security teams are often faced with:
 
 - thousands of vulnerabilities
 - hundreds of security recommendations
 - many findings marked as High or Critical
 
+Traditional vulnerability management often focuses on CVSS scores or severity classifications. This approach creates several challenges:
+
+- the same vulnerability is evaluated equally regardless of the asset
+
+- business impact is not considered
+
+- attack chains and relationships are not identified.
+
+
 Although these tools are effective at identifying problems, they rarely answer the most important question: **Which issues should be addressed first?**
 
 In practice, remediation work is often prioritized according to:
 
-·     technical severity
+- technical severity
+- number of affected systems
+- ease of remediation
 
-·     number of affected systems
-
-·     ease of remediation
-
- 
-
-This often leads organizations to spend resources resolving issues with limited real risk while more critical exposures remain unaddressed.
+ This often leads organizations to spend resources resolving issues with limited real risk while more critical exposures remain unaddressed.
 
 
 
 ## A Risk-Based Prioritization Model
 
-The **Security Insight** framework introduces a risk-based prioritization model that evaluates security findings based on both consequence and probability.
+The **Security Insight** framework introduces a **risk-based prioritization model** that evaluates security findings based on both consequence and probability.
 
- 
-
-**Risk Score = Consequence Score × Probability Score**
-
- 
+```
+Risk Score = Consequence Score × Probability Score
+```
 
 **Consequence Score** represents the potential impact if a vulnerability is exploited.
 
 **Probability Score** represents the likelihood that the vulnerability will actually be exploited.
 
- 
-
 The model can also be influenced by **contextual risk factors** such as:
 
-·     internet exposure
+- internet exposure
+- known exploits
+- legacy systems
+- +more can be added along the way !
 
-·     known exploits
-
-·     legacy systems.
+These factors will each increase the probability score with +1 - and therefore indirectly increasing the overall risk score.
 
 
 
-## Challenges with Traditional Vulnerability Prioritization
+## Why We Use a Graph — Understanding Exposure Graph Architecture
 
-Traditional vulnerability management often focuses on CVSS scores or severity classifications.
+**Defenders typically think in lists.** Security tools often present data as separate inventories such as:
 
-This approach creates several challenges:
+- Devices
+- Users
+- Software
+- Vulnerabilities
+- Cloud resources
 
-·     the same vulnerability is evaluated equally regardless of the asset
+These lists help with management and reporting, but they **do not show how systems interact with each other**.
 
-·     business impact is not considered
 
-·     attack chains and relationships are not identified.
+
+**Attackers, however, do not think in lists.** They think in **relationships between systems** and look for ways to move laterally through an environment. Instead of focusing on individual assets, they focus on **how one compromised system can lead to another**.
+
+This is why modern security platforms like **Microsoft Exposure Graph** represent security data as a **graph of connected entities** rather than isolated lists.
+
+A graph structure allows security tools such as **Microsoft Defender** and **Microsoft Security Copilot** to map relationships between users, devices, applications, and privileges.
+
+
+
+#### Example of an Attack Path
+
+A typical attack rarely targets the most critical system directly. Instead, attackers move through connected systems step by step.
+
+For example:
+
+```
+User device → Application server → Service account → Domain Controller
+```
+
+This path can represent the following scenario:
+
+1. An attacker compromises a **user device** through phishing or malware.
+2. That device has access to an **application server**.
+3. The application server runs using a **service account**.
+4. The service account has elevated privileges on the **domain controller**.
+
+By following this chain of relationships, the attacker can eventually gain control of the **domain controller**, even though the original compromise happened on a normal user machine.
+
+
+
+### Why Graph Architecture Matters
+
+A **graph model** allows security platforms to:
+
+- **Map relationships between assets**
+- **Identify possible attack paths**
+- **Detect lateral movement opportunities**
+- **Prioritize exposures that could lead to high-impact compromise**
+
+Instead of asking *“What vulnerabilities exist?”*, a graph-based system asks:
+
+> *“Which vulnerabilities could actually lead to a critical system being compromised?”*
+
+This relationship-based view is what makes exposure graphs powerful for **modern threat detection and attack path analysis**.
+
+
+
+The **Security Insight model** therefore uses **Exposure Graph** analysis to identify relationships between assets, identities, vulnerabilities and configuration issues. Data is coming from:
+
+- ExposureGraphNodes
+
+- ExposureGraphEdges
+- Defender Vulnerability Management findings
+- configuration assessments
+
+ These datasets allow analysis of relationships between systems and security findings.
 
  
 
-## Exposure Graph Architecture
+# High-level Overview of Implementation
 
-The **Security Insight framework** uses data from Microsoft Defender Exposure Graph including:
+| Step                                                         | Detailed actions                                             |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| Step 1: **Onboarding** of Entra App registration - to be used with SecurityInsight | 1. Create Entra App registration (SPN) with **Secret**<br />2. Delegate permissions in API permissions<br />3. Delegate permissions in Azure |
+| Step 2: Setting **Asset Tier Level** using tagging (using script from SecurityInsight)<br /><br />**See detailed steps below in the section** | 1. Adjust the authentication details in launcher file <br /><br />2. Run asset launcher to tag recommended tags (locked, prod)<br /><br />3. Adjust custom yaml-file to tag resources<br />Start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI') |
+| Step 3: Setting **Asset Criticality Level** Classification (in Defender) | 1. Add custom classifications based on Tags and configure Criticality Level in Defender Critical Asset Management<br /><br /<br /><br />NOTE: I'm working with Microsoft to include new features in Defender Critical Asset Management:<br />* Kusto cmdlets - instead of using static fields<br />* Missing fields like "not contains"<br />* API to automate onboarding<br /><br />NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in Defender Critical Asset Management. This is due to syncing delays. |
+| Step 4: Run **Risk Analysis**                                | Summary mode:<br />                                          |
 
-·     ExposureGraphNodes
 
-·     ExposureGraphEdges
 
-·     Defender Vulnerability Management findings
 
-·     configuration assessments
 
- 
+## Step 1: **Onboarding** of Entra App registration - to be used with SecurityInsight
 
-These datasets allow analysis of relationships between systems and security findings.
+1. Create Entra App registration (SPN) and set **Secret** (note it down!)<br />By default, Authentication is done with Secret. 
+   Feel free to adjust login in the launcher files to store data in Keyvault, use certificate, etc. <br />
 
- 
+2. Delegate **API permissions** to Entra App SPN - found under 'APIs my organization uses'. <br />Remember: **Grant Admin Control**<br />
+
+```
+**Microsoft Threat Protection** -> **AdvancedHunting.Read.All**
+**Microsoft Graph** -> **ThreatHunting.Read.All**
+**WindowsDefenderATP** -> **Machine.ReadWrite.All**
+```
+
+
+
+3. Delegate tag contributor permissions in Azure to Entra App SPN<br />
+
+```
+Least privilege: **Tag Contributor**
+```
+
+
+
+## Step 2: Setting **Asset Tier Level** using tagging 
+
+1. Adjust the **authentication details** in launcher file, **RunCriticalAssetTagging.ps1** (SpnTenantId, SpnClientId, SpnClientSecret)
+
+```
+If (-not $AutomationFramework) {
+
+    $global:SpnTenantId         = "<Your TenantId>"     # override per your SPN tenant if different
+    $global:SpnClientId         = "<APP/CLIENT ID GUID>"
+    $global:SpnClientSecret     = "<CLIENT SECRET VALUE>"
+}
+```
+
+
+
+2. Run asset launcher to tag recommended tags (locked, prod)
+
+```
+
+```
+
+
+
+1. Adjust custom yaml-file to tag resources<br />Start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI')
+
+2. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI')
+
+3. Create Entra App registration (SPN) and set **Secret** (note it down!)<br />
+
+   By defau
+
+
+
+- - | Step                                                         | Detailed actions                                             |
+    | ------------------------------------------------------------ | ------------------------------------------------------------ |
+    | Step 1: Onboarding of Entra App registration                 | 1. Create Entra App registration<br /><br />2. Delegate permissions in API permissions - found under 'APIs my organization uses'. <br />**Microsoft Threat Protection** -> **AdvancedHunting.Read.All**<br />**Microsoft Graph** -> **ThreatHunting.Read.All** <br />**WindowsDefenderATP** -> **Machine.ReadWrite.All**<br /><br />Remember: **Grant Admin Control**<br /><br />3. Delegate permissions in Azure<br /> |
+    | Step 1: Setting Asset Tier Level using tagging (using script from SecurityInsight) | 1. Use Recommended Queries against Graph<br /><br />2. Tag resources, start with tier-0, then tier-1, etc. (tag includes 'AssetTier--SI'<br /><br />This process takes a number of iterations and typically involves involvement of multiple teams and documentation, like naming conventions, ip plan, business systems overview.<br /><br />3. Tag resources, that should be Excluded (tag includes 'Asset--Excluded--SI') |
+    | Step 2: Setting Asset Criticality Level Classification (in Defender) | 1. Add custom classifications based on Tags and configure Criticality Level in Defender Critical Asset Management<br /><br /<br /><br />NOTE: I'm working with Microsoft to include new features in Defender Critical Asset Management:<br />* Kusto cmdlets - instead of using static fields<br />* Missing fields like "not contains"<br />* API to automate onboarding<br /><br />NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in Defender Critical Asset Management. This is due to syncing delays. |
+    | Step 3: Run Risk Analysis                                    |                                                              |
+    |                                                              |                                                              |
+
+
 
 ## Step 1: Setting Asset Tier Level using tagging
 
@@ -118,7 +237,7 @@ Asset Tagging runs with defined frequency like every 4 hours.
 | ------------------------------------------------------------ | ------------------------------------------------------------ |
 | AssetTagName                                                 | Description                                                  |
 | Mode                                                         | Implementation scope <br />(can be defined in launcher or commandline)<br /><br />Supported:<br />Prod<br />Test |
-| QueryEngine                                                  | Select query engine<br /><br />Sopported:<br />DefenderGraph = ExposureGraph<br />AzureResourceGraph = Azure Resource Graph |
+| QueryEngine                                                  | Select query engine<br /><br />Supported:<br />DefenderGraph = ExposureGraph<br />AzureResourceGraph = Azure Resource Graph |
 | Query structure<br /><br />Step 1: Scoping - what to find ?<br />Step 2: Get existing Tags "as-is"<br />Step 3: Define Value for tag to set "to-be"<br />Step 4: Write resources<br />Step 5: Filter resources to show only resources in scope with missing tag (delta) | Query the Graph<br /><br />AssetTagType supported values: <br />AssetTier--SI = shows asset is in-scope with tier-info<br />Asset--Excluded--SI = shows asset must be excluded<br /><br />AssetTag = any value that makes the asset unique<br /><br />AssetTierLevel = 0,1,2,3 |
 
 

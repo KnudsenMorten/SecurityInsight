@@ -262,7 +262,7 @@ This score is used to prioritize remediation activities.
 
 
 
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/Riskscore-Sample.png)
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/Riskscore-Sample-Zoom.png)
 
 Line #1 with score of 20 is the most critical thing to fix, based on the calculation. Then the next lines with risk score 15, 12, 10, etc.
 
@@ -271,6 +271,10 @@ Severity: 4
 Probability:5 (4 + 1 due to risk factor 'internet exposed'). 4 is coming from risk index
 Risk Score: 20 (4 x 5)
 ```
+
+
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/Riskscore-Sample.png)
 
 
 

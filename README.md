@@ -246,17 +246,31 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
 **Probability Score** may be adjusted using **contextual risk indicators (risk factors)**, that increase the likelihood of exploitation. such as:
 
-- exploit availability
-- internet exposure
-- legacy systems
+- **Active exploitation:** If the vulnerability is currently being exploited in the wild, the likelihood of compromise is significantly higher.
+- **Public exploit code:** Proof-of-concept exploit code is publicly available, lowering the barrier for attackers to exploit the vulnerability.
+- **Internet exposure:** Systems accessible from the internet increase the likelihood of exploitation.
+- **Legacy systems:** Older or unsupported systems may lack security updates and increase vulnerability risk.
 
  Each of these influence the score by increasing the probability score with +1 due to the risk factor
+
+
+
+Future possible risk factors being considered are:
+
+- **Large attack surface** – The system exposes multiple services, APIs, or open ports that increase discovery and exploitation opportunities.
+- **Third-party exposure** – The system is accessible by external partners, vendors, or suppliers.
+- **Shared infrastructure** – The vulnerable system is shared across many users or business units, increasing attacker opportunity.
+- **Weak network segmentation** – The system is poorly isolated, allowing attackers easier lateral movement once access is gained.
+- **Credential exposure risk** – The environment has higher likelihood of credential compromise (e.g., shared accounts, weak MFA adoption).
+- **Remote access enabled** – Services such as VPN, RDP, SSH, or remote administration interfaces increase potential entry points.
 
 
 
 The **final risk score** is calculated as:
 
 **Risk Score = Consequence Score × Probability Score**
+
+
 
 This score is used to prioritize remediation activities.
 

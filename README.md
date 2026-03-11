@@ -254,73 +254,92 @@ This score is used to prioritize remediation activities.
 
 ### Criticality Prioritization | Risk Score Definitions
 
-| Criticality Level Name | Criticality Description                                      | Compromise Impact                                            | Defender terms (portal) | Defender terms (API) |
-| ---------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | ----------------------- | -------------------- |
-| Critical<br />(tier-0) | Identity or infrastructure trust anchors that control authentication, authorization, encryption, or global security boundaries.<br/><br/>Assets that, if compromised, give an attacker full control of the organization, identity fabric, or security boundary. These are the crown jewels. | Compromize Impact<br/>Full organizational takeover, persistent compromise likely. | Very High - tier 0      | criticalityLevel = 0 |
-| High<br />(Tier-1)     | Systems that configure, orchestrate, or grant access to Tier 2/3 assets.<br/><br/>Systems that manage or enforce configuration on lower-tier assets. If compromised, they enable privilege escalation or widespread lateral movement.<br/><br/>Business-critical platforms or workloads supporting core operations.<br/><br/>Standard production systems that host sensitive but non-root-of-trust workloads. Compromise impacts specific business functions but not identity fabric control. | Rapid privilege escalation or environment-wide misconfiguration.<br/><br/>Business disruption, focused operational risk. | High - tier 1           | criticalityLevel = 1 |
-| Medium<br />(Tier-2)   | Tier 2 (User & Developer Endpoints):<br/>Real users authenticate and access business resources, but these systems do not control identity or the security control plane.<br/>Compromise typically impacts a user, team, or non-production environment (data loss, token theft, lateral movement within Tier 2). |                                                              | Medium - tier 2         | criticalityLevel = 2 |
-| Low<br />(Tier-3)      | Tier 3 (Low-Trust / Shared / Disposable):<br/>Shared, anonymous, or intentionally isolated systems (kiosk-style or disposable labs).<br/>Assume high compromise likelihood and design for minimal blast radius (tight isolation, frequent reset/wipe, no privileged access). | Local impact; lateral movement required to escalate.         | Low - tier 3            | criticalityLevel = 3 |
+**Disclaimer:**
+The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+| Criticality Level Name<br />(Tier) | Criticality Description                                      | Compromise Impact                                            | Defender terms (portal) | Defender terms (API)<br />criticalityLevel |
+| ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | ----------------------- | ------------------------------------------ |
+| Critical<br />(Tier-0)             | Identity or infrastructure trust anchors that control authentication, authorization, encryption, or global security boundaries.<br/><br/>Assets that, if compromised, give an attacker full control of the organization, identity fabric, or security boundary. These are the crown jewels. | Compromise Impact<br/>Full organizational takeover, persistent compromise likely. | Very High - tier 0      | 0                                          |
+| High<br />(Tier-1)                 | Systems that configure, orchestrate, or grant access to Tier 2/3 assets.<br/><br/>Systems that manage or enforce configuration on lower-tier assets. If compromised, they enable privilege escalation or widespread lateral movement.<br/><br/>Business-critical platforms or workloads supporting core operations.<br/><br/>Standard production systems that host sensitive but non-root-of-trust workloads. Compromise impacts specific business functions but not identity fabric control. | Rapid privilege escalation or environment-wide misconfiguration.<br/><br/>Business disruption, focused operational risk. | High - tier 1           | 1                                          |
+| Medium<br />(Tier-2)               | Tier 2 (User & Developer Endpoints):<br/>Real users authenticate and access business resources, but these systems do not control identity or the security control plane.<br/>Compromise typically impacts a user, team, or non-production environment (data loss, token theft, lateral movement within Tier 2). |                                                              | Medium - tier 2         | 2                                          |
+| Low<br />(Tier-3)                  | Tier 3 (Low-Trust / Shared / Disposable):<br/>Shared, anonymous, or intentionally isolated systems (kiosk-style or disposable labs).<br/>Assume high compromise likelihood and design for minimal blast radius (tight isolation, frequent reset/wipe, no privileged access). | Local impact; lateral movement required to escalate.         | Low - tier 3            | 3                                          |
 
 
 
 ### Endpoint / Device Asset Criticality Classification
 
-| Criticality Level | Typical Assets                                               |
-| ----------------- | ------------------------------------------------------------ |
-| Critical          | Server Roles:<br/>* Active Directory Domain Services (AD DS)<br/>* Active Directory Certificate Services (AD CS)<br/>* Active Directory Federation Services (AD FS) trust root configuration<br/>* DNS integrated with AD for domain trust management<br/>Azure AD Connect Sync engine<br/>* On-prem Authentication Broker Servers (e.g., PTA agents, federation bridges)<br/>* Azure AD DS Domain Services instances (if used)<br/>* Entra ID Connect Servers (Hybrid Identity Sync)<br/><br/>Management:<br/>* Privileged Access Workstations (PAWs)<br/>* Security Management Servers (MDE, MDEr, EDR collectors)<br/><br/>Infrastructure:<br/>* Hardware Security Modules (HSM appliances or Azure Key Vault HSM-backed)<br/><br/>HyperVisor:<br/>* Hypervisor Hosts (VMware ESXi, Hyper-V clusters hosting Tier-0 assets) |
-| High              | Server Roles:<br/>* Endpoint Management Admin Servers<br/>* RADIUS / NPS Authentication servers<br/>* Backup Management Systems<br/>* Patch Management Servers<br/>* Enterprise Firewall/Proxy Management Consoles<br/>* Federated Identity Components (e.g., SSO Gateways, OAuth Brokers)<br/>* Print Spooler servers with elevated AD access risk<br/><br/>* Business application servers (ERP, CRM, HR, Finance, etc.)<br/>* Tiered database servers (data-important but not identity-root)<br/>* File/print servers<br/>* Production line-of-business application VMs<br/>* Middleware or API integration servers<br/>* Jump hosts for application operations (not identity or security ops)<br/>* Web servers hosting business systems (IIS / NGINX / Apache)<br/>* Application middleware servers (Tomcat, WebLogic, SAP dispatcher)<br/>* Standard SQL / NoSQL databases containing operational business data |
-| Medium            | * Employee laptops & desktops<br/>* Employee mobile phones<br/>* Non-admin VDI clients<br/>* Developer test machines<br/>* Training, demo environments<br/>* QA / staging servers (non-prod)<br/>* Non-production dev/test environments<br/>* Internal wiki or documentation servers<br/>* Local print/file servers without privilege exposure |
-| Low               | * Kiosks and shared access terminals<br/>* Shared/kiosk mobile devices (exception only: no corporate mailbox, no MFA approval, reset/wipe frequently) |
+**Disclaimer:**
+The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+| Criticality Level      | Typical Assets                                               |
+| ---------------------- | ------------------------------------------------------------ |
+| Critical<br />(tier-0) | Server Roles:<br/>* Active Directory Domain Services (AD DS)<br/>* Active Directory Certificate Services (AD CS)<br/>* Active Directory Federation Services (AD FS) trust root configuration<br/>* DNS integrated with AD for domain trust management<br/>Azure AD Connect Sync engine<br/>* On-prem Authentication Broker Servers (e.g., PTA agents, federation bridges)<br/>* Azure AD DS Domain Services instances (if used)<br/>* Entra ID Connect Servers (Hybrid Identity Sync)<br/><br/>Management:<br/>* Privileged Access Workstations (PAWs)<br/>* Security Management Servers (MDE, MDEr, EDR collectors)<br/><br/>Infrastructure:<br/>* Hardware Security Modules (HSM appliances or Azure Key Vault HSM-backed)<br/><br/>HyperVisor:<br/>* Hypervisor Hosts (VMware ESXi, Hyper-V clusters hosting Tier-0 assets) |
+| High<br />(Tier-1)     | Server Roles:<br/>* Endpoint Management Admin Servers<br/>* RADIUS / NPS Authentication servers<br/>* Backup Management Systems<br/>* Patch Management Servers<br/>* Enterprise Firewall/Proxy Management Consoles<br/>* Federated Identity Components (e.g., SSO Gateways, OAuth Brokers)<br/>* Print Spooler servers with elevated AD access risk<br/><br/>* Business application servers (ERP, CRM, HR, Finance, etc.)<br/>* Tiered database servers (data-important but not identity-root)<br/>* File/print servers<br/>* Production line-of-business application VMs<br/>* Middleware or API integration servers<br/>* Jump hosts for application operations (not identity or security ops)<br/>* Web servers hosting business systems (IIS / NGINX / Apache)<br/>* Application middleware servers (Tomcat, WebLogic, SAP dispatcher)<br/>* Standard SQL / NoSQL databases containing operational business data |
+| Medium<br />(Tier-2)   | * Employee laptops & desktops<br/>* Employee mobile phones<br/>* Non-admin VDI clients<br/>* Developer test machines<br/>* Training, demo environments<br/>* QA / staging servers (non-prod)<br/>* Non-production dev/test environments<br/>* Internal wiki or documentation servers<br/>* Local print/file servers without privilege exposure |
+| Low<br />(Tier-3)      | * Kiosks and shared access terminals<br/>* Shared/kiosk mobile devices (exception only: no corporate mailbox, no MFA approval, reset/wipe frequently) |
 
 
 
 ### Identity Asset Criticality Classification
 
-| Criticality Level | Typical Assets                                               |
-| ----------------- | ------------------------------------------------------------ |
-| Critical          | Cloud - Entra ID Roles:<br/>* Global Administrator accounts<br/>* Privileged Authentication Administrator<br/>* Privileged Role Administrator<br/>* Directory Synchronization Service Accounts<br/>* Break-glass Emergency Access Accounts<br/>* Directory Writers<br/><br/>Cloud - Entra ID Services:<br/>* Conditional Access and Identity Governance core policies<br/><br/>AD:<br/>* Domain Admins<br/>* Enterprise Admins<br/>* Schema Admins<br/>* Administrators (Built-in)<br/>* Key Admins / Crypto Admins<br/>* Cert Publishers<br/>* Group Policy Creator Owners<br/>* Incoming Forest Trust Builders<br/>* Protected Users Group<br/>* Privileged Kerberos delegation accounts<br/><br/>Azure:<br/>* Privileged Credential Vault Root Access |
-| High              | Entra ID:<br/>* Security Administrator accounts<br/>* Application Administrator accounts<br/>* Conditional Access Administrators<br/>* Exchange / SharePoint / Teams Admins (Privileged variants)<br/><br/>AD:<br/>* Server Operators<br/>* Backup Operators<br/>* Print Operators (privilege escalation risk in AD)<br/>* Network Configuration Operators<br/><br/>Accounts:<br/>* Helpdesk Administrator accounts with delegated reset access<br/>* Tier-1 admin accounts (Scoped to systems supporting Tier-0 assets indirectly) |
-| Medium            | Entra ID / Identity (Tier 2):<br/>* Standard user accounts (employees)<br/>* Developer user accounts (non-privileged)<br/>* Guest / B2B external collaborators (low-privilege access)<br/>* Non-privileged test accounts<br/>* Workload identities used only for Tier-2 / non-production workloads (no privileged role assignments) |
-| Low               | Identity (Tier 3):<br/>* Shared kiosk identities (where unavoidable)<br/>* Temporary / disposable lab identities with no access to corporate data<br/>* Local-only accounts on kiosk or shared devices |
+**Disclaimer:**
+The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+| Criticality Level      | Typical Assets                                               |
+| ---------------------- | ------------------------------------------------------------ |
+| Critical<br />(tier-0) | Cloud - Entra ID Roles:<br/>* Global Administrator accounts<br/>* Privileged Authentication Administrator<br/>* Privileged Role Administrator<br/>* Directory Synchronization Service Accounts<br/>* Break-glass Emergency Access Accounts<br/>* Directory Writers<br/><br/>Cloud - Entra ID Services:<br/>* Conditional Access and Identity Governance core policies<br/><br/>AD:<br/>* Domain Admins<br/>* Enterprise Admins<br/>* Schema Admins<br/>* Administrators (Built-in)<br/>* Key Admins / Crypto Admins<br/>* Cert Publishers<br/>* Group Policy Creator Owners<br/>* Incoming Forest Trust Builders<br/>* Protected Users Group<br/>* Privileged Kerberos delegation accounts<br/><br/>Azure:<br/>* Privileged Credential Vault Root Access |
+| High<br />(Tier-1)     | Entra ID:<br/>* Security Administrator accounts<br/>* Application Administrator accounts<br/>* Conditional Access Administrators<br/>* Exchange / SharePoint / Teams Admins (Privileged variants)<br/><br/>AD:<br/>* Server Operators<br/>* Backup Operators<br/>* Print Operators (privilege escalation risk in AD)<br/>* Network Configuration Operators<br/><br/>Accounts:<br/>* Helpdesk Administrator accounts with delegated reset access<br/>* Tier-1 admin accounts (Scoped to systems supporting Tier-0 assets indirectly) |
+| Medium<br />(Tier-2)   | Entra ID / Identity (Tier 2):<br/>* Standard user accounts (employees)<br/>* Developer user accounts (non-privileged)<br/>* Guest / B2B external collaborators (low-privilege access)<br/>* Non-privileged test accounts<br/>* Workload identities used only for Tier-2 / non-production workloads (no privileged role assignments) |
+| Low<br />(Tier-3)      | Identity (Tier 3):<br/>* Shared kiosk identities (where unavoidable)<br/>* Temporary / disposable lab identities with no access to corporate data<br/>* Local-only accounts on kiosk or shared devices |
 
 
 
 ### Cloud (Azure) Asset Criticality Classification
 
-| Criticality Level | Typical Assets                                               |
-| ----------------- | ------------------------------------------------------------ |
-| Critical          | Azure (services):<br/>* Azure Key Vaults storing tenant root keys or certificate authorities<br/>* Immutable and Locked Azure Storage holding identity bootstrap data<br/><br/>Azure (delegations):<br/>* Azure Management Groups with root tenant-level access<br/>* Azure Subscription Owner roles over security-critical subscriptions |
-| High              | Azure:<br/>* Azure Virtual Machines with privileged tokens or identities assigned<br/>* Highly active Azure Key Vaults with large number of operations<br/>* Azure Automation / Runbook accounts with role assignments<br/>* Azure Arc / Hybrid management orchestrators<br/>* Azure Network and Security Policy control plane resources |
-| Medium            | Azure (Tier 2):<br/>* Dev/Test subscriptions and resource groups<br/>* Non-production workloads (dev, test, QA, staging) without production data<br/>* End-user virtual desktop services (AVD / Windows 365) for non-admin users<br/>* Personal / sandbox resources with no privileged role assignments |
-| Low               | Azure (Tier 3):<br/>* Sandbox subscriptions designed for experimentation<br/>* Proof-of-concept / pilot workloads with no sensitive data<br/>* Lab resource groups intended to be wiped/reset |
+**Disclaimer:**
+The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+| Criticality Level      | Typical Assets                                               |
+| ---------------------- | ------------------------------------------------------------ |
+| Critical<br />(tier-0) | Azure (services):<br/>* Azure Key Vaults storing tenant root keys or certificate authorities<br/>* Immutable and Locked Azure Storage holding identity bootstrap data<br/><br/>Azure (delegations):<br/>* Azure Management Groups with root tenant-level access<br/>* Azure Subscription Owner roles over security-critical subscriptions |
+| High<br />(Tier-1)     | Azure:<br/>* Azure Virtual Machines with privileged tokens or identities assigned<br/>* Highly active Azure Key Vaults with large number of operations<br/>* Azure Automation / Runbook accounts with role assignments<br/>* Azure Arc / Hybrid management orchestrators<br/>* Azure Network and Security Policy control plane resources |
+| Medium<br />(Tier-2)   | Azure (Tier 2):<br/>* Dev/Test subscriptions and resource groups<br/>* Non-production workloads (dev, test, QA, staging) without production data<br/>* End-user virtual desktop services (AVD / Windows 365) for non-admin users<br/>* Personal / sandbox resources with no privileged role assignments |
+| Low<br />(Tier-3)      | Azure (Tier 3):<br/>* Sandbox subscriptions designed for experimentation<br/>* Proof-of-concept / pilot workloads with no sensitive data<br/>* Lab resource groups intended to be wiped/reset |
 
 
 
 ### SaaS (Apps) Asset Criticality Classification
 
-| Criticality Level | Typical Assets                                               |
-| ----------------- | ------------------------------------------------------------ |
-| Critical          | Entra ID (app-permissions):<br/>* Service Principals with Directory.ReadWrite.All or Organization-wide write permissions<br/><br/>Identity integration:<br/>* Identity provider / SSO configuration applications (Enta ID, Okta, PingFed bridges)<br/><br/>Management Portals:<br/>* Core tenant admin portals (Entra Admin Center, Azure Portal with Owner/GA access) |
-| High              | Cloud:<br/>* Intune<br/>* Backup<br/><br/>Entra ID integrations:<br/>* SPNs with elevated delegated OAuth permissions (user impersonation capabilities)<br/>* Line-of-business SaaS systems with admin-level access rights<br/>* Service accounts with Exchange/SharePoint/Teams admin rights<br/>* M365 platform-wide configuration access applications<br/>* Directory-synced SaaS environments with strong platform integration |
-| Medium            | * Business SaaS platforms with departmental administrator rights<br/>* Project management platforms<br/>* Document collaboration SaaS applications (non-sensitive)<br/>* CRM / HR / Finance SaaS platforms with departmental administrators<br/>* SharePoint Online site admins (for business units, not tenant-level) |
-| Low               | * Low-sensitivity SaaS (department task apps, wiki tools, non-auth-critical)<br/>* Trial / evaluation SaaS instances<br/>* Dev/test application tenants<br/>* Collaboration productivity apps (non-admin roles)<br/>* Low-sensitivity workflow or forms applications |
+**Disclaimer:**
+The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+| Criticality Level      | Typical Assets                                               |
+| ---------------------- | ------------------------------------------------------------ |
+| Critical<br />(tier-0) | Entra ID (app-permissions):<br/>* Service Principals with Directory.ReadWrite.All or Organization-wide write permissions<br/><br/>Identity integration:<br/>* Identity provider / SSO configuration applications (Enta ID, Okta, PingFed bridges)<br/><br/>Management Portals:<br/>* Core tenant admin portals (Entra Admin Center, Azure Portal with Owner/GA access) |
+| High<br />(Tier-1)     | Cloud:<br/>* Intune<br/>* Backup<br/><br/>Entra ID integrations:<br/>* SPNs with elevated delegated OAuth permissions (user impersonation capabilities)<br/>* Line-of-business SaaS systems with admin-level access rights<br/>* Service accounts with Exchange/SharePoint/Teams admin rights<br/>* M365 platform-wide configuration access applications<br/>* Directory-synced SaaS environments with strong platform integration |
+| Medium<br />(Tier-2)   | * Business SaaS platforms with departmental administrator rights<br/>* Project management platforms<br/>* Document collaboration SaaS applications (non-sensitive)<br/>* CRM / HR / Finance SaaS platforms with departmental administrators<br/>* SharePoint Online site admins (for business units, not tenant-level) |
+| Low<br />(Tier-3)      | * Low-sensitivity SaaS (department task apps, wiki tools, non-auth-critical)<br/>* Trial / evaluation SaaS instances<br/>* Dev/test application tenants<br/>* Collaboration productivity apps (non-admin roles)<br/>* Low-sensitivity workflow or forms applications |
 
 
 
 ### Data Asset Criticality Classification
 
-| Criticality Level | Typical Assets                                               |
-| ----------------- | ------------------------------------------------------------ |
-| Critical          | * Root encryption keys (HSM / Key Vault root keys)<br/>* Token signing certificates (AD FS, Azure AD B2C, SAML Identity Providers)<br/>* Identity bootstrap credentials / trust chain material<br/>* Domain / Directory backup archives and snapshots<br/>* Privileged credential vault master keys |
-| High              | * Line-of-business application configuration databases<br/>* Enterprise configuration backups<br/>* PKI intermediate CAs and signing authorities<br/>* Operational secrets stores for applications and APIs |
-| Medium            | * Business process data<br/>* Departmental shared files<br/>* Standard application configuration data<br/>* Non-identity-securing configuration data |
-| Low               | * Non-sensitive content repositories<br/>* Training data<br/>* Internal public documentation<br/>* Documentation and knowledge base files<br/>* Non-sensitive departmental shared files |
+**Disclaimer:**
+The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+| Criticality Level      | Typical Assets                                               |
+| ---------------------- | ------------------------------------------------------------ |
+| Critical<br />(tier-0) | * Root encryption keys (HSM / Key Vault root keys)<br/>* Token signing certificates (AD FS, Azure AD B2C, SAML Identity Providers)<br/>* Identity bootstrap credentials / trust chain material<br/>* Domain / Directory backup archives and snapshots<br/>* Privileged credential vault master keys |
+| High<br />(Tier-1)     | * Line-of-business application configuration databases<br/>* Enterprise configuration backups<br/>* PKI intermediate CAs and signing authorities<br/>* Operational secrets stores for applications and APIs |
+| Medium<br />(Tier-2)   | * Business process data<br/>* Departmental shared files<br/>* Standard application configuration data<br/>* Non-identity-securing configuration data |
+| Low<br />(Tier-3)      | * Non-sensitive content repositories<br/>* Training data<br/>* Internal public documentation<br/>* Documentation and knowledge base files<br/>* Non-sensitive departmental shared files |
 
 
 
 ### Risk Index - How we prioritize scoring (customizable)?
 
-<small>
+**Disclaimer:**
+The risk scoring and prioritization model presented in this table is based on my personal assessment and general security best practices. The scoring methodology, severity levels, and criticality tiers are intended as a customizable reference framework. Actual risk prioritization may vary between organizations depending on their infrastructure, business impact, regulatory requirements, threat landscape, and risk tolerance.
 
 | Security<br />Domain | Category           | Sub<br />Category | ConfigurationId | Security<br />Severity | Risk<br />Consequence<br />Score_<br />Security<br />Severity | Criticality<br />TierLevel | Risk<br />Probablity<br />Score_<br />Criticiality<br />TierLevel | Comments                                                     |
 | -------------------- | ------------------ | ----------------- | --------------- | ---------------------- | ------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
@@ -383,8 +402,6 @@ This score is used to prioritize remediation activities.
 | Endpoint             | Security  controls | EDR               | scid-2000       | Very High              | 2                                                            | High - tier 1              | 1                                                            | Turn  on Microsoft Defender for Endpoint sensor              |
 | Endpoint             | Security controls  | EDR               | scid-2000       | Very High              | 2                                                            | Medium - tier 2            | 1                                                            | Turn on Microsoft Defender for Endpoint  sensor              |
 | Endpoint             | Security  controls | EDR               | scid-2000       | Very High              | 2                                                            | Low - tier 3               | 1                                                            | Turn  on Microsoft Defender for Endpoint sensor              |
-
-</small>
 
 
 

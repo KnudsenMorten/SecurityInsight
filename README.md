@@ -264,7 +264,7 @@ This score is used to prioritize remediation activities.
 
 ### Severity Prioritization | Risk Score Definitions
 
-[Download as Excel file]()
+[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
 
 | Defender Severity Score | Severity Category | Severity description                                         |
 | ----------------------- | ----------------- | ------------------------------------------------------------ |
@@ -281,7 +281,7 @@ This score is used to prioritize remediation activities.
 **Disclaimer:**
 The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
 
-[Download as Excel file]()
+[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
 
 | Criticality Level Name<br />(Tier) | Criticality Description                                      | Compromise Impact                                            | Defender terms (portal) | Defender terms (API)<br />criticalityLevel |
 | ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | ----------------------- | ------------------------------------------ |

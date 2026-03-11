@@ -264,6 +264,8 @@ This score is used to prioritize remediation activities.
 
 ### Severity Prioritization | Risk Score Definitions
 
+[Download as Excel file]()
+
 | Defender Severity Score | Severity Category | Severity description                                         |
 | ----------------------- | ----------------- | ------------------------------------------------------------ |
 | 10                      | Very High Risk    | If this configuration is not applied, attackers gain a major foothold or common attack vector remains wide open. |
@@ -278,6 +280,8 @@ This score is used to prioritize remediation activities.
 
 **Disclaimer:**
 The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+[Download as Excel file]()
 
 | Criticality Level Name<br />(Tier) | Criticality Description                                      | Compromise Impact                                            | Defender terms (portal) | Defender terms (API)<br />criticalityLevel |
 | ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | ----------------------- | ------------------------------------------ |

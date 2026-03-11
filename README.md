@@ -297,6 +297,8 @@ The asset criticality classifications presented here are based on my professiona
 **Disclaimer:**
 The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
 
+[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
+
 | Criticality Level      | Typical Assets                                               |
 | ---------------------- | ------------------------------------------------------------ |
 | Critical<br />(tier-0) | Server Roles:<br/>* Active Directory Domain Services (AD DS)<br/>* Active Directory Certificate Services (AD CS)<br/>* Active Directory Federation Services (AD FS) trust root configuration<br/>* DNS integrated with AD for domain trust management<br/>Azure AD Connect Sync engine<br/>* On-prem Authentication Broker Servers (e.g., PTA agents, federation bridges)<br/>* Azure AD DS Domain Services instances (if used)<br/>* Entra ID Connect Servers (Hybrid Identity Sync)<br/><br/>Management:<br/>* Privileged Access Workstations (PAWs)<br/>* Security Management Servers (MDE, MDEr, EDR collectors)<br/><br/>Infrastructure:<br/>* Hardware Security Modules (HSM appliances or Azure Key Vault HSM-backed)<br/><br/>HyperVisor:<br/>* Hypervisor Hosts (VMware ESXi, Hyper-V clusters hosting Tier-0 assets) |
@@ -310,6 +312,8 @@ The asset criticality classifications presented here are based on my professiona
 
 **Disclaimer:**
 The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
 
 | Criticality Level      | Typical Assets                                               |
 | ---------------------- | ------------------------------------------------------------ |
@@ -325,6 +329,8 @@ The asset criticality classifications presented here are based on my professiona
 **Disclaimer:**
 The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
 
+[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
+
 | Criticality Level      | Typical Assets                                               |
 | ---------------------- | ------------------------------------------------------------ |
 | Critical<br />(tier-0) | Azure (services):<br/>* Azure Key Vaults storing tenant root keys or certificate authorities<br/>* Immutable and Locked Azure Storage holding identity bootstrap data<br/><br/>Azure (delegations):<br/>* Azure Management Groups with root tenant-level access<br/>* Azure Subscription Owner roles over security-critical subscriptions |
@@ -338,6 +344,8 @@ The asset criticality classifications presented here are based on my professiona
 
 **Disclaimer:**
 The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+
+[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
 
 | Criticality Level      | Typical Assets                                               |
 | ---------------------- | ------------------------------------------------------------ |
@@ -353,6 +361,8 @@ The asset criticality classifications presented here are based on my professiona
 **Disclaimer:**
 The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
 
+[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
+
 | Criticality Level      | Typical Assets                                               |
 | ---------------------- | ------------------------------------------------------------ |
 | Critical<br />(tier-0) | * Root encryption keys (HSM / Key Vault root keys)<br/>* Token signing certificates (AD FS, Azure AD B2C, SAML Identity Providers)<br/>* Identity bootstrap credentials / trust chain material<br/>* Domain / Directory backup archives and snapshots<br/>* Privileged credential vault master keys |
@@ -366,6 +376,8 @@ The asset criticality classifications presented here are based on my professiona
 
 **Disclaimer:**
 The risk scoring and prioritization model presented in this table is based on my personal assessment and general security best practices. The scoring methodology, severity levels, and criticality tiers are intended as a customizable reference framework. Actual risk prioritization may vary between organizations depending on their infrastructure, business impact, regulatory requirements, threat landscape, and risk tolerance.
+
+[Download as CSV-file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/SecurityInsight_RiskIndex.csv)
 
 | Security<br />Domain | Category           | Sub<br />Category | ConfigurationId | Security<br />Severity | Risk<br />Consequence<br />Score_<br />Security<br />Severity | Criticality<br />TierLevel | Risk<br />Probablity<br />Score_<br />Criticiality<br />TierLevel | Comments                                                     |
 | -------------------- | ------------------ | ----------------- | --------------- | ---------------------- | ------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |

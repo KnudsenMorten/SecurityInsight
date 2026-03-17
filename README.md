@@ -82,9 +82,125 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
   
 ------
 
+# Executive Summary
+
+### 🧩 What it is
+
+**SecurityInsight is a risk-based prioritization solution for Microsoft security findings.**
+
+It rethinks traditional tools like Secure Score by introducing a **custom risk scoring model** based on:
+
+- consequence (impact)
+- probability (likelihood)
+- contextual risk factors
+
+Its core purpose is simple:
+
+> **Help security teams decide what to fix first — based on real risk, not just severity.**
 
 
-## The Challenge: Too Many Security Recommendations
+
+### 🚨 Problem it solves
+
+**SecurityInsight addresses the lack of meaningful prioritization in modern security tooling.**
+
+In typical environments:
+
+- Thousands of vulnerabilities and recommendations exist
+- Many are labeled “high” or “critical”
+- Prioritization is based mostly on technical severity
+
+**SecurityInsight solves this by:**
+
+- Incorporating **business impact (asset criticality)**
+- Considering **likelihood of exploitation**
+- Understanding **relationships and attack paths**
+
+👉 Instead of treating all findings equally, it highlights the ones that actually matter.
+
+
+
+## ⚙️ How it works
+
+### 🔢 Risk model
+
+**SecurityInsight uses a simple core formula:**
+
+Risk Score = Consequence × Probability
+
+- **Consequence** → impact if exploited
+- **Probability** → likelihood of exploitation
+
+The score is further refined with contextual factors such as:
+
+- Internet exposure
+- Known exploits
+- Legacy systems
+
+
+
+### 🏷️ Critical asset tagging
+
+**SecurityInsight classifies assets by importance**, for example:
+
+- **Tier-0 (Critical):** Global Admins, Domain Admins, break-glass accounts
+- **Tier-1 / Tier-2 / Tier-3:** decreasing importance
+
+👉 The same vulnerability becomes higher priority when it affects critical assets.
+
+
+
+### 🕸️ Graph-based analysis
+
+**SecurityInsight uses graph-based security data (Exposure Graph)** to:
+
+- Map relationships between users, devices, identities, and resources
+- Identify attack paths and lateral movement
+- Correlate findings instead of treating them in isolation
+
+👉 This aligns defensive prioritization with how attackers actually operate.
+
+
+
+### 🧮 Risk analysis engine
+
+**SecurityInsight includes a PowerShell-based analysis engine that:**
+
+- Executes Kusto (KQL) queries against Microsoft security data
+- Processes graph data (nodes + edges)
+- Applies the risk model
+- Produces a prioritized **risk index**
+
+Core components:
+
+- `RunSecurityInsight.ps1` (entry point)
+- Risk analysis scripts
+- KQL query definitions (YAML)
+- Risk index configuration (CSV)
+
+
+
+### 📊 Reporting
+
+**SecurityInsight generates actionable outputs such as:**
+
+- Summary reports
+- Detailed findings
+- Prioritized remediation lists
+
+Optional:
+
+- AI-generated summaries via OpenAI integration
+
+
+
+## 💡 Key idea
+
+> **SecurityInsight transforms raw security findings into a prioritized, business-aware risk view.**
+
+
+
+# The Challenge: Too Many Security Recommendations
 
 Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings. Security teams are often faced with:
 
@@ -115,7 +231,7 @@ In practice, remediation work is often prioritized according to:
 
 
 
-## A Risk-Based Prioritization Model
+# A Risk-Based Prioritization Model
 
 The **Security Insight** framework introduces a **risk-based prioritization model** that evaluates security findings based on both consequence and probability.
 
@@ -140,7 +256,7 @@ These factors will each increase the probability score with +1 - and therefore i
 
 
 
-## Why We Use a Graph — Understanding Exposure Graph Architecture
+# Why We Use a Graph — Understanding Exposure Graph Architecture
 
 **Defenders typically think in lists.** Security tools often present data as separate inventories such as:
 
@@ -234,7 +350,7 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 
 
 
-## Risk Score Model
+# Risk Score Model
 
 **Risk Score** is calculated using two dimensions:
 
@@ -496,7 +612,7 @@ The framework generates both summary and detailed reports.
 
 
 
-## Governance and Compliance
+# Governance and Compliance
 
 The model supports several important security frameworks.
 
@@ -529,7 +645,7 @@ The model aligns with several CIS controls, including:
 
 
 
-## Operational Benefits
+# Operational Benefits
 
 The risk-based model provides several advantages:
 
@@ -542,7 +658,7 @@ The risk-based model provides several advantages:
 
 
 
-## Future Opportunities
+# Future Opportunities
 
 Potential future developments include:
 
@@ -555,7 +671,7 @@ Potential future developments include:
 
 
 
-## Transparency and Flexibility
+# Transparency and Flexibility
 
 A key strength of the Security Insight model is its **transparent and flexible architecture**.
 
@@ -578,7 +694,7 @@ This approach ensures that the model is **100% transparent and open**.
 
 
 
-## Collaboration with Microsoft
+# Collaboration with Microsoft
 
 The development of the Security Insight model is conducted in close dialogue with Microsoft.
 
@@ -592,7 +708,7 @@ The goal of this collaboration is to explore how the principles behind the Secur
 
 
 
-## Files Overview
+# Files Overview
 
 ### Asset Tagging
 

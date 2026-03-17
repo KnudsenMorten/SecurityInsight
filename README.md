@@ -124,6 +124,9 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
 ------
 
 # Executive Summary
+My customer loves the solution as it allows them to take better decisions on which recommendations to fix – with respect of the criticality level/priority of the asset – combined with lots of contextual risk factors
+To simplify it: you take the first line in the Excel spreadsheet, as it has the highest “risk score”. The higher risk score, the more important is the recommendation.
+
 
 ### 🧩 What it is
 

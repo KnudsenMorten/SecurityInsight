@@ -1,6 +1,12 @@
 # SecurityInsight
 Rethink **Secure Score** into a **new risk-based security risk score**, based on **consequence, probability** and **risk factors**. Solution includes **critical asset tagging**, **ready-to-use reports** (based on Defender Exposure Graph and Azure Resource Graphs Kusto queries), **automation-scripts,** **risk index** and more
 
+My customer loves the solution as **it allows them to take better decisions on which recommendations to fix first** – with respect of the **criticality level/priority of the asset** – **combined with lots of contextual risk factors**
+
+To simplify it: **you take the first line in the Excel spreadsheet, as it has the highest “risk score”. The higher risk score, the more important is the recommendation.**
+
+
+
 ## 📑 Table of Contents
 
 - [Executive Summary](#executive-summary)
@@ -120,13 +126,10 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
   - [5.2 Run analysis (Summary & Detailed)](#step-52a-run-risk-analysis-launcher-in-summary-mode-cmdline)
   - [5.3 AI integration](#step-53a-deploy-openai-instance-to-enable-ai-support-deploy_openai_payg_instance_securityinsightsps1)
   
- 
+
 ------
 
 # Executive Summary
-My customer loves the solution as it allows them to take better decisions on which recommendations to fix – with respect of the criticality level/priority of the asset – combined with lots of contextual risk factors
-To simplify it: you take the first line in the Excel spreadsheet, as it has the highest “risk score”. The higher risk score, the more important is the recommendation.
-
 
 ### 🧩 What it is
 

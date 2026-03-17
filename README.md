@@ -1,18 +1,41 @@
 # SecurityInsight
 Rethink **Secure Score** into a **new risk-based security risk score**, based on **consequence, probability** and **risk factors**. Solution includes **critical asset tagging**, **ready-to-use reports** (based on Defender Exposure Graph and Azure Resource Graphs Kusto queries), **automation-scripts,** **risk index** and more
 
-## Table of Contents
+## 📑 Table of Contents
+
+- [Executive Summary](#executive-summary)
+  - [🧩 What it is](#-what-it-is)
+  - [🚨 Problem it solves](#-problem-it-solves)
+  - [⚙️ How it works](#️-how-it-works)
+    - [🔢 Risk model](#-risk-model)
+    - [🏷️ Critical asset tagging](#️-critical-asset-tagging)
+    - [🕸️ Graph-based analysis](#️-graph-based-analysis)
+    - [🧮 Risk analysis engine](#-risk-analysis-engine)
+    - [📊 Reporting](#-reporting)
+  - [💡 Key idea](#-key-idea)
+
+---
+
+### 🔍 Core Concepts
 
 - [The Challenge: Too Many Security Recommendations](#the-challenge-too-many-security-recommendations)
 - [A Risk-Based Prioritization Model](#a-risk-based-prioritization-model)
 - [Why We Use a Graph — Understanding Exposure Graph Architecture](#why-we-use-a-graph--understanding-exposure-graph-architecture)
 - [Example of an Attack Path](#example-of-an-attack-path)
-  - [Example of Attack Path](#example-of-attack-path)
 - [Why Graph Architecture Matters](#why-graph-architecture-matters)
+
+---
+
+### 📊 Risk Model & Scoring
 
 - [Risk Score Model](#risk-score-model)
   - [Severity Prioritization \| Risk Score Definitions](#severity-prioritization--risk-score-definitions)
   - [Criticality Prioritization \| Risk Score Definitions](#criticality-prioritization--risk-score-definitions)
+- [Risk Index - How we prioritize scoring (customizable)?](#risk-index---how-we-prioritize-scoring-customizable)
+
+---
+
+### 🏷️ Asset Criticality & Classification
 
 - [Asset Criticality Classification](#asset-criticality-classification)
   - [Endpoint / Device Asset Criticality Classification](#endpoint--device-asset-criticality-classification)
@@ -21,18 +44,32 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
   - [SaaS (Apps) Asset Criticality Classification](#saas-apps-asset-criticality-classification)
   - [Data Asset Criticality Classification](#data-asset-criticality-classification)
 
-- [Risk Index - How we prioritize scoring (customizable)?](#risk-index---how-we-prioritize-scoring-customizable)
+---
+
+### 📈 Reporting & Outputs
 
 - [Reporting](#reporting)
+
+---
+
+### 🏛️ Governance & Alignment
 
 - [Governance and Compliance](#governance-and-compliance)
   - [NIS2 Directive](#nis2-directive)
   - [CIS Critical Security Controls](#cis-critical-security-controls)
 
+---
+
+### ⚙️ Operational Value
+
 - [Operational Benefits](#operational-benefits)
 - [Future Opportunities](#future-opportunities)
 - [Transparency and Flexibility](#transparency-and-flexibility)
 - [Collaboration with Microsoft](#collaboration-with-microsoft)
+
+---
+
+### 🗂️ Solution Structure
 
 - [Files Overview](#files-overview)
   - [Asset Tagging](#asset-tagging)
@@ -41,45 +78,49 @@ Rethink **Secure Score** into a **new risk-based security risk score**, based on
   - [Support file](#support-file)
   - [Sample Output files](#sample-output-files)
 
+---
+
+### 🚀 Implementation Guide
+
 - [High-level Overview of Implementation](#high-level-overview-of-implementation)
 
+#### Step 1: Prepare SecurityInsight files
 - [Step 1: Prepare SecurityInsight files on automation-server](#step-1-prepare-securityinsight-files-on-automation-server)
-  - [1.1. Download all files from Github site and create folder on automation/batch-server](#11-download-all-files-from-github-site-and-create-folder-on-automationbatch-server)
-  - [1.2. Install necessary PowerShell modules on server](#12-install-necessary-powershell-modules-on-server-optional-as-the-script-will-also-do-this-if-missing)
+  - [1.1 Download files](#11-download-all-files-from-github-site-and-create-folder-on-automationbatch-server)
+  - [1.2 Install PowerShell modules](#12-install-necessary-powershell-modules-on-server-optional-as-the-script-will-also-do-this-if-missing)
 
-- [Step 2: Onboarding of Entra App registration - to be used with SecurityInsight](#step-2-onboarding-of-entra-app-registration---to-be-used-with-securityinsight)
-  - [2.1. Create Entra App registration (SPN) and set Secret](#21-create-entra-app-registration-spn-and-set-secret-note-it-down)
-  - [2.2. Delegate API permissions to Entra App SPN](#22-delegate-api-permissions-to-entra-app-spn)
-  - [2.3. Delegate Tag Contributor permissions in Azure](#23-delegate-tag-contributor-permissions-in-azure-to-entra-app-spn-on-tenant-root-level-to-ensure-the-possibility-to-tag-all-azure-resources)
+#### Step 2: Entra App onboarding
+- [Step 2: Onboarding of Entra App registration](#step-2-onboarding-of-entra-app-registration---to-be-used-with-securityinsight)
+  - [2.1 Create App Registration](#21-create-entra-app-registration-spn-and-set-secret-note-it-down)
+  - [2.2 API permissions](#22-delegate-api-permissions-to-entra-app-spn)
+  - [2.3 Azure permissions](#23-delegate-tag-contributor-permissions-in-azure-to-entra-app-spn-on-tenant-root-level-to-ensure-the-possibility-to-tag-all-azure-resources)
 
+#### Step 3: Asset tagging
 - [Step 3: Setting Asset Tier Level using tagging](#step-3-setting-asset-tier-level-using-tagging)
   - [Structure of query in YAML-file](#structure-of-query-in-yaml-file)
   - [Asset Tagging files](#asset-tagging-files)
-  - [Step 3.1. Adjust the authentication details in launcher file](#step-31-adjust-the-authentication-details-in-launcher-file-runcriticalassettaggingps1-spntenantid-spnclientid-spnclientsecret)
-  - [Step 3.2. Adjust the WhatIfMode](#step-32-adjust-the-whatifmode-to-true-if-you-are-only-testing-otherwise-leave-it-as-false-to-set-the-tags)
-  - [Step 3.3. Run Critical Asset launcher in PROD mode](#step-33-prod-run-critical-asset-launcher-to-tag-recommended-tags-in-prod-mode)
-  - [Step 3.4. Setup recurring job](#step-34-prod-setup-recurring-job-to-run-every-x-hours-using-task-scheduler-or-3rd-party-software-like-visualcron)
-  - [Step 3.5. Adjust custom yaml-file to tag resources in Test-mode](#step-35-test-adjust-custom-yaml-file-to-tag-resources-in-test-mode)
-  - [Step 3.6. Run Critical Asset launcher in TEST mode](#step-36-test-run-critical-asset-launcher-to-tag-recommended-tags-in-test-mode)
-  - [Step 3.7. Adjust queries to Prod-mode](#step-37-prod-adjust-queries-to-prod-mode-once-happy-now-they-will-be-included-in-the-recurring-job)
+  - [3.1 Adjust authentication](#step-31-adjust-the-authentication-details-in-launcher-file-runcriticalassettaggingps1-spntenantid-spnclientid-spnclientsecret)
+  - [3.2 WhatIf mode](#step-32-adjust-the-whatifmode-to-true-if-you-are-only-testing-otherwise-leave-it-as-false-to-set-the-tags)
+  - [3.3 Run tagging (PROD)](#step-33-prod-run-critical-asset-launcher-to-tag-recommended-tags-in-prod-mode)
+  - [3.4 Schedule recurring job](#step-34-prod-setup-recurring-job-to-run-every-x-hours-using-task-scheduler-or-3rd-party-software-like-visualcron)
+  - [3.5 Adjust queries (TEST)](#step-35-test-adjust-custom-yaml-file-to-tag-resources-in-test-mode)
+  - [3.6 Run tagging (TEST)](#step-36-test-run-critical-asset-launcher-to-tag-recommended-tags-in-test-mode)
+  - [3.7 Promote to PROD](#step-37-prod-adjust-queries-to-prod-mode-once-happy-now-they-will-be-included-in-the-recurring-job)
 
+#### Step 4: Criticality classification
 - [Step 4: Setting Asset Criticality Level Classification](#step-4-setting-asset-criticality-level-classification)
-  - [Step 4.1 - How to setup Criticality Tier Level against Azure resources](#step-41---how-to-setup-criticality-tier-level-against-azure-resources)
-  - [Step 4.2 - How to setup Criticality Tier Level against Defender device resources](#step-42---how-to-setup-criticality-tier-level-against-defender-device-resources)
-  - [What am I missing in Critical Asset Management - Dialog with Microsoft in progress](#what-am-i-missing-in-critical-asset-management)
+  - [4.1 Azure resources](#step-41---how-to-setup-criticality-tier-level-against-azure-resources)
+  - [4.2 Defender devices](#step-42---how-to-setup-criticality-tier-level-against-defender-device-resources)
+  - [Gaps / Missing capabilities](#what-am-i-missing-in-critical-asset-management)
 
+#### Step 5: Risk analysis
 - [Step 5: Run the Risk Analysis](#step-5-run-the-risk-analysis)
   - [Files Overview (Risk Analysis)](#files-overview-risk-analysis)
-  - [Step 5.1. Adjust the authentication + smtp details](#step-51-adjust-the-authentication--smtp-details-in-launcher-file-runsecurityinsightps1)
-  - [Step 5.2A. Run Risk Analysis launcher in SUMMARY mode](#step-52a-run-risk-analysis-launcher-in-summary-mode-cmdline)
-  - [Step 5.2B. Run Risk Analysis launcher in DETAILED mode GUI](#step-52b-run-risk-analysis-launcher-in-detailed-mode-guiise-mode-alternative)
-  - [Step 5.2C. Run Risk Analysis launcher in DETAILED mode cmdline](#step-52c-run-risk-analysis-launcher-in-detailed-mode-cmdline)
-  - [Step 5.2D. Run Risk Analysis launcher in DETAILED mode GUI alternative](#step-52d-run-risk-analysis-launcher-in-detailed-mode-guiise-mode-alternative)
-  - [Step 5.2E. Run Risk Analysis launcher for Custom Report Template](#step-52e-run-risk-analysis-launcher-for-custom-report-template-cmdline)
-  - [Step 5.3A. Deploy OpenAI instance to enable AI Support](#step-53a-deploy-openai-instance-to-enable-ai-support-deploy_openai_payg_instance_securityinsightsps1)
-  - [Step 5.3B. Run deployment script](#step-53b-run-risk-deploy_openai_payg_instance_securityinsightsps1-to-deploy-ai-instance)
-  - [Step 5.3C. Adjust Risk Analysis launcher to enable AI summary](#step-53c-adjust-the-risk-analysis-launcher-file-to-enable-ai-summary-support-runsecurityinsightps1)
+  - [5.1 Authentication & SMTP](#step-51-adjust-the-authentication--smtp-details-in-launcher-file-runsecurityinsightps1)
+  - [5.2 Run analysis (Summary & Detailed)](#step-52a-run-risk-analysis-launcher-in-summary-mode-cmdline)
+  - [5.3 AI integration](#step-53a-deploy-openai-instance-to-enable-ai-support-deploy_openai_payg_instance_securityinsightsps1)
   
+ 
 ------
 
 # Executive Summary
@@ -197,6 +238,8 @@ Optional:
 ## 💡 Key idea
 
 > **SecurityInsight transforms raw security findings into a prioritized, business-aware risk view.**
+
+------
 
 
 

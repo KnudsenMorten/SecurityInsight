@@ -1585,7 +1585,7 @@ NOTE: Adding a new Azure Tag takes between 24-48 hours before it will show up in
 | Critical Asset Management | Ability to run Kusto query, instead of having to choose static field. Much more efficient and will also overcome limitations, where I can correlate tables<br /><br />Lots of field are missing like device roles, internal ip address |
 | Critical Asset Management | API for onboarding of custom classifications. We have t manually create today |
 | Device (custom query)     | Internal IP Address is not an option                         |
-| Identity (custom query)   | Operator 'not contains' is missing<br /><br />Impossible to make a query like<br />Find all Admins that starts with Admin- AND doesn't contain ""-T0-T0-id" |
+| Identity (custom query)   | Operator 'not contains' is missing<br /><br />Impossible to make a query like<br />Find all Admins that starts with Admin- AND doesn't contain ""-T0-L0-id" |
 | Identity (custom query)   | extensionAttibute1-15 is missing<br /><br />Many tag users like<br />extensionAttribute6 (Classification) = Internal_User, Service_Account<br />extensionAttibute7 (AuthenticationMethod) = Internal_User_AD_Synced_MFA, Service_Account_Cloud_FIDO |
 
 ------

@@ -49,6 +49,8 @@ $global:OpenAI_apiVersion           = $null
 $global:OpenAI_MaxTokensPerRequest  = $null
 $global:AI_MaxTokensPerRequest      = $null
 $global:AI_Uri                      = $null
+$global:AI_apiKey                   = $null
+$global:AI_deployment               = $null
 
 #########################################################################################################
 # OPTIONAL VARIABLE OVERRIDES (used only when no CLI switch is provided)

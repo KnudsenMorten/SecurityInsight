@@ -1,6 +1,5 @@
 ﻿param(
   [Parameter(Mandatory=$false)]
-  [ValidateNotNullOrEmpty()]
   [string] $SettingsPath,
 
   [Parameter(Mandatory=$false)]

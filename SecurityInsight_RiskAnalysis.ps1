@@ -2734,10 +2734,10 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
       Write-AutoBucketCache -Path $cachePath2 -CacheObject $cache2
     }
   } catch { }
-}Write-Info ("total rows across all buckets before dedupe: {0}" -f $ResultAll.Count)
+}
         # $ResultAll = @(Deduplicate-Rows -Rows $ResultAll)
         $ResultAll = @($ResultAll)   # enforce array
-        Write-Info ("total rows after dedupe: {0}" -f ($ResultAll | Measure-Object).Count)
+        Write-Info ("total rows across all buckets: {0}" -f $ResultAll.Count)
 
     } else {
 

@@ -4,13 +4,35 @@
   [string] $ReportTemplate,
 
   [Parameter(Mandatory=$false)]
+  [switch] $Detailed,
+
+  [Parameter(Mandatory=$false)]
+  [switch] $Summary,
+
+  [Parameter(Mandatory=$false)]
   [switch] $AutomationFramework,
 
   [Parameter(Mandatory=$false)]
   [string] $SettingsPath,
 
   [Parameter(Mandatory=$false)]
-  [switch] $BuildSummaryByAI
+  [switch] $BuildSummaryByAI,
+
+  # Adaptive bucketing
+  [Parameter(Mandatory=$false)]
+  [switch] $AutoBucketCount,
+
+  [Parameter(Mandatory=$false)]
+  [ValidateRange(1,512)]
+  [int] $AutoBucketMax = 64,
+
+  [Parameter(Mandatory=$false)]
+  [switch] $AutoBucketCache,
+
+  # Deletes OUTPUT\AutoBucketCache.json so it rebuilds
+  [Parameter(Mandatory=$false)]
+  [Alias('ResetCache')]
+  [switch] $ResetCacheSwitch
 )
 
 #########################################################################################################

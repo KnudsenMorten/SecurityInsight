@@ -2946,10 +2946,10 @@ Write-Ok ("excel file ready: {0}" -f $global:OutputXlsx)
 if ([bool]$global:BuildSummaryByAI) {
 
     # Resolve AI config from GLOBAL OpenAI_* variables (single source of truth)
-    if (-not $global:AI_apiKey -and -not [string]::IsNullOrWhiteSpace($global:OpenAI_apiKey)) {
+    if (-not [string]::IsNullOrWhiteSpace($global:OpenAI_apiKey)) {
         $global:AI_apiKey = $global:OpenAI_apiKey
     }
-    if (-not $global:AI_deployment -and -not [string]::IsNullOrWhiteSpace($global:OpenAI_deployment)) {
+    if (-not [string]::IsNullOrWhiteSpace($global:OpenAI_deployment)) {
         $global:AI_deployment = $global:OpenAI_deployment
     }
 

@@ -35,6 +35,12 @@ $Scope               = @($global:Scope)
 if ($null -eq $global:WhatIfMode) { $global:WhatIfMode = $false }
 $WhatIfMode = [bool]$global:WhatIfMode
 
+if ($null -eq $global:SuppressErrors) { $global:SuppressErrors = $false }
+$SuppressErrors = [bool]$global:SuppressErrors
+
+$script:SuppressErrors = $SuppressErrors
+$script:WhatIfMode     = $WhatIfMode
+
 #######################################################################################################
 # FUNCTIONS
 #######################################################################################################
@@ -42,7 +48,12 @@ $WhatIfMode = [bool]$global:WhatIfMode
 function Write-Step  ($m){ Write-Host "[STEP] $m" -ForegroundColor Cyan }
 function Write-Info  ($m){ Write-Host "[INFO] $m" -ForegroundColor Gray }
 function Write-Ok    ($m){ Write-Host "[OK]   $m" -ForegroundColor Green }
-function Write-Warn2 ($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
+function Write-Warn2 {
+  param($m)
+  if (-not $script:SuppressWarnings) {
+    Write-Host "[WARN] $m" -ForegroundColor Yellow
+  }
+}
 function Write-Err2  ($m){ Write-Host "[ERR]  $m" -ForegroundColor Red }
 function Tick { param([string]$Label="") if($script:_sw){ $script:_sw.Stop(); Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds); $script:_sw=$null } }
 function Tock { $script:_sw = [System.Diagnostics.Stopwatch]::StartNew() }
@@ -314,7 +325,6 @@ function Get-DeviceNameFromRow {
 function Get-SenseDeviceIdFromRow {
   param([Parameter(Mandatory)][psobject]$Row)
 
-  # primary id to use for Defender machine APIs
   $id = Get-FirstNonEmptyPropertyValue -Row $Row -Names @('SenseDeviceId','senseDeviceId')
   if ([string]::IsNullOrWhiteSpace($id)) { return $null }
   return $id.Trim()
@@ -324,7 +334,8 @@ function Test-DefenderMachineExists {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
-    [Parameter(Mandatory)][string]$MachineId
+    [Parameter(Mandatory)][string]$MachineId,
+    [bool]$SuppressErrors = $script:SuppressErrors
   )
 
   if ([string]::IsNullOrWhiteSpace($MachineId)) { return $false }
@@ -340,6 +351,12 @@ function Test-DefenderMachineExists {
     $statusCode = $null
     if ($resp) { try { $statusCode = [int]$resp.StatusCode } catch {} }
     if ($statusCode -eq 404) { return $false }
+
+    if ($SuppressErrors) {
+      Write-Warn2 ("Suppressed Defender machine existence check error: MachineId={0} | Error={1}" -f $MachineId, $_.Exception.Message)
+      return $false
+    }
+
     throw
   }
 }
@@ -352,7 +369,8 @@ function AddTagForMultipleMachines {
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
     [Parameter(Mandatory)][string[]]$MachineIds,
     [Parameter(Mandatory)][string]$Tag,
-    [bool]$WhatIfMode = $script:WhatIfMode
+    [bool]$WhatIfMode = $script:WhatIfMode,
+    [bool]$SuppressErrors = $script:SuppressErrors
   )
 
   $uri  = "https://api.securitycenter.microsoft.com/api/machines/AddOrRemoveTagForMultipleMachines"
@@ -362,13 +380,37 @@ function AddTagForMultipleMachines {
     MachineIds = @($MachineIds)
   }
 
+  $result = [pscustomobject]@{
+    Success      = $false
+    Suppressed   = $false
+    WhatIf       = $false
+    ErrorMessage = $null
+    Count        = @($MachineIds).Count
+    Tag          = $Tag
+    Uri          = $uri
+  }
+
   if ($WhatIfMode) {
     Write-Warn2 ("[WHATIF] Would bulk-tag {0} machines with '{1}'" -f $MachineIds.Count, $Tag)
     Write-Info  ("[WHATIF] POST {0}" -f $uri)
-    return
+    $result.Success = $true
+    $result.WhatIf  = $true
+    return $result
   }
 
-  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj | Out-Null
+  try {
+    Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj | Out-Null
+    $result.Success = $true
+    return $result
+  }
+  catch {
+    $result.ErrorMessage = $_.Exception.Message
+    if ($SuppressErrors) {
+      $result.Suppressed = $true
+      return $result
+    }
+    throw
+  }
 }
 
 function Add-DefenderTag {
@@ -377,7 +419,8 @@ function Add-DefenderTag {
     [Parameter(Mandatory)][string]$MachineId,
     [Parameter(Mandatory)][string]$Tag,
     [string]$DeviceName = "<unknown>",
-    [bool]$WhatIfMode = $script:WhatIfMode
+    [bool]$WhatIfMode = $script:WhatIfMode,
+    [bool]$SuppressErrors = $script:SuppressErrors
   )
 
   $uri  = "https://api.securitycenter.microsoft.com/api/machines/$MachineId/tags"
@@ -386,13 +429,38 @@ function Add-DefenderTag {
     Action = "Add"
   }
 
+  $result = [pscustomobject]@{
+    Success      = $false
+    Suppressed   = $false
+    WhatIf       = $false
+    ErrorMessage = $null
+    MachineId    = $MachineId
+    DeviceName   = $DeviceName
+    Tag          = $Tag
+    Uri          = $uri
+  }
+
   if ($WhatIfMode) {
     Write-Warn2 ("[WHATIF] Would tag machine {0} ({1}) with '{2}'" -f $DeviceName, $MachineId, $Tag)
     Write-Info  ("[WHATIF] POST {0}" -f $uri)
-    return
+    $result.Success = $true
+    $result.WhatIf  = $true
+    return $result
   }
 
-  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj | Out-Null
+  try {
+    Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj | Out-Null
+    $result.Success = $true
+    return $result
+  }
+  catch {
+    $result.ErrorMessage = $_.Exception.Message
+    if ($SuppressErrors) {
+      $result.Suppressed = $true
+      return $result
+    }
+    throw
+  }
 }
 
 # ==========================================================================================
@@ -404,7 +472,8 @@ function Apply-TagBulkWithSplit {
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
     [Parameter(Mandatory)][pscustomobject[]]$Devices, # objects: Id, Name
     [Parameter(Mandatory)][string]$Tag,
-    [int]$MaxSplitDepth = 10
+    [int]$MaxSplitDepth = 10,
+    [bool]$SuppressErrors = $script:SuppressErrors
   )
 
   if (-not $Devices -or $Devices.Count -eq 0) { return }
@@ -420,8 +489,15 @@ function Apply-TagBulkWithSplit {
     $ids = @($items | ForEach-Object { $_.Id })
 
     try {
-      AddTagForMultipleMachines -AccessHeaders $AccessHeaders -MachineIds $ids -Tag $Tag
-      Write-Ok ("bulk tag applied to {0} machines" -f $ids.Count)
+      $bulkResult = AddTagForMultipleMachines -AccessHeaders $AccessHeaders -MachineIds $ids -Tag $Tag -SuppressErrors $SuppressErrors
+
+      if ($bulkResult.Suppressed) {
+        Write-Warn2 ("Suppressed Defender bulk tagging error for {0} machines (depth {1}) | Tag='{2}' | Error={3}" -f $ids.Count, $depth, $Tag, $bulkResult.ErrorMessage)
+      }
+      else {
+        Write-Ok ("bulk tag applied to {0} machines" -f $ids.Count)
+      }
+
       continue
     }
     catch {
@@ -430,11 +506,21 @@ function Apply-TagBulkWithSplit {
       if ($items.Count -le 1 -or $depth -ge $MaxSplitDepth) {
         $one = $items[0]
         try {
-          Add-DefenderTag -AccessHeaders $AccessHeaders -MachineId $one.Id -Tag $Tag -DeviceName $one.Name | Out-Null
-          Write-Ok ("tag '{0}' added (single): {1} ({2})" -f $Tag, $one.Name, $one.Id)
+          $singleResult = Add-DefenderTag -AccessHeaders $AccessHeaders -MachineId $one.Id -Tag $Tag -DeviceName $one.Name -SuppressErrors $SuppressErrors
+          if ($singleResult.Suppressed) {
+            Write-Warn2 ("Suppressed Defender single-machine tagging error: {0} ({1}) | Tag='{2}' | Error={3}" -f $one.Name, $one.Id, $Tag, $singleResult.ErrorMessage)
+          }
+          else {
+            Write-Ok ("tag '{0}' added (single): {1} ({2})" -f $Tag, $one.Name, $one.Id)
+          }
         }
         catch {
-          Write-Err2 ("unprocessable machine: {0} ({1}): {2}" -f $one.Name, $one.Id, $_.Exception.Message)
+          if ($SuppressErrors) {
+            Write-Warn2 ("Suppressed unprocessable machine error: {0} ({1}) | Error={2}" -f $one.Name, $one.Id, $_.Exception.Message)
+          }
+          else {
+            Write-Err2 ("unprocessable machine: {0} ({1}): {2}" -f $one.Name, $one.Id, $_.Exception.Message)
+          }
         }
         continue
       }
@@ -452,7 +538,7 @@ function Apply-TagBulkWithSplit {
 }
 
 # ==========================================================================================
-# Azure tagging functions unchanged
+# Azure tagging helpers
 # ==========================================================================================
 function Get-ArgResourceIdFromRow {
   param([Parameter(Mandatory)][psobject]$Row)
@@ -492,51 +578,153 @@ function Get-TagValueFromRow {
   return $null
 }
 
+function Get-SubscriptionIdFromResourceId {
+  param([Parameter(Mandatory)][string]$ResourceId)
+
+  if ([string]::IsNullOrWhiteSpace($ResourceId)) { return $null }
+
+  if ($ResourceId -match '^/subscriptions/([0-9a-fA-F-]{36})(/|$)') {
+    return $matches[1].ToLowerInvariant()
+  }
+
+  return $null
+}
+
+function Get-ResourceTypeFromResourceId {
+  param([Parameter(Mandatory)][string]$ResourceId)
+
+  if ([string]::IsNullOrWhiteSpace($ResourceId)) { return $null }
+
+  $m = [regex]::Match($ResourceId, '/providers/([^/]+/[^/]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+  if ($m.Success) { return $m.Groups[1].Value.ToLowerInvariant() }
+
+  return $null
+}
+
+function Test-ArmResourceId {
+  param([Parameter(Mandatory)][string]$ResourceId)
+
+  if ([string]::IsNullOrWhiteSpace($ResourceId)) { return $false }
+
+  return ($ResourceId -match '^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/[^/]+/.+')
+}
+
+function Set-AzContextFromResourceId {
+  [CmdletBinding()]
+  param([Parameter(Mandatory)][string]$ResourceId)
+
+  $subId = Get-SubscriptionIdFromResourceId -ResourceId $ResourceId
+  if ([string]::IsNullOrWhiteSpace($subId)) {
+    throw "Could not extract subscription id from ResourceId: $ResourceId"
+  }
+
+  $ctx = Get-AzContext -ErrorAction SilentlyContinue
+  $currentSub = $null
+  if ($ctx -and $ctx.Subscription) { $currentSub = [string]$ctx.Subscription.Id }
+
+  if ($currentSub -ne $subId) {
+    Set-AzContext -SubscriptionId $subId -ErrorAction Stop | Out-Null
+  }
+
+  return $subId
+}
+
+function Test-SkipAzureTaggingForType {
+  param([Parameter(Mandatory)][string]$ResourceType)
+
+  $skipTypes = @(
+    'microsoft.insights/scheduledqueryrules'
+  )
+
+  return ($skipTypes -contains $ResourceType.ToLowerInvariant())
+}
+
 function Add-AzureResourceTag {
+  [CmdletBinding()]
   param(
     [Parameter(Mandatory)][string]$ResourceId,
     [Parameter(Mandatory)][string]$AssetTagName,
     [Parameter(Mandatory)][string]$TagKey,
-    [bool]$WhatIfMode = $script:WhatIfMode
+    [bool]$WhatIfMode = $script:WhatIfMode,
+    [bool]$SuppressErrors = $script:SuppressErrors
   )
 
-  if ([string]::IsNullOrWhiteSpace($ResourceId))   { throw "ResourceId is empty" }
-  if ([string]::IsNullOrWhiteSpace($TagKey))       { throw "TagKey is empty" }
-  if ([string]::IsNullOrWhiteSpace($AssetTagName)) { throw "AssetTagName is empty" }
+  $rid = if ($null -ne $ResourceId) { $ResourceId.Trim() } else { $null }
 
-  $rid = $ResourceId.Trim()
-
-  $existing = $null
-  try { $existing = (Get-AzTag -ResourceId $rid -ErrorAction Stop).Properties.TagsProperty } catch { $existing = $null }
-
-  $already = $false
-  if ($existing -and $existing.ContainsKey($TagKey) -and ([string]$existing[$TagKey]) -eq $AssetTagName) {
-    $already = $true
+  $result = [pscustomobject]@{
+    Success          = $false
+    Suppressed       = $false
+    Changed          = $false
+    AlreadyPresent   = $false
+    Skipped          = $false
+    SkipReason       = $null
+    WhatIf           = $false
+    ResourceId       = $rid
+    ResourceType     = $null
+    SubscriptionId   = $null
+    TagKey           = $TagKey
+    TagValue         = $AssetTagName
+    ErrorMessage     = $null
   }
 
-  if ($WhatIfMode) {
-    if ($already) {
-      Write-Info ("[WHATIF] Azure tag already present: {0} -> {1}='{2}'" -f $rid, $TagKey, $AssetTagName)
-    } else {
-      Write-Warn2 ("[WHATIF] Would set Azure tag: {0} -> {1}='{2}' (Merge)" -f $rid, $TagKey, $AssetTagName)
+  try {
+    if ([string]::IsNullOrWhiteSpace($rid))            { throw "ResourceId is empty" }
+    if ([string]::IsNullOrWhiteSpace($TagKey))         { throw "TagKey is empty" }
+    if ([string]::IsNullOrWhiteSpace($AssetTagName))   { throw "AssetTagName is empty" }
+    if (-not (Test-ArmResourceId -ResourceId $rid))    { throw "Invalid ARM ResourceId: $rid" }
+
+    $resourceType = Get-ResourceTypeFromResourceId -ResourceId $rid
+    $subId        = Get-SubscriptionIdFromResourceId -ResourceId $rid
+
+    $result.ResourceType   = $resourceType
+    $result.SubscriptionId = $subId
+
+    if (-not [string]::IsNullOrWhiteSpace($resourceType) -and (Test-SkipAzureTaggingForType -ResourceType $resourceType)) {
+      $result.Skipped    = $true
+      $result.SkipReason = "Tagging skipped for resource type: $resourceType"
+      return $result
     }
 
-    return [pscustomobject]@{
-      WhatIf     = $true
-      Changed    = (-not $already)
-      ResourceId = $rid
-      TagKey     = $TagKey
-      TagValue   = $AssetTagName
+    Set-AzContextFromResourceId -ResourceId $rid | Out-Null
+
+    $existing = $null
+    try {
+      $existing = (Get-AzTag -ResourceId $rid -ErrorAction Stop).Properties.TagsProperty
     }
+    catch {
+      $existing = $null
+    }
+
+    if ($existing -and $existing.ContainsKey($TagKey) -and ([string]$existing[$TagKey]) -eq $AssetTagName) {
+      $result.Success        = $true
+      $result.AlreadyPresent = $true
+      $result.Changed        = $false
+      if ($WhatIfMode) { $result.WhatIf = $true }
+      return $result
+    }
+
+    if ($WhatIfMode) {
+      $result.Success = $true
+      $result.WhatIf  = $true
+      $result.Changed = $true
+      return $result
+    }
+
+    Update-AzTag -ResourceId $rid -Tag @{ $TagKey = $AssetTagName } -Operation Merge -ErrorAction Stop | Out-Null
+
+    $result.Success = $true
+    $result.Changed = $true
+    return $result
   }
+  catch {
+    $result.ErrorMessage = $_.Exception.Message
 
-  Update-AzTag -ResourceId $rid -Tag @{ $TagKey = $AssetTagName } -Operation Merge -ErrorAction Stop | Out-Null
+    if ($SuppressErrors) {
+      $result.Suppressed = $true
+      return $result
+    }
 
-  [pscustomobject]@{
-    Changed    = (-not $already)
-    ResourceId = $rid
-    TagKey     = $TagKey
-    TagValue   = $AssetTagName
+    throw
   }
 }
 
@@ -556,6 +744,7 @@ function Test-MicrosoftGraphInstalled {
 
 Write-Step "initializing"
 Write-Info ("WhatIfMode: {0}" -f $WhatIfMode)
+Write-Info ("SuppressErrors: {0}" -f $SuppressErrors)
 
 if (-not (Test-AzModuleInstalled)) {
   Write-Step "Installing Az modules ... Please Wait !"
@@ -689,7 +878,6 @@ function Import-AssetTaggingYaml {
   return @($y.AssetTagging)
 }
 
-# Defaults can be overridden by launcher globals
 $LockedYamlFile = if ($global:LockedYamlFile -and -not [string]::IsNullOrWhiteSpace([string]$global:LockedYamlFile)) { [string]$global:LockedYamlFile } else { 'SecurityInsight_CriticalAssetTagging_Locked.yaml' }
 $CustomYamlFile = if ($global:CustomYamlFile -and -not [string]::IsNullOrWhiteSpace([string]$global:CustomYamlFile)) { [string]$global:CustomYamlFile } else { 'SecurityInsight_CriticalAssetTagging_Custom.yaml' }
 $LegacyYamlFile = if ($global:LegacyYamlFile -and -not [string]::IsNullOrWhiteSpace([string]$global:LegacyYamlFile)) { [string]$global:LegacyYamlFile } else { 'CriticalAssetTagging.yaml' }
@@ -782,7 +970,6 @@ foreach ($rule in @($Yaml.AssetTagging)) {
       $assetTagName = [string]($rows | Select-Object -First 1).AssetTagName
       if ([string]::IsNullOrWhiteSpace($assetTagName)) { Write-Warn2 "query returned rows but AssetTagName is empty; skipping"; continue }
 
-      # Build list from SenseDeviceId + DeviceName (no DNS resolution)
       $devices = @()
       $skippedNoSenseId = 0
       $skippedNotFound  = 0
@@ -797,12 +984,23 @@ foreach ($rule in @($Yaml.AssetTagging)) {
           continue
         }
 
-        # optional: skip dead/offboarded machines early
         $exists = $true
-        try { $exists = Test-DefenderMachineExists -AccessHeaders $AccessHeaders -MachineId $id } catch { throw }
+        try {
+          $exists = Test-DefenderMachineExists -AccessHeaders $AccessHeaders -MachineId $id -SuppressErrors $SuppressErrors
+        }
+        catch {
+          if ($SuppressErrors) {
+            Write-Warn2 ("Suppressed Defender existence check error for {0} ({1}) | Error={2}" -f $name, $id, $_.Exception.Message)
+            $exists = $false
+          }
+          else {
+            throw
+          }
+        }
+
         if (-not $exists) {
           $skippedNotFound++
-          Write-Warn2 ("Skipping device: not found in Defender (404): {0} ({1})" -f $name, $id)
+          Write-Warn2 ("Skipping device: not found in Defender (404 or inaccessible): {0} ({1})" -f $name, $id)
           continue
         }
 
@@ -810,9 +1008,8 @@ foreach ($rule in @($Yaml.AssetTagging)) {
       }
 
       if ($skippedNoSenseId -gt 0) { Write-Warn2 ("Skipped {0} row(s): missing SenseDeviceId" -f $skippedNoSenseId) }
-      if ($skippedNotFound  -gt 0) { Write-Warn2 ("Skipped {0} row(s): SenseDeviceId not found in Defender (404)" -f $skippedNotFound) }
+      if ($skippedNotFound  -gt 0) { Write-Warn2 ("Skipped {0} row(s): SenseDeviceId not found in Defender or inaccessible" -f $skippedNotFound) }
 
-      # de-dupe by id (keep first name)
       $devices = @($devices | Group-Object Id | ForEach-Object { $_.Group | Select-Object -First 1 })
 
       if (-not $devices -or $devices.Count -eq 0) { Write-Warn2 "no taggable devices found; skipping"; continue }
@@ -831,7 +1028,17 @@ foreach ($rule in @($Yaml.AssetTagging)) {
 
         Write-Info ("tagging {0} machines with '{1}' (chunk {2}/{3}) -> {4}" -f $chunk.Count, $assetTagName, $currentChunk, $totalChunks, $namesPreview)
 
-        Apply-TagBulkWithSplit -AccessHeaders $AccessHeaders -Devices $chunk -Tag $assetTagName
+        try {
+          Apply-TagBulkWithSplit -AccessHeaders $AccessHeaders -Devices $chunk -Tag $assetTagName -SuppressErrors $SuppressErrors
+        }
+        catch {
+          if ($SuppressErrors) {
+            Write-Warn2 ("Suppressed Defender chunk tagging error: Tag='{0}' | Chunk={1}/{2} | Error={3}" -f $assetTagName, $currentChunk, $totalChunks, $_.Exception.Message)
+          }
+          else {
+            throw
+          }
+        }
       }
     }
     elseif ($queryEngine -eq 'AZURERESOURCEGRAPH') {
@@ -896,13 +1103,60 @@ foreach ($rule in @($Yaml.AssetTagging)) {
           continue
         }
 
+        $resourceType = $null
+        $targetSub    = $null
         try {
-          $result = Add-AzureResourceTag -ResourceId $rid -AssetTagName $tagValue -TagKey $tagKey
-          if ($result.Changed) { Write-Ok ("Azure tag set: {0} -> {1}='{2}'" -f $nameHint, $tagKey, $tagValue) }
-          else                 { Write-Info ("Azure tag already present: {0} -> {1}='{2}'" -f $nameHint, $tagKey, $tagValue) }
+          if (-not [string]::IsNullOrWhiteSpace($rid)) {
+            $resourceType = Get-ResourceTypeFromResourceId -ResourceId $rid
+            $targetSub    = Get-SubscriptionIdFromResourceId -ResourceId $rid
+          }
+        } catch {}
+
+        try {
+          $result = Add-AzureResourceTag `
+            -ResourceId $rid `
+            -AssetTagName $tagValue `
+            -TagKey $tagKey `
+            -WhatIfMode $WhatIfMode `
+            -SuppressErrors $SuppressErrors
+
+          if ($result.Skipped) {
+            Write-Warn2 ("Skipping Azure tag: {0} | Type={1} | ResourceId={2} | Reason={3}" -f `
+              $nameHint, $result.ResourceType, $rid, $result.SkipReason)
+          }
+          elseif ($result.Suppressed) {
+            Write-Warn2 ("Suppressed Azure tagging error: {0} | Type={1} | TargetSub={2} | ResourceId={3} | Error={4}" -f `
+              $nameHint, $resourceType, $targetSub, $rid, $result.ErrorMessage)
+          }
+          elseif ($result.WhatIf -and $result.Changed) {
+            Write-Warn2 ("[WHATIF] Would set Azure tag: {0} -> {1}='{2}' | Type={3} | ResourceId={4}" -f `
+              $nameHint, $tagKey, $tagValue, $result.ResourceType, $rid)
+          }
+          elseif ($result.AlreadyPresent) {
+            Write-Info ("Azure tag already present: {0} -> {1}='{2}' | Type={3}" -f `
+              $nameHint, $tagKey, $tagValue, $result.ResourceType)
+          }
+          elseif ($result.Changed) {
+            Write-Ok ("Azure tag set: {0} -> {1}='{2}' | Type={3}" -f `
+              $nameHint, $tagKey, $tagValue, $result.ResourceType)
+          }
+          else {
+            Write-Warn2 ("Azure tag returned no-change/unknown state: {0} | Type={1} | ResourceId={2}" -f `
+              $nameHint, $resourceType, $rid)
+          }
         }
         catch {
-          Write-Err2 ("Azure tagging failed: {0} ({1})" -f $nameHint, $_.Exception.Message)
+          $currentSub = $null
+          try { $currentSub = (Get-AzContext).Subscription.Id } catch {}
+
+          if ($SuppressErrors) {
+            Write-Warn2 ("Suppressed Azure tagging failure: {0} | Type={1} | TargetSub={2} | ContextSub={3} | ResourceId={4} | Error={5}" -f `
+              $nameHint, $resourceType, $targetSub, $currentSub, $rid, $_.Exception.Message)
+          }
+          else {
+            Write-Err2 ("Azure tagging failed: {0} | Type={1} | TargetSub={2} | ContextSub={3} | ResourceId={4} | Error={5}" -f `
+              $nameHint, $resourceType, $targetSub, $currentSub, $rid, $_.Exception.Message)
+          }
         }
       }
     }

@@ -880,10 +880,11 @@ WindowsDefenderATP -> Machine.ReadWrite.All
 
 
 
-### 2.3. Delegate 'Tag Contributor' permissions in Azure to Entra App SPN on Tenant Root-level to ensure the possibility to tag all Azure resources<br />
+### 2.3. Delegate 'Tag Contributor' and 'Reader' permissions in Azure to Entra App SPN on Tenant Root-level to ensure the possibility to tag all Azure resources + Run Azure Resource Graph queries<br />
 
 ```
 Tag Contributor (least privilege)
+Reader (least privilege)
 ```
 
 ![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/EntraApp-Azure-Permissions.png)

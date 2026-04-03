@@ -1,6 +1,6 @@
 AssetTagging:
   - AssetTagName: AzHubPlatformManagementSub--tier0--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: AzureResourceGraph
     Query:
       - |
@@ -27,7 +27,7 @@ AssetTagging:
 
 
   - AssetTagName: AzHubPlatformManagementResources--tier0--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: AzureResourceGraph
     Query:
       - |
@@ -58,7 +58,7 @@ AssetTagging:
         | order by subscriptionId asc
 
   - AssetTagName: AzHubPlatformSecuritySub--tier0--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: AzureResourceGraph
     Query:
       - |
@@ -85,7 +85,7 @@ AssetTagging:
 
 
   - AssetTagName: AzHubPlatformSecurityResources--tier0--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: AzureResourceGraph
     Query:
       - |
@@ -144,7 +144,7 @@ AssetTagging:
 
 
   - AssetTagName: AutomationServer--tier0--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -200,7 +200,7 @@ AssetTagging:
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
   - AssetTagName: ServerBusinessServices--tier1--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -531,7 +531,7 @@ AssetTagging:
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
   - AssetTagName: Network_WLANAccessPoint--tier2--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: DefenderGraph
     Query:
       - |
@@ -576,7 +576,7 @@ AssetTagging:
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
 
   - AssetTagName: Temp-Client-Devices--excluded--SI
-    Mode: Test
+    Mode: Prod
     QueryEngine: DefenderGraph
     Query:
       - |

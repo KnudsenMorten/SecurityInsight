@@ -38,8 +38,12 @@ $WhatIfMode = [bool]$global:WhatIfMode
 if ($null -eq $global:SuppressErrors) { $global:SuppressErrors = $false }
 $SuppressErrors = [bool]$global:SuppressErrors
 
-$script:SuppressErrors = $SuppressErrors
-$script:WhatIfMode     = $WhatIfMode
+if ($null -eq $global:SuppressWarnings) { $global:SuppressWarnings = $false }
+$SuppressWarnings = [bool]$global:SuppressWarnings
+
+$script:SuppressErrors   = $SuppressErrors
+$script:SuppressWarnings = $SuppressWarnings
+$script:WhatIfMode       = $WhatIfMode
 
 #######################################################################################################
 # FUNCTIONS
@@ -48,13 +52,21 @@ $script:WhatIfMode     = $WhatIfMode
 function Write-Step  ($m){ Write-Host "[STEP] $m" -ForegroundColor Cyan }
 function Write-Info  ($m){ Write-Host "[INFO] $m" -ForegroundColor Gray }
 function Write-Ok    ($m){ Write-Host "[OK]   $m" -ForegroundColor Green }
+
 function Write-Warn2 {
   param($m)
   if (-not $script:SuppressWarnings) {
     Write-Host "[WARN] $m" -ForegroundColor Yellow
   }
 }
-function Write-Err2  ($m){ Write-Host "[ERR]  $m" -ForegroundColor Red }
+
+function Write-Err2 {
+  param($m)
+  if (-not $script:SuppressErrors) {
+    Write-Host "[ERR]  $m" -ForegroundColor Red
+  }
+}
+
 function Tick { param([string]$Label="") if($script:_sw){ $script:_sw.Stop(); Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds); $script:_sw=$null } }
 function Tock { $script:_sw = [System.Diagnostics.Stopwatch]::StartNew() }
 
@@ -470,7 +482,7 @@ function Apply-TagBulkWithSplit {
   [CmdletBinding()]
   param(
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
-    [Parameter(Mandatory)][pscustomobject[]]$Devices, # objects: Id, Name
+    [Parameter(Mandatory)][pscustomobject[]]$Devices,
     [Parameter(Mandatory)][string]$Tag,
     [int]$MaxSplitDepth = 10,
     [bool]$SuppressErrors = $script:SuppressErrors
@@ -551,10 +563,27 @@ function Get-ArgResourceIdFromRow {
 
 function Get-ArgResourceNameFromRow {
   param([Parameter(Mandatory)][psobject]$Row)
-  foreach ($name in @('name','Name','resourceName','ResourceName')) {
+
+  foreach ($name in @('name','Name','resourceName','ResourceName','displayName','DisplayName')) {
     $p = $Row.PSObject.Properties[$name]
     if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return [string]$p.Value }
   }
+
+  $rid = Get-ArgResourceIdFromRow -Row $Row
+  if (-not [string]::IsNullOrWhiteSpace($rid)) {
+    if ($rid -match '^/subscriptions/([0-9a-fA-F-]{36})$') {
+      return $matches[1]
+    }
+    if ($rid -match '^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/([^/]+)$') {
+      return $matches[1]
+    }
+
+    $segments = @($rid.Trim('/') -split '/')
+    if ($segments.Count -gt 0) {
+      return $segments[-1]
+    }
+  }
+
   return $null
 }
 
@@ -590,10 +619,34 @@ function Get-SubscriptionIdFromResourceId {
   return $null
 }
 
+function Test-SubscriptionScopeId {
+  param([Parameter(Mandatory)][string]$ResourceId)
+
+  if ([string]::IsNullOrWhiteSpace($ResourceId)) { return $false }
+
+  return ($ResourceId -match '^/subscriptions/[0-9a-fA-F-]{36}$')
+}
+
+function Test-ResourceGroupScopeId {
+  param([Parameter(Mandatory)][string]$ResourceId)
+
+  if ([string]::IsNullOrWhiteSpace($ResourceId)) { return $false }
+
+  return ($ResourceId -match '^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+$')
+}
+
 function Get-ResourceTypeFromResourceId {
   param([Parameter(Mandatory)][string]$ResourceId)
 
   if ([string]::IsNullOrWhiteSpace($ResourceId)) { return $null }
+
+  if (Test-SubscriptionScopeId -ResourceId $ResourceId) {
+    return 'microsoft.resources/subscriptions'
+  }
+
+  if (Test-ResourceGroupScopeId -ResourceId $ResourceId) {
+    return 'microsoft.resources/resourcegroups'
+  }
 
   $m = [regex]::Match($ResourceId, '/providers/([^/]+/[^/]+)', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
   if ($m.Success) { return $m.Groups[1].Value.ToLowerInvariant() }
@@ -605,6 +658,9 @@ function Test-ArmResourceId {
   param([Parameter(Mandatory)][string]$ResourceId)
 
   if ([string]::IsNullOrWhiteSpace($ResourceId)) { return $false }
+
+  if (Test-SubscriptionScopeId -ResourceId $ResourceId) { return $true }
+  if (Test-ResourceGroupScopeId -ResourceId $ResourceId) { return $true }
 
   return ($ResourceId -match '^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/[^/]+/.+')
 }
@@ -668,18 +724,23 @@ function Add-AzureResourceTag {
   }
 
   try {
-    if ([string]::IsNullOrWhiteSpace($rid))            { throw "ResourceId is empty" }
-    if ([string]::IsNullOrWhiteSpace($TagKey))         { throw "TagKey is empty" }
-    if ([string]::IsNullOrWhiteSpace($AssetTagName))   { throw "AssetTagName is empty" }
-    if (-not (Test-ArmResourceId -ResourceId $rid))    { throw "Invalid ARM ResourceId: $rid" }
+    if ([string]::IsNullOrWhiteSpace($rid))          { throw "ResourceId is empty" }
+    if ([string]::IsNullOrWhiteSpace($TagKey))       { throw "TagKey is empty" }
+    if ([string]::IsNullOrWhiteSpace($AssetTagName)) { throw "AssetTagName is empty" }
+    if (-not (Test-ArmResourceId -ResourceId $rid))  { throw "Invalid ARM ResourceId: $rid" }
 
-    $resourceType = Get-ResourceTypeFromResourceId -ResourceId $rid
-    $subId        = Get-SubscriptionIdFromResourceId -ResourceId $rid
+    $resourceType        = Get-ResourceTypeFromResourceId -ResourceId $rid
+    $subId               = Get-SubscriptionIdFromResourceId -ResourceId $rid
+    $isSubscriptionScope = Test-SubscriptionScopeId -ResourceId $rid
+    $isResourceGroup     = Test-ResourceGroupScopeId -ResourceId $rid
 
     $result.ResourceType   = $resourceType
     $result.SubscriptionId = $subId
 
-    if (-not [string]::IsNullOrWhiteSpace($resourceType) -and (Test-SkipAzureTaggingForType -ResourceType $resourceType)) {
+    if (-not [string]::IsNullOrWhiteSpace($resourceType) -and
+        -not $isSubscriptionScope -and
+        -not $isResourceGroup -and
+        (Test-SkipAzureTaggingForType -ResourceType $resourceType)) {
       $result.Skipped    = $true
       $result.SkipReason = "Tagging skipped for resource type: $resourceType"
       return $result
@@ -695,7 +756,12 @@ function Add-AzureResourceTag {
       $existing = $null
     }
 
+    $already = $false
     if ($existing -and $existing.ContainsKey($TagKey) -and ([string]$existing[$TagKey]) -eq $AssetTagName) {
+      $already = $true
+    }
+
+    if ($already) {
       $result.Success        = $true
       $result.AlreadyPresent = $true
       $result.Changed        = $false
@@ -745,6 +811,7 @@ function Test-MicrosoftGraphInstalled {
 Write-Step "initializing"
 Write-Info ("WhatIfMode: {0}" -f $WhatIfMode)
 Write-Info ("SuppressErrors: {0}" -f $SuppressErrors)
+Write-Info ("SuppressWarnings: {0}" -f $SuppressWarnings)
 
 if (-not (Test-AzModuleInstalled)) {
   Write-Step "Installing Az modules ... Please Wait !"
@@ -1074,7 +1141,7 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         continue
       }
 
-      Write-Info ("tagging {0} Azure resources (individual tagging)" -f $resourceIds.Count)
+      Write-Info ("tagging {0} Azure scope(s)/resources (individual tagging)" -f $resourceIds.Count)
 
       foreach ($rid in $resourceIds) {
 

@@ -7,6 +7,28 @@ To simplify it: **you take the first line in the Excel spreadsheet, as it has th
 
 
 
+## Videos (Youtube)
+
+[Summary Excel output](https://youtu.be/Txno9r2pJj4)
+
+[Summary AI output mail](https://youtu.be/kFhrkB0KHvg)
+
+[Detailed Excel output](https://youtu.be/kDrWDzOuWos)
+
+[Collect/Build Risk Analytics (Summary)](https://youtu.be/taW7k4uY9Qo)
+
+[RiskAnalytics RiskIndex](https://youtu.be/YzPIUqU9vJU)
+
+[RiskAnalytics Queries Locked YAML file](https://youtu.be/OImndAACTy0)
+
+[Run Tagging](https://youtu.be/erIS68DaaB8)
+
+[Tagging Custom YAML file](https://youtu.be/_WzIVRe0YxU)
+
+[Tagging Locked YAML file](https://youtu.be/ndTiLZzcl58)
+
+
+
 ## 📑 Table of Contents
 
 - [Executive Summary](#executive-summary)

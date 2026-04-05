@@ -326,6 +326,7 @@ function Get-DeviceNameFromRow {
 
   $n = Get-FirstNonEmptyPropertyValue -Row $Row -Names @(
     'DeviceName','deviceName',
+    'NodeName','nodeName',
     'ComputerDnsName','computerDnsName',
     'HostName','hostName',
     'Name','name'

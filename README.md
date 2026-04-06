@@ -1,5 +1,5 @@
 # SecurityInsight
-Rethink **Secure Score** into a **new risk-based security risk score**, based on **consequence, probability** and **risk factors**. Solution includes **critical asset tagging**, **ready-to-use reports** (based on Defender Exposure Graph and Azure Resource Graphs Kusto queries), **automation-scripts,** **risk index** and more
+Rethink **Secure Score** into a **new risk-based security risk score**, based on **consequence, probability** and **risk factors**; an add-on to Microsoft Defender. Solution includes **critical asset tagging**, **ready-to-use reports** (based on Defender Exposure Graph and Azure Resource Graphs Kusto queries), **automation-scripts,** **risk index** and more
 
 My customer loves the solution as **it allows them to take better decisions on which recommendations to fix first** – with respect of the **criticality level/priority of the asset** – **combined with lots of contextual risk factors**
 

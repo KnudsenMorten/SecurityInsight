@@ -1097,8 +1097,8 @@ function Calculate-RiskScore {
             ($RiskIndex.TierValueColumn)      = _get $r $CriticalityTierLevelInputName
         }
 
-        $rfCons = _asBit (_get $r $RiskFactorConsequenceInputName)
-        $rfProb = _asBit (_get $r $RiskFactorProbabilityInputName)
+        $rfCons = [int](_toDouble (_get $r $RiskFactorConsequenceInputName))
+        $rfProb = [int](_toDouble (_get $r $RiskFactorProbabilityInputName))
 
         $consBase = _findScore -Kind 'Consequence' -kv $kv -Index $RiskIndex -TraceLocal:$Trace
         $probBase = _findScore -Kind 'Probability' -kv $kv -Index $RiskIndex -TraceLocal:$Trace

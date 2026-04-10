@@ -957,10 +957,14 @@ Asset Tagging runs with defined frequency like every 4 hours.
 | [CriticalAssetTagging.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/CriticalAssetTagging.ps1) | Main Engine for Asset Tagging<br />Uses YAML-files as data repo | Yes <br />                                         |
 | [SecurityInsight_CriticalAssetTagging_Custom.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Custom.yaml) | Data file (custom tags)<br />Kusto queries against graph-engines | No <br />(custom asset tags)                       |
 | [SecurityInsight_CriticalAssetTagging_Locked.yaml](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/SecurityInsight_CriticalAssetTagging_Locked.yaml) | Data file (recommended tags)<br />Kusto queries against graph-engines | Yes                                                |
+| RunCriticalAssetTaggingMaintenance_FixConflictingTags.ps1    | Engine launcher - Removes tags on Defender objects, where multiple tiers have been applied to resource (tier-1, tier-0, etc.). It will leave the highest tier and delete higher tiers. | No                                                 |
+| CriticalAssetTaggingMaintenance_FixConflictingTags.ps1       | Main engine - Removes tags on Defender objects, where multiple tiers have been applied to resource (tier-1, tier-0, etc.). It will leave the highest tier and delete higher tiers. | No                                                 |
 
 
 
 ### Step 3.1. Adjust the authentication details in launcher file, RunCriticalAssetTagging.ps1 (SpnTenantId, SpnClientId, SpnClientSecret)
+
+NOTE: Feel free to adjust solution so you NOT store secrets in file as this is not good practice :-) - think of this as a sample !!!!
 
 ```
 If (-not $AutomationFramework) {
@@ -1192,7 +1196,7 @@ Sample:
 
 You can choose to modify sample TEST-queries and fine-tune the queries to match your environment.
 
-Fine-tuning often requires adjustment according to **naming convention (Defender)**, **management-group naming (Azure)** or **IP subnets (backbone/network)**
+Fine-tuning often requires adjustment according to **naming convention (Defender)**, **management-group naming (Azure)** or **IP subnets (backbone/network)**. Below are examples !
 
 | AssetTagName                                | What needs to be changed in Query?                           |
 | ------------------------------------------- | ------------------------------------------------------------ |
@@ -1639,6 +1643,8 @@ The solution consists of three main components:
 
 
 ### Step 5.1. Adjust the authentication + smtp details in launcher file, RunSecurityInsight.ps1
+
+NOTE: Feel free to adjust solution so you NOT store secrets in file as this is not good practice :-) - think of this as a sample !!!!
 
 ```
 if (-not $global:AutomationFramework) {

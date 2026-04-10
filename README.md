@@ -1006,10 +1006,10 @@ $WhatIfMode                  = $false
 ### Step 3.3. [PROD]  Run Critical Asset launcher to tag recommended tags in PROD mode
 
 ```
-RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+RunCriticalAssetTagging.ps1 -SCOPE PROD
 
 Sample:
-<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging.ps1 -SCOPE PROD
 ```
 
 
@@ -1202,10 +1202,10 @@ You will now get the following tags applied, based on the data file **SecurityIn
 ### Step 3.4. [PROD]  Setup Recurring job to run every x hours using task scheduler or 3rd party software like VisualCron. This job should only run the queries, that have been tested and validated and moved into PROD status
 
 ```
-RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+RunCriticalAssetTagging.ps1 -SCOPE PROD
 
 Sample:
-<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE PROD
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging.ps1 -SCOPE PROD
 ```
 
 

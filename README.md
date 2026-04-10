@@ -202,9 +202,13 @@ Risk Score = Consequence × Probability
 
 The score is further refined with contextual factors such as:
 
-- Internet exposure
-- Known exploits
-- Legacy systems
+- Internet Exposure
+- Contains Verified Secret
+- Critical Resource
+- Lateral Movement
+- Sensitive Data
+- LegacyEndOfSupport
+- ExploitSignals -> Vulnerability Exploitkit exist ? Yes, choose before others
 
 
 
@@ -316,9 +320,13 @@ Risk Score = Consequence Score × Probability Score
 
 The model can also be influenced by **contextual risk factors** such as:
 
-- internet exposure
-- known exploits
-- legacy systems
+- Internet Exposure
+- Contains Verified Secret
+- Critical Resource
+- Lateral Movement
+- Sensitive Data
+- LegacyEndOfSupport
+- ExploitSignals -> Vulnerability Exploitkit exist ? Yes, choose before others
 - +more can be added along the way !
 
 These factors will each increase the probability score with +1 - and therefore indirectly increasing the overall risk score.
@@ -437,8 +445,12 @@ The **Security Insight model** therefore uses **Exposure Graph** analysis to ide
 - **Public exploit code:** Proof-of-concept exploit code is publicly available, lowering the barrier for attackers to exploit the vulnerability.
 - **Internet exposure:** Systems accessible from the internet increase the likelihood of exploitation.
 - **Legacy systems:** Older or unsupported systems may lack security updates and increase vulnerability risk.
+- Contains Verified Secret
+- Critical Resource
+- Lateral Movement
+- Sensitive Data
 
- Each of these influence the score by increasing the probability score with +1 due to the risk factor
+Each of these influence the score by increasing the probability score with +1 due to the risk factor
 
 
 
@@ -481,17 +493,23 @@ Risk Score: 20 (4 x 5)
 
 
 
+#### Another example with more risk factors impacted risk score
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/RiskFactorsSamples.png)
+
+
+
 ### Severity Prioritization | Risk Score Definitions
 
 [Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
 
 | Defender Severity Score | Severity Category | Severity description                                         |
 | ----------------------- | ----------------- | ------------------------------------------------------------ |
-| 10                      | Very High Risk    | If this configuration is not applied, attackers gain a major foothold or common attack vector remains wide open. |
-| 9                       | High Risk         | Strongly recommended to fix ASAP; commonly exploited by real-world malware and ransomware. |
-| 8                       | Medium-High Risk  | Important baseline security hardening; reduces attack surface and lateral movement. |
-| 5-7                     | Medium Risk       | Security best practice; helps reduce exposure but less frequently exploited. |
-| 1-4                     | Low Risk          | Hardening / hygiene controls; helps, but attackers less likely to target. |
+| 10                      | Very High         | If this configuration is not applied, attackers gain a major foothold or common attack vector remains wide open. |
+| 9                       | High              | Strongly recommended to fix ASAP; commonly exploited by real-world malware and ransomware. |
+| 8                       | Medium-High       | Important baseline security hardening; reduces attack surface and lateral movement. |
+| 5-7                     | Medium            | Security best practice; helps reduce exposure but less frequently exploited. |
+| 1-4                     | Low               | Hardening / hygiene controls; helps, but attackers less likely to target. |
 
 
 

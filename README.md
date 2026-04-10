@@ -1369,10 +1369,10 @@ Change to (add // in front)
 ### Step 3.6. [TEST]  Run Critical Asset launcher to tag recommended tags in TEST mode
 
 ```
-RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
+RunCriticalAssetTagging.ps1 -SCOPE TEST
 
 Sample:
-<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging_Automation_Framework.ps1 -SCOPE TEST
+<Drive>:\SCRIPTS\SecurityInsights\RunCriticalAssetTagging.ps1 -SCOPE TEST
 ```
 
 

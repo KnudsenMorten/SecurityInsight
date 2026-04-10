@@ -1556,30 +1556,29 @@ Assets are classified using 2 methods in Defender Critical Asset Management:
 
 ![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/Images/CriticalityLevel-Defender-overview.png)
 
+### Custom Classification Examples from my environment - customize to your needs !
 
-
-**Custom classification in Defender Critical Asset Management**
-
-- AzPlatformManagementResources--tier0--SI
-- DomainControllerDNS--tier0--SI
-- ADCertificateService--tier0--SI
-- EntraSyncService--tier0--SI
-- EmployeeWorkstations--tier2--SI
-- EmployeeMobile--tier2--SI
-- IoT--tier3--SI
-- AzHubPlatformManagementSub--tier0--SI
-- AzHubPlatformSecuritySub--tier0--SI
-- AzLZDatacenterSub--tier0--SI
-- AutomationServer--tier0--SI
-- ServerBusinessServices--tier1--SI
-- PAWDevices--tier0--SI
-- Network_Backbone_Switch--tier0--SI
-- Network_Backbone_Router--tier0--SI
-- Network_Backbone_Management--tier0--SI
-- Network_WLANAccessPoint--tier2--SI
-- Temp-Client-Devices--excluded--SI
-
-
+| Name                                     | Criticality Level | Query builder  | Query                                                        |
+| ---------------------------------------- | ----------------- | -------------- | ------------------------------------------------------------ |
+| EmployeeMobile--tier2--SI                | Medium - tier 2   | Device         | Tags contains EmployeeMobile--tier2--SI                      |
+| AutomationServer--tier0--SI              | Very high - tier0 | Device         | Tags contains AutomationServer--tier0--SI                    |
+| Network_Backbone_Switch--tier0--SI       | Very high - tier0 | Device         | Tags contains Network_Backbone_Switch--tier0--SI             |
+| Network_Backbone_Router--tier0--SI       | Very high - tier0 | Device         | Tags contains Network_Backbone_Router--tier0--SI             |
+| IoT--tier3--SI                           | Low - tier 3      | Device         | Tags contains IoT--tier3--SI                                 |
+| EmployeeWorkstations--tier2--SI          | Medium - tier 2   | Device         | Tags contains EmployeeWorkstations--tier2--SI                |
+| ServerBusinessServices--tier1--SI        | High - tier 1     | Device         | Tags contains ServerBusinessServices--tier1--SI              |
+| PAWDevices--tier0--SI                    | Very high - tier0 | Device         | Tags contains PAWDevices--tier0--SI                          |
+| Network_WLANAccessPoint--tier2--SI       | Medium - tier 2   | Device         | Tags contains Network_WLANAccessPoint--tier2--SI             |
+| Network_Backbone_Management--tier0--SI   | Very high - tier0 | Device         | Tags contains Network_Backbone_Management--tier0--SI         |
+| ADCertificateService--tier0--SI          | Very high - tier0 | Device         | Tags contains ADCertificateService--tier0--SI                |
+| EntraSyncService--tier0--SI              | Very high - tier0 | Device         | Tags contains EntraSyncService--tier0--SI                    |
+| DomainControllerDNS--tier0--SI           | Very high - tier0 | Device         | Tags contains DomainControllerDNS--tier0--SI                 |
+| AzPlatformManagementResources--tier0--SI | Very high - tier0 | Cloud resource | Resources Tags equals assetTier--SI =<br /> AzPlatformManagementResources--tier0--SI |
+| AzPlatformManagementSub--tier0--SI       | Very high - tier0 | Cloud resource | Resources Tags equals assetTier--SI = <br />AzPlatformManagementSub--tier0--SI |
+| Tier-2 Identity Users                    | Medium - tier 2   | Identity       | AND:<br />Email Address does not end with mok@2linkit.net<br />Email Address does not start with Admin-<br />Email Address does not start with BGA-<br />Email Address does not start with MSOL<br />Email Address does not start with Administrator<br />Email Address does not start with AAD<br />Email Address does not start with gMSA<br />Email Address does not start with SVC-<br />Account Name does not start with Administrator<br />Account Name does not start with gMSA<br />Account Name does not start with MSOL<br />Account Name does not start with AAD<br />Account Name does not start with krbtgt<br />Account Name does not start with Guest<br />Account Name does not start with On-Premises Directory Synchronization Service Account<br />Account Name does not start svc |
+| Tier-0 Critical Users                    | Very high - tier0 | Identity       | OR:<br />Email Address contains -L0-T0-<br />Email Address contains mok@2linkit.net |
+| Tier-1 Identity Admin Account            | High - tier 1     | Identity       | AND:<br />Email Address starts with Admin-<br />Email Address does not end with -L0-T0-ID@2linkit.net<br />Email Address does not end with -L0-T0-AD@2linkit.net |
+|                                          |                   |                |                                                              |
 
 The tags are used in the risk model when native criticality data is not available.
 

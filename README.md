@@ -29,124 +29,144 @@ To simplify it: **you take the first line in the Excel spreadsheet, as it has th
 
 
 
-## 📑 Table of Contents
-
-- [Executive Summary](#executive-summary)
-  - [🧩 What it is](#-what-it-is)
-  - [🚨 Problem it solves](#-problem-it-solves)
-  - [⚙️ How it works](#️-how-it-works)
-    - [🔢 Risk model](#-risk-model)
-    - [🏷️ Critical asset tagging](#️-critical-asset-tagging)
-    - [🕸️ Graph-based analysis](#️-graph-based-analysis)
-    - [🧮 Risk analysis engine](#-risk-analysis-engine)
-    - [📊 Reporting](#-reporting)
-  - [💡 Key idea](#-key-idea)
-
----
-
-### 🔍 Core Concepts
-
-- [The Challenge: Too Many Security Recommendations](#the-challenge-too-many-security-recommendations)
-- [A Risk-Based Prioritization Model](#a-risk-based-prioritization-model)
-- [Why We Use a Graph — Understanding Exposure Graph Architecture](#why-we-use-a-graph--understanding-exposure-graph-architecture)
-- [Example of an Attack Path](#example-of-an-attack-path)
-- [Why Graph Architecture Matters](#why-graph-architecture-matters)
-
----
-
-### 📊 Risk Model & Scoring
-
-- [Risk Score Model](#risk-score-model)
-  - [Severity Prioritization \| Risk Score Definitions](#severity-prioritization--risk-score-definitions)
-  - [Criticality Prioritization \| Risk Score Definitions](#criticality-prioritization--risk-score-definitions)
-- [Risk Index - How we prioritize scoring (customizable)?](#risk-index---how-we-prioritize-scoring-customizable)
-
----
-
-### 🏷️ Asset Criticality & Classification
-
-- [Asset Criticality Classification](#asset-criticality-classification)
-  - [Endpoint / Device Asset Criticality Classification](#endpoint--device-asset-criticality-classification)
-  - [Identity Asset Criticality Classification](#identity-asset-criticality-classification)
-  - [Cloud (Azure) Asset Criticality Classification](#cloud-azure-asset-criticality-classification)
-  - [SaaS (Apps) Asset Criticality Classification](#saas-apps-asset-criticality-classification)
-  - [Data Asset Criticality Classification](#data-asset-criticality-classification)
-
----
-
-### 📈 Reporting & Outputs
-
-- [Reporting](#reporting)
-
----
-
-### 🏛️ Governance & Alignment
-
-- [Governance and Compliance](#governance-and-compliance)
-  - [NIS2 Directive](#nis2-directive)
-  - [CIS Critical Security Controls](#cis-critical-security-controls)
-
----
-
-### ⚙️ Operational Value
-
-- [Operational Benefits](#operational-benefits)
-- [Future Opportunities](#future-opportunities)
-- [Transparency and Flexibility](#transparency-and-flexibility)
-- [Collaboration with Microsoft](#collaboration-with-microsoft)
-
----
-
-### 🗂️ Solution Structure
-
-- [Files Overview](#files-overview)
-  - [Asset Tagging](#asset-tagging)
-  - [Asset Tagging Maintenance - Clean-up/Remove orphaned tags](#asset-tagging-maintenance---clean-upremove-orphaned-tags)
-  - [Risk Analysis](#risk-analysis)
-  - [Support file](#support-file)
-  - [Sample Output files](#sample-output-files)
-
----
-
-### 🚀 Implementation Guide
-
-- [High-level Overview of Implementation](#high-level-overview-of-implementation)
-
-#### Step 1: Prepare SecurityInsight files
-- [Step 1: Prepare SecurityInsight files on automation-server](#step-1-prepare-securityinsight-files-on-automation-server)
-  - [1.1 Download files](#11-download-all-files-from-github-site-and-create-folder-on-automationbatch-server)
-  - [1.2 Install PowerShell modules](#12-install-necessary-powershell-modules-on-server-optional-as-the-script-will-also-do-this-if-missing)
-
-#### Step 2: Entra App onboarding
-- [Step 2: Onboarding of Entra App registration](#step-2-onboarding-of-entra-app-registration---to-be-used-with-securityinsight)
-  - [2.1 Create App Registration](#21-create-entra-app-registration-spn-and-set-secret-note-it-down)
-  - [2.2 API permissions](#22-delegate-api-permissions-to-entra-app-spn)
-  - [2.3 Azure permissions](#23-delegate-tag-contributor-permissions-in-azure-to-entra-app-spn-on-tenant-root-level-to-ensure-the-possibility-to-tag-all-azure-resources)
-
-#### Step 3: Asset tagging
-- [Step 3: Setting Asset Tier Level using tagging](#step-3-setting-asset-tier-level-using-tagging)
-  - [Structure of query in YAML-file](#structure-of-query-in-yaml-file)
-  - [Asset Tagging files](#asset-tagging-files)
-  - [3.1 Adjust authentication](#step-31-adjust-the-authentication-details-in-launcher-file-runcriticalassettaggingps1-spntenantid-spnclientid-spnclientsecret)
-  - [3.2 WhatIf mode](#step-32-adjust-the-whatifmode-to-true-if-you-are-only-testing-otherwise-leave-it-as-false-to-set-the-tags)
-  - [3.3 Run tagging (PROD)](#step-33-prod-run-critical-asset-launcher-to-tag-recommended-tags-in-prod-mode)
-  - [3.4 Schedule recurring job](#step-34-prod-setup-recurring-job-to-run-every-x-hours-using-task-scheduler-or-3rd-party-software-like-visualcron)
-  - [3.5 Adjust queries (TEST)](#step-35-test-adjust-custom-yaml-file-to-tag-resources-in-test-mode)
-  - [3.6 Run tagging (TEST)](#step-36-test-run-critical-asset-launcher-to-tag-recommended-tags-in-test-mode)
-  - [3.7 Promote to PROD](#step-37-prod-adjust-queries-to-prod-mode-once-happy-now-they-will-be-included-in-the-recurring-job)
-
-#### Step 4: Criticality classification
-- [Step 4: Setting Asset Criticality Level Classification](#step-4-setting-asset-criticality-level-classification)
-  - [4.1 Azure resources](#step-41---how-to-setup-criticality-tier-level-against-azure-resources)
-  - [4.2 Defender devices](#step-42---how-to-setup-criticality-tier-level-against-defender-device-resources)
-  - [Gaps / Missing capabilities](#what-am-i-missing-in-critical-asset-management)
-
-#### Step 5: Risk analysis
-- [Step 5: Run the Risk Analysis](#step-5-run-the-risk-analysis)
-  - [Files Overview (Risk Analysis)](#files-overview-risk-analysis)
-  - [5.1 Authentication & SMTP](#step-51-adjust-the-authentication--smtp-details-in-launcher-file-runsecurityinsightps1)
-  - [5.2 Run analysis (Summary & Detailed)](#step-52a-run-risk-analysis-launcher-in-summary-mode-cmdline)
-  - [5.3 AI integration](#step-53a-deploy-openai-instance-to-enable-ai-support-deploy_openai_payg_instance_securityinsightsps1)
+- - 📑 Table of Contents
+  
+    - [Executive Summary](#executive-summary)
+      - [🧩 What it is](#-what-it-is)
+      - [🚨 Problem it solves](#-problem-it-solves)
+      - [⚙️ How it works](#️-how-it-works)
+        - [🔢 Risk model](#-risk-model)
+        - [🏷️ Critical asset tagging](#️-critical-asset-tagging)
+        - [🕸️ Graph-based analysis](#️-graph-based-analysis)
+        - [🧮 Risk analysis engine](#-risk-analysis-engine)
+        - [📊 Reporting](#-reporting)
+      - [💡 Key idea](#-key-idea)
+  
+    ---
+  
+    ### 🔍 Core Concepts
+  
+    - [The Challenge: Too Many Security Recommendations](#the-challenge-too-many-security-recommendations)
+    - [A Risk-Based Prioritization Model](#a-risk-based-prioritization-model)
+    - [Why We Use a Graph — Understanding Exposure Graph Architecture](#why-we-use-a-graph--understanding-exposure-graph-architecture)
+    - [Example of an Attack Path](#example-of-an-attack-path)
+    - [Why Graph Architecture Matters](#why-graph-architecture-matters)
+  
+    ---
+  
+    ### 📊 Risk Model & Scoring
+  
+    - [Risk Score Model](#risk-score-model)
+      - [Severity Prioritization \| Risk Score Definitions](#severity-prioritization--risk-score-definitions)
+      - [Criticality Prioritization \| Risk Score Definitions](#criticality-prioritization--risk-score-definitions)
+    - [Risk Index - How we prioritize scoring (customizable)?](#risk-index---how-we-prioritize-scoring-customizable)
+  
+    ---
+  
+    ### 🏷️ Asset Criticality & Classification
+  
+    - [Asset Criticality Classification](#asset-criticality-classification)
+      - [Identity Asset Criticality Classification](#identity-asset-criticality-classification)
+        - [Active Directory — Built-in Groups](#active-directory--built-in-groups)
+        - [Active Directory — Permissions](#active-directory--permissions)
+        - [Entra ID — Built-in Roles](#entra-id--built-in-roles)
+        - [Entra ID — API Permissions](#entra-id--api-permissions)
+        - [Azure — Built-in Roles](#azure--built-in-roles)
+        - [Azure — Permissions](#azure--permissions)
+        - [Accounts](#accounts)
+      - [Endpoint / Device Asset Criticality Classification](#endpoint--device-asset-criticality-classification)
+        - [Server Roles](#server-roles)
+        - [Management](#management)
+        - [Infrastructure](#infrastructure)
+        - [Hypervisor](#hypervisor)
+        - [Network Equipment](#network-equipment)
+        - [IoT / OT](#iot--ot)
+        - [Client Devices](#client-devices)
+      - [Cloud (Azure) Asset Criticality Classification](#cloud-azure-asset-criticality-classification)
+        - [Compute](#compute)
+        - [Storage](#storage)
+        - [Identity & Access](#identity--access)
+        - [Networking](#networking)
+        - [Management & Governance](#management--governance)
+        - [Hypervisor / Fabric](#hypervisor--fabric)
+  
+    ---
+  
+    ### 📈 Reporting & Outputs
+  
+    - [Reporting](#reporting)
+  
+    ---
+  
+    ### 🏛️ Governance & Alignment
+  
+    - [Governance and Compliance](#governance-and-compliance)
+      - [NIS2 Directive](#nis2-directive)
+      - [CIS Critical Security Controls](#cis-critical-security-controls)
+  
+    ---
+  
+    ### ⚙️ Operational Value
+  
+    - [Operational Benefits](#operational-benefits)
+    - [Future Opportunities](#future-opportunities)
+    - [Transparency and Flexibility](#transparency-and-flexibility)
+    - [Collaboration with Microsoft](#collaboration-with-microsoft)
+  
+    ---
+  
+    ### 🗂️ Solution Structure
+  
+    - [Files Overview](#files-overview)
+      - [Asset Tagging](#asset-tagging)
+      - [Asset Tagging Maintenance - Clean-up/Remove orphaned tags](#asset-tagging-maintenance---clean-upremove-orphaned-tags)
+      - [Risk Analysis](#risk-analysis)
+      - [Support file](#support-file)
+      - [Sample Output files](#sample-output-files)
+  
+    ---
+  
+    ### 🚀 Implementation Guide
+  
+    - [High-level Overview of Implementation](#high-level-overview-of-implementation)
+  
+    #### Step 1: Prepare SecurityInsight files
+    - [Step 1: Prepare SecurityInsight files on automation-server](#step-1-prepare-securityinsight-files-on-automation-server)
+      - [1.1 Download files](#11-download-all-files-from-github-site-and-create-folder-on-automationbatch-server)
+      - [1.2 Install PowerShell modules](#12-install-necessary-powershell-modules-on-server-optional-as-the-script-will-also-do-this-if-missing)
+  
+    #### Step 2: Entra App onboarding
+    - [Step 2: Onboarding of Entra App registration](#step-2-onboarding-of-entra-app-registration---to-be-used-with-securityinsight)
+      - [2.1 Create App Registration](#21-create-entra-app-registration-spn-and-set-secret-note-it-down)
+      - [2.2 API permissions](#22-delegate-api-permissions-to-entra-app-spn)
+      - [2.3 Azure permissions](#23-delegate-tag-contributor-permissions-in-azure-to-entra-app-spn-on-tenant-root-level-to-ensure-the-possibility-to-tag-all-azure-resources)
+  
+    #### Step 3: Asset tagging
+    - [Step 3: Setting Asset Tier Level using tagging](#step-3-setting-asset-tier-level-using-tagging)
+      - [Structure of query in YAML-file](#structure-of-query-in-yaml-file)
+      - [Asset Tagging files](#asset-tagging-files)
+      - [3.1 Adjust authentication](#step-31-adjust-the-authentication-details-in-launcher-file-runcriticalassettaggingps1-spntenantid-spnclientid-spnclientsecret)
+      - [3.2 WhatIf mode](#step-32-adjust-the-whatifmode-to-true-if-you-are-only-testing-otherwise-leave-it-as-false-to-set-the-tags)
+      - [3.3 Run tagging (PROD)](#step-33-prod-run-critical-asset-launcher-to-tag-recommended-tags-in-prod-mode)
+      - [3.4 Schedule recurring job](#step-34-prod-setup-recurring-job-to-run-every-x-hours-using-task-scheduler-or-3rd-party-software-like-visualcron)
+      - [3.5 Adjust queries (TEST)](#step-35-test-adjust-custom-yaml-file-to-tag-resources-in-test-mode)
+      - [3.6 Run tagging (TEST)](#step-36-test-run-critical-asset-launcher-to-tag-recommended-tags-in-test-mode)
+      - [3.7 Promote to PROD](#step-37-prod-adjust-queries-to-prod-mode-once-happy-now-they-will-be-included-in-the-recurring-job)
+  
+    #### Step 4: Criticality classification
+    - [Step 4: Setting Asset Criticality Level Classification](#step-4-setting-asset-criticality-level-classification)
+      - [4.1 Azure resources](#step-41---how-to-setup-criticality-tier-level-against-azure-resources)
+      - [4.2 Defender devices](#step-42---how-to-setup-criticality-tier-level-against-defender-device-resources)
+      - [Gaps / Missing capabilities](#what-am-i-missing-in-critical-asset-management)
+  
+    #### Step 5: Risk analysis
+    - [Step 5: Run the Risk Analysis](#step-5-run-the-risk-analysis)
+      - [Files Overview (Risk Analysis)](#files-overview-risk-analysis)
+      - [5.1 Authentication & SMTP](#step-51-adjust-the-authentication--smtp-details-in-launcher-file-runsecurityinsightps1)
+      - [5.2 Run analysis (Summary & Detailed)](#step-52a-run-risk-analysis-launcher-in-summary-mode-cmdline)
+      - [5.3 AI integration](#step-53a-deploy-openai-instance-to-enable-ai-support-deploy_openai_payg_instance_securityinsightsps1)
+  
+    
   
 
 ------
@@ -225,7 +245,7 @@ The score is further refined with contextual factors such as:
 
 ### 🕸️ Graph-based analysis
 
-**SecurityInsight uses graph-based security data (Exposure Graph)** to:
+SecurityInsight uses graph-based security data (Exposure Graph) to:
 
 - Map relationships between users, devices, identities, and resources
 - Identify attack paths and lateral movement
@@ -501,111 +521,71 @@ Risk Score: 20 (4 x 5)
 
 ### Severity Prioritization | Risk Score Definitions
 
-[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
+**Disclaimer:** The severity scores and risk impact classifications presented here are based on my own professional judgment and experience working with attacker-centric security frameworks. Actual exploitation impact may vary depending on each organization's specific environment, existing detective and preventive controls, risk tolerance, regulatory requirements, and architectural decisions. Scores should be used as a prioritization guide, not as absolute measures of risk.
 
-| Defender Severity Score | Severity Category | Severity description                                         |
-| ----------------------- | ----------------- | ------------------------------------------------------------ |
-| 10                      | Very High         | If this configuration is not applied, attackers gain a major foothold or common attack vector remains wide open. |
-| 9                       | High              | Strongly recommended to fix ASAP; commonly exploited by real-world malware and ransomware. |
-| 8                       | Medium-High       | Important baseline security hardening; reduces attack surface and lateral movement. |
-| 5-7                     | Medium            | Security best practice; helps reduce exposure but less frequently exploited. |
-| 1-4                     | Low               | Hardening / hygiene controls; helps, but attackers less likely to target. |
+| Defender Severity Score | Severity Category (risk impact) | **Attacker-centric definition, sample of** take-over & **consequence** **(WHY)** |
+| ----------------------- | ------------------------------- | ------------------------------------------------------------ |
+| 10                      | Very High                       | **Absence of this control gives attackers an immediate and decisive advantage.** <br/><br/>Either a critical attack path is left fully exposed, or a single exploitation leads directly to full environment compromise with no further steps required. |
+| 9                       | High                            | This control addresses **weaknesses that are actively weaponized in the wild by ransomware operators, credential theft campaigns, and advanced persistent threat actors**. <br/><br/>Exploitation is well-documented, tooling is widely available, and remediation should be treated as urgent. |
+| 8                       | Medium-High                     | This control is a **foundational hardening measure that meaningfully shrinks the attack surface and disrupts common lateral movement techniques**. <br/><br/>While not immediately catastrophic if missing, its absence creates conditions that attackers routinely chain together to escalate privileges or move laterally. |
+| 5-7                     | Medium                          | This control reflects **established security best practice and reduces exposure to known attack patterns**. <br/>Exploitation is possible but less consistent, typically requiring specific environmental conditions or attacker patience. Prioritize after higher-severity items are addressed. |
+| 1-4                     | Low                             | This control contributes to **security hygiene and long-term posture improvement**. <br/><br/>Missing controls in this range are unlikely to be directly targeted but may marginally increase the cost or noise for an attacker operating in the environment. |
 
 
 
 ### Criticality Prioritization | Risk Score Definitions
 
 **Disclaimer:**
-The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk.
 
-[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
-
-| Criticality Level Name<br />(Tier) | Criticality Description                                      | Compromise Impact                                            | Defender terms (portal) | Defender terms (API)<br />criticalityLevel |
-| ---------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | ----------------------- | ------------------------------------------ |
-| Critical<br />(Tier-0)             | Identity or infrastructure trust anchors that control authentication, authorization, encryption, or global security boundaries.<br/><br/>Assets that, if compromised, give an attacker full control of the organization, identity fabric, or security boundary. These are the crown jewels. | Compromise Impact<br/>Full organizational takeover, persistent compromise likely. | Very High - tier 0      | 0                                          |
-| High<br />(Tier-1)                 | Systems that configure, orchestrate, or grant access to Tier 2/3 assets.<br/><br/>Systems that manage or enforce configuration on lower-tier assets. If compromised, they enable privilege escalation or widespread lateral movement.<br/><br/>Business-critical platforms or workloads supporting core operations.<br/><br/>Standard production systems that host sensitive but non-root-of-trust workloads. Compromise impacts specific business functions but not identity fabric control. | Rapid privilege escalation or environment-wide misconfiguration.<br/><br/>Business disruption, focused operational risk. | High - tier 1           | 1                                          |
-| Medium<br />(Tier-2)               | Tier 2 (User & Developer Endpoints):<br/>Real users authenticate and access business resources, but these systems do not control identity or the security control plane.<br/>Compromise typically impacts a user, team, or non-production environment (data loss, token theft, lateral movement within Tier 2). |                                                              | Medium - tier 2         | 2                                          |
-| Low<br />(Tier-3)                  | Tier 3 (Low-Trust / Shared / Disposable):<br/>Shared, anonymous, or intentionally isolated systems (kiosk-style or disposable labs).<br/>Assume high compromise likelihood and design for minimal blast radius (tight isolation, frequent reset/wipe, no privileged access). | Local impact; lateral movement required to escalate.         | Low - tier 3            | 3                                          |
-
-
-
-### Endpoint / Device Asset Criticality Classification
-
-**Disclaimer:**
-The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
-
-[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
-
-| Criticality Level      | Typical Assets                                               |
-| ---------------------- | ------------------------------------------------------------ |
-| Critical<br />(tier-0) | Server Roles:<br/>* Active Directory Domain Services (AD DS)<br/>* Active Directory Certificate Services (AD CS)<br/>* Active Directory Federation Services (AD FS) trust root configuration<br/>* DNS integrated with AD for domain trust management<br/>Azure AD Connect Sync engine<br/>* On-prem Authentication Broker Servers (e.g., PTA agents, federation bridges)<br/>* Azure AD DS Domain Services instances (if used)<br/>* Entra ID Connect Servers (Hybrid Identity Sync)<br/><br/>Management:<br/>* Privileged Access Workstations (PAWs)<br/>* Security Management Servers (MDE, MDEr, EDR collectors)<br/><br/>Infrastructure:<br/>* Hardware Security Modules (HSM appliances or Azure Key Vault HSM-backed)<br/><br/>HyperVisor:<br/>* Hypervisor Hosts (VMware ESXi, Hyper-V clusters hosting Tier-0 assets) |
-| High<br />(Tier-1)     | Server Roles:<br/>* Endpoint Management Admin Servers<br/>* RADIUS / NPS Authentication servers<br/>* Backup Management Systems<br/>* Patch Management Servers<br/>* Enterprise Firewall/Proxy Management Consoles<br/>* Federated Identity Components (e.g., SSO Gateways, OAuth Brokers)<br/>* Print Spooler servers with elevated AD access risk<br/><br/>* Business application servers (ERP, CRM, HR, Finance, etc.)<br/>* Tiered database servers (data-important but not identity-root)<br/>* File/print servers<br/>* Production line-of-business application VMs<br/>* Middleware or API integration servers<br/>* Jump hosts for application operations (not identity or security ops)<br/>* Web servers hosting business systems (IIS / NGINX / Apache)<br/>* Application middleware servers (Tomcat, WebLogic, SAP dispatcher)<br/>* Standard SQL / NoSQL databases containing operational business data |
-| Medium<br />(Tier-2)   | * Employee laptops & desktops<br/>* Employee mobile phones<br/>* Non-admin VDI clients<br/>* Developer test machines<br/>* Training, demo environments<br/>* QA / staging servers (non-prod)<br/>* Non-production dev/test environments<br/>* Internal wiki or documentation servers<br/>* Local print/file servers without privilege exposure |
-| Low<br />(Tier-3)      | * Kiosks and shared access terminals<br/>* Shared/kiosk mobile devices (exception only: no corporate mailbox, no MFA approval, reset/wipe frequently) |
+| **Criticality** **Level** **Name** **(Tier)** | **Attacker-centric definition,  sample of** take-over & consequence **(WHY)** | **Defender** **terms**                                       |
+| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(Tier-0)**                    | **Immediate full environment  compromise if taken**<br />Compromise of a Domain Controller, krbtgt  account, or Global Administrator yields unrestricted control over every  identity, credential, and resource in the environment.<br /><br />An attacker can forge Kerberos tickets,  replicate the entire AD database, assign any Entra role, and persist  indefinitely without detection. Recovery requires full forest rebuild. | **Portal:** <br /> Very High - tier 0    <br /><br />**API:**   <br />0 |
+| **High<br />(Tier-1)**                        | **High impact, one or two pivots to  full compromise**<br />Compromise of an Exchange server,  Authentication Administrator, or jump server provides credential material,  token abuse opportunities, or lateral movement paths that lead to tier 0  within one or two steps. <br />    <br />An attacker can reset MFA, intercept  authentication flows, abuse unconstrained delegation, or exploit ADCS  misconfigurations to escalate without direct access to tier 0 assets. | **Portal:** <br />  High - tier 1<br />**API:** <br /> 1     |
+| **Medium<br />(Tier-2)**                      | **Significant workload impact,  conditional path to escalation**  <br />Compromise of a file server, developer  workstation, or SharePoint environment enables mass data exfiltration,  credential harvesting from application configs, and abuse of scoped service  accounts.     <br />Escalation to tier 0 is possible but  requires chaining multiple weaknesses such as finding reused credentials,  misconfigured delegation, or an over-permissioned service principal. | **Portal:**<br /> Medium - tier 2    <br />**API:**   2      |
+| **Low<br />(Tier-3)**                         | **Low blast radius, limited lateral  movement potential**  <br />Compromise of a standard employee  workstation, guest PC, or read-only service account yields limited immediate  value.<br /><br />An attacker gains a foothold for  phishing, internal reconnaissance, or credential capture via keylogging, but  cannot directly access sensitive systems or escalate without exploiting  additional misconfigurations elsewhere in the environment. | **Portal:**  <br />Low - tier 3    <br />**API:**   3        |
 
 
 
 ### Identity Asset Criticality Classification
 
 **Disclaimer:**
-The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete
 
-[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
+| Criticality Level                                            | Typical Assets                                               |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(tier-0)<b**r /><br /><br />Immediate Domain Takeover | **Entra ID Roles (built-in) – users/managed identities:** Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator, Partner / GDAP Delegated Admin, Directory Synchronization Accounts, Hybrid Identity Administrator (when Entra Connect is in password hash sync mode)<br /><br />**Application Permissions (Graph / API) :** RoleManagement.ReadWrite.Directory, Directory.ReadWrite.All, AppRoleAssignment.ReadWrite.All, Policy.ReadWrite.AuthenticationMethod, PrivilegedAccess.ReadWrite.AzureAD, RoleManagement.ReadWrite.CloudPC, Organization.ReadWrite.All, Domain.ReadWrite.All, CrossTenantUserProfileSharing.ReadWrite.All, OnPremDirectorySynchronization.ReadWrite.All<br /><br />**Azure Built-in Roles:** Owner (root management group), User Access Administrator (root management group), Owner (tenant root subscription)<br /><br />**Azure Permissions:** Contributor + blueprint assign (root MG), Managed Identity Contributor (root scope), Entra ID joined device with Global Admin token cache, Subscription Owner with Az AD write federation<br/><br/>**AD Built-in Groups:** Domain Admins, Enterprise Admins, Schema Admins, Administrators (builtin), Group Policy Creator Owners, Cert Publishers, Domain Controllers group<br/><br/>**AD Permissions:** Replication rights (DCSync), DnsAdmins (with DC write), SYSTEM on any DC<br /><br />**Accounts Identities (list not complete):** krbtgt account, SYSTEM on DC, Entra Connect sync account (MSOL_), ADConnect service account, Break-glass emergency access accounts, Service accounts with DCSync rights, Accounts with AdminSDHolder propagated ACLs |
+| **High<br />(Tier-1)**<br /><br />Fast-Track Takeover (Abusable Privileges) | **Entra ID Roles (built-in) – users/managed identities:** Authentication Administrator, Hybrid Identity Administrator, Exchange Administrator, Cloud App Administrator, Application Administrator, Security Administrator, Intune Administrator, Identity Governance Administrator, External Identity Provider Administrator, B2C IEF Policy Administrator, Domain Name Administrator, Password Administrator (when targeting admins), Helpdesk Administrator (when targeting admins), Billing Administrator, Azure DevOps Administrator, Windows 365 Administrator<br/><br/>**Application Permissions (Graph / API) :** Application.ReadWrite.All, Mail.ReadWrite (app all users), User.ReadWrite.All, Group.ReadWrite.All, Sites.FullControl.All, DeviceManagementServiceConfig.ReadWrite.All, DeviceManagementApps.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, ServicePrincipalEndpoint.ReadWrite.All, Policy.ReadWrite.ConditionalAccess, Policy.ReadWrite.PermissionGrant, EntitlementManagement.ReadWrite.All, PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup, AuthenticationContext.ReadWrite.All, TrustFrameworkKeySet.ReadWrite.All, UserAuthenticationMethod.ReadWrite.All, IdentityProvider.ReadWrite.All, Organization.ReadWrite.All, Domain.ReadWrite.All, AccessReview.ReadWrite.All, Agreement.ReadWrite.All, RoleEligibilitySchedule.ReadWrite.Directory, RoleAssignmentSchedule.ReadWrite.Directory<br /><br />**Azure Built-in Roles (list not complete):** Owner (subscription or resource group), User Access Administrator (subscription scope), Key Vault Administrator, Azure Kubernetes Service Cluster Admin, Managed Identity Operator (on high-privilege MIs), Virtual Machine Contributor, Automation Account Contributor, Logic App Contributor<br/><br/>**Azure Permissions (list not complete):** Contributor on Key Vault (with access policy model), Azure Arc onboarding with connected machine agent, Storage Account Contributor (with Entra-integrated storage), Azure DevOps project admin (with service connection to high-priv MI), Defender for Cloud admin, IMDS token theft via VM access, Runbook execution as managed identity<br /><br />**AD Built-in Groups:** Account Operators, Backup Operators, Server Operators, Print Operators<br/><br/>**AD Permissions (list not complete):** GPO edit rights on tier 0 OUs, AdminSDHolder write access, msDS-KeyCredentialLink write, WriteOwner on domain root, WriteDACL on domain root, GenericAll on tier 0 groups, GenericWrite on Domain Controllers OU, AllExtendedRights on domain root, ForceChangePassword on admin accounts, Manage CA (AD CS), Certificate enrollment agents, ESC1–ESC8 vulnerable certificate templates, SeBackupPrivilege holders, SeRestorePrivilege holders, SeTakeOwnershipPrivilege holders, SeDebugPrivilege on DC, SeImpersonatePrivilege on DC, Unconstrained delegation computers, Unconstrained delegation service accounts, Shadow Credentials write on admin accounts, SID History injection rights, Trust account manipulation rights, GPO link rights on tier 0 OUs, OU owner on Domain Controllers OU<br /><br />**Accounts (list not complete):** Entra Connect service account, High-privilege service principals with T0 Graph permissions, Admin-consented OAuth apps with T1 permissions, AD CS enrollment agent accounts, Service accounts with unconstrained delegation, Accounts with GenericAll on tier 0 objects, Federated identity credentials on high-privilege app registrations, Managed identities with Owner or UAA at subscription scope, Workload identities bound to high-privilege Azure RBAC roles, Azure Automation Run As accounts, Service principals with client secrets stored in Key Vault accessible to lower-trust identities |
+| **Medium<br />(Tier-2)**<br /><br />Conditional Takeover (Needs Chaining / Misconfig) | **Entra ID Roles (built-in) – users/managed identities (list not complete):** User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator<br/><br/>**Application Permissions (Graph / API) (list not complete):** Mail.Read (app all users), Calendars.ReadWrite, Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All<br/><br/>**Azure Built-in Roles (list not complete):** Network Contributor, Log Analytics Contributor, Automation Operator, Azure DevOps stakeholder, Azure Kubernetes Service Cluster User<br /><br />**Azure Permissions (list not complete):** Contributor (single non-sensitive resource group), Storage Blob Data Reader (scoped to non-sensitive storage), Log Analytics Reader, Monitoring Reader, Security Reader (Defender for Cloud), Managed Identity on low-privilege workload, Service principal scoped to single resource group<br/><br />**AD Built-in Groups:** DNS Admins<br/><br />**AD Permissions (list not complete):** OU-scoped write ACLs, LAPS read rights, Constrained delegation (msDS-AllowedToDelegateTo), RBCD write rights, Kerberoastable high-priv Sas<br/><br />**Accounts (list not complete):** High-privilege service principals scoped to workload, Admin-consented OAuth apps with scoped permissions, Automation accounts with limited RBAC, Azure DevOps service connections scoped to single subscription |
+| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Entra ID Roles (built-in) – users/managed identities:** User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator<br/><br/>**Application Permissions (Graph / API) (list not complete):** Mail.Read (app all users), Calendars.ReadWrite, Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All<br/><br/>**Azure Built-in Roles (list not complete):** Reader (subscription or resource group), Billing Reader, Cost Management Reader, Tag Contributor, Azure DevOps Basic user (no pipeline access)<br /><br />**Azure Permissions (list not complete):** Storage Blob Data Reader (scoped, non-sensitive), Managed Identity with Reader only, Service principal with Reader on isolated resource group<br/><br/>**AD Built-in Groups:** Domain Users (default), Read-only DC (RODC)<br/><br/>**AD Permissions (list not complete):** Scoped helpdesk OU read, GenericRead on non-priv objects<br /><br />**Accounts (list not complete):** Standard user accounts, Guest accounts, Read-only service accounts, Managed identities with no RBAC assignments, Expired or disabled service principals |
 
-| Criticality Level      | Typical Assets                                               |
-| ---------------------- | ------------------------------------------------------------ |
-| Critical<br />(tier-0) | Cloud - Entra ID Roles:<br/>* Global Administrator accounts<br/>* Privileged Authentication Administrator<br/>* Privileged Role Administrator<br/>* Directory Synchronization Service Accounts<br/>* Break-glass Emergency Access Accounts<br/>* Directory Writers<br/><br/>Cloud - Entra ID Services:<br/>* Conditional Access and Identity Governance core policies<br/><br/>AD:<br/>* Domain Admins<br/>* Enterprise Admins<br/>* Schema Admins<br/>* Administrators (Built-in)<br/>* Key Admins / Crypto Admins<br/>* Cert Publishers<br/>* Group Policy Creator Owners<br/>* Incoming Forest Trust Builders<br/>* Protected Users Group<br/>* Privileged Kerberos delegation accounts<br/><br/>Azure:<br/>* Privileged Credential Vault Root Access |
-| High<br />(Tier-1)     | Entra ID:<br/>* Security Administrator accounts<br/>* Application Administrator accounts<br/>* Conditional Access Administrators<br/>* Exchange / SharePoint / Teams Admins (Privileged variants)<br/><br/>AD:<br/>* Server Operators<br/>* Backup Operators<br/>* Print Operators (privilege escalation risk in AD)<br/>* Network Configuration Operators<br/><br/>Accounts:<br/>* Helpdesk Administrator accounts with delegated reset access<br/>* Tier-1 admin accounts (Scoped to systems supporting Tier-0 assets indirectly) |
-| Medium<br />(Tier-2)   | Entra ID / Identity (Tier 2):<br/>* Standard user accounts (employees)<br/>* Developer user accounts (non-privileged)<br/>* Guest / B2B external collaborators (low-privilege access)<br/>* Non-privileged test accounts<br/>* Workload identities used only for Tier-2 / non-production workloads (no privileged role assignments) |
-| Low<br />(Tier-3)      | Identity (Tier 3):<br/>* Shared kiosk identities (where unavoidable)<br/>* Temporary / disposable lab identities with no access to corporate data<br/>* Local-only accounts on kiosk or shared devices |
+
+
+### Endpoint / Device Asset Criticality Classification
+
+**Disclaimer:**
+The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete
+
+| Criticality Level                                            | Typical Assets                                               |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(tier-0)<**br /><br /><br />Immediate full environment compromise if taken | **Server Roles:** Domain Controllers (Primary/Additional), Read-Only Domain Controllers (RODC), AD CS servers (Certificate Authority — root and subordinate), Entra Connect / AD Connect servers, Federation servers (AD FS primary)<br/><br/>**Management:** Privileged Access Workstations (PAW) used by tier 0 admins, Backup servers with DC/CA backup data, Monitoring servers with domain-level agent credentials, Key Management Services (KMS) servers with domain-joined credential store<br/><br/>**Infrastructure:** HSM-attached servers (storing root CA private keys), SAN / storage controllers backing tier 0 VMs<br/><br/>**Hypervisor:** Hypervisor hosts running tier 0 guest VMs (VMware ESXi, Hyper-V, KVM), vCenter / SCVMM management servers (managing tier 0 hypervisors)<br/><br/>**Network Equipment:** Core routers (BGP, MPLS backbone), Core switches (spanning all VLANs), Firewall clusters (perimeter and internal segmentation), Out-of-band management network devices (iDRAC, iLO, IPMI), Network management servers (Cisco DNA, SolarWinds — full network write access), SD-WAN controllers, Load balancers (handling auth traffic)<br/><br/>**IoT / OT:** Building management systems (BMS) controllers with domain integration, Physical security controllers (badge access, CCTV management) with domain integration, OT / ICS controllers with direct network adjacency to tier 0 systems |
+| **High<br />(Tier-1)**<br /><br />High impact, one or two pivots to full compromise | **Server Roles:** Exchange servers, MFA / RADIUS servers, PKI subordinate CA servers, DNS servers (non-DC hosted), Active Directory Federation Services (AD FS) proxy servers<br/><br/>**Management:** Privileged Access Workstations (PAW) used by tier 1 admins, Jump servers / bastion hosts, SIEM servers, Endpoint Detection and Response (EDR) management servers, SCCM / MECM primary site servers, Privileged Identity Management (PIM) approval workflow servers, Secret management servers (HashiCorp Vault, Azure Key Vault private endpoints), Password managers with admin credential stores, Patch management servers (WSUS), Admin workstations used by tier 1 staff without PAW controls<br/><br/>**Infrastructure:** Network Access Control (NAC) servers, VPN concentrators / remote access servers, Azure Arc-connected servers with high-privilege managed identity, Privileged developer machines with production secrets or pipeline credentials<br/><br/>**Hypervisor:** Hypervisor hosts running tier 1 guest VMs, vCenter / SCVMM management servers (managing tier 1 hypervisors)<br/><br/>**Network Equipment:** Distribution switches, Wireless LAN controllers (WLC), Proxy servers (SSL inspection — credential visibility), RADIUS / TACACS+ network authentication servers, Network packet brokers / TAP aggregators, Remote access concentrators (Citrix ADC, F5 BIG-IP), DNS resolvers (internal recursive), DHCP servers (domain-integrated), Network time protocol (NTP) primary server<br/><br/>**IoT / OT:** SCADA / ICS servers (non-tier 0 adjacent), Industrial IoT gateways with network bridging, UPS management controllers (power disruption potential), HVAC controllers (data center environment impact), Building automation system (BAS) servers, Medical device management servers, Surveillance / CCTV management servers (non-domain integrated)<br/>**Client Devices**: IT staff personal workstations (helpdesk, sysadmin, network engineers — cached credentials, admin tools, RDP session history), IT management laptops (used for remote administration without formal PAW controls), Security operations workstations (SOC analyst machines with SIEM and EDR console access), Senior IT personal workstations (IT managers, architects — broad access scope) |
+| **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Server Roles:** File servers, SharePoint servers, SQL servers hosting sensitive databases, Citrix / RDS session hosts, Web application servers with Entra integrated auth, API gateway servers, Collaboration servers (Teams on-prem, Skype for Business), HR and identity lifecycle management servers, Internal certificate registration authority (RA) servers, IT service management servers (ServiceNow, Jira)<br/><br/>**Management:** Log aggregation servers, DevOps / CI-CD build agents, Container orchestration nodes (Kubernetes worker nodes)<br/><br />**Hypervisor:** Hypervisor hosts running tier 2 guest VMs<br/><br/>**Network Equipment:** Access layer switches (user-facing VLANs), Wireless access points (managed), Network monitoring appliances (read-only), Standalone DHCP servers (non-domain integrated), Content filtering / web proxy appliances, VoIP / SIP gateways<br/><br/>**IoT / OT:** Smart meeting room devices (displays, conferencing systems), Environmental sensors (temperature, humidity — data center), Badge readers (non-domain integrated, isolated), Laboratory equipment with network interfaces, IP cameras (isolated VLAN, no domain integration), Industrial sensors (read-only, no control plane access), Retail / POS terminals (isolated network segment)<br/><br/>**Client Devices:** Production workstations, Lab workstations, Shared devices, Developer workstations, Power user workstations (finance, legal, HR) |
+| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Server Roles:** Print servers, DHCP servers, Time servers (NTP), VoIP servers, Internal wiki / intranet servers, Archival / cold storage servers, Physical access control servers, Test / sandbox servers<br/><br/>**Management:** Network monitoring probes<br/><br/>**Network Equipment:** Unmanaged access switches, Consumer-grade wireless access points, Out-of-band console servers (isolated, read-only access), Standalone print servers (network-connected, no domain join)<br/><br/>**IoT / OT:** Smart lighting controllers (isolated network), Consumer IoT devices (isolated guest VLAN), Non-networked or air-gapped sensors, Vending machines / coffee machines with network connectivity, Digital signage players (isolated, read-only content), Wearables / smart badges (no domain integration), USB-only peripheral devices with firmware update capability<br/><br/>**Client Devices:** Standard employee workstations, Student workstations, Kiosk machines, Guest PCs, Shared classroom / library computers, Development workstations (non-privileged, isolated, no production access), Personally-owned BYOD devices, Retired / decommissioned machines |
 
 
 
 ### Cloud (Azure) Asset Criticality Classification
 
 **Disclaimer:**
-The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
+The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete
 
-[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
-
-| Criticality Level      | Typical Assets                                               |
-| ---------------------- | ------------------------------------------------------------ |
-| Critical<br />(tier-0) | Azure (services):<br/>* Azure Key Vaults storing tenant root keys or certificate authorities<br/>* Immutable and Locked Azure Storage holding identity bootstrap data<br/><br/>Azure (delegations):<br/>* Azure Management Groups with root tenant-level access<br/>* Azure Subscription Owner roles over security-critical subscriptions |
-| High<br />(Tier-1)     | Azure:<br/>* Azure Virtual Machines with privileged tokens or identities assigned<br/>* Highly active Azure Key Vaults with large number of operations<br/>* Azure Automation / Runbook accounts with role assignments<br/>* Azure Arc / Hybrid management orchestrators<br/>* Azure Network and Security Policy control plane resources |
-| Medium<br />(Tier-2)   | Azure (Tier 2):<br/>* Dev/Test subscriptions and resource groups<br/>* Non-production workloads (dev, test, QA, staging) without production data<br/>* End-user virtual desktop services (AVD / Windows 365) for non-admin users<br/>* Personal / sandbox resources with no privileged role assignments |
-| Low<br />(Tier-3)      | Azure (Tier 3):<br/>* Sandbox subscriptions designed for experimentation<br/>* Proof-of-concept / pilot workloads with no sensitive data<br/>* Lab resource groups intended to be wiped/reset |
-
-
-
-### SaaS (Apps) Asset Criticality Classification
-
-**Disclaimer:**
-The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
-
-[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
-
-| Criticality Level      | Typical Assets                                               |
-| ---------------------- | ------------------------------------------------------------ |
-| Critical<br />(tier-0) | Entra ID (app-permissions):<br/>* Service Principals with Directory.ReadWrite.All or Organization-wide write permissions<br/><br/>Identity integration:<br/>* Identity provider / SSO configuration applications (Enta ID, Okta, PingFed bridges)<br/><br/>Management Portals:<br/>* Core tenant admin portals (Entra Admin Center, Azure Portal with Owner/GA access) |
-| High<br />(Tier-1)     | Cloud:<br/>* Intune<br/>* Backup<br/><br/>Entra ID integrations:<br/>* SPNs with elevated delegated OAuth permissions (user impersonation capabilities)<br/>* Line-of-business SaaS systems with admin-level access rights<br/>* Service accounts with Exchange/SharePoint/Teams admin rights<br/>* M365 platform-wide configuration access applications<br/>* Directory-synced SaaS environments with strong platform integration |
-| Medium<br />(Tier-2)   | * Business SaaS platforms with departmental administrator rights<br/>* Project management platforms<br/>* Document collaboration SaaS applications (non-sensitive)<br/>* CRM / HR / Finance SaaS platforms with departmental administrators<br/>* SharePoint Online site admins (for business units, not tenant-level) |
-| Low<br />(Tier-3)      | * Low-sensitivity SaaS (department task apps, wiki tools, non-auth-critical)<br/>* Trial / evaluation SaaS instances<br/>* Dev/test application tenants<br/>* Collaboration productivity apps (non-admin roles)<br/>* Low-sensitivity workflow or forms applications |
-
-
-
-### Data Asset Criticality Classification
-
-**Disclaimer:**
-The asset criticality classifications presented here are based on my professional judgment and experience. Actual classifications may vary depending on each organization’s specific environment, risk tolerance, regulatory requirements, architecture, and operational priorities.
-
-[Download as Excel file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Risk%20Score%20Definitions.xlsx)
-
-| Criticality Level      | Typical Assets                                               |
-| ---------------------- | ------------------------------------------------------------ |
-| Critical<br />(tier-0) | * Root encryption keys (HSM / Key Vault root keys)<br/>* Token signing certificates (AD FS, Azure AD B2C, SAML Identity Providers)<br/>* Identity bootstrap credentials / trust chain material<br/>* Domain / Directory backup archives and snapshots<br/>* Privileged credential vault master keys |
-| High<br />(Tier-1)     | * Line-of-business application configuration databases<br/>* Enterprise configuration backups<br/>* PKI intermediate CAs and signing authorities<br/>* Operational secrets stores for applications and APIs |
-| Medium<br />(Tier-2)   | * Business process data<br/>* Departmental shared files<br/>* Standard application configuration data<br/>* Non-identity-securing configuration data |
-| Low<br />(Tier-3)      | * Non-sensitive content repositories<br/>* Training data<br/>* Internal public documentation<br/>* Documentation and knowledge base files<br/>* Non-sensitive departmental shared files |
+| Criticality Level                                            | Typical Assets                                               |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(tier-0)**<br /><br />Immediate full environment compromise if taken | **Compute:** Virtual Machines hosting tier 0 workloads (DC, ADCS, Entra Connect), Virtual Machines with privileged tokens or highly privileged managed identities assigned, VM Scale Sets running privileged workloads, Azure Bastion hosts (gateway to tier 0 VMs), Confidential compute instances handling key material<br/><br/>**Storage:** Storage accounts containing DC/CA backup data, Storage accounts containing Entra Connect configuration, Azure Blob Storage backing tier 0 audit and log pipelines, Storage accounts with Entra-integrated RBAC and tier 0 data, Immutable and locked Azure Storage holding identity bootstrap data<br/><br/>**Identity & Access:** Entra ID tenant root, Management group root (tenant root group), Subscriptions containing tier 0 workloads, Azure Key Vault storing root CA private keys, Azure Key Vault storing tenant-wide secrets and certificates, Azure Key Vaults storing tenant root keys or certificate authorities, Managed Identity with Owner or User Access Administrator at subscription or MG scope, App registrations with RoleManagement.ReadWrite.Directory or Directory.ReadWrite.All, Service principals with tenant-wide privileged Graph API permissions<br/><br/>**Networking:** Virtual Networks hosting tier 0 VMs, Network Security Groups governing tier 0 subnet traffic, Azure Firewall (central hub — controls all east-west and north-south traffic), ExpressRoute circuits (direct on-prem to cloud bridge), Azure Private DNS zones (name resolution for tier 0 services), VPN Gateways (site-to-site tunnels into on-prem tier 0 networks), Azure DDoS Protection plans, Azure Network and Security Policy control plane resources<br/><br/>**Management & Governance:** Azure Management Groups with root tenant-level access, Azure Subscription Owner roles over security-critical subscriptions, Azure Policy assignments at root MG scope, Azure Blueprints assigned at root MG scope, Microsoft Defender for Cloud, Azure Monitor (Log Analytics workspaces ingesting tier 0 signals), Microsoft Sentinel workspace, Azure Automation accounts running as high-privilege managed identity, Azure Automation / Runbook accounts with privileged role assignments, Azure DevOps organizations with service connections to tier 0 subscriptions, Azure Arc control plane (manages on-prem servers as Azure resources), Azure Arc / Hybrid management orchestrators<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 0 VMs, Azure VMware Solution (AVS) management clusters, Azure Stack HCI clusters running tier 0 guest VMs |
+| **High<br />(Tier-1)**<br /><br />High impact, one or two pivots to full compromise | **Compute:** Virtual Machines hosting Exchange, ADFS, MFA, or SIEM workloads, Virtual Machines with scoped privileged tokens or identities, Azure Kubernetes Service (AKS) clusters with privileged workloads, Azure Container Apps running privileged services, Azure Batch accounts with high-privilege managed identity<br/><br/>**Storage:** Storage accounts backing SIEM and log aggregation, Storage accounts containing application secrets or config, Azure File shares mounted by privileged VMs, Azure Data Lake storing sensitive identity or security telemetry, Highly active Azure Key Vaults with large number of operations<br/><br/>**Identity & Access:** App registrations with Application.ReadWrite.All or User.ReadWrite.All, Service principals with Exchange, Intune, or Security Administrator equivalent permissions, Managed Identities with Contributor or Key Vault Administrator at subscription scope, Azure AD B2C tenants federated to production tenant, Federated identity credentials on privileged app registrations<br/><br/>**Networking:** Hub Virtual Networks (peered to tier 0 VNets), Azure Application Gateway (WAF — handles auth traffic), Azure Front Door (global entry point — SSL termination), Azure Load Balancer (fronting tier 1 workloads), Network Virtual Appliances (NVA — routing and inspection), Azure Private Endpoints for tier 1 services, Azure DNS resolvers (recursive — name resolution for all workloads)<br/><br/>**Management & Governance:** Azure Automation accounts with scoped privileged runbooks, Azure Automation / Runbook accounts with scoped role assignments, Log Analytics workspaces ingesting tier 1 signals, Azure DevOps pipelines deploying to tier 1 environments, Azure Key Vault storing tier 1 application secrets, Microsoft Defender for Endpoint, Azure Update Manager, Azure Lighthouse delegations with privileged access, Azure Arc / Hybrid management orchestrators (scoped to tier 1 systems)<br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 1 VMs, Azure Stack HCI clusters running tier 1 guest VMs, Azure VMware Solution (AVS) workload clusters |
+| **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Compute:** Virtual Machines hosting file, SharePoint, SQL, or collaboration workloads, Azure Kubernetes Service (AKS) worker nodes (non-privileged workloads), Azure App Service plans hosting internal applications, Azure Functions with scoped managed identity, Azure Logic Apps with limited connector scope, Azure Virtual Desktop (AVD) / Windows 365 for non-admin users, Dev/Test virtual machines without production data<br/><br/>**Storage:** Storage accounts hosting application data (non-sensitive), Azure SQL databases (non-sensitive schemas), Azure Cosmos DB instances (application data), Azure File shares mounted by standard workload VMs, Azure Blob Storage for application asset delivery<br/><br/>**Identity & Access:** App registrations with scoped delegated permissions, Service principals scoped to single resource group, Managed Identities with Contributor on isolated resource group, App registrations with Mail.Read or Files.ReadWrite.All<br/><br/>**Networking:** Spoke Virtual Networks (workload-specific, peered to hub), Azure Application Gateway (non-auth workloads), Network Security Groups on workload subnets, Azure Traffic Manager profiles, Azure Content Delivery Network (CDN) endpoints<br/><br/>**Management & Governance:** Dev/Test subscriptions and resource groups, Non-production workloads (dev, test, QA, staging) without production data, Azure DevOps pipelines deploying to tier 2 environments, Log Analytics workspaces (workload-scoped), Azure Key Vault storing tier 2 application secrets, Azure Monitor alert rules (workload-scoped), Azure Backup vaults (tier 2 workload data)<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 2 VMs, Azure Stack HCI clusters running tier 2 guest VMs |
+| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Compute:** Virtual Machines hosting non-sensitive workloads (print, NTP, intranet), Azure App Service (public-facing, no internal integration), Azure Static Web Apps, Azure Container Instances (isolated, ephemeral), Sandbox subscriptions designed for experimentation, Proof-of-concept / pilot workloads with no sensitive data, Lab resource groups intended to be wiped/reset<br/><br/>**Storage:** Storage accounts hosting public or non-sensitive content, Azure Blob Storage for static asset delivery, Azure Archive storage (cold, no active credentials)<br/><br/>**Identity & Access:** App registrations with User.Read delegated only, Service principals with Reader on isolated resource group, Managed Identities with no RBAC assignments, Expired or disabled service principals, Guest user accounts with default permissions, Personal / sandbox resources with no privileged role assignments<br/><br/>**Networking:** Azure CDN endpoints (public content delivery), Azure DNS public zones (external name resolution only), Network Security Groups on isolated low-trust subnets, Azure Virtual WAN branches (read-only monitoring)<br/><br/>**Management & Governance:** Azure Cost Management (read-only), Azure Policy (read-only assignments), Azure Monitor (read-only, non-sensitive workloads), Azure Advisor (recommendations only), Azure Service Health alerts (read-only), Sandbox subscriptions for experimentation, Proof-of-concept and pilot resource groups with no sensitive data<br/><br/>**Hypervisor / Fabric:** Azure Sandbox / dev-test dedicated hosts, Non-production Azure Stack HCI clusters |
 
 
 

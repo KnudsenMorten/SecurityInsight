@@ -105,7 +105,7 @@ AssetTagging:
         | extend
             AssetTagType   = "AssetTier--SI",
             AssetTag       = "ADCertificateService",
-            AssetTierLevel = 1
+            AssetTierLevel = 0
         | extend    
             AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
         // Tagging END -----------------
@@ -164,7 +164,7 @@ AssetTagging:
         // Tagging BEGIN ---------------
         | extend
             AssetTagType   = "AssetTier--SI",
-            AssetTag       = "DomainControllerDNS",
+            AssetTag       = "EntraSyncService",
             AssetTierLevel = 0
         | extend    
             AssetTagName   = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")

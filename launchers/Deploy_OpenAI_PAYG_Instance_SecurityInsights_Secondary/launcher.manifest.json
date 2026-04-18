@@ -1,0 +1,21 @@
+{
+  "scriptName": "Deploy_OpenAI_PAYG_Instance_SecurityInsights_Secondary",
+  "engineScript": "Deploy_OpenAI_PAYG_Instance_SecurityInsights",
+  "version": "2.0.0",
+  "scriptType": "Engine",
+  "community": true,
+  "communityRepo": "SecurityInsight",
+  "description": "Deploys (or reuses) an Azure OpenAI PAYG account + model deployment for the SecurityInsight 'Secondary' instance. Calls the Deploy_OpenAI_PAYG_Instance_SecurityInsights engine with this variant's pre-filled customer values.",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "notes": "One of N launcher variants for the Deploy_OpenAI engine. Edit launcher.override.ps1 (sibling) to swap any value at runtime without modifying the template.",
+  "parameters": {
+    "SubscriptionId": "<secondary-subscription-id>",
+    "ResourceGroupName": "rg-security-insight-secondary",
+    "Location": "westeurope",
+    "AccountName": "oai-mortenknudsen-security-insight-2",
+    "DeploymentName": "oai-mortenknudsen-security-insight-2",
+    "ModelName": "gpt-4.1-mini",
+    "ModelVersion": "latest",
+    "Capacity": 100
+  }
+}

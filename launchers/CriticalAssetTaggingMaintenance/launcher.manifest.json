@@ -1,0 +1,10 @@
+{
+  "description": "CriticalAssetTaggingMaintenance -- v2 ported engine under SecurityInsight.",
+  "scriptType": "Engine",
+  "community": true,
+  "notes": "Ported via TOOLS/New-SolutionLauncherSet.ps1. Engine copied near-verbatim with defensive patches (idempotent $global:PathScripts + FUNCTIONS/LEGACY fallback). Internal-only = False.",
+  "scriptName": "CriticalAssetTaggingMaintenance",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "version": "2.0.0",
+  "communityRepo": "SecurityInsight"
+}

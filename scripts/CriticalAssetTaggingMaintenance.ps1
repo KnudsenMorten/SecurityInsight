@@ -656,7 +656,7 @@ foreach ($sub in $subsWithTag) {
 
 # DELETE SPECIFIC TAG ON AZURE RESOURCES
 
-$TagToDelete = "dsadas"   # exact key to remove
+$TagToDelete = "AssetTagName"   # exact key to remove
 $PageSize    = 1000
 
 $query = @'

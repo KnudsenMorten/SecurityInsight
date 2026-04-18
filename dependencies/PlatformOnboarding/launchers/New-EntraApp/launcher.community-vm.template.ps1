@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community VM launcher for SecurityInsight\IdentityAssetsCollectDefineTierIngestLog.
+    Community VM launcher for PlatformOnboarding\New-EntraApp.
 .DESCRIPTION
-    Runs the IdentityAssetsCollectDefineTierIngestLog engine on a Windows box in the customer's own tenant.
+    Runs the New-EntraApp engine on a Windows box in the customer's own tenant.
     Reads credentials from LauncherConfig.ps1 (.gitignore'd). Supports 4 auth
     methods (MI, SPN+KV, SPN+cert, SPN+plaintext). See LauncherConfig.sample.ps1.
 #>
@@ -84,7 +84,7 @@ function Resolve-RepoRoot {
     throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected to find either FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a scripts/+launchers/ pair (published community repo)." -f $Start)
 }
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'IdentityAssetsCollectDefineTierIngestLog' -Flavour 'community-vm' -Description 'IdentityAssetsCollectDefineTierIngestLog -- v2 ported engine under SecurityInsight.'
+Write-Banner -Solution 'PlatformOnboarding' -Engine 'New-EntraApp' -Flavour 'community-vm' -Description 'New-EntraApp -- v2 ported engine under PlatformOnboarding.'
 
 try {
     Write-Step "Resolving repo root"
@@ -215,10 +215,10 @@ $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'IdentityAssetsCollectDefineTierIngestLog.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'New-EntraApp.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
-if (-not $engine) { throw "Launcher: engine 'IdentityAssetsCollectDefineTierIngestLog.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
+if (-not $engine) { throw "Launcher: engine 'New-EntraApp.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

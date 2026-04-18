@@ -1,0 +1,10 @@
+{
+  "scriptType": "Engine",
+  "version": "2.0.0",
+  "description": "New-KeyVaultForSolution -- v2 ported engine under PlatformOnboarding.",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "scriptName": "New-KeyVaultForSolution",
+  "community": true,
+  "notes": "Ported via TOOLS/New-SolutionLauncherSet.ps1. Engine copied near-verbatim with defensive patches (idempotent $global:PathScripts + FUNCTIONS/LEGACY fallback). Internal-only = False.",
+  "communityRepo": "PlatformOnboarding"
+}

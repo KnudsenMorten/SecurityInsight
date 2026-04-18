@@ -1,0 +1,10 @@
+{
+  "version": "2.0.0",
+  "communityRepo": "PlatformOnboarding",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "scriptName": "Enable-VmManagedIdentity",
+  "scriptType": "Engine",
+  "description": "Enable-VmManagedIdentity -- v2 ported engine under PlatformOnboarding.",
+  "community": true,
+  "notes": "Ported via TOOLS/New-SolutionLauncherSet.ps1. Engine copied near-verbatim with defensive patches (idempotent $global:PathScripts + FUNCTIONS/LEGACY fallback). Internal-only = False."
+}

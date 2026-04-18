@@ -2,9 +2,9 @@
 #Requires -Modules @{ ModuleName='Az.Accounts'; ModuleVersion='2.0.0' }
 <#
 .SYNOPSIS
-    Community Azure (Function / Logic App / Hybrid Worker) launcher for SecurityInsight\CriticalAssetTaggingMaintenance.
+    Community Azure (Function / Logic App / Hybrid Worker) launcher for PlatformOnboarding\New-KeyVaultForSolution.
 .DESCRIPTION
-    Runs the CriticalAssetTaggingMaintenance engine from an Azure host that has a system-assigned MI.
+    Runs the New-KeyVaultForSolution engine from an Azure host that has a system-assigned MI.
     MI -> Key Vault -> SPN secret -> SPN login. Requires App Settings:
     PLATFORM_TENANT_ID, PLATFORM_SUBSCRIPTION_ID, PLATFORM_KEYVAULT.
 #>
@@ -84,7 +84,7 @@ function Resolve-RepoRoot {
     throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected to find either FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a scripts/+launchers/ pair (published community repo)." -f $Start)
 }
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'CriticalAssetTaggingMaintenance' -Flavour 'community-azure' -Description 'CriticalAssetTaggingMaintenance -- v2 ported engine under SecurityInsight.'
+Write-Banner -Solution 'PlatformOnboarding' -Engine 'New-KeyVaultForSolution' -Flavour 'community-azure' -Description 'New-KeyVaultForSolution -- v2 ported engine under PlatformOnboarding.'
 
 try {
     Write-Step "Resolving repo root"
@@ -151,10 +151,10 @@ $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'CriticalAssetTaggingMaintenance.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'New-KeyVaultForSolution.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
-if (-not $engine) { throw "Launcher: engine 'CriticalAssetTaggingMaintenance.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
+if (-not $engine) { throw "Launcher: engine 'New-KeyVaultForSolution.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

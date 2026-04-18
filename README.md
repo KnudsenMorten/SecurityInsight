@@ -1,7 +1,5 @@
 # SecurityInsight
 
-# SecurityInsight
-
 SecurityInsight is a **risk-based prioritization add-on for Microsoft Defender**. It replaces the traditional Secure Score model with a scoring system built on **consequence, probability, and contextual risk factors** — giving security teams a clear, ordered list of what to fix first.
 
 > **The core idea is simple: take the first line in the Excel output. It has the highest risk score. Work your way down.**

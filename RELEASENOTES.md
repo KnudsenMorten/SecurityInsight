@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.3
+## v2.1.4
 
-Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream AutomateIT monorepo:
+Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- docs(SecurityInsight): expand Azure Function hosting + add Preview + Contributing sections (4d409fc)
+- chore: strip 'AutomateIT' branding from user-facing launcher + doc content (653bac5)
 
 ---
 

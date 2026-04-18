@@ -8,7 +8,7 @@ param([string]$InstallPath)
 
 $ErrorActionPreference = 'Stop'
 
-function Resolve-AutomateITRepoRoot {
+function Resolve-RepoRoot {
     param([string]$Start = $PSScriptRoot)
     $cur = $Start
     while ($cur) {
@@ -17,9 +17,9 @@ function Resolve-AutomateITRepoRoot {
         if (-not $parent -or $parent -eq $cur) { break }
         $cur = $parent
     }
-    throw "Launcher: cannot locate AutomateIT repo root walking up from '$Start'."
+    throw "Launcher: cannot locate solution repo root walking up from '$Start'."
 }
-if (-not $InstallPath) { $InstallPath = Resolve-AutomateITRepoRoot }
+if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
 
 $overrideFile = Join-Path $PSScriptRoot 'launcher.override.ps1'
 if (Test-Path -LiteralPath $overrideFile) { . $overrideFile }
@@ -28,10 +28,10 @@ if (Test-Path -LiteralPath $overrideFile) { . $overrideFile }
 Import-Module (Join-Path $InstallPath 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1') -Force
 
 $ctx = New-PlatformContext `
-    -TenantId           $env:AUTOMATEIT_TENANT_ID `
-    -SubscriptionId     $env:AUTOMATEIT_SUBSCRIPTION_ID `
-    -KeyVaultName       $env:AUTOMATEIT_KEYVAULT `
-    -StorageAccountName $env:AUTOMATEIT_STORAGE_ACCOUNT
+    -TenantId           $env:PLATFORM_TENANT_ID `
+    -SubscriptionId     $env:PLATFORM_SUBSCRIPTION_ID `
+    -KeyVaultName       $env:PLATFORM_KEYVAULT `
+    -StorageAccountName $env:PLATFORM_STORAGE_ACCOUNT
 Initialize-PlatformIdentity -Context $ctx -IgnoreMissing | Out-Null
 
 if (-not $ctx.Identity.Modern.Azure.AppId -or -not $ctx.Identity.Modern.Azure.Secret) {

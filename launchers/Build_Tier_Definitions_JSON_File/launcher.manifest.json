@@ -1,0 +1,10 @@
+{
+  "description": "Build_Tier_Definitions_JSON_File -- v2 ported engine under SecurityInsight.",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "version": "2.0.0",
+  "scriptType": "Engine",
+  "notes": "Ported via TOOLS/New-SolutionLauncherSet.ps1. Engine copied near-verbatim with defensive patches (idempotent $global:PathScripts + FUNCTIONS/LEGACY fallback). Internal-only = False.",
+  "scriptName": "Build_Tier_Definitions_JSON_File",
+  "communityRepo": "SecurityInsight",
+  "community": true
+}

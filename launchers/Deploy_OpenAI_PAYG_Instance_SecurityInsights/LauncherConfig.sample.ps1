@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community-edition customer test config for Deploy_OpenAI (Secondary).
+    Community-edition customer test config for Deploy_OpenAI .
 .DESCRIPTION
     Copy to LauncherConfig.ps1 (same folder), fill in your TEST SPN values
     (a separate SPN with Cognitive Services Contributor on the target

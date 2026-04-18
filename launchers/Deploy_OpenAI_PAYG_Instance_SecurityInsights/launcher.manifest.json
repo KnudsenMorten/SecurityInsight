@@ -1,0 +1,21 @@
+{
+  "scriptName": "Deploy_OpenAI_PAYG_Instance_SecurityInsights",
+  "engineScript": "Deploy_OpenAI_PAYG_Instance_SecurityInsights",
+  "version": "2.0.0",
+  "scriptType": "Engine",
+  "community": true,
+  "communityRepo": "SecurityInsight",
+  "description": "Deploys (or reuses) an Azure OpenAI PAYG account + model deployment used by SecurityInsight for AI summary generation. Customer values (SubscriptionId, ResourceGroupName, Location, AccountName, DeploymentName) are set via launcher.override.ps1 (sibling, .gitignore'd) or edited directly in the launcher template.",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "notes": "Single launcher for the Deploy_OpenAI engine. Edit launcher.override.ps1 (sibling) to swap any value at runtime without modifying the template.",
+  "parameters": {
+    "SubscriptionId": "<your-subscription-id>",
+    "ResourceGroupName": "rg-security-insight",
+    "Location": "swedencentral",
+    "AccountName": "oai-security-insight",
+    "DeploymentName": "oai-security-insight",
+    "ModelName": "gpt-4.1-mini",
+    "ModelVersion": "latest",
+    "Capacity": 100
+  }
+}

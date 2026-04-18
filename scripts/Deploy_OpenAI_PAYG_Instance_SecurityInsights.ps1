@@ -76,25 +76,42 @@ $ApiVersion = "2024-10-01"
 $InferenceApiVersion = "2025-01-01-preview"
 #endregion =======================================================
 
-#region ================= USER-EDITABLE DEFAULTS =================
+#region ================= LAUNCHER-SUPPLIED DEFAULTS =================
+# This engine is launcher-driven. All customer-specific values
+# (SubscriptionId, ResourceGroupName, Location, AccountName, DeploymentName)
+# MUST be supplied by the launcher -- either as -SubscriptionId etc.
+# parameters, or by setting matching $global:* variables before the
+# engine is invoked.
+#
+# The defaults here are PLATFORM-NEUTRAL only -- model preference,
+# capacity, SKU order, etc. They are safe to ship to the community repo.
 $ScriptDefaults = @{
-    SubscriptionId      = "xxxxxxxxx"
-    ResourceGroupName   = "rg-security-insight"
-    Location            = "swedencentral"
-    AccountName         = "oai-xxxxx-security-insight"
-    DeploymentName      = "oai-xxxxx-security-insight"
+    SubscriptionId      = $global:SubscriptionId
+    ResourceGroupName   = $global:ResourceGroupName
+    Location            = $global:Location
+    AccountName         = $global:AccountName
+    DeploymentName      = $global:DeploymentName
 
     # Preferred default (may not be supported; script will try others)
-    ModelName           = "gpt-4.1-mini"
-    ModelVersion        = "latest"
+    ModelName           = if ($global:ModelName)    { $global:ModelName }    else { 'gpt-4.1-mini' }
+    ModelVersion        = if ($global:ModelVersion) { $global:ModelVersion } else { 'latest' }
 
-    Capacity            = 100   # script uses this as "sku.capacity" for the deployment PUT
-    PublicNetworkAccess = "Enabled"
-    WaitForAccountReady = $true
+    Capacity            = if ($global:Capacity)            { [int]$global:Capacity }            else { 100 }
+    PublicNetworkAccess = if ($global:PublicNetworkAccess) { $global:PublicNetworkAccess }      else { 'Enabled' }
+    WaitForAccountReady = if ($null -ne $global:WaitForAccountReady) { [bool]$global:WaitForAccountReady } else { $true }
 
-    DeploymentSkuOrder  = @("GlobalStandard")
+    DeploymentSkuOrder  = if ($global:DeploymentSkuOrder) { @($global:DeploymentSkuOrder) } else { @('GlobalStandard') }
 
-    WriteModelDumps     = $true
+    WriteModelDumps     = if ($null -ne $global:WriteModelDumps) { [bool]$global:WriteModelDumps } else { $true }
+}
+
+# Hard guard: customer-specific values must be present (from launcher or -param)
+foreach ($req in 'SubscriptionId','ResourceGroupName','Location','AccountName','DeploymentName') {
+    $fromParam = (Get-Variable -Name $req -Scope Local -ErrorAction SilentlyContinue).Value
+    $fromDefaults = $ScriptDefaults[$req]
+    if ([string]::IsNullOrWhiteSpace([string]$fromParam) -and [string]::IsNullOrWhiteSpace([string]$fromDefaults)) {
+        throw "Deploy_OpenAI_PAYG_Instance_SecurityInsights: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
+    }
 }
 
 $AlwaysVerbose = $true

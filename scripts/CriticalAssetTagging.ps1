@@ -1,4 +1,4 @@
-Write-host "***********************************************************************************************"
+﻿Write-host "***********************************************************************************************"
 Write-host "Critical Asset Tagging using YAML-file"
 Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
@@ -13,6 +13,11 @@ if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:S
 }
 if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
 if (-not $global:Scope -or @($global:Scope).Count -eq 0) { $global:Scope = @('PROD') }
+
+# KustoCL engine globals (set by launcher, optional - only required when KustoCL rules exist)
+if ($null -eq $global:KustoWorkspaceId)  { $global:KustoWorkspaceId  = $null }
+if ($null -eq $global:KustoTable)        { $global:KustoTable         = 'SI_IdentityAssets_CL' }
+if ($null -eq $global:CsaAttributeSet)   { $global:CsaAttributeSet   = 'SecurityInsight' }
 
 try {
   $global:SettingsPath = (Resolve-Path -LiteralPath $global:SettingsPath).Path
@@ -67,7 +72,132 @@ function Write-Err2 {
   }
 }
 
-function Tick { param([string]$Label="") if($script:_sw){ $script:_sw.Stop(); Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds); $script:_sw=$null } }
+function Write-Sep {
+  param(
+    [string]$Char = '-',
+    [int]$Width = 110
+  )
+  Write-Host ($Char * $Width) -ForegroundColor DarkGray
+}
+
+function Write-BlockFields {
+  param(
+    [hashtable]$Fields,
+    [ValidateSet('Info','Ok','Warn','Err')]
+    [string]$Level = 'Info',
+    [string]$Indent = ""
+  )
+
+  if (-not $Fields -or $Fields.Count -eq 0) { return }
+
+  $color = switch ($Level) {
+    'Ok'   { 'Green' }
+    'Warn' { 'Yellow' }
+    'Err'  { 'Red' }
+    default { 'Gray' }
+  }
+
+  $keys = @($Fields.Keys)
+
+  $preferredOrder = @(
+    'Rule','Engine','Mode','Chunk','Count','Machines',
+    'Name','Type','Tag','TagKey','TagValue',
+    'Reason','TargetSub','ContextSub','Id',
+    'ResourceId','Error'
+  )
+
+  $orderedKeys = @()
+  foreach ($k in $preferredOrder) {
+    if ($keys -contains $k) { $orderedKeys += $k }
+  }
+  foreach ($k in $keys) {
+    if ($orderedKeys -notcontains $k) { $orderedKeys += $k }
+  }
+
+  foreach ($k in $orderedKeys) {
+    $v = if ($null -eq $Fields[$k]) { "" } else { [string]$Fields[$k] }
+
+    if ($k -in @('ResourceId','Error')) {
+      Write-Host ("{0}{1,-12}:" -f $Indent, $k) -ForegroundColor $color
+      foreach ($line in ($v -split "`r?`n")) {
+        Write-Host $line -ForegroundColor $color
+      }
+    }
+    else {
+      Write-Host ("{0}{1,-12}: {2}" -f $Indent, $k, $v) -ForegroundColor $color
+    }
+  }
+}
+
+function Write-InfoBlock {
+  param(
+    [Parameter(Mandatory)][string]$Title,
+    [hashtable]$Fields = @{},
+    [switch]$SeparatorBefore,
+    [switch]$SeparatorAfter
+  )
+
+  if ($SeparatorBefore) { Write-Sep }
+  Write-Info $Title
+  Write-BlockFields -Fields $Fields -Level Info
+  if ($SeparatorAfter) { Write-Sep }
+}
+
+function Write-OkBlock {
+  param(
+    [Parameter(Mandatory)][string]$Title,
+    [hashtable]$Fields = @{},
+    [switch]$SeparatorBefore,
+    [switch]$SeparatorAfter
+  )
+
+  if ($SeparatorBefore) { Write-Sep }
+  Write-Ok $Title
+  Write-BlockFields -Fields $Fields -Level Ok
+  if ($SeparatorAfter) { Write-Sep }
+}
+
+function Write-WarnBlock {
+  param(
+    [Parameter(Mandatory)][string]$Title,
+    [hashtable]$Fields = @{},
+    [switch]$SeparatorBefore,
+    [switch]$SeparatorAfter
+  )
+
+  if ($script:SuppressWarnings) { return }
+
+  if ($SeparatorBefore) { Write-Sep }
+  Write-Warn2 $Title
+  Write-BlockFields -Fields $Fields -Level Warn
+  if ($SeparatorAfter) { Write-Sep }
+}
+
+function Write-ErrBlock {
+  param(
+    [Parameter(Mandatory)][string]$Title,
+    [hashtable]$Fields = @{},
+    [switch]$SeparatorBefore,
+    [switch]$SeparatorAfter
+  )
+
+  if ($script:SuppressErrors) { return }
+
+  if ($SeparatorBefore) { Write-Sep }
+  Write-Err2 $Title
+  Write-BlockFields -Fields $Fields -Level Err
+  if ($SeparatorAfter) { Write-Sep }
+}
+
+function Tick {
+  param([string]$Label="")
+  if($script:_sw){
+    $script:_sw.Stop()
+    Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds)
+    $script:_sw=$null
+  }
+}
+
 function Tock { $script:_sw = [System.Diagnostics.Stopwatch]::StartNew() }
 
 function Ensure-Module {
@@ -110,6 +240,176 @@ function Get-QueryEngine {
   $qe = ([string]$QueryEngine).Trim()
   if ([string]::IsNullOrWhiteSpace($qe)) { return 'DEFENDERGRAPH' }
   $qe.ToUpperInvariant()
+}
+
+# ==========================================================================================
+# KUSTOCL ENGINE - Log Analytics query + Entra CSA write-back
+# ==========================================================================================
+
+function Invoke-KustoCLQuery {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$WorkspaceId,
+    [Parameter(Mandatory)][string]$Query
+  )
+
+  # Requires Az.OperationalInsights
+  $result = Invoke-AzOperationalInsightsQuery `
+    -WorkspaceId $WorkspaceId `
+    -Query       $Query `
+    -ErrorAction Stop
+
+  if (-not $result -or -not $result.Results) {
+    return [pscustomobject]@{ Data = @(); Count = 0 }
+  }
+
+  $rows = @($result.Results)
+  return [pscustomobject]@{ Data = $rows; Count = $rows.Count }
+}
+
+function Get-EntraObjectIdFromRow {
+  param([Parameter(Mandatory)][psobject]$Row)
+  foreach ($n in @('ObjectId','objectId','ObjectId_s','objectId_s')) {
+    $p = $Row.PSObject.Properties[$n]
+    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return ([string]$p.Value).Trim() }
+  }
+  return $null
+}
+
+function Get-EntraObjectTypeFromRow {
+  param([Parameter(Mandatory)][psobject]$Row)
+  foreach ($n in @('ObjectType','objectType','ObjectType_s','objectType_s')) {
+    $p = $Row.PSObject.Properties[$n]
+    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return ([string]$p.Value).Trim() }
+  }
+  return $null
+}
+
+function Get-EntraDisplayNameFromRow {
+  param([Parameter(Mandatory)][psobject]$Row)
+  foreach ($n in @('DisplayName','displayName','DisplayName_s','displayName_s')) {
+    $p = $Row.PSObject.Properties[$n]
+    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return ([string]$p.Value).Trim() }
+  }
+  return '<unknown>'
+}
+
+function Get-EntraEndpointFromObjectType {
+  param([Parameter(Mandatory)][string]$ObjectType)
+  switch ($ObjectType.ToLowerInvariant()) {
+    'user'              { return 'users' }
+    'serviceprincipal'  { return 'servicePrincipals' }
+    'managedidentity'   { return 'servicePrincipals' }
+    default             { return $null }
+  }
+}
+
+function Get-EntraCurrentCSATags {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Endpoint,
+    [Parameter(Mandatory)][string]$ObjectId,
+    [Parameter(Mandatory)][string]$AttributeSet
+  )
+
+  try {
+    $resp = Invoke-MgGraphRequest `
+      -Method  GET `
+      -Uri     "https://graph.microsoft.com/v1.0/$Endpoint/$ObjectId`?`$select=customSecurityAttributes" `
+      -Headers @{ 'Content-Type' = 'application/json' }
+
+    $csaBlock = $resp.customSecurityAttributes
+    if (-not $csaBlock) { return @() }
+
+    $setBlock = $csaBlock.$AttributeSet
+    if (-not $setBlock) { return @() }
+
+    $raw = $setBlock.AssetTags
+    if (-not $raw) { return @() }
+
+    # AssetTags is a string collection - may come back as array or single string
+    if ($raw -is [System.Collections.IEnumerable] -and -not ($raw -is [string])) {
+      return @($raw | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    }
+    return @([string]$raw)
+  }
+  catch {
+    # Object may not have CSA yet - treat as empty
+    return @()
+  }
+}
+
+function Set-EntraCSATag {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][string]$Endpoint,
+    [Parameter(Mandatory)][string]$ObjectId,
+    [Parameter(Mandatory)][string]$AttributeSet,
+    [Parameter(Mandatory)][string]$AssetTagName,
+    [Parameter(Mandatory)][string[]]$CurrentTags,
+    [string]$DisplayName    = '<unknown>',
+    [bool]$WhatIfMode       = $script:WhatIfMode,
+    [bool]$SuppressErrors   = $script:SuppressErrors
+  )
+
+  $result = [pscustomobject]@{
+    Success        = $false
+    Suppressed     = $false
+    AlreadyPresent = $false
+    WhatIf         = $false
+    Changed        = $false
+    ErrorMessage   = $null
+    ObjectId       = $ObjectId
+    DisplayName    = $DisplayName
+    AssetTagName   = $AssetTagName
+  }
+
+  # Skip if already tagged
+  if ($CurrentTags -contains $AssetTagName) {
+    $result.Success        = $true
+    $result.AlreadyPresent = $true
+    return $result
+  }
+
+  if ($WhatIfMode) {
+    $result.Success = $true
+    $result.WhatIf  = $true
+    $result.Changed = $true
+    return $result
+  }
+
+  # Merge new tag into existing collection
+  $newTags = @($CurrentTags) + @($AssetTagName) | Select-Object -Unique
+
+  $body = @{
+    customSecurityAttributes = @{
+      $AttributeSet = @{
+        '@odata.type' = '#Microsoft.DirectoryServices.CustomSecurityAttributeValue'
+        'AssetTags@odata.type' = '#Collection(String)'
+        AssetTags     = @($newTags)
+      }
+    }
+  }
+
+  try {
+    Invoke-MgGraphRequest `
+      -Method  PATCH `
+      -Uri     "https://graph.microsoft.com/v1.0/$Endpoint/$ObjectId" `
+      -Headers @{ 'Content-Type' = 'application/json' } `
+      -Body    ($body | ConvertTo-Json -Depth 6) | Out-Null
+
+    $result.Success = $true
+    $result.Changed = $true
+    return $result
+  }
+  catch {
+    $result.ErrorMessage = $_.Exception.Message
+    if ($SuppressErrors) {
+      $result.Suppressed = $true
+      return $result
+    }
+    throw
+  }
 }
 
 function Ensure-GraphAuth {
@@ -329,10 +629,23 @@ function Get-DeviceNameFromRow {
     'NodeName','nodeName',
     'ComputerDnsName','computerDnsName',
     'HostName','hostName',
+    'DnsName','dnsName',
+    'NetBiosName','netBiosName',
+    'AadDeviceName','aadDeviceName',
+    'MachineName','machineName',
     'Name','name'
   )
-  if ([string]::IsNullOrWhiteSpace($n)) { return "<unknown>" }
-  return $n.Trim()
+
+  if (-not [string]::IsNullOrWhiteSpace($n)) {
+    return $n.Trim()
+  }
+
+  $id = Get-SenseDeviceIdFromRow -Row $Row
+  if (-not [string]::IsNullOrWhiteSpace($id)) {
+    return "<unknown:$id>"
+  }
+
+  return "<unknown>"
 }
 
 function Get-SenseDeviceIdFromRow {
@@ -366,7 +679,10 @@ function Test-DefenderMachineExists {
     if ($statusCode -eq 404) { return $false }
 
     if ($SuppressErrors) {
-      Write-Warn2 ("Suppressed Defender machine existence check error: MachineId={0} | Error={1}" -f $MachineId, $_.Exception.Message)
+      Write-WarnBlock -Title "Suppressed Defender machine existence check error" -Fields ([ordered]@{
+        MachineId = $MachineId
+        Error     = $_.Exception.Message
+      }) -SeparatorBefore
       return $false
     }
 
@@ -404,8 +720,11 @@ function AddTagForMultipleMachines {
   }
 
   if ($WhatIfMode) {
-    Write-Warn2 ("[WHATIF] Would bulk-tag {0} machines with '{1}'" -f $MachineIds.Count, $Tag)
-    Write-Info  ("[WHATIF] POST {0}" -f $uri)
+    Write-WarnBlock -Title "[WHATIF] Would bulk-tag Defender machines" -Fields ([ordered]@{
+      Count = $MachineIds.Count
+      Tag   = $Tag
+      Uri   = $uri
+    }) -SeparatorBefore
     $result.Success = $true
     $result.WhatIf  = $true
     return $result
@@ -454,8 +773,12 @@ function Add-DefenderTag {
   }
 
   if ($WhatIfMode) {
-    Write-Warn2 ("[WHATIF] Would tag machine {0} ({1}) with '{2}'" -f $DeviceName, $MachineId, $Tag)
-    Write-Info  ("[WHATIF] POST {0}" -f $uri)
+    Write-WarnBlock -Title "[WHATIF] Would tag Defender machine" -Fields ([ordered]@{
+      DeviceName = $DeviceName
+      MachineId  = $MachineId
+      Tag        = $Tag
+      Uri        = $uri
+    }) -SeparatorBefore
     $result.Success = $true
     $result.WhatIf  = $true
     return $result
@@ -505,34 +828,64 @@ function Apply-TagBulkWithSplit {
       $bulkResult = AddTagForMultipleMachines -AccessHeaders $AccessHeaders -MachineIds $ids -Tag $Tag -SuppressErrors $SuppressErrors
 
       if ($bulkResult.Suppressed) {
-        Write-Warn2 ("Suppressed Defender bulk tagging error for {0} machines (depth {1}) | Tag='{2}' | Error={3}" -f $ids.Count, $depth, $Tag, $bulkResult.ErrorMessage)
+        Write-WarnBlock -Title "Suppressed Defender bulk tagging error" -Fields ([ordered]@{
+          Count = $ids.Count
+          Depth = $depth
+          Tag   = $Tag
+          Error = $bulkResult.ErrorMessage
+        }) -SeparatorBefore
       }
       else {
-        Write-Ok ("bulk tag applied to {0} machines" -f $ids.Count)
+        Write-OkBlock -Title "Defender bulk tag applied" -Fields ([ordered]@{
+          Count = $ids.Count
+          Tag   = $Tag
+          Depth = $depth
+        }) -SeparatorBefore
       }
 
       continue
     }
     catch {
-      Write-Err2 ("bulk tagging failed for {0} machines (depth {1}): {2}" -f $ids.Count, $depth, $_.Exception.Message)
+      Write-ErrBlock -Title "Defender bulk tagging failed" -Fields ([ordered]@{
+        Count = $ids.Count
+        Depth = $depth
+        Error = $_.Exception.Message
+      }) -SeparatorBefore
 
       if ($items.Count -le 1 -or $depth -ge $MaxSplitDepth) {
         $one = $items[0]
         try {
           $singleResult = Add-DefenderTag -AccessHeaders $AccessHeaders -MachineId $one.Id -Tag $Tag -DeviceName $one.Name -SuppressErrors $SuppressErrors
           if ($singleResult.Suppressed) {
-            Write-Warn2 ("Suppressed Defender single-machine tagging error: {0} ({1}) | Tag='{2}' | Error={3}" -f $one.Name, $one.Id, $Tag, $singleResult.ErrorMessage)
+            Write-WarnBlock -Title "Suppressed Defender single-machine tagging error" -Fields ([ordered]@{
+              Name  = $one.Name
+              Id    = $one.Id
+              Tag   = $Tag
+              Error = $singleResult.ErrorMessage
+            }) -SeparatorBefore
           }
           else {
-            Write-Ok ("tag '{0}' added (single): {1} ({2})" -f $Tag, $one.Name, $one.Id)
+            Write-OkBlock -Title "Defender single-machine tag applied" -Fields ([ordered]@{
+              Name = $one.Name
+              Id   = $one.Id
+              Tag  = $Tag
+            }) -SeparatorBefore
           }
         }
         catch {
           if ($SuppressErrors) {
-            Write-Warn2 ("Suppressed unprocessable machine error: {0} ({1}) | Error={2}" -f $one.Name, $one.Id, $_.Exception.Message)
+            Write-WarnBlock -Title "Suppressed unprocessable Defender machine error" -Fields ([ordered]@{
+              Name  = $one.Name
+              Id    = $one.Id
+              Error = $_.Exception.Message
+            }) -SeparatorBefore
           }
           else {
-            Write-Err2 ("unprocessable machine: {0} ({1}): {2}" -f $one.Name, $one.Id, $_.Exception.Message)
+            Write-ErrBlock -Title "Unprocessable Defender machine" -Fields ([ordered]@{
+              Name  = $one.Name
+              Id    = $one.Id
+              Error = $_.Exception.Message
+            }) -SeparatorBefore
           }
         }
         continue
@@ -689,8 +1042,28 @@ function Set-AzContextFromResourceId {
 function Test-SkipAzureTaggingForType {
   param([Parameter(Mandatory)][string]$ResourceType)
 
+  # Types that cannot be tagged via Update-AzTag / PATCH on the resource id.
+  # These are either provider-scope-only resources (no /tags endpoint on ARM),
+  # internal Microsoft service objects, or types where PATCH is not supported.
   $skipTypes = @(
-    'microsoft.insights/scheduledqueryrules'
+    # Already skipped - query rules have no tags endpoint
+    'microsoft.insights/scheduledqueryrules',
+
+    # Role assignments - PATCH not supported at any roleAssignment scope
+    # (neither subscription-provider, resourceGroup, nor MG scope)
+    'microsoft.authorization/roleassignments',
+
+    # Policy assignments at subscription-provider scope have no tags endpoint.
+    # (RG-scoped assignments are taggable, but ARG queries should already
+    # filter to isnotempty(resourceGroup) so provider-scope ones never appear)
+    'microsoft.authorization/policyassignments',
+
+    # Defender for Cloud / security pricing plans - subscription-provider scope,
+    # no /tags endpoint (microsoft.security/pricings/{PlanName})
+    'microsoft.security/pricings',
+
+    # Internal Microsoft Sentinel platform service - not a customer-manageable resource
+    'microsoft.sentinelplatformservices/sentinelplatformservices'
   )
 
   return ($skipTypes -contains $ResourceType.ToLowerInvariant())
@@ -728,6 +1101,19 @@ function Add-AzureResourceTag {
     if ([string]::IsNullOrWhiteSpace($rid))          { throw "ResourceId is empty" }
     if ([string]::IsNullOrWhiteSpace($TagKey))       { throw "TagKey is empty" }
     if ([string]::IsNullOrWhiteSpace($AssetTagName)) { throw "AssetTagName is empty" }
+    # Provider-scope resources (e.g. /subscriptions/{id}/providers/...) are not taggable
+    # via ARM tags � they have no /tags endpoint. Detect them before the strict ARM id check
+    # and return a clean skip rather than throwing.
+    if (-not [string]::IsNullOrWhiteSpace($rid)) {
+      $rt = Get-ResourceTypeFromResourceId -ResourceId $rid
+      if (-not [string]::IsNullOrWhiteSpace($rt) -and
+          (Test-SkipAzureTaggingForType -ResourceType $rt)) {
+        $result.Skipped    = $true
+        $result.SkipReason = "Tagging skipped for resource type: $rt"
+        return $result
+      }
+    }
+
     if (-not (Test-ArmResourceId -ResourceId $rid))  { throw "Invalid ARM ResourceId: $rid" }
 
     $resourceType        = Get-ResourceTypeFromResourceId -ResourceId $rid
@@ -827,6 +1213,7 @@ if (-not (Test-MicrosoftGraphInstalled)) {
 Ensure-Module Az.Accounts
 Ensure-Module Az.Resources
 Ensure-Module Az.ResourceGraph
+Ensure-Module Az.OperationalInsights
 Ensure-Module Microsoft.Graph.Security
 Ensure-Module MicrosoftGraphPS
 Ensure-Module ImportExcel
@@ -1022,12 +1409,12 @@ foreach ($rule in @($Yaml.AssetTagging)) {
     $query = [string]$queryItem
     if ([string]::IsNullOrWhiteSpace($query)) { continue }
 
-    Write-Info ""
+    Write-Sep
     Write-Info ("Processing: {0} (Mode={1}, Engine={2})" -f $rule.AssetTagName, $ruleMode, $queryEngine)
 
     if ($queryEngine -eq 'DEFENDERGRAPH') {
 
-      Write-Info "running hunting query against engine: $queryEngine .... Please wait !"
+      Write-Info "running hunting query against engine: DEFENDERGRAPH .... Please wait !"
       $resp = Invoke-DefenderGraphQuery -Query $query
 
       if (-not $resp.Results) { Write-Info "no results"; continue }
@@ -1048,7 +1435,10 @@ foreach ($rule in @($Yaml.AssetTagging)) {
 
         if ([string]::IsNullOrWhiteSpace($id)) {
           $skippedNoSenseId++
-          Write-Warn2 ("Skipping row: missing SenseDeviceId for {0}" -f $name)
+          Write-WarnBlock -Title "Skipping Defender row" -Fields ([ordered]@{
+            Reason = "Missing SenseDeviceId"
+            Name   = $name
+          }) -SeparatorBefore
           continue
         }
 
@@ -1058,7 +1448,11 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         }
         catch {
           if ($SuppressErrors) {
-            Write-Warn2 ("Suppressed Defender existence check error for {0} ({1}) | Error={2}" -f $name, $id, $_.Exception.Message)
+            Write-WarnBlock -Title "Suppressed Defender existence check error" -Fields ([ordered]@{
+              Name  = $name
+              Id    = $id
+              Error = $_.Exception.Message
+            }) -SeparatorBefore
             $exists = $false
           }
           else {
@@ -1068,19 +1462,37 @@ foreach ($rule in @($Yaml.AssetTagging)) {
 
         if (-not $exists) {
           $skippedNotFound++
-          Write-Warn2 ("Skipping device: not found in Defender (404 or inaccessible): {0} ({1})" -f $name, $id)
+          Write-WarnBlock -Title "Skipping Defender device" -Fields ([ordered]@{
+            Reason = "Not found in Defender (404 or inaccessible)"
+            Name   = $name
+            Id     = $id
+          }) -SeparatorBefore
           continue
         }
 
         $devices += [pscustomobject]@{ Id = $id; Name = $name }
       }
 
-      if ($skippedNoSenseId -gt 0) { Write-Warn2 ("Skipped {0} row(s): missing SenseDeviceId" -f $skippedNoSenseId) }
-      if ($skippedNotFound  -gt 0) { Write-Warn2 ("Skipped {0} row(s): SenseDeviceId not found in Defender or inaccessible" -f $skippedNotFound) }
+      if ($skippedNoSenseId -gt 0) {
+        Write-WarnBlock -Title "Skipped Defender rows" -Fields ([ordered]@{
+          Reason = "Missing SenseDeviceId"
+          Count  = $skippedNoSenseId
+        }) -SeparatorBefore
+      }
+
+      if ($skippedNotFound -gt 0) {
+        Write-WarnBlock -Title "Skipped Defender rows" -Fields ([ordered]@{
+          Reason = "SenseDeviceId not found in Defender or inaccessible"
+          Count  = $skippedNotFound
+        }) -SeparatorBefore
+      }
 
       $devices = @($devices | Group-Object Id | ForEach-Object { $_.Group | Select-Object -First 1 })
 
-      if (-not $devices -or $devices.Count -eq 0) { Write-Warn2 "no taggable devices found; skipping"; continue }
+      if (-not $devices -or $devices.Count -eq 0) {
+        Write-Warn2 "no taggable devices found; skipping"
+        continue
+      }
 
       $chunkSize   = 500
       $totalChunks = [math]::Ceiling($devices.Count / $chunkSize)
@@ -1091,17 +1503,37 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         $endIndex     = [math]::Min($i + $chunkSize - 1, $devices.Count - 1)
         $chunk        = @($devices[$i..$endIndex])
 
-        $namesPreview = @($chunk | Select-Object -First 5 | ForEach-Object { $_.Name }) -join ', '
+        $namesPreview = @(
+          $chunk | Select-Object -First 5 | ForEach-Object {
+            if ([string]::IsNullOrWhiteSpace($_.Name) -or $_.Name -like '<unknown*') {
+              $_.Id
+            }
+            else {
+              "{0} ({1})" -f $_.Name, $_.Id
+            }
+          }
+        ) -join ', '
+
         if ($chunk.Count -gt 5) { $namesPreview = "$namesPreview, ..." }
 
-        Write-Info ("tagging {0} machines with '{1}' (chunk {2}/{3}) -> {4}" -f $chunk.Count, $assetTagName, $currentChunk, $totalChunks, $namesPreview)
+        Write-InfoBlock -Title "Defender tagging batch" -Fields ([ordered]@{
+          Rule     = $rule.AssetTagName
+          Tag      = $assetTagName
+          Chunk    = "$currentChunk/$totalChunks"
+          Count    = $chunk.Count
+          Machines = $namesPreview
+        }) -SeparatorBefore
 
         try {
           Apply-TagBulkWithSplit -AccessHeaders $AccessHeaders -Devices $chunk -Tag $assetTagName -SuppressErrors $SuppressErrors
         }
         catch {
           if ($SuppressErrors) {
-            Write-Warn2 ("Suppressed Defender chunk tagging error: Tag='{0}' | Chunk={1}/{2} | Error={3}" -f $assetTagName, $currentChunk, $totalChunks, $_.Exception.Message)
+            Write-WarnBlock -Title "Suppressed Defender chunk tagging error" -Fields ([ordered]@{
+              Tag   = $assetTagName
+              Chunk = "$currentChunk/$totalChunks"
+              Error = $_.Exception.Message
+            }) -SeparatorBefore
           }
           else {
             throw
@@ -1111,7 +1543,7 @@ foreach ($rule in @($Yaml.AssetTagging)) {
     }
     elseif ($queryEngine -eq 'AZURERESOURCEGRAPH') {
 
-      Write-Info "running hunting query against engine: $queryEngine .... Please wait !"
+      Write-Info "running hunting query against engine: AZURERESOURCEGRAPH .... Please wait !"
       $arg = Invoke-AzureResourceGraphQuery -Query $query
 
       $rows = @()
@@ -1142,7 +1574,12 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         continue
       }
 
-      Write-Info ("tagging {0} Azure scope(s)/resources (individual tagging)" -f $resourceIds.Count)
+      Write-InfoBlock -Title "Azure tagging batch" -Fields ([ordered]@{
+        Rule   = $rule.AssetTagName
+        Engine = $queryEngine
+        Mode   = $ruleMode
+        Count  = $resourceIds.Count
+      }) -SeparatorBefore
 
       foreach ($rid in $resourceIds) {
 
@@ -1158,7 +1595,11 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         $tagKey = $null
         if ($match) { $tagKey = Get-ArgAssetTagTypeFromRow -Row $match }
         if ([string]::IsNullOrWhiteSpace($tagKey)) {
-          Write-Warn2 ("Skipping Azure tag: missing AssetTagType for {0} ({1})" -f $nameHint, $rid)
+          Write-WarnBlock -Title "Skipping Azure tag" -Fields ([ordered]@{
+            Name       = $nameHint
+            Reason     = "Missing AssetTagType"
+            ResourceId = $rid
+          }) -SeparatorBefore
           continue
         }
 
@@ -1167,7 +1608,11 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         if ([string]::IsNullOrWhiteSpace($tagValue)) { $tagValue = $fallbackTagValue }
 
         if ([string]::IsNullOrWhiteSpace($tagValue)) {
-          Write-Warn2 ("Skipping Azure tag: missing AssetTagName for {0} ({1})" -f $nameHint, $rid)
+          Write-WarnBlock -Title "Skipping Azure tag" -Fields ([ordered]@{
+            Name       = $nameHint
+            Reason     = "Missing AssetTagName"
+            ResourceId = $rid
+          }) -SeparatorBefore
           continue
         }
 
@@ -1189,28 +1634,53 @@ foreach ($rule in @($Yaml.AssetTagging)) {
             -SuppressErrors $SuppressErrors
 
           if ($result.Skipped) {
-            Write-Warn2 ("Skipping Azure tag: {0} | Type={1} | ResourceId={2} | Reason={3}" -f `
-              $nameHint, $result.ResourceType, $rid, $result.SkipReason)
+            Write-WarnBlock -Title "Skipping Azure tag" -Fields ([ordered]@{
+              Name       = $nameHint
+              Type       = $result.ResourceType
+              Reason     = $result.SkipReason
+              ResourceId = $rid
+            }) -SeparatorBefore
           }
           elseif ($result.Suppressed) {
-            Write-Warn2 ("Suppressed Azure tagging error: {0} | Type={1} | TargetSub={2} | ResourceId={3} | Error={4}" -f `
-              $nameHint, $resourceType, $targetSub, $rid, $result.ErrorMessage)
+            Write-WarnBlock -Title "Suppressed Azure tagging error" -Fields ([ordered]@{
+              Name       = $nameHint
+              Type       = $resourceType
+              TargetSub  = $targetSub
+              ResourceId = $rid
+              Error      = $result.ErrorMessage
+            }) -SeparatorBefore
           }
           elseif ($result.WhatIf -and $result.Changed) {
-            Write-Warn2 ("[WHATIF] Would set Azure tag: {0} -> {1}='{2}' | Type={3} | ResourceId={4}" -f `
-              $nameHint, $tagKey, $tagValue, $result.ResourceType, $rid)
+            Write-WarnBlock -Title "[WHATIF] Would set Azure tag" -Fields ([ordered]@{
+              Name       = $nameHint
+              TagKey     = $tagKey
+              TagValue   = $tagValue
+              Type       = $result.ResourceType
+              ResourceId = $rid
+            }) -SeparatorBefore
           }
           elseif ($result.AlreadyPresent) {
-            Write-Info ("Azure tag already present: {0} -> {1}='{2}' | Type={3}" -f `
-              $nameHint, $tagKey, $tagValue, $result.ResourceType)
+            Write-InfoBlock -Title "Azure tag already present" -Fields ([ordered]@{
+              Name     = $nameHint
+              TagKey   = $tagKey
+              TagValue = $tagValue
+              Type     = $result.ResourceType
+            }) -SeparatorBefore
           }
           elseif ($result.Changed) {
-            Write-Ok ("Azure tag set: {0} -> {1}='{2}' | Type={3}" -f `
-              $nameHint, $tagKey, $tagValue, $result.ResourceType)
+            Write-OkBlock -Title "Azure tag set" -Fields ([ordered]@{
+              Name     = $nameHint
+              TagKey   = $tagKey
+              TagValue = $tagValue
+              Type     = $result.ResourceType
+            }) -SeparatorBefore
           }
           else {
-            Write-Warn2 ("Azure tag returned no-change/unknown state: {0} | Type={1} | ResourceId={2}" -f `
-              $nameHint, $resourceType, $rid)
+            Write-WarnBlock -Title "Azure tag returned no-change/unknown state" -Fields ([ordered]@{
+              Name       = $nameHint
+              Type       = $resourceType
+              ResourceId = $rid
+            }) -SeparatorBefore
           }
         }
         catch {
@@ -1218,18 +1688,233 @@ foreach ($rule in @($Yaml.AssetTagging)) {
           try { $currentSub = (Get-AzContext).Subscription.Id } catch {}
 
           if ($SuppressErrors) {
-            Write-Warn2 ("Suppressed Azure tagging failure: {0} | Type={1} | TargetSub={2} | ContextSub={3} | ResourceId={4} | Error={5}" -f `
-              $nameHint, $resourceType, $targetSub, $currentSub, $rid, $_.Exception.Message)
+            Write-WarnBlock -Title "Suppressed Azure tagging failure" -Fields ([ordered]@{
+              Name       = $nameHint
+              Type       = $resourceType
+              TargetSub  = $targetSub
+              ContextSub = $currentSub
+              ResourceId = $rid
+              Error      = $_.Exception.Message
+            }) -SeparatorBefore
           }
           else {
-            Write-Err2 ("Azure tagging failed: {0} | Type={1} | TargetSub={2} | ContextSub={3} | ResourceId={4} | Error={5}" -f `
-              $nameHint, $resourceType, $targetSub, $currentSub, $rid, $_.Exception.Message)
+            Write-ErrBlock -Title "Azure tagging failed" -Fields ([ordered]@{
+              Name       = $nameHint
+              Type       = $resourceType
+              TargetSub  = $targetSub
+              ContextSub = $currentSub
+              ResourceId = $rid
+              Error      = $_.Exception.Message
+            }) -SeparatorBefore
           }
         }
       }
     }
+    elseif ($queryEngine -eq 'KUSTOCL') {
+
+      # -----------------------------------------------------------------------
+      # KustoCL engine - query Log Analytics custom table, write CSA on Entra
+      # -----------------------------------------------------------------------
+
+      if ([string]::IsNullOrWhiteSpace([string]$global:KustoWorkspaceId)) {
+        Write-WarnBlock -Title "Skipping KustoCL rule" -Fields ([ordered]@{
+          Rule   = $rule.AssetTagName
+          Reason = "KustoWorkspaceId global is not set - add it to your launcher"
+        }) -SeparatorBefore
+        continue
+      }
+
+      # Substitute {{TABLE}} placeholder with the configured table name
+      $kustoTable = if (-not [string]::IsNullOrWhiteSpace([string]$global:KustoTable)) {
+        [string]$global:KustoTable
+      } else { 'SI_IdentityAssets_CL' }
+
+      $resolvedQuery = $query -replace '\{\{TABLE\}\}', $kustoTable
+
+      Write-Info "running hunting query against engine: KUSTOCL .... Please wait !"
+
+      $kResult = $null
+      try {
+        $kResult = Invoke-KustoCLQuery -WorkspaceId $global:KustoWorkspaceId -Query $resolvedQuery
+      }
+      catch {
+        if ($SuppressErrors) {
+          Write-WarnBlock -Title "Suppressed KustoCL query error" -Fields ([ordered]@{
+            Rule  = $rule.AssetTagName
+            Error = $_.Exception.Message
+          }) -SeparatorBefore
+          continue
+        }
+        throw
+      }
+
+      if (-not $kResult -or $kResult.Count -eq 0) { Write-Info "no results"; continue }
+
+      $rows = @($kResult.Data)
+
+      # Read AssetTagName from first row (same contract as DefenderGraph)
+      $assetTagName = [string]($rows | Select-Object -First 1).AssetTagName
+      if ([string]::IsNullOrWhiteSpace($assetTagName)) {
+        Write-Warn2 "KustoCL query returned rows but AssetTagName column is empty; skipping"
+        continue
+      }
+
+      # Resolve AttributeSet - from rule property, then global, then default
+      $attributeSet = if ($rule.PSObject.Properties.Name -contains 'AttributeSet' -and
+                          -not [string]::IsNullOrWhiteSpace([string]$rule.AttributeSet)) {
+        [string]$rule.AttributeSet
+      } elseif (-not [string]::IsNullOrWhiteSpace([string]$global:CsaAttributeSet)) {
+        [string]$global:CsaAttributeSet
+      } else { 'SecurityInsight' }
+
+      Write-InfoBlock -Title "KustoCL identity tagging batch" -Fields ([ordered]@{
+        Rule         = $rule.AssetTagName
+        Engine       = $queryEngine
+        Mode         = $ruleMode
+        Count        = $rows.Count
+        AttributeSet = $attributeSet
+      }) -SeparatorBefore
+
+      $tagged   = 0
+      $skipped  = 0
+      $alreadyP = 0
+      $failed   = 0
+
+      foreach ($r in $rows) {
+
+        $objectId   = Get-EntraObjectIdFromRow   -Row $r
+        $objectType = Get-EntraObjectTypeFromRow  -Row $r
+        $displayName= Get-EntraDisplayNameFromRow -Row $r
+
+        if ([string]::IsNullOrWhiteSpace($objectId)) {
+          Write-WarnBlock -Title "Skipping KustoCL row" -Fields ([ordered]@{
+            Reason      = "Missing ObjectId column"
+            DisplayName = $displayName
+          }) -SeparatorBefore
+          $skipped++
+          continue
+        }
+
+        if ([string]::IsNullOrWhiteSpace($objectType)) {
+          Write-WarnBlock -Title "Skipping KustoCL row" -Fields ([ordered]@{
+            Reason      = "Missing ObjectType column"
+            DisplayName = $displayName
+            ObjectId    = $objectId
+          }) -SeparatorBefore
+          $skipped++
+          continue
+        }
+
+        $endpoint = Get-EntraEndpointFromObjectType -ObjectType $objectType
+        if ([string]::IsNullOrWhiteSpace($endpoint)) {
+          Write-WarnBlock -Title "Skipping KustoCL row" -Fields ([ordered]@{
+            Reason      = "Unrecognised ObjectType: $objectType"
+            DisplayName = $displayName
+            ObjectId    = $objectId
+          }) -SeparatorBefore
+          $skipped++
+          continue
+        }
+
+        # Read current CSA tags - used for skip/already-present check
+        $currentTags = @()
+        try {
+          $currentTags = Get-EntraCurrentCSATags `
+            -Endpoint     $endpoint `
+            -ObjectId     $objectId `
+            -AttributeSet $attributeSet
+        }
+        catch {
+          if ($SuppressErrors) {
+            Write-WarnBlock -Title "Suppressed CSA read error" -Fields ([ordered]@{
+              DisplayName = $displayName
+              ObjectId    = $objectId
+              Error       = $_.Exception.Message
+            }) -SeparatorBefore
+            $skipped++
+            continue
+          }
+          throw
+        }
+
+        try {
+          $result = Set-EntraCSATag `
+            -Endpoint     $endpoint `
+            -ObjectId     $objectId `
+            -AttributeSet $attributeSet `
+            -AssetTagName $assetTagName `
+            -CurrentTags  $currentTags `
+            -DisplayName  $displayName `
+            -WhatIfMode   $WhatIfMode `
+            -SuppressErrors $SuppressErrors
+
+          if ($result.Suppressed) {
+            Write-WarnBlock -Title "Suppressed CSA tagging error" -Fields ([ordered]@{
+              DisplayName  = $displayName
+              ObjectId     = $objectId
+              AssetTagName = $assetTagName
+              Error        = $result.ErrorMessage
+            }) -SeparatorBefore
+            $failed++
+          }
+          elseif ($result.WhatIf -and $result.Changed) {
+            Write-WarnBlock -Title "[WHATIF] Would set CSA tag" -Fields ([ordered]@{
+              DisplayName  = $displayName
+              ObjectId     = $objectId
+              ObjectType   = $objectType
+              AttributeSet = $attributeSet
+              AssetTagName = $assetTagName
+            }) -SeparatorBefore
+            $tagged++
+          }
+          elseif ($result.AlreadyPresent) {
+            Write-InfoBlock -Title "CSA tag already present" -Fields ([ordered]@{
+              DisplayName  = $displayName
+              ObjectId     = $objectId
+              AssetTagName = $assetTagName
+            }) -SeparatorBefore
+            $alreadyP++
+          }
+          elseif ($result.Changed) {
+            Write-OkBlock -Title "CSA tag set" -Fields ([ordered]@{
+              DisplayName  = $displayName
+              ObjectId     = $objectId
+              ObjectType   = $objectType
+              AttributeSet = $attributeSet
+              AssetTagName = $assetTagName
+            }) -SeparatorBefore
+            $tagged++
+          }
+        }
+        catch {
+          if ($SuppressErrors) {
+            Write-WarnBlock -Title "Suppressed CSA tagging failure" -Fields ([ordered]@{
+              DisplayName  = $displayName
+              ObjectId     = $objectId
+              Error        = $_.Exception.Message
+            }) -SeparatorBefore
+            $failed++
+          }
+          else {
+            Write-ErrBlock -Title "CSA tagging failed" -Fields ([ordered]@{
+              DisplayName  = $displayName
+              ObjectId     = $objectId
+              Error        = $_.Exception.Message
+            }) -SeparatorBefore
+          }
+        }
+      }
+
+      Write-InfoBlock -Title "KustoCL batch complete" -Fields ([ordered]@{
+        Rule      = $rule.AssetTagName
+        Tagged    = $tagged
+        AlreadyOk = $alreadyP
+        Skipped   = $skipped
+        Failed    = $failed
+      }) -SeparatorBefore
+    }
     else {
-      Write-Warn2 ("Unknown QueryEngine '{0}' for rule '{1}'. Use DefenderGraph or AzureResourceGraph." -f $queryEngine, $rule.AssetTagName)
+      Write-Warn2 ("Unknown QueryEngine '{0}' for rule '{1}'. Use DefenderGraph, AzureResourceGraph or KustoCL." -f $queryEngine, $rule.AssetTagName)
       continue
     }
   }

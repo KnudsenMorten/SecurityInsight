@@ -4,7 +4,7 @@
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- workflow(publish): upgrade actions/checkout + upload-artifact to v5 (silences Windows git cleanup exit-128 warning + Node.js 20 deprecation warning) (71025c8)
+- workflow(publish): port to ubuntu-latest (silences Windows git-128 post-cleanup warning) (1fc05ee)
 
 ---
 

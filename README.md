@@ -335,23 +335,122 @@ cd C:\SecurityInsight\launchers\IdentityAssetsCollectDefineTierIngestLog
 .\launcher.community-vm.template.ps1
 ```
 
-### Step 5 — (Cloud-hosted alternative) run from a Function / Logic App
+### Step 5 — (Cloud-hosted alternative) run from an Azure Function or Logic App
 
-If you'd rather run unattended without a Windows VM — use the `-azure` launcher instead of
-`-vm`. It reads the SPN secret from your own Key Vault via Managed Identity, so nothing
-sensitive lives on disk. The secret-name convention matches `AutomateITPS`
-(`Modern-ApplicationId-Azure`, `Modern-Secret-Azure`).
+If you don't want a Windows VM, you can host SecurityInsight in **Azure Functions** (PowerShell 7.4
+runtime) or trigger it from a **Logic App** / **Hybrid Runbook Worker**. The `-azure`
+launcher flavour is designed exactly for this — no credentials on disk, secret comes from
+Key Vault via a **Managed Identity** (MI).
 
-```powershell
-.\launcher.community-azure.template.ps1
+> **There is currently no provisioning script** that creates the Function App / Logic App
+> for you. You set the infra up once by hand (or via your existing IaC), then deploy the
+> SecurityInsight code on top. An opinionated provisioner (`Onboarding_SecurityInsight_Hosting.ps1`)
+> is on the roadmap — watch the [Discussions](https://github.com/KnudsenMorten/SecurityInsight/discussions)
+> for progress.
+
+#### 5.1 Provision the Azure resources (one-time)
+
+Create the following (portal / Bicep / Terraform — your choice):
+
+1. **Resource group** to hold everything (e.g. `rg-securityinsight-host`).
+2. **Storage account** — required backing store for the Function App. Standard LRS is fine.
+3. **Azure Function App**:
+   - **Runtime:** PowerShell 7.4.
+   - **Hosting plan:** Consumption or Premium (Consumption is cheapest; Premium if you need VNet
+     integration or always-on).
+   - **System-assigned Managed Identity:** **enabled**.
+4. **Azure Key Vault** in the same tenant (can be an existing one).
+   - Secrets to add:
+     - `Modern-ApplicationId-Azure` — the SPN's Application (client) ID.
+     - `Modern-Secret-Azure` — the SPN's client secret value.
+     - (optional) `Modern-CertificateThumbprint-Azure` — only if you're using cert auth
+       instead of secret. Leave blank otherwise.
+5. **RBAC on the Key Vault**: grant the Function App's system-assigned MI the
+   **Key Vault Secrets User** role on the Key Vault's access-policy or RBAC scope.
+6. **SPN permissions** (same as Step 2 for the VM flow) — the SPN whose secret you stored
+   in Key Vault needs the Defender / Graph / Azure permissions listed there.
+
+#### 5.2 Deploy SecurityInsight code into the Function App
+
+Simplest shape: a single HTTP-triggered (or timer-triggered) function whose body invokes
+the community-azure launcher. Conceptual layout inside the Function App:
+
+```
+wwwroot/
+├── host.json
+├── profile.ps1
+├── requirements.psd1                       ← lists Az, Microsoft.Graph, MicrosoftGraphPS, ImportExcel, powershell-yaml
+├── scripts/                                ← copied verbatim from the SecurityInsight repo
+├── launchers/
+│   └── SecurityInsight_RiskAnalysis/
+│       └── launcher.community-azure.template.ps1
+└── SecurityInsight_RiskAnalysis_Fn/
+    ├── function.json                       ← timer / HTTP trigger binding
+    └── run.ps1                             ← one-liner that dot-sources the launcher
 ```
 
-Required Function / Logic App environment variables:
-- `AUTOMATEIT_TENANT_ID`
-- `AUTOMATEIT_SUBSCRIPTION_ID`
-- `AUTOMATEIT_KEYVAULT`
+`SecurityInsight_RiskAnalysis_Fn/run.ps1`:
 
-The Managed Identity needs `Key Vault Secrets User` on the Key Vault.
+```powershell
+param($Timer)
+$launcher = Join-Path $env:HOME 'site\wwwroot\launchers\SecurityInsight_RiskAnalysis\launcher.community-azure.template.ps1'
+& $launcher
+```
+
+Deploy via your preferred path — `func azure functionapp publish`, GitHub Actions
+`Azure/functions-action`, or zip-deploy via Portal.
+
+#### 5.3 Configure Function App settings
+
+In the Function App → **Configuration → Application settings**, add:
+
+| App setting | Value | Notes |
+| --- | --- | --- |
+| `AUTOMATEIT_TENANT_ID` | `<your-tenant-id>` | Same SPN tenant as the secrets in Key Vault. |
+| `AUTOMATEIT_SUBSCRIPTION_ID` | `<subscription to query>` | Used by Az cmdlets for scope. |
+| `AUTOMATEIT_KEYVAULT` | `<kv-name>` | Short name, not full URI. |
+| `AUTOMATEIT_STORAGE_ACCOUNT` | `<optional>` | Only if the engine writes state to Azure Table. |
+
+The `launcher.community-azure.template.ps1` reads those env vars, calls
+`New-PlatformContext`, resolves the SPN secret via MI → Key Vault, and invokes the engine.
+
+#### 5.4 Trigger + schedule
+
+For timer trigger (run every 4 hours):
+
+```json
+// SecurityInsight_RiskAnalysis_Fn/function.json
+{
+  "bindings": [
+    {
+      "name": "Timer",
+      "type": "timerTrigger",
+      "direction": "in",
+      "schedule": "0 0 */4 * * *"
+    }
+  ]
+}
+```
+
+For HTTP trigger (invoke on-demand from Logic Apps / a dashboard):
+
+```json
+{
+  "bindings": [
+    { "name": "req",  "type": "httpTrigger",  "direction": "in",  "authLevel": "function", "methods": ["post"] },
+    { "name": "$return", "type": "http",     "direction": "out" }
+  ]
+}
+```
+
+#### 5.5 Logic App pattern (alternative)
+
+For a low-code wrapper, a **Logic App** can call the Function App's HTTP trigger on a schedule
+or in response to Defender / Sentinel events. Use a **system-assigned MI** on the Logic App
+and grant it `Invoke` on the Function App's scope if you want auth without function keys.
+
+The engine itself doesn't change between Function and Logic App hosts — both end up running
+the same `launcher.community-azure.template.ps1`.
 
 ## Passing arguments to the engine
 
@@ -399,6 +498,137 @@ Arguments:  -NoProfile -ExecutionPolicy Bypass -File "<path>\SecurityInsight\lau
 ```
 
 Replace `<path>` with wherever you cloned the repo. The launcher resolves everything else relative to itself.
+
+------
+
+# 🧪 Preview vs Stable — which branch should I use?
+
+SecurityInsight is published in **two channels**, both to this same GitHub repo:
+
+| Channel | Branch | What's here | Recommended for |
+| --- | --- | --- | --- |
+| **Stable** | `main` | Tagged releases (`v2.1.0`, `v2.1.1`, ...) with a matching GitHub Release + `SecurityInsight-vX.Y.Z.zip` asset. | **Production.** This is what you should run unless you explicitly want early-access features. |
+| **Preview** | `preview` | Same content one release cycle ahead of stable. Gets a refresh whenever a `-preview` tag is cut upstream. No Release / zip asset — clone-only. | Labs, dev tenants, validating next release before it becomes stable. |
+
+## Accessing each channel
+
+**Stable** — default for everyone:
+
+```powershell
+# Download the release zip (recommended non-dev path)
+# → https://github.com/KnudsenMorten/SecurityInsight/releases/latest
+
+# …or clone the main branch:
+git clone https://github.com/KnudsenMorten/SecurityInsight.git
+```
+
+**Preview** — opt in explicitly:
+
+```powershell
+# Fresh clone, preview branch:
+git clone -b preview https://github.com/KnudsenMorten/SecurityInsight.git
+
+# Already on main? Switch to preview:
+cd SecurityInsight
+git fetch origin
+git checkout preview
+git pull
+```
+
+## Switching back to stable
+
+```powershell
+cd SecurityInsight
+git checkout main
+git pull
+```
+
+Your `data/*_Custom.yaml`, `data/SecurityInsight_RiskIndex.csv`,
+`data/SecurityInsight_IdentityTiering.json`, and
+`launchers/<Engine>/LauncherConfig.ps1` files are preserved by the update rules — they are
+never overwritten by a branch switch or a pull.
+
+## When does something land on each branch?
+
+1. Every change lands on the upstream monorepo (`KnudsenMorten/AutomateIT`) first.
+2. Cutting a `SecurityInsight-vX.Y.Z-preview` tag publishes to this repo's **`preview`** branch.
+3. After preview validation, cutting a `SecurityInsight-vX.Y.Z` tag publishes to **`main`**
+   and creates a matching GitHub **Release** with the downloadable zip.
+
+So the `preview` branch is always **ahead of or equal to** `main`. No surprise rollbacks.
+
+## What can go wrong on preview (and how to recover)
+
+Preview is meant to be stable enough to run, but it's not batch-tested like stable. If a
+preview version misbehaves:
+
+1. Switch back to stable: `git checkout main && git pull`.
+2. Open an [Issue](https://github.com/KnudsenMorten/SecurityInsight/issues/new) with the
+   preview tag you were on, the error, and the engine involved. See
+   [Contributing, bugs & discussions](#-contributing-bugs--discussions) below.
+
+------
+
+# 📣 Contributing, bugs & discussions
+
+SecurityInsight is a community-maintained add-on. Feedback and contributions are welcome.
+
+## Report a bug or incident
+
+Open a GitHub Issue:
+[**New issue → KnudsenMorten/SecurityInsight**](https://github.com/KnudsenMorten/SecurityInsight/issues/new/choose)
+
+What to include:
+
+- **Version**: output of `git describe --tags` or the release tag you downloaded
+  (e.g. `v2.1.2`), or `preview` + commit short SHA if you're on preview.
+- **Engine**: which engine mis-behaved (e.g. `SecurityInsight_RiskAnalysis`).
+- **Host**: VM / Azure Function / Logic App / Hybrid Worker.
+- **Tenant shape** (rough): ~how many Defender devices, ~how many subscriptions, whether
+  hybrid or cloud-only. This is often the difference between "works for me" and "reproduces".
+- **What happened vs what you expected.**
+- **Full error** (stack trace, not just the first line). Redact any tenant-specific identifiers
+  before posting.
+- **Last 20 lines of the transcript** (the engines write `Transcript_*.log` into the working
+  folder).
+
+Security-sensitive reports — don't use a public Issue. Email `mok@mortenknudsen.net` directly
+with "`[SECURITY]`" in the subject. See [SECURITY.md](SECURITY.md) for the reporting policy.
+
+## Feature request or question
+
+Two good places:
+
+- **[Discussions](https://github.com/KnudsenMorten/SecurityInsight/discussions)** — for
+  open-ended questions, design conversations, "has anyone tried...". Less formal than Issues.
+- **Issues** — for "I want this feature" with a specific, actionable description.
+
+## Submit a pull request
+
+This repo **accepts PRs directly**. See [CONTRIBUTING.md](CONTRIBUTING.md) for the exact flow:
+
+- Fork → branch → commit → PR against `main`.
+- Small fixes (typos, broken URLs, YAML sample additions) — welcome without prior discussion.
+- Larger changes (new engine, scoring-model changes, new report template) — please open an
+  Issue or Discussion first so we can align on shape before you write code.
+- **Important:** this repo is auto-generated from the upstream `AutomateIT` monorepo. Accepted
+  PRs are bridged upstream by the maintainer, and the next release republishes them here with
+  your commit attribution preserved.
+
+## Share your work
+
+If you've built a useful **Custom YAML** (tagging rules or RiskAnalysis queries) for your own
+tenant and think it might help others, open a Discussion thread under **Show & Tell**. Good
+candidates get promoted into the platform `_Locked` YAMLs (with attribution) in a future
+release.
+
+## Help & resources
+
+- **Author's blog:** https://mortenknudsen.net (alias https://aka.ms/morten) — deep-dives, release notes.
+- **YouTube channel:** linked at the top of this README.
+- **Discord / chat:** none (keeping coordination on GitHub).
+- **Email:** mok@mortenknudsen.net (last resort — use Issues / Discussions first so others
+  benefit from the answer).
 
 ------
 

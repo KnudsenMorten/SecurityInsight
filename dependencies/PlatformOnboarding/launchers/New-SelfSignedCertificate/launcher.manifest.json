@@ -1,0 +1,10 @@
+{
+  "communityRepo": "PlatformOnboarding",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "version": "2.0.0",
+  "notes": "Ported via TOOLS/New-SolutionLauncherSet.ps1. Engine copied near-verbatim with defensive patches (idempotent $global:PathScripts + FUNCTIONS/LEGACY fallback). Internal-only = False.",
+  "community": true,
+  "scriptType": "Engine",
+  "description": "New-SelfSignedCertificate -- v2 ported engine under PlatformOnboarding.",
+  "scriptName": "New-SelfSignedCertificate"
+}

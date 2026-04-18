@@ -1,0 +1,10 @@
+{
+  "community": true,
+  "communityRepo": "PlatformOnboarding",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "version": "2.0.0",
+  "scriptName": "New-EntraApp",
+  "notes": "Ported via TOOLS/New-SolutionLauncherSet.ps1. Engine copied near-verbatim with defensive patches (idempotent $global:PathScripts + FUNCTIONS/LEGACY fallback). Internal-only = False.",
+  "scriptType": "Engine",
+  "description": "New-EntraApp -- v2 ported engine under PlatformOnboarding."
+}

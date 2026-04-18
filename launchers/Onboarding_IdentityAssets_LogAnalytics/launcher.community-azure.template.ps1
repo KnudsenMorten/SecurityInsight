@@ -132,14 +132,29 @@ try {
 
 Write-Step "Setting engine globals"
 $global:AutomationFramework = $false
-$global:SettingsPath        = Join-Path $InstallPath 'SOLUTIONS\SecurityInsight\DATA'
+$settingsOwner = $engineOwner
+$settingsResolved = $null
+foreach ($case in 'DATA','data') {
+    $candidate = Join-Path $settingsOwner $case
+    if (Test-Path -LiteralPath $candidate) { $settingsResolved = $candidate; break }
+}
+$global:SettingsPath = if ($settingsResolved) { $settingsResolved } else { $PSScriptRoot }
 $global:WhatIfMode          = [bool]$WhatIfMode
 $global:SuppressErrors      = [bool]$SuppressErrors
 $global:SuppressWarnings    = [bool]$SuppressWarnings
 
 try {
     Write-Step "Invoking engine"
-    $engine = Join-Path $InstallPath 'SOLUTIONS\SecurityInsight\SCRIPTS\Onboarding_IdentityAssets_LogAnalytics.ps1'
+    # Resolve engine path portably -- works in the monorepo, in a published
+# community repo, and inside a bundled dependency under dependencies/<dep>/.
+$launcherDir = $PSScriptRoot
+$engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
+$engine = $null
+foreach ($case in 'SCRIPTS','scripts') {
+    $candidate = Join-Path $engineOwner (Join-Path $case 'Onboarding_IdentityAssets_LogAnalytics.ps1')
+    if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
+}
+if (-not $engine) { throw "Launcher: engine 'Onboarding_IdentityAssets_LogAnalytics.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

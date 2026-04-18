@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community launcher for Deploy_OpenAI (Secondary) -- runs on an external user's box. Reads SPN credentials from LauncherConfig.ps1 (.gitignore'd).
+    Community launcher for Deploy_OpenAI  -- runs on an external user's box. Reads SPN credentials from LauncherConfig.ps1 (.gitignore'd).
 #>
 [CmdletBinding()]
 param([string]$InstallPath)
@@ -32,15 +32,15 @@ if (-not (Test-Path -LiteralPath $cfgPath)) {
 
 if ($global:SpnTenantId -and $global:SpnClientId -and $global:SpnClientSecret) {
     $cred = [pscredential]::new($global:SpnClientId, (ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force))
-    Connect-AzAccount -ServicePrincipal -TenantId $global:SpnTenantId -Credential $cred -Subscription '<secondary-subscription-id>' | Out-Null
+    Connect-AzAccount -ServicePrincipal -TenantId $global:SpnTenantId -Credential $cred -Subscription '<primary-subscription-id>' | Out-Null
 }
 
-# Deploy variant 'Secondary' -- customer values for the OpenAI account/deployment
-$global:SubscriptionId    = '<secondary-subscription-id>'
-$global:ResourceGroupName = 'rg-security-insight-secondary'
-$global:Location          = 'westeurope'
-$global:AccountName       = 'oai-mortenknudsen-security-insight-2'
-$global:DeploymentName    = 'oai-mortenknudsen-security-insight-2'
+# Deploy -- customer values for the OpenAI account/deployment
+$global:SubscriptionId    = '<primary-subscription-id>'
+$global:ResourceGroupName = 'rg-security-insight'
+$global:Location          = 'swedencentral'
+$global:AccountName       = 'oai-security-insight'
+$global:DeploymentName    = 'oai-security-insight'
 $global:ModelName         = 'gpt-4.1-mini'
 $global:ModelVersion      = 'latest'
 $global:Capacity          = 100

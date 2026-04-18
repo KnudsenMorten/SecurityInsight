@@ -1,0 +1,452 @@
+﻿<#
+.SYNOPSIS
+    Provisions Log Analytics workspace, DCE, DCR, and custom table for SI_IdentityAssets ingestion.
+.DESCRIPTION
+    Idempotent setup script. Safe to re-run.
+    Requires: Az.Accounts, Az.Resources, Az.OperationalInsights, Az.Monitor, AzLogDcrIngestPS.
+#>
+
+#------------------------------------------------------------------------------------------------------------
+# CONFIGURATION (v2: launcher is source of truth)
+#------------------------------------------------------------------------------------------------------------
+
+if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
+    $global:SettingsPath = $PSScriptRoot
+}
+if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
+
+if (-not [bool]$global:AutomationFramework) {
+    if ([string]::IsNullOrWhiteSpace([string]$global:SpnTenantId) -or
+        [string]::IsNullOrWhiteSpace([string]$global:SpnClientId) -or
+        [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Launcher must set them or enable AutomationFramework."
+    }
+}
+
+if ([bool]$global:AutomationFramework) {
+    # --- Automation Framework branch (internal 2LINKIT infra) ---
+    $ScriptDirectory = $PSScriptRoot
+    $global:PathScripts = Split-Path -parent $ScriptDirectory
+    Write-Output ""
+    Write-Output "Script Directory -> $($global:PathScripts)"
+
+    Import-Module "$($global:PathScripts)\FUNCTIONS\2LINKIT-Functions.psm1"         -Global -Force -WarningAction SilentlyContinue
+    Import-Module "$($global:PathScripts)\FUNCTIONS\Automation-ConnectDetails.psm1" -Global -Force -WarningAction SilentlyContinue
+    ConnectDetails
+    Import-Module "$($global:PathScripts)\FUNCTIONS\Automation-DefaultVariables.psm1" -Global -Force -WarningAction SilentlyContinue
+    Default_Variables
+
+    & "$($global:PathScripts)\FUNCTIONS\Connect_Azure.ps1"
+
+    $global:SpnTenantId     = $global:AzureTenantId
+    $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure
+    $global:SpnClientSecret = $global:HighPriv_Modern_Secret_Azure
+
+} else {
+    # --- Community / standalone branch (SPN globals set by launcher) ---
+    if (-not (Get-AzContext -ErrorAction SilentlyContinue)) {
+        $secretSecure = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
+        $credential   = New-Object System.Management.Automation.PSCredential ($global:SpnClientId, $secretSecure)
+        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $credential -WarningAction SilentlyContinue | Out-Null
+    }
+}
+
+#########################################################################################################
+# VARIABLES -- customer-tunable. Override via launcher ($global:*) or edit here.
+#########################################################################################################
+
+$TenantId                = if ($global:AutomationFramework) { $Global:TenantID } else { $global:SpnTenantId }
+$SubscriptionId          = if ($global:SubscriptionId)       { $global:SubscriptionId }       elseif ($global:MainLogAnalyticsWorkspaceSubId) { $global:MainLogAnalyticsWorkspaceSubId } else { (Get-AzContext).Subscription.Id }
+$ResourceGroup           = if ($global:ResourceGroup)        { $global:ResourceGroup }        else { "rg-securityinsight" }
+$Location                = if ($global:Location)             { $global:Location }             else { "westeurope" }
+$WorkspaceName           = if ($global:WorkspaceName)        { $global:WorkspaceName }        else { "log-platform-management-securityinsight" }
+$DceName                 = if ($global:DceName)              { $global:DceName }              else { "dce-platform-management-securityinsight" }
+$DcrName                 = if ($global:DcrName)              { $global:DcrName }              else { "dcr-platform-management-securityinsight" }
+$TableName               = if ($global:TableName)            { $global:TableName }            else { "SI_IdentityAssets" }
+$WorkspaceRetentionDays  = if ($global:WorkspaceRetentionDays){$global:WorkspaceRetentionDays}else { 90 }
+$IngestionSpnClientId    = if ($global:AutomationFramework)  { $global:HighPriv_Modern_ApplicationID_Azure } else { $global:SpnClientId }
+
+#########################################################################################################
+# HELPERS
+#########################################################################################################
+
+function Write-Step { param($m) Write-Host "[STEP] $m" -ForegroundColor Cyan  }
+function Write-Info { param($m) Write-Host "[INFO] $m" -ForegroundColor Gray  }
+function Write-Ok   { param($m) Write-Host "[OK]   $m" -ForegroundColor Green }
+function Write-Warn { param($m) Write-Host "[WARN] $m" -ForegroundColor Yellow }
+function Write-Err  { param($m) Write-Host "[ERR]  $m" -ForegroundColor Red   }
+function Write-Sep  { Write-Host ("-" * 80) -ForegroundColor DarkGray }
+
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory)] [scriptblock] $ScriptBlock,
+        [int] $MaxAttempts = 5,
+        [int] $InitialDelaySec = 3,
+        [string] $OperationName = "operation"
+    )
+    $attempt = 0
+    $delay = $InitialDelaySec
+    while ($true) {
+        $attempt++
+        try {
+            return & $ScriptBlock
+        } catch {
+            if ($attempt -ge $MaxAttempts) {
+                Write-Err "$OperationName failed after $attempt attempts: $($_.Exception.Message)"
+                throw
+            }
+            Write-Warn "$OperationName attempt $attempt failed: $($_.Exception.Message) - retrying in ${delay}s"
+            Start-Sleep -Seconds $delay
+            $delay = [Math]::Min($delay * 2, 30)
+        }
+    }
+}
+
+function Ensure-RoleAssignment {
+    param(
+        [Parameter(Mandatory)] [string] $ObjectId,
+        [Parameter(Mandatory)] [string] $RoleDefinitionName,
+        [Parameter(Mandatory)] [string] $Scope
+    )
+    $existing = Get-AzRoleAssignment -ObjectId $ObjectId -Scope $Scope -ErrorAction SilentlyContinue |
+        Where-Object { $_.RoleDefinitionName -eq $RoleDefinitionName -and $_.Scope -eq $Scope }
+
+    if ($existing) {
+        Write-Info "Role '$RoleDefinitionName' already assigned at $Scope"
+        return $false
+    }
+
+    Invoke-WithRetry -OperationName "Assign $RoleDefinitionName" -ScriptBlock {
+        New-AzRoleAssignment `
+            -ObjectId           $ObjectId `
+            -RoleDefinitionName $RoleDefinitionName `
+            -Scope              $Scope `
+            -ErrorAction        Stop | Out-Null
+    }
+    Write-Ok "Assigned '$RoleDefinitionName' at $Scope"
+    return $true
+}
+
+#########################################################################################################
+# PREFLIGHT - modules
+#########################################################################################################
+
+Write-Sep
+Write-Step "Preflight: verifying required modules"
+
+$requiredModules = @(
+    'Az.Accounts', 'Az.Resources', 'Az.OperationalInsights', 'Az.Monitor', 'AzLogDcrIngestPS'
+)
+
+foreach ($m in $requiredModules) {
+    $mod = Get-Module -Name $m -ListAvailable -ErrorAction SilentlyContinue
+    if (-not $mod) {
+        if ($m -eq 'AzLogDcrIngestPS') {
+            Write-Info "Installing $m from PSGallery..."
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Install-Module -Name $m -Repository PSGallery -Force -Scope CurrentUser
+        } else {
+            throw "Required module '$m' is not installed. Run: Install-Module $m -Scope CurrentUser"
+        }
+    }
+}
+Import-Module AzLogDcrIngestPS -Global -Force -DisableNameChecking -WarningAction SilentlyContinue
+Write-Ok "All required modules present"
+
+#########################################################################################################
+# VALIDATE INPUT VARIABLES
+#########################################################################################################
+
+Write-Sep
+Write-Step "Validating input variables"
+
+if ([string]::IsNullOrWhiteSpace($IngestionSpnClientId)) {
+    throw "IngestionSpnClientId is empty - check that `$global:HighPriv_Modern_ApplicationID_Azure is set"
+}
+if ([string]::IsNullOrWhiteSpace($TenantId))       { throw "TenantId is empty" }
+if ([string]::IsNullOrWhiteSpace($SubscriptionId)) { throw "SubscriptionId is empty" }
+Write-Ok "Variables validated"
+
+#########################################################################################################
+# CONTEXT
+#########################################################################################################
+
+Write-Sep
+Write-Step "Setting Azure context"
+
+try {
+    $currentCtx = Get-AzContext -ErrorAction SilentlyContinue
+    if (-not $currentCtx -or $currentCtx.Subscription.Id -ne $SubscriptionId -or $currentCtx.Tenant.Id -ne $TenantId) {
+        Set-AzContext -SubscriptionId $SubscriptionId -TenantId $TenantId -ErrorAction Stop | Out-Null
+    }
+    $ctx = Get-AzContext -ErrorAction Stop
+    if (-not $ctx) { throw "No Azure context - run Connect-AzAccount first" }
+    Write-Ok "Context: $($ctx.Account.Id) | Sub: $($ctx.Subscription.Name)"
+} catch {
+    throw "Failed to set Azure context: $($_.Exception.Message)"
+}
+
+#########################################################################################################
+# RESOLVE INGESTION SPN
+#########################################################################################################
+
+Write-Sep
+Write-Step "Resolving ingestion service principal"
+
+$spn = Invoke-WithRetry -OperationName "Get ingestion SPN" -ScriptBlock {
+    Get-AzADServicePrincipal -ApplicationId $IngestionSpnClientId -ErrorAction Stop
+}
+if (-not $spn) {
+    throw "Service principal with AppId '$IngestionSpnClientId' not found in tenant $TenantId"
+}
+$spnObjectId = $spn.Id
+Write-Ok "SPN ObjectId: $spnObjectId ($($spn.DisplayName))"
+
+#########################################################################################################
+# RESOURCE GROUP (idempotent)
+#########################################################################################################
+
+Write-Sep
+Write-Step "Ensuring resource group: $ResourceGroup"
+
+$existingRg = Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue
+if (-not $existingRg) {
+    Invoke-WithRetry -OperationName "Create RG $ResourceGroup" -ScriptBlock {
+        New-AzResourceGroup -Name $ResourceGroup -Location $Location -ErrorAction Stop | Out-Null
+    }
+    Write-Ok "Created resource group: $ResourceGroup"
+} else {
+    if ($existingRg.Location -ne $Location) {
+        Write-Warn "RG '$ResourceGroup' exists in '$($existingRg.Location)' but requested '$Location' - using existing location"
+        $Location = $existingRg.Location
+    }
+    Write-Info "RG exists: $ResourceGroup ($($existingRg.Location))"
+}
+
+#########################################################################################################
+# LOG ANALYTICS WORKSPACE (idempotent)
+#########################################################################################################
+
+Write-Sep
+Write-Step "Ensuring Log Analytics workspace: $WorkspaceName"
+
+$workspace = Get-AzOperationalInsightsWorkspace -ResourceGroupName $ResourceGroup -Name $WorkspaceName -ErrorAction SilentlyContinue
+if (-not $workspace) {
+    Invoke-WithRetry -OperationName "Create workspace" -ScriptBlock {
+        New-AzOperationalInsightsWorkspace `
+            -ResourceGroupName $ResourceGroup `
+            -Name              $WorkspaceName `
+            -Location          $Location `
+            -Sku               "PerGB2018" `
+            -RetentionInDays   $WorkspaceRetentionDays `
+            -ErrorAction       Stop | Out-Null
+    }
+    $workspace = Invoke-WithRetry -OperationName "Get workspace" -ScriptBlock {
+        $w = Get-AzOperationalInsightsWorkspace -ResourceGroupName $ResourceGroup -Name $WorkspaceName -ErrorAction Stop
+        if (-not $w -or -not $w.CustomerId -or -not $w.ResourceId) { throw "Workspace not fully provisioned yet" }
+        $w
+    }
+    Write-Ok "Created workspace: $WorkspaceName"
+} else {
+    Write-Info "Workspace exists: $WorkspaceName"
+}
+
+$WorkspaceResourceId = $workspace.ResourceId
+$WorkspaceCustomerId = $workspace.CustomerId
+$WorkspaceLocation   = $workspace.Location
+
+if (-not $WorkspaceResourceId) { throw "Could not resolve workspace ResourceId" }
+
+Write-Ok "ResourceId : $WorkspaceResourceId"
+Write-Ok "CustomerId : $WorkspaceCustomerId"
+Write-Ok "Location   : $WorkspaceLocation"
+
+#########################################################################################################
+# BUILD DCE/DCR CACHE
+#########################################################################################################
+
+Write-Sep
+Write-Step "Building DCE/DCR global cache"
+
+$global:AzDceDetails = Invoke-WithRetry -OperationName "List DCEs" -ScriptBlock {
+    Get-AzDceListAll -TenantId $TenantId -Verbose:$false
+}
+$global:AzDcrDetails = Invoke-WithRetry -OperationName "List DCRs" -ScriptBlock {
+    Get-AzDcrListAll -TenantId $TenantId -Verbose:$false
+}
+Write-Ok "DCE cache: $(($global:AzDceDetails | Measure-Object).Count) | DCR cache: $(($global:AzDcrDetails | Measure-Object).Count)"
+
+#########################################################################################################
+# DATA COLLECTION ENDPOINT (idempotent)
+#########################################################################################################
+
+Write-Sep
+Write-Step "Ensuring Data Collection Endpoint: $DceName"
+
+$dce = Get-AzDataCollectionEndpoint -ResourceGroupName $ResourceGroup -Name $DceName -ErrorAction SilentlyContinue
+if (-not $dce) {
+    $dce = Invoke-WithRetry -OperationName "Create DCE" -ScriptBlock {
+        New-AzDataCollectionEndpoint `
+            -ResourceGroupName              $ResourceGroup `
+            -Name                           $DceName `
+            -Location                       $Location `
+            -NetworkAclsPublicNetworkAccess "Enabled" `
+            -ErrorAction                    Stop
+    }
+    Write-Ok "Created DCE: $DceName"
+} else {
+    Write-Info "DCE exists: $DceName"
+}
+
+if (-not $dce.LogIngestionEndpoint) {
+    throw "DCE exists but has no LogIngestionEndpoint - check provisioning state: $($dce.ProvisioningState)"
+}
+
+$DceResourceId   = $dce.Id
+$DceIngestionUri = $dce.LogIngestionEndpoint
+Write-Ok "DCE ResourceId    : $DceResourceId"
+Write-Ok "DCE Ingestion URI : $DceIngestionUri"
+
+#########################################################################################################
+# BUILD SAMPLE DATA + SANITISE SCHEMA
+#########################################################################################################
+
+Write-Sep
+Write-Step "Building sample data + sanitising schema"
+
+$sampleObject = [PSCustomObject]@{
+    # Identity core
+    ObjectId = "00000000-0000-0000-0000-000000000000"; ObjectType = "User"
+    DisplayName = "Sample Identity"; UPN = "sample@domain.com"
+    AppId = ""; SPType = ""; AccountEnabled = $true
+    # External / guest
+    IsExternal = $false; ExternalDomain = ""; IsB2BCollaborator = $false
+    # On-prem sync
+    OnPremSynced = $false; OnPremSamAccountName = ""; OnPremDistinguishedName = ""
+    # Profile
+    Department = ""; JobTitle = ""; Manager = ""
+    # Extension attributes
+    ExtensionAttribute1 = ""; ExtensionAttribute2 = ""; ExtensionAttribute3 = ""
+    ExtensionAttribute4 = ""; ExtensionAttribute5 = ""; ExtensionAttribute6 = ""
+    ExtensionAttribute7 = ""; ExtensionAttribute8 = ""; ExtensionAttribute9 = ""
+    ExtensionAttribute10 = ""; ExtensionAttribute11 = ""; ExtensionAttribute12 = ""
+    ExtensionAttribute13 = ""; ExtensionAttribute14 = ""; ExtensionAttribute15 = ""
+    # Lifecycle
+    CreatedDateTime = [datetime]::UtcNow.ToString("o"); CreatedDays = 0
+    LastSignInDateTime = ""; LastSignInDays = -1; LastNonInteractiveSignInDays = -1
+    IsStale = $false; PasswordLastChangedDays = -1; IsPasswordNeverExpires = $false
+    # MFA
+    MFARegistered = $false; MFAMethodCount = 0; MFAMethods = ""; IsPasswordlessOnly = $false
+    # Roles
+    AssignedEntraRoles = ""; EligibleEntraRoles = ""
+    IsPrivileged = $false; IsPrivilegedEligible = $false
+    HasPermanentPrivilegedRole = $false; RequiresPIMReview = $false
+    # Risk
+    IsSensitive = $false; IsHighValueTarget = $false; IsBreakGlass = $false
+    IsShadowAdmin = $false; IsOrphan = $false
+    # API permissions
+    ApplicationPermissions = ""; DelegatedPermissions = ""; HighestRiskPermission = ""
+    HasWritePermissions = $false; HasDirectoryWriteAccess = $false
+    HasRoleWriteAccess = $false; HasMailboxAccess = $false
+    TargetAPICount = 0; DerivedTierFromPermissions = -1
+    # Credentials
+    HasClientSecret = $false; HasCertificate = $false; HasExpiredCredential = $false
+    CredentialExpiryDays = -1; HasNoOwner = $false; OwnersCount = 0; Owners = ""
+    # MI
+    IsManagedIdentity = $false; IsManagedIdentityUserAssigned = $false; ManagedIdentityResourceId = ""
+    # Multi-tenant
+    IsMultiTenant = $false; PublisherVerified = $false; IsExternal_SPN = $false
+    # Tagging
+    AssetTags = ""; AssetTier = ""; AssetTagType = ""; EffectiveTier = -1
+    # Metadata
+    CollectionTime = [datetime]::UtcNow.ToString("o")
+}
+
+$dataArray = @($sampleObject)
+$dataArray = Add-CollectionTimeToAllEntriesInArray            -Data $dataArray -Verbose:$false
+$dataArray = ValidateFix-AzLogAnalyticsTableSchemaColumnNames -Data $dataArray -Verbose:$false
+$dataArray = Build-DataArrayToAlignWithSchema                 -Data $dataArray -Verbose:$false
+
+$colCount = ($dataArray[0].PSObject.Properties | Measure-Object).Count
+Write-Ok "Schema prepared: $colCount columns"
+
+#########################################################################################################
+# CREATE / UPDATE TABLE + DCR
+#########################################################################################################
+
+Write-Sep
+Write-Step "Creating/updating table + DCR"
+
+try {
+    CheckCreateUpdate-TableDcr-Structure `
+        -AzLogWorkspaceResourceId                   $WorkspaceResourceId `
+        -TenantId                                   $TenantId `
+        -DceName                                    $DceName `
+        -DcrName                                    $DcrName `
+        -DcrResourceGroup                           $ResourceGroup `
+        -TableName                                  $TableName `
+        -Data                                       $dataArray `
+        -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
+        -AzLogDcrTableCreateFromAnyMachine          $true `
+        -AzLogDcrTableCreateFromReferenceMachine    @() `
+        -Verbose:$false | Out-Null
+    Write-Ok "Table + DCR provisioned: ${TableName}_CL"
+} catch {
+    Write-Err "Table/DCR provisioning failed: $($_.Exception.Message)"
+    throw
+}
+
+#########################################################################################################
+# RBAC - ingestion SPN
+#   - Monitoring Metrics Publisher on RG (send data to DCRs)
+#   - Contributor on RG (manage DCE/DCR resources)
+#   - Contributor on the Log Analytics workspace
+#########################################################################################################
+
+Write-Sep
+Write-Step "Assigning RBAC roles to ingestion SPN"
+
+$rgScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup"
+
+$changed1 = Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Monitoring Metrics Publisher" -Scope $rgScope
+$changed2 = Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor"                  -Scope $rgScope
+$changed3 = Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor"                  -Scope $WorkspaceResourceId
+
+if ($changed1 -or $changed2 -or $changed3) {
+    Write-Ok "New role assignments made - waiting 60s for propagation..."
+    Start-Sleep -Seconds 60
+}
+
+#########################################################################################################
+# SUMMARY
+#########################################################################################################
+
+Write-Sep
+Write-Sep
+
+Write-Host ""
+Write-Host "  [ADMIN] Remember to update the file \FUNCTIONS\Automation-DefaultVariables.psm1" -ForegroundColor Yellow
+Write-Host ""
+Write-Sep
+Write-Host ""
+
+Write-Host "    #############################################################################" -ForegroundColor DarkGray
+Write-Host "    # SecurityInsight | LogAnalytics Integration"                                  -ForegroundColor DarkGray
+Write-Host "    #############################################################################" -ForegroundColor DarkGray
+Write-Host ("    `$global:SecurityInsight_LOG_BatchSize                = 300")                                                      -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_LOG_TableName                = `"{0}`""   -f $TableName)                                  -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_LOG_WorkspaceResourceId      = `"{0}`""   -f $WorkspaceResourceId.ToLower())              -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_LOG_DcrResourceGroup         = `"{0}`""   -f $ResourceGroup.ToLower())                    -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_LOG_DcrName                  = `"{0}`""   -f $DcrName.ToLower())                          -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_LOG_DceName                  = `"{0}`""   -f $DceName.ToLower())                          -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_LOG_DceIngestionUri          = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))               -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_Identity_TroubleshootingMode = `$false")                                                  -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_Identity_CsaAttributeSet     = `"SecurityInsight`"")                                      -ForegroundColor White
+Write-Host ("    `$global:SecurityInsight_Defender_WorkspaceResourceId = `$global:MainLogAnalyticsWorkspaceResourceId`"")
+Write-Host ("    `$global:SecurityInsight_Identity_SubscriptionNameExcludePatterns = @( `"")
+Write-Host ("    `      '*Azure for Students*' `"")
+Write-Host ("    `    ) `"")
+
+Write-Host ""
+Write-Sep
+Write-Host ""

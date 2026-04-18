@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community cloud launcher for Deploy_OpenAI (Primary) -- external user in a Function/LogicApp with their own MI + KV holding Modern-*-Azure.
+    Community cloud launcher for Deploy_OpenAI  -- external user in a Function/LogicApp with their own MI + KV holding Modern-*-Azure.
 #>
 [CmdletBinding()]
 param([string]$InstallPath)
@@ -45,12 +45,12 @@ finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 $cred = [pscredential]::new($ctx.Identity.Modern.Azure.AppId, (ConvertTo-SecureString $appSecretPlain -AsPlainText -Force))
 Connect-AzAccount -ServicePrincipal -TenantId $ctx.Tenant.Id -Credential $cred -Subscription '<primary-subscription-id>' | Out-Null
 
-# Deploy variant 'Primary' -- customer values for the OpenAI account/deployment
+# Deploy -- customer values for the OpenAI account/deployment
 $global:SubscriptionId    = '<primary-subscription-id>'
 $global:ResourceGroupName = 'rg-security-insight'
 $global:Location          = 'swedencentral'
-$global:AccountName       = 'oai-mortenknudsen-security-insight'
-$global:DeploymentName    = 'oai-mortenknudsen-security-insight'
+$global:AccountName       = 'oai-security-insight'
+$global:DeploymentName    = 'oai-security-insight'
 $global:ModelName         = 'gpt-4.1-mini'
 $global:ModelVersion      = 'latest'
 $global:Capacity          = 100

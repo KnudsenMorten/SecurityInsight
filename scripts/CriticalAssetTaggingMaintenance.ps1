@@ -1,5 +1,37 @@
-﻿Write-host "***********************************************************************************************"
-Write-host "Critical Asset Tagging using YAML-file"
+Write-host "***********************************************************************************************"
+Write-host "Critical Asset Tagging Maintenance"
+Write-host ""
+Write-host "Diagnostic + maintenance sample queries for SecurityInsight asset tagging."
+Write-host ""
+Write-host "What this script does when run as-is:"
+Write-host "  1. Connects to Microsoft Graph and the Defender Security Center API using your SPN."
+Write-host "  2. Runs a read-only inventory query that lists every tag currently applied to"
+Write-host "     Defender devices (no changes made -- purely diagnostic)."
+Write-host ""
+Write-host "What else is in this file:"
+Write-host "  A library of SAMPLE maintenance operations at the bottom, each wrapped in a block"
+Write-host "  comment (<# ... #>) so nothing runs by default. Each sample is a self-contained"
+Write-host "  script you can copy into a separate file, or uncomment inline, to perform a specific"
+Write-host "  maintenance task. The samples are:"
+Write-host ""
+Write-host "    SAMPLE A : Remove ONE specific SI tier tag (e.g. 'ADCertificateService--tier1--SI')"
+Write-host "               from every Defender device that currently carries it."
+Write-host ""
+Write-host "    SAMPLE B : Remove ALL SI tier tags (--tier0--SI .. --tier3--SI) from every Defender"
+Write-host "               device. Use this for a full reset before re-running CriticalAssetTagging.ps1"
+Write-host "               from scratch. (Replaces the previous ResetDefenderTagsSecurityInsight.ps1.)"
+Write-host ""
+Write-host "    SAMPLE C : Remove a specific tag KEY (e.g. 'createdBy') from every Azure subscription"
+Write-host "               that carries it."
+Write-host ""
+Write-host "    SAMPLE D : Remove a specific tag KEY (e.g. 'AssetTagName') from every Azure resource"
+Write-host "               that carries it."
+Write-host ""
+Write-host "IMPORTANT:"
+Write-host "  - The samples DO make changes. Review the KQL / Azure query, edit the target"
+Write-host "    tag name, optionally set `$global:WhatIfMode = `$true for a dry run, then uncomment"
+Write-host "    the specific sample block before running."
+Write-host "  - The diagnostic at the top is always safe; only the SAMPLE sections mutate state."
 Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
 Write-host "***********************************************************************************************"
@@ -14,6 +46,7 @@ if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:S
 }
 if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
 if (-not $global:Scope -or @($global:Scope).Count -eq 0) { $global:Scope = @('PROD') }
+if ($null -eq $global:WhatIfMode) { $global:WhatIfMode = $false }
 
 # Normalize SettingsPath
 try {
@@ -31,10 +64,11 @@ if (-not [bool]$global:AutomationFramework) {
   }
 }
 
-# Map globals into locals (rest of file can keep using $SettingsPath etc.)
+# Map globals into locals
 $SettingsPath        = $global:SettingsPath
 $AutomationFramework = [bool]$global:AutomationFramework
 $Scope               = @($global:Scope)
+$WhatIfMode          = [bool]$global:WhatIfMode
 
 #######################################################################################################
 # FUNCTIONS (begin)
@@ -46,6 +80,12 @@ function Write-Info  ($m){ Write-Host "[INFO] $m" -ForegroundColor Gray }
 function Write-Ok    ($m){ Write-Host "[OK]   $m" -ForegroundColor Green }
 function Write-Warn2 ($m){ Write-Host "[WARN] $m" -ForegroundColor Yellow }
 function Write-Err2  ($m){ Write-Host "[ERR]  $m" -ForegroundColor Red }
+
+function Write-Sep {
+  param([string]$Char = '-', [int]$Width = 110)
+  Write-Host ($Char * $Width) -ForegroundColor DarkGray
+}
+
 function Tick { param([string]$Label="") if($script:_sw){ $script:_sw.Stop(); Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds); $script:_sw=$null } }
 function Tock { $script:_sw = [System.Diagnostics.Stopwatch]::StartNew() }
 
@@ -73,22 +113,6 @@ function Connect-GraphHighPriv {
   $script:GraphLastConnectUtc = [datetime]::UtcNow
   Write-Ok ("Graph connected at {0:u}" -f $script:GraphLastConnectUtc)
   Write-Info "Graph request context: ClientTimeout=900s, MaxRetry=6, RetryDelay=5s, RetriesTimeLimit=600s"
-}
-
-function Get-RuleMode {
-  param([AllowNull()][object]$Mode)
-  if ($null -eq $Mode) { return 'PROD' }
-  $m = ([string]$Mode).Trim()
-  if ([string]::IsNullOrWhiteSpace($m)) { return 'PROD' }
-  $m.ToUpperInvariant()
-}
-
-function Get-QueryEngine {
-  param([AllowNull()][object]$QueryEngine)
-  if ($null -eq $QueryEngine) { return 'DEFENDERGRAPH' }
-  $qe = ([string]$QueryEngine).Trim()
-  if ([string]::IsNullOrWhiteSpace($qe)) { return 'DEFENDERGRAPH' }
-  $qe.ToUpperInvariant()
 }
 
 function Ensure-GraphAuth {
@@ -209,21 +233,85 @@ function ConvertTo-PSObjectDeep {
   return (_Convert $InputObject $true)
 }
 
+# ── Throttle-aware REST invoker for Defender API ────────────────────────────
+$script:DefenderMinDelayMs = 750
+$script:DefenderLastCall   = [datetime]::MinValue
+
+function Invoke-DefenderRest {
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory)][ValidateSet('GET','POST','PATCH','PUT','DELETE')]
+    [string]$Method,
+    [Parameter(Mandatory)][string]$Uri,
+    [Parameter(Mandatory)][hashtable]$Headers,
+    [object]$BodyObj    = $null,
+    [int]$MaxAttempts   = 8
+  )
+
+  $attempt      = 0
+  $delaySeconds = 2
+
+  while ($true) {
+    $attempt++
+
+    if ($script:DefenderLastCall -ne [datetime]::MinValue) {
+      $elapsedMs = ([datetime]::UtcNow - $script:DefenderLastCall).TotalMilliseconds
+      if ($elapsedMs -lt $script:DefenderMinDelayMs) {
+        Start-Sleep -Milliseconds ([int]($script:DefenderMinDelayMs - $elapsedMs))
+      }
+    }
+
+    try {
+      $script:DefenderLastCall = [datetime]::UtcNow
+      if ($null -ne $BodyObj) {
+        $json = $BodyObj | ConvertTo-Json -Depth 6
+        return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers -ContentType "application/json" -Body $json
+      } else {
+        return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers
+      }
+    }
+    catch {
+      $ex         = $_.Exception
+      $resp       = $ex.Response
+      $statusCode = $null
+      $retryAfter = $null
+
+      if ($resp) {
+        try { $statusCode = [int]$resp.StatusCode } catch {}
+        try { $retryAfter = $resp.Headers['Retry-After'] } catch {}
+      }
+
+      if ($statusCode -eq 429) {
+        $sleep = $null
+        if ($retryAfter -and ($retryAfter -match '^\d+$')) { $sleep = [int]$retryAfter }
+        if (-not $sleep) { $sleep = $delaySeconds }
+        Write-Info ("429 throttled. Sleeping {0}s (attempt {1}/{2})" -f $sleep, $attempt, $MaxAttempts)
+        Start-Sleep -Seconds $sleep
+        $delaySeconds = [math]::Min($delaySeconds * 2, 60)
+        if ($attempt -lt $MaxAttempts) { continue }
+      }
+
+      if ($statusCode -ge 500 -and $statusCode -le 599 -and $attempt -lt $MaxAttempts) {
+        Write-Info ("{0} server error. Sleeping {1}s (attempt {2}/{3})" -f $statusCode, $delaySeconds, $attempt, $MaxAttempts)
+        Start-Sleep -Seconds $delaySeconds
+        $delaySeconds = [math]::Min($delaySeconds * 2, 60)
+        continue
+      }
+
+      throw
+    }
+  }
+}
+
 function AddTagForMultipleMachines {
   param(
     [Parameter(Mandatory)][hashtable]$AccessHeaders,
     [Parameter(Mandatory)][string[]]$DeviceInventoryIds,
     [Parameter(Mandatory)][string]$Tag
   )
-
   $uri  = "https://api.securitycenter.microsoft.com/api/machines/AddOrRemoveTagForMultipleMachines"
-  $body = @{
-    Value      = $Tag
-    Action     = "Add"
-    MachineIds = @($DeviceInventoryIds)
-  } | ConvertTo-Json -Depth 4
-
-  Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
+  $bodyObj = @{ Value = $Tag; Action = "Add"; MachineIds = @($DeviceInventoryIds) }
+  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj
 }
 
 function Add-DefenderTag {
@@ -232,143 +320,58 @@ function Add-DefenderTag {
     [Parameter(Mandatory)][string]$DeviceInventoryId,
     [Parameter(Mandatory)][string]$Tag
   )
-
   $uri  = "https://api.securitycenter.microsoft.com/api/machines/$DeviceInventoryId/tags"
-  $body = @{
-    Value  = $Tag
-    Action = "Add"
-  } | ConvertTo-Json -Depth 4
-
-  Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
-}
-
-function Get-ArgResourceIdFromRow {
-  param([Parameter(Mandatory)][psobject]$Row)
-  foreach ($name in @('ResourceId','resourceId','id','Id')) {
-    $p = $Row.PSObject.Properties[$name]
-    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return [string]$p.Value }
-  }
-  return $null
-}
-
-function Get-ArgResourceNameFromRow {
-  param([Parameter(Mandatory)][psobject]$Row)
-  foreach ($name in @('name','Name','resourceName','ResourceName')) {
-    $p = $Row.PSObject.Properties[$name]
-    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return [string]$p.Value }
-  }
-  return $null
-}
-
-function Get-ArgAssetTagTypeFromRow {
-  param([Parameter(Mandatory)][psobject]$Row)
-  foreach ($name in @('AssetTagType','assettagtype','TagKey','tagKey')) {
-    $p = $Row.PSObject.Properties[$name]
-    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return ([string]$p.Value).Trim() }
-  }
-  return $null
-}
-
-function Get-TagValueFromRow {
-  param(
-    [Parameter(Mandatory)][psobject]$Row,
-    [Parameter(Mandatory)][string]$ColumnName
-  )
-  if ([string]::IsNullOrWhiteSpace($ColumnName)) { return $null }
-  $p = $Row.PSObject.Properties[$ColumnName]
-  if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) { return ([string]$p.Value).Trim() }
-  return $null
-}
-
-function Add-AzureResourceTag {
-  param(
-    [Parameter(Mandatory)][string]$ResourceId,
-    [Parameter(Mandatory)][string]$AssetTagName,
-    [Parameter(Mandatory)][string]$TagKey
-  )
-
-  if ([string]::IsNullOrWhiteSpace($ResourceId))   { throw "ResourceId is empty" }
-  if ([string]::IsNullOrWhiteSpace($TagKey))       { throw "TagKey is empty" }
-  if ([string]::IsNullOrWhiteSpace($AssetTagName)) { throw "AssetTagName is empty" }
-
-  $rid = $ResourceId.Trim()
-
-  $existing = $null
-  try { $existing = (Get-AzTag -ResourceId $rid -ErrorAction Stop).Properties.TagsProperty } catch { $existing = $null }
-
-  $already = $false
-  if ($existing -and $existing.ContainsKey($TagKey) -and ([string]$existing[$TagKey]) -eq $AssetTagName) {
-    $already = $true
-  }
-
-  Update-AzTag -ResourceId $rid -Tag @{ $TagKey = $AssetTagName } -Operation Merge -ErrorAction Stop | Out-Null
-
-  [pscustomobject]@{
-    Changed    = (-not $already)
-    ResourceId = $rid
-    TagKey     = $TagKey
-    TagValue   = $AssetTagName
-  }
+  $bodyObj = @{ Value = $Tag; Action = "Add" }
+  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj
 }
 
 function RemoveTagForMultipleMachines {
-    param(
-        [Parameter(Mandatory)][hashtable]$AccessHeaders,
-        [Parameter(Mandatory)][string[]]$DeviceInventoryIds,
-        [Parameter(Mandatory)][string]$Tag
-    )
-
-    $uri  = "https://api.securitycenter.microsoft.com/api/machines/AddOrRemoveTagForMultipleMachines"
-    $body = @{
-        Value      = $Tag
-        Action     = "Remove"
-        MachineIds = @($DeviceInventoryIds)
-    } | ConvertTo-Json -Depth 4
-
-    Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
+  param(
+    [Parameter(Mandatory)][hashtable]$AccessHeaders,
+    [Parameter(Mandatory)][string[]]$DeviceInventoryIds,
+    [Parameter(Mandatory)][string]$Tag
+  )
+  $uri  = "https://api.securitycenter.microsoft.com/api/machines/AddOrRemoveTagForMultipleMachines"
+  $bodyObj = @{ Value = $Tag; Action = "Remove"; MachineIds = @($DeviceInventoryIds) }
+  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj
 }
 
-
 function Remove-DefenderTag {
-    param(
-        [Parameter(Mandatory)][hashtable]$AccessHeaders,
-        [Parameter(Mandatory)][string]$DeviceInventoryId,
-        [Parameter(Mandatory)][string]$Tag
-    )
-
-    $uri  = "https://api.securitycenter.microsoft.com/api/machines/$DeviceInventoryId/tags"
-    $body = @{
-        Value  = $Tag
-        Action = "Remove"
-    } | ConvertTo-Json -Depth 4
-
-    Invoke-RestMethod -Method POST -Uri $uri -Headers $AccessHeaders -ContentType "application/json" -Body $body
+  param(
+    [Parameter(Mandatory)][hashtable]$AccessHeaders,
+    [Parameter(Mandatory)][string]$DeviceInventoryId,
+    [Parameter(Mandatory)][string]$Tag
+  )
+  $uri  = "https://api.securitycenter.microsoft.com/api/machines/$DeviceInventoryId/tags"
+  $bodyObj = @{ Value = $Tag; Action = "Remove" }
+  Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj
 }
 
 function Test-AzModuleInstalled {
-    Write-Step "Validating Az modules"
-    return $null -ne (Get-Module -ListAvailable -Name 'Az.Accounts' -ErrorAction SilentlyContinue)
+  Write-Step "Validating Az modules"
+  return $null -ne (Get-Module -ListAvailable -Name 'Az.Accounts' -ErrorAction SilentlyContinue)
 }
 
 function Test-MicrosoftGraphInstalled {
-    Write-Step "Validating Microsoft Graph modules"
-    return $null -ne (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue)
+  Write-Step "Validating Microsoft Graph modules"
+  return $null -ne (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue)
 }
 
-#####################################################################################################
+#######################################################################################################
 # POWERSHELL MODULE VALIDATION
-#####################################################################################################
+#######################################################################################################
 
 Write-Step "initializing"
+Write-Info ("WhatIfMode: {0}" -f $WhatIfMode)
 
 if (-not (Test-AzModuleInstalled)) {
-    Write-Step "Installing Az modules ... Please Wait !"
-    Install-Module Az -Scope AllUsers -Force -AllowClobber
+  Write-Step "Installing Az modules ... Please Wait !"
+  Install-Module Az -Scope AllUsers -Force -AllowClobber
 }
 
 if (-not (Test-MicrosoftGraphInstalled)) {
-    Write-Step "Installing Microsoft Graph modules ... Please Wait !"
-    Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
+  Write-Step "Installing Microsoft Graph modules ... Please Wait !"
+  Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
 }
 
 Ensure-Module Az.Accounts
@@ -379,15 +382,11 @@ Ensure-Module MicrosoftGraphPS
 Ensure-Module ImportExcel
 Ensure-Module powershell-yaml
 
-#####################################################################################################
+#######################################################################################################
 # CONNECTION
-#####################################################################################################
+#######################################################################################################
 
 if ($AutomationFramework) {
-
-  #----------------------
-  # AUTOMATION FRAMEWORK
-  #----------------------
 
   $ScriptDirectory = $PSScriptRoot
   $global:PathScripts = Split-Path -parent $ScriptDirectory
@@ -436,10 +435,6 @@ if ($AutomationFramework) {
 
 } else {
 
-  #----------------------
-  # Connect Custom Auth
-  #----------------------
-
   Write-Host "Connect using ServicePrincipal with AppId & Secret"
 
   Write-Step "connecting to Azure"
@@ -463,32 +458,15 @@ if ($AutomationFramework) {
   $AccessHeaders = Get-DefenderAccessHeaders
 }
 
-#####################################################################################################
-# INITIALIZATION
-#####################################################################################################
+#######################################################################################################
+# DIAGNOSTIC (ACTIVE, READ-ONLY) -- show every tag currently applied to Defender devices
+#######################################################################################################
 
-# ================= Scope handling ==================
+Write-Sep -Char '*'
+Write-Step "Diagnostic: inventory of all tags currently applied to Defender devices"
+Write-Sep -Char '*'
 
-$Scope = @(
-  $Scope |
-  ForEach-Object { ([string]$_).Trim().ToUpperInvariant() } |
-  Where-Object { $_ } |
-  Select-Object -Unique
-)
-
-if ($null -eq $Scope -or @($Scope).Count -eq 0) { $Scope = @('PROD') }
-
-Write-Step "execution scope initialized"
-Write-Info ("Active Scope(s): {0}" -f ($Scope -join ', '))
-
-
-#####################################################################################################
-# MAIN PROGRAM
-#####################################################################################################
-
-Write-host "SHOW ALL TAGS IN DEFENDER"
-
-$query = @'
+$DiagnosticQuery = @'
 ExposureGraphNodes
     | where NodeLabel has "device"
         or NodeLabel has "microsoft.compute/virtualmachines"
@@ -504,24 +482,48 @@ ExposureGraphNodes
     | order by Tag asc
 '@
 
-Write-Info "running hunting query against Defender Exposure Graph .... Please wait !"
-$resp = Invoke-DefenderGraphQuery -Query $query
-if (-not $resp.Results) {
-    Write-Info "no results"
-    continue
+Write-Info "Running hunting query against Defender Exposure Graph... Please wait!"
+$resp = Invoke-DefenderGraphQuery -Query $DiagnosticQuery
+if (-not $resp -or -not $resp.Results) {
+  Write-Info "No tags found on any device."
+} else {
+  $tagRows = @(ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties -StripOData)
+  if (-not $tagRows -or $tagRows.Count -eq 0) {
+    Write-Info "No tags found on any device."
+  } else {
+    Write-Info ("{0} distinct tag(s) found on Defender devices:" -f $tagRows.Count)
+    $tagRows | Format-Table -AutoSize
+  }
 }
 
-$rows = @(ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties -StripOData)
-if (-not $rows -or $rows.Count -eq 0) {
-    Write-Info "no results"
-    continue
-}
+Write-Sep -Char '*'
+Write-Info "Done. If you need to remove / reset tags, review the SAMPLE blocks in the"
+Write-Info "lower half of this file, copy the one you need, edit the target tag name,"
+Write-Info "and run it separately. Nothing further runs automatically."
+Write-Sep -Char '*'
 
-$rows
+return   # <-- hard stop: nothing past this line executes unless you remove this 'return' on purpose.
 
-#>
 
-<# DELETE SPECIFIC TAG from all devices (Defender)
+#######################################################################################################
+# SAMPLES -- NOT ACTIVE. Each block is a self-contained snippet you can copy into a
+#            fresh script (or uncomment inline) when you need to perform that maintenance
+#            operation. All samples assume auth is already established above.
+#
+#            Set   $global:WhatIfMode = $true   to do a dry run.
+#######################################################################################################
+
+
+<# =======================================================================================
+   SAMPLE A -- Remove ONE specific SI tier tag from every Defender device that carries it.
+   =======================================================================================
+
+   Purpose: a targeted clean-up (e.g. a tag was applied in error, or a tier re-classification
+   means a specific tag is no longer valid). Only the named tag is removed; other SI tier
+   tags and non-SI tags on the same device are untouched.
+
+   EDIT BEFORE RUNNING:
+     $TagToDelete = '<tag name, e.g. ADCertificateService--tier1--SI>'
 
 $TagToDelete = 'ADCertificateService--tier1--SI'
 
@@ -533,14 +535,11 @@ ExposureGraphNodes
 | extend rawData = todynamic(NodeProperties).rawData
 | where tobool(rawData.isExcluded) == false
 | project NodeId, NodeName, NodeLabel, rawData, EntityIds
-
-// Output Required Columns
 | extend
-    deviceManualTags = iff(isnull(rawData.deviceManualTags), dynamic([]), todynamic(rawData.deviceManualTags)),
+    deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
     deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags)),
-    tags = iff(isnull(rawData.tags.tags), dynamic([]), todynamic(rawData.tags.tags))
-| extend
-    AssetTags  = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+    tags              = iff(isnull(rawData.tags.tags),         dynamic([]), todynamic(rawData.tags.tags))
+| extend AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
 | extend entityIds_dyn = todynamic(EntityIds)
 | mv-apply e = entityIds_dyn on (
     summarize
@@ -552,71 +551,195 @@ ExposureGraphNodes
 | where AssetTags contains "{0}"
 '@ -f $TagToDelete.Replace('"','\"')
 
-Write-Info "running hunting query against Defender Exposure Graph .... Please wait !"
-$resp = Invoke-DefenderGraphQuery -Query $query
-
-if (-not $resp.Results) {
-    Write-Info "no results"
-    continue
-}
+Write-Info "Running hunting query against Defender Exposure Graph .... Please wait !"
+$resp = Invoke-DefenderGraphQuery -Query $Query
+if (-not $resp.Results) { Write-Info "no results"; return }
 
 $rows = @(ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties -StripOData)
-if (-not $rows -or $rows.Count -eq 0) {
-    Write-Info "no results"
-    continue
-}
+if (-not $rows -or $rows.Count -eq 0) { Write-Info "no results"; return }
 
 $deviceInventoryIds = @(
-    $rows |
-    ForEach-Object { [string]$_.DeviceInventoryId } |
-    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-    Select-Object -Unique
+    $rows | ForEach-Object { [string]$_.DeviceInventoryId } |
+            Where-Object   { -not [string]::IsNullOrWhiteSpace($_) } |
+            Select-Object  -Unique
 )
+if ($deviceInventoryIds.Count -eq 0) { Write-Warn2 "no DeviceInventoryId values found; skipping"; return }
 
-if ($deviceInventoryIds.Count -eq 0) {
-    Write-Warn2 "no DeviceInventoryId values found; skipping"
-    continue
+if ($WhatIfMode) {
+    Write-Warn2 ("[WHATIF] Would remove '{0}' from {1} device(s)." -f $TagToDelete, $deviceInventoryIds.Count)
+    return
 }
 
 $chunkSize   = 500
 $totalChunks = [math]::Ceiling($deviceInventoryIds.Count / $chunkSize)
-
-# Lookup for NodeName logging
-$rowsById = @{}
-foreach ($r in $rows) {
-    $id = [string]$r.DeviceInventoryId
-    if ([string]::IsNullOrWhiteSpace($id)) { continue }
-    if (-not $rowsById.ContainsKey($id)) { $rowsById[$id] = $r }
-}
-
 for ($i = 0; $i -lt $deviceInventoryIds.Count; $i += $chunkSize) {
-
     $currentChunk = [math]::Floor($i / $chunkSize) + 1
     $endIndex     = [math]::Min($i + $chunkSize - 1, $deviceInventoryIds.Count - 1)
     $chunk        = $deviceInventoryIds[$i..$endIndex]
-
     try {
         RemoveTagForMultipleMachines -AccessHeaders $AccessHeaders -DeviceInventoryIds $chunk -Tag $TagToDelete | Out-Null
-        Write-Ok ("tag '$($TagToDelete)' removed from {0} machines" -f $chunk.Count)
+        Write-Ok ("tag '{0}' removed from {1} machines (chunk {2}/{3})" -f $TagToDelete, $chunk.Count, $currentChunk, $totalChunks)
     }
     catch {
-        Write-Err2 ("bulk tagging failed (chunk {0}/{1}): {2}" -f $currentChunk, $totalChunks, $_.Exception.Message)
-        Write-Host ""
-        Write-Info "Fall-back to add tag individually"
-
+        Write-Err2 ("bulk removal failed (chunk {0}/{1}): {2}" -f $currentChunk, $totalChunks, $_.Exception.Message)
         foreach ($id in $chunk) {
-            try {
-                Remove-DefenderTag -AccessHeaders $AccessHeaders -DeviceInventoryId $id -Tag $TagToDelete | Out-Null
-                Write-Ok ("tag '{0}' added: {1}" -f $assetTagName, $id)
-            }
-            catch {
-                Write-Err2 ("failed tagging {0}: {1}" -f $id, $_.Exception.Message)
-            }
+            try { Remove-DefenderTag -AccessHeaders $AccessHeaders -DeviceInventoryId $id -Tag $TagToDelete | Out-Null }
+            catch { Write-Err2 ("failed removing from {0}: {1}" -f $id, $_.Exception.Message) }
         }
     }
 }
 
-#------------------------------------------------------------------
+#> # end SAMPLE A
+
+
+<# =======================================================================================
+   SAMPLE B -- Remove ALL SI tier tags (--tier0--SI .. --tier3--SI) from every device.
+   =======================================================================================
+
+   Purpose: full reset of SecurityInsight tier tagging across the Defender estate. Use
+   before re-running CriticalAssetTagging.ps1 against a fresh tag model, or when
+   decommissioning the SecurityInsight tagging scheme. Non-SI tags and the --excluded--
+   sentinel are NOT touched. Processes one (device x tag) pair per 500-item batch.
+
+   (This sample replaces the standalone ResetDefenderTagsSecurityInsight.ps1 that used
+   to live in this folder.)
+
+   EDIT BEFORE RUNNING: nothing mandatory. Optionally set $global:WhatIfMode = $true first.
+
+Write-Sep -Char '*'
+Write-Step "Scanning Defender Exposure Graph for all --tierN--SI tags"
+Write-Sep -Char '*'
+
+$Query = @'
+ExposureGraphNodes
+| where NodeLabel has "device"
+    or NodeLabel has "microsoft.compute/virtualmachines"
+    or NodeLabel has "microsoft.hybridcompute/machines"
+| extend rawData = todynamic(NodeProperties).rawData
+| where tobool(rawData.isExcluded) == false
+| project NodeId, NodeName, NodeLabel, rawData, EntityIds
+| extend
+    deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+    deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags))
+| extend
+    AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+| extend entityIds_dyn = todynamic(EntityIds)
+| mv-apply e = entityIds_dyn on (
+    summarize
+        DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+        SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId"),
+        AzureResourceId   = make_list_if(tostring(e.id), tostring(e.type) == "AzureResourceId")
+)
+| extend AzureResourceId = strcat_array(AzureResourceId, ";")
+| where AssetTags has "--tier0--SI"
+    or AssetTags has "--tier1--SI"
+    or AssetTags has "--tier2--SI"
+    or AssetTags has "--tier3--SI"
+| extend AssetTagsArray = split(AssetTags, ";")
+| mv-apply tag = AssetTagsArray to typeof(string) on (
+    summarize SITierTags = make_list_if(
+        tag,
+        tag matches regex @"--tier[0-3]--SI"
+    )
+)
+| where array_length(SITierTags) > 0
+| mv-expand TagToRemove = SITierTags to typeof(string)
+| project NodeId, NodeName, NodeLabel, DeviceInventoryId, SenseDeviceId, AzureResourceId,
+          TagToRemove, AllSITierTags = strcat_array(SITierTags, ";")
+| order by TagToRemove asc, NodeName asc
+'@
+
+$resp = Invoke-DefenderGraphQuery -Query $Query
+if (-not $resp -or -not $resp.Results) { Write-Step "Reset complete -- nothing to remove"; return }
+
+$rows = @(ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties -StripOData)
+if (-not $rows -or $rows.Count -eq 0) { Write-Step "Reset complete -- nothing to remove"; return }
+
+$uniqueDevices = @($rows | Select-Object -ExpandProperty NodeName -Unique)
+$uniqueTags    = @($rows | Select-Object -ExpandProperty TagToRemove -Unique | Sort-Object)
+
+Write-Sep
+Write-Info ("Devices with SI tier tags : {0}" -f $uniqueDevices.Count)
+Write-Info ("Distinct tags to remove   : {0}" -f $uniqueTags.Count)
+Write-Info ("Total (device x tag) ops  : {0}" -f $rows.Count)
+Write-Sep
+foreach ($t in $uniqueTags) { Write-Info ("  {0}" -f $t) }
+Write-Sep
+
+if ($WhatIfMode) { Write-Warn2 "WhatIfMode is ON -- no tags will actually be removed"; Write-Sep }
+
+$tagGroups = $rows |
+  Where-Object { -not [string]::IsNullOrWhiteSpace($_.TagToRemove) } |
+  Group-Object -Property TagToRemove
+
+$totalRemoved = 0; $totalSkipped = 0; $totalFailed = 0
+foreach ($group in $tagGroups) {
+  $TagToDelete = $group.Name
+  Write-Sep; Write-Info ("Processing tag : '{0}'" -f $TagToDelete)
+
+  $deviceInventoryIds = @(
+    $group.Group | ForEach-Object { [string]$_.DeviceInventoryId } |
+                   Where-Object   { -not [string]::IsNullOrWhiteSpace($_) } |
+                   Select-Object  -Unique
+  )
+  if ($deviceInventoryIds.Count -eq 0) {
+    Write-Warn2 ("No valid DeviceInventoryId found for tag '{0}' -- skipping" -f $TagToDelete)
+    $totalSkipped += $group.Group.Count; continue
+  }
+
+  $rowsById = @{}
+  foreach ($r in $group.Group) {
+    $id = [string]$r.DeviceInventoryId
+    if (-not [string]::IsNullOrWhiteSpace($id) -and -not $rowsById.ContainsKey($id)) { $rowsById[$id] = $r }
+  }
+
+  Write-Info ("  Devices affected : {0}" -f $deviceInventoryIds.Count)
+  $chunkSize   = 500
+  $totalChunks = [math]::Ceiling($deviceInventoryIds.Count / $chunkSize)
+
+  for ($i = 0; $i -lt $deviceInventoryIds.Count; $i += $chunkSize) {
+    $currentChunk = [math]::Floor($i / $chunkSize) + 1
+    $endIndex     = [math]::Min($i + $chunkSize - 1, $deviceInventoryIds.Count - 1)
+    $chunk        = @($deviceInventoryIds[$i..$endIndex])
+
+    if ($WhatIfMode) {
+      Write-Warn2 ("[WHATIF] Would remove '{0}' from {1} devices (chunk {2}/{3})" -f $TagToDelete, $chunk.Count, $currentChunk, $totalChunks)
+      $totalRemoved += $chunk.Count; continue
+    }
+
+    try {
+      RemoveTagForMultipleMachines -AccessHeaders $AccessHeaders -DeviceInventoryIds $chunk -Tag $TagToDelete | Out-Null
+      Write-Ok ("Tag '{0}' removed from {1} devices (chunk {2}/{3})" -f $TagToDelete, $chunk.Count, $currentChunk, $totalChunks)
+      $totalRemoved += $chunk.Count
+    }
+    catch {
+      Write-Err2 ("Bulk removal failed for '{0}' (chunk {1}/{2}): {3}" -f $TagToDelete, $currentChunk, $totalChunks, $_.Exception.Message)
+      foreach ($id in $chunk) {
+        try { Remove-DefenderTag -AccessHeaders $AccessHeaders -DeviceInventoryId $id -Tag $TagToDelete | Out-Null; $totalRemoved++ }
+        catch { Write-Err2 ("  Failed removing '{0}' from {1}: {2}" -f $TagToDelete, $id, $_.Exception.Message); $totalFailed++ }
+      }
+    }
+  }
+}
+
+Write-Sep -Char '*'
+Write-Info ("Devices removed   : {0}" -f $totalRemoved)
+Write-Info ("Devices skipped   : {0}" -f $totalSkipped)
+Write-Info ("Devices failed    : {0}" -f $totalFailed)
+Write-Sep -Char '*'
+
+#> # end SAMPLE B
+
+
+<# =======================================================================================
+   SAMPLE C -- Remove a specific tag KEY from every Azure subscription that carries it.
+   =======================================================================================
+
+   Purpose: clean up orphan or deprecated subscription-level tag keys. Removes the entire
+   tag key (name + value) from the subscription's resource tags.
+
+   EDIT BEFORE RUNNING:
+     $TagToDelete = '<tag key, e.g. createdBy>'
 
 $TagToDelete = 'createdBy'
 
@@ -628,83 +751,75 @@ resourcecontainers
 | order by subscriptionName asc
 '@ -f $TagToDelete
 
-Write-Host "Querying subscriptions ..." -ForegroundColor Cyan
+Write-Info ("Querying subscriptions with tag '{0}'..." -f $TagToDelete)
 $subsWithTag = Search-AzGraph -Query $Query -First 1000
 
 foreach ($sub in $subsWithTag) {
-    Write-Host "Processing subscription: $($sub.subscriptionName) [$($sub.subscriptionId)]" -ForegroundColor Yellow
-
+    Write-Info ("Processing subscription: {0} [{1}]" -f $sub.subscriptionName, $sub.subscriptionId)
+    if ($WhatIfMode) { Write-Warn2 ("[WHATIF] Would remove tag '{0}' from subscription {1}" -f $TagToDelete, $sub.subscriptionId); continue }
     try {
-        Set-AzContext -SubscriptionId $sub.subscriptionId -ErrorAction Stop
-
-        # Delete ONLY this tag key on the subscription resource
+        Set-AzContext -SubscriptionId $sub.subscriptionId -ErrorAction Stop | Out-Null
         Update-AzTag `
             -ResourceId "/subscriptions/$($sub.subscriptionId)" `
             -Tag @{ $TagToDelete = "" } `
             -Operation Delete `
-            -ErrorAction Stop
-
-        Write-Host "Removed tag [$TagToDelete]" -ForegroundColor Green
-        write-host ""
+            -ErrorAction Stop | Out-Null
+        Write-Ok ("Removed tag '{0}' from {1}" -f $TagToDelete, $sub.subscriptionId)
     }
     catch {
-        Write-Host "Failed on subscription $($sub.subscriptionId): $_" -ForegroundColor Red
+        Write-Err2 ("Failed on subscription {0}: {1}" -f $sub.subscriptionId, $_.Exception.Message)
     }
 }
 
-#---------------------------------
+#> # end SAMPLE C
 
-# DELETE SPECIFIC TAG ON AZURE RESOURCES
 
-$TagToDelete = "AssetTagName"   # exact key to remove
+<# =======================================================================================
+   SAMPLE D -- Remove a specific tag KEY from every Azure resource that carries it.
+   =======================================================================================
+
+   Purpose: clean up resource-level tag keys across the entire estate (e.g. deprecated
+   AssetTagName or similar). Only the named key is deleted; the resource's other tags
+   are preserved.
+
+   EDIT BEFORE RUNNING:
+     $TagToDelete = '<tag key, e.g. AssetTagName>'
+
+$TagToDelete = 'AssetTagName'
 $PageSize    = 1000
 
-$query = @'
+$Query = @'
 Resources
 | where isnotnull(tags["{0}"])
 | project
-    id,
-    name,
-    type,
-    resourceGroup,
-    subscriptionId,
-    location,
+    id, name, type, resourceGroup, subscriptionId, location,
     TagValue = tostring(tags["{0}"])
 | order by subscriptionId asc
 '@ -f $TagToDelete
 
-Write-Host "Querying all resources with tag '$TagToDelete'..." -ForegroundColor Cyan
-
+Write-Info ("Querying all resources with tag '{0}'..." -f $TagToDelete)
 $all = New-Object System.Collections.Generic.List[object]
 $skipToken = $null
-
 do {
-    $result = Search-AzGraph -Query $query -First $PageSize -SkipToken $skipToken
+    $result = Search-AzGraph -Query $Query -First $PageSize -SkipToken $skipToken
     if ($result -and $result.Data) { [void]$all.AddRange($result.Data) }
     $skipToken = $result.SkipToken
 } while ($skipToken)
 
-Write-Host ("Found {0} resources with tag '{1}'." -f $all.Count, $TagToDelete) -ForegroundColor Yellow
+Write-Info ("Found {0} resources with tag '{1}'" -f $all.Count, $TagToDelete)
 
 foreach ($r in $all) {
-    Write-Host "Processing: $($r.name) [$($r.type)]" -ForegroundColor Yellow
-    Write-Host "  ResourceId: $($r.id)" -ForegroundColor DarkGray
-    Write-Host "  Current $($TagToDelete): $($r.TagValue)" -ForegroundColor DarkGray
-
+    Write-Info ("Processing: {0} [{1}]" -f $r.name, $r.type)
+    Write-Info ("  ResourceId: {0}" -f $r.id)
+    Write-Info ("  Current {0}: {1}" -f $TagToDelete, $r.TagValue)
+    if ($WhatIfMode) { Write-Warn2 ("[WHATIF] Would remove tag '{0}' from {1}" -f $TagToDelete, $r.id); continue }
     try {
-        # Delete ONLY this tag key from the resource (no full replace)
-        Update-AzTag `
-            -ResourceId $r.id `
-            -Tag @{ $TagToDelete = "" } `
-            -Operation Delete `
-            -ErrorAction Stop
-
-        Write-Host "  Removed tag [$TagToDelete]" -ForegroundColor Green
-        write-host ""
+        Update-AzTag -ResourceId $r.id -Tag @{ $TagToDelete = "" } -Operation Delete -ErrorAction Stop | Out-Null
+        Write-Ok ("  Removed tag '{0}'" -f $TagToDelete)
     }
     catch {
-        Write-Host "  FAILED: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Err2 ("  FAILED: {0}" -f $_.Exception.Message)
     }
 }
 
-#>
+#> # end SAMPLE D

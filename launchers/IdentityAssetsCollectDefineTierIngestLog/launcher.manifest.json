@@ -1,0 +1,10 @@
+{
+  "community": true,
+  "version": "2.0.0",
+  "description": "IdentityAssetsCollectDefineTierIngestLog -- v2 ported engine under SecurityInsight.",
+  "scriptName": "IdentityAssetsCollectDefineTierIngestLog",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "scriptType": "Engine",
+  "communityRepo": "SecurityInsight",
+  "notes": "Ported via TOOLS/New-SolutionLauncherSet.ps1. Engine copied near-verbatim with defensive patches (idempotent $global:PathScripts + FUNCTIONS/LEGACY fallback). Internal-only = False."
+}

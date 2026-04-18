@@ -24,482 +24,138 @@ My customers value SecurityInsight because it lets them make better remediation 
 
 ---
 
-## 📑 Table of Contents
+## 📑 What's in this doc
 
-- [Executive Summary](#executive-summary)
-  - [🧩 What it is](#-what-it-is)
-  - [🚨 Problem it solves](#-problem-it-solves)
-  - [⚙️ How it works](#️-how-it-works)
-    - [🔢 Risk model](#-risk-model)
-    - [🏷️ Critical asset tagging](#️-critical-asset-tagging)
-    - [🕸️ Graph-based analysis](#️-graph-based-analysis)
-    - [🧮 Risk analysis engine](#-risk-analysis-engine)
-    - [📊 Reporting](#-reporting)
-  - [💡 Key idea](#-key-idea)
+1. **[Quick Start](#-quick-start--tldr)** — three steps, three repos, working install.
+2. **[Preview vs Stable](#-preview-vs-stable--which-branch-should-i-use)** — main branch vs preview branch.
+3. **[Contributing, bugs & discussions](#-contributing-bugs--discussions)** — how to file issues / PRs.
+4. **[Engines in this solution](#-engines-in-this-solution--what-each-one-does)** — one-paragraph description of each engine.
+5. **[Implementation steps (high level)](#-implementation-steps-high-level)** — the full three-repo flow with links.
+6. **[Detailed Implementation Guide](#-detailed-implementation-guide)** — collapsible deep-dives for Steps 3–5 (SecurityInsight-specific).
+7. Reference material (all collapsed by default):
+   - 📚 Executive Summary, Core Concepts, Risk Model, Asset Classification
+   - 🏛️ Governance, Compliance, Operational Benefits, Future Opportunities
+8. **[Files Overview](#files-overview)** — paths + update rules for every file in the solution.
+# 📦 Quick Start  (TL;DR)
 
----
+> **Three repos, three steps, one working SecurityInsight deployment.** Each piece below
+> has its own detailed README — this page just points at them so you follow the canonical
+> docs rather than stale duplicates.
 
-### 🔍 Core Concepts
+1. **Onboard** — create the Entra App + SPN, (optional) certificate, (optional) Key Vault
+   and VM Managed Identity. One-time setup per tenant.
+   → [KnudsenMorten/PlatformOnboarding](https://github.com/KnudsenMorten/PlatformOnboarding#readme)
 
-- [The Challenge: Too Many Security Recommendations](#the-challenge-too-many-security-recommendations)
-- [A Risk-Based Prioritization Model](#a-risk-based-prioritization-model)
-- [Why We Use a Graph — Understanding Exposure Graph Architecture](#why-we-use-a-graph--understanding-exposure-graph-architecture)
-- [Example of an Attack Path](#example-of-an-attack-path)
-- [Why Graph Architecture Matters](#why-graph-architecture-matters)
+2. **Monitor** — (optional but recommended) stand up the health-check engine so you get
+   emailed if a secret expires, Key Vault becomes unreachable, or the Function App stops
+   answering.
+   → [KnudsenMorten/PlatformMonitoring](https://github.com/KnudsenMorten/PlatformMonitoring#readme)
 
----
-
-### 📊 Risk Model & Scoring
-
-- [Risk Score Model](#risk-score-model)
-  - [Severity Prioritization \| Risk Score Definitions](#severity-prioritization--risk-score-definitions)
-  - [Criticality Prioritization \| Risk Score Definitions](#criticality-prioritization--risk-score-definitions)
-- [Risk Index - How we prioritize scoring (customizable)?](#risk-index---how-we-prioritize-scoring-customizable)
-
----
-
-### 🏷️ Asset Criticality & Classification
-
-- [Asset Criticality Classification](#asset-criticality-classification)
-  - [Identity Asset Criticality Classification](#identity-asset-criticality-classification)
-    - [Active Directory — Built-in Groups](#active-directory--built-in-groups)
-    - [Active Directory — Permissions](#active-directory--permissions)
-    - [Entra ID — Built-in Roles](#entra-id--built-in-roles)
-    - [Entra ID — API Permissions](#entra-id--api-permissions)
-    - [Azure — Built-in Roles](#azure--built-in-roles)
-    - [Azure — Permissions](#azure--permissions)
-    - [Accounts](#accounts)
-  - [Endpoint / Device Asset Criticality Classification](#endpoint--device-asset-criticality-classification)
-    - [Server Roles](#server-roles)
-    - [Management](#management)
-    - [Infrastructure](#infrastructure)
-    - [Hypervisor](#hypervisor)
-    - [Network Equipment](#network-equipment)
-    - [IoT / OT](#iot--ot)
-    - [Client Devices](#client-devices)
-  - [Cloud (Azure) Asset Criticality Classification](#cloud-azure-asset-criticality-classification)
-    - [Compute](#compute)
-    - [Storage](#storage)
-    - [Identity & Access](#identity--access)
-    - [Networking](#networking)
-    - [Management & Governance](#management--governance)
-    - [Hypervisor / Fabric](#hypervisor--fabric)
-
----
-
-### 📈 Reporting & Outputs
-
-- [Reporting](#reporting)
-
----
-
-### 🏛️ Governance & Alignment
-
-- [Governance and Compliance](#governance-and-compliance)
-  - [NIS2 Directive](#nis2-directive)
-  - [CIS Critical Security Controls](#cis-critical-security-controls)
-
----
-
-### ⚙️ Operational Value
-
-- [Operational Benefits](#operational-benefits)
-- [Future Opportunities](#future-opportunities)
-- [Transparency and Flexibility](#transparency-and-flexibility)
-- [Collaboration with Microsoft](#collaboration-with-microsoft)
-
----
-
-### 🗂️ Solution Structure
-
-- [Files Overview](#files-overview)
-  - [Asset Tagging](#asset-tagging)
-  - [Asset Tagging Maintenance - Clean-up/Remove orphaned tags](#asset-tagging-maintenance---clean-upremove-orphaned-tags)
-  - [Risk Analysis](#risk-analysis)
-  - [Support file](#support-file)
-  - [Sample Output files](#sample-output-files)
-
----
-
-### 🚀 Implementation Guide
-
-- [High-level Overview of Implementation](#high-level-overview-of-implementation)
-
-#### Step 1: Prepare SecurityInsight files
-- [Step 1: Prepare SecurityInsight files on automation-server](#step-1-prepare-securityinsight-files-on-automation-server)
-  - [1.1 Download files](#11-download-all-files-from-github-site-and-create-folder-on-automationbatch-server)
-  - [1.2 Install PowerShell modules](#12-install-necessary-powershell-modules-on-server-optional-as-the-script-will-also-do-this-if-missing)
-
-#### Step 2: Entra App onboarding
-- [Step 2: Onboarding of Entra App registration](#step-2-onboarding-of-entra-app-registration---to-be-used-with-securityinsight)
-  - [2.1 Create App Registration](#21-create-entra-app-registration-spn-and-set-secret-note-it-down)
-  - [2.2 API permissions](#22-delegate-api-permissions-to-entra-app-spn)
-  - [2.3 Azure permissions](#23-delegate-tag-contributor-permissions-in-azure-to-entra-app-spn-on-tenant-root-level-to-ensure-the-possibility-to-tag-all-azure-resources)
-
-#### Step 3: Asset tagging
-- [Step 3: Setting Asset Tier Level using tagging](#step-3-setting-asset-tier-level-using-tagging)
-  - [Structure of query in YAML-file](#structure-of-query-in-yaml-file)
-  - [Asset Tagging files](#asset-tagging-files)
-  - [3.1 Adjust authentication](#step-31-adjust-the-authentication-details-in-launcher-file-runcriticalassettaggingps1-spntenantid-spnclientid-spnclientsecret)
-  - [3.2 WhatIf mode](#step-32-adjust-the-whatifmode-to-true-if-you-are-only-testing-otherwise-leave-it-as-false-to-set-the-tags)
-  - [3.3 Run tagging (PROD)](#step-33-prod-run-critical-asset-launcher-to-tag-recommended-tags-in-prod-mode)
-  - [3.4 Schedule recurring job](#step-34-prod-setup-recurring-job-to-run-every-x-hours-using-task-scheduler-or-3rd-party-software-like-visualcron)
-  - [3.5 Adjust queries (TEST)](#step-35-test-adjust-custom-yaml-file-to-tag-resources-in-test-mode)
-  - [3.6 Run tagging (TEST)](#step-36-test-run-critical-asset-launcher-to-tag-recommended-tags-in-test-mode)
-  - [3.7 Promote to PROD](#step-37-prod-adjust-queries-to-prod-mode-once-happy-now-they-will-be-included-in-the-recurring-job)
-
-#### Step 4: Criticality classification
-- [Step 4: Setting Asset Criticality Level Classification](#step-4-setting-asset-criticality-level-classification)
-  - [4.1 Azure resources](#step-41---how-to-setup-criticality-tier-level-against-azure-resources)
-  - [4.2 Defender devices](#step-42---how-to-setup-criticality-tier-level-against-defender-device-resources)
-  - [Gaps / Missing capabilities](#what-am-i-missing-in-critical-asset-management)
-
-#### Step 5: Risk analysis
-- [Step 5: Run the Risk Analysis](#step-5-run-the-risk-analysis)
-  - [Files Overview (Risk Analysis)](#files-overview-risk-analysis)
-  - [5.1 Authentication & SMTP](#step-51-adjust-the-authentication--smtp-details-in-launcher-file-runsecurityinsightps1)
-  - [5.2 Run analysis (Summary & Detailed)](#step-52a-run-risk-analysis-launcher-in-summary-mode-cmdline)
-  - [5.3 AI integration](#step-53a-deploy-openai-instance-to-enable-ai-support-deploy_openai_payg_instance_securityinsightsps1)
-
-------
-
-# 📦 Installation & Running
-
-> **Start here if you are installing SecurityInsight for the first time.** Everything below is
-> the v2 layout — one launcher per engine, customer credentials in a `LauncherConfig.ps1` file
-> (never in code), data files split between platform-locked and customer-editable.
-
-## Repository layout
-
-Once you have the files on disk, the tree looks like this:
-
-```
-SecurityInsight/
-├── scripts/                                              ← engine scripts (don't edit)
-│   ├── Build_Tier_Definitions_JSON_File.ps1
-│   ├── CriticalAssetTagging.ps1
-│   ├── CriticalAssetTaggingMaintenance.ps1
-│   ├── CriticalAssetTaggingMaintenance_FixConflictingTags.ps1
-│   ├── Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
-│   ├── IdentityAssetsCollectDefineTierIngestLog.ps1
-│   ├── Onboarding_IdentityAssets_LogAnalytics.ps1
-│   ├── SecurityInsight_RiskAnalysis.ps1
-│   └── UpdateSecurityInsight.ps1
-├── launchers/                                            ← one folder per engine
-│   ├── CriticalAssetTagging/
-│   │   ├── launcher.manifest.json
-│   │   ├── launcher.community-vm.template.ps1              ← run this on a Windows box / dev PC
-│   │   ├── launcher.community-azure.template.ps1           ← run this from a Function / Logic App / Hybrid Worker
-│   │   └── LauncherConfig.sample.ps1                       ← copy to LauncherConfig.ps1, then edit
-│   ├── (one folder for every other engine, same shape)
-│   └── ...
-├── data/                                                 ← YAML / CSV / JSON the engines read
-│   ├── SecurityInsight_CriticalAssetTagging_Locked.yaml    ← platform-curated (overwritten on update)
-│   ├── SecurityInsight_CriticalAssetTagging_Custom.yaml    ← stripped starter — YOU edit this
-│   ├── SecurityInsight_RiskAnalysis_Queries_Locked.yaml    ← platform-curated
-│   ├── SecurityInsight_RiskAnalysis_Queries_Custom.yaml    ← stripped starter — YOU edit this
-│   ├── SecurityInsight_RiskIndex.csv                       ← customer-TUNABLE (preserved on update)
-│   ├── SecurityInsight_IdentityTiering.json                ← customer-TUNABLE (preserved on update)
-│   └── _samples/                                           ← full reference copies (overwritten on update)
-│       ├── SecurityInsight_CriticalAssetTagging_Custom.yaml  ← complete sample for the custom tagging file
-│       ├── SecurityInsight_RiskAnalysis_Queries_Custom.yaml  ← complete sample for the custom queries file
-│       ├── Sample - RiskAnalysis_Summary_Bucket.xlsx         ← what a Summary report looks like
-│       ├── Sample - RiskAnalysis_Detailed_Bucket.xlsx        ← what a Detailed report looks like
-│       └── Sample mail - Summary / Detailed report.pdf       ← what the AI summary email looks like
-├── docs/                                                 ← all documentation, images, Visio, Word/PDF
-├── CONTRIBUTING.md                                       ← PR flow
-├── LICENSE                                               ← MIT
-├── RELEASENOTES.md                                       ← auto-generated per release
-└── README.md                                             ← this file
-```
-
-## File update rules (important)
-
-When a new release is published you can refresh your local copy with `git pull`, with
-`UpdateSecurityInsight.ps1`, or by re-downloading the release zip. The rules are always:
-
-| Path | On update | Why |
-| --- | --- | --- |
-| `scripts/*.ps1` | **Overwritten** | Platform ships these; you should never edit them. |
-| `data/*_Locked.*` | **Overwritten** | Platform-curated recommended content. |
-| `data/_samples/*` | **Overwritten** | Reference material, always fresh. |
-| `data/*_Custom.*` | **Preserved** (install-once) | Your tagging + query customisations stay. |
-| `data/*.csv`, `data/*.json` (no suffix) | **Preserved** (install-once) | Customer-tunable defaults (e.g. `SecurityInsight_RiskIndex.csv`, `SecurityInsight_IdentityTiering.json`) — your edits stay. |
-| `launchers/<Engine>/launcher.*.template.ps1` | **Overwritten** | Template code. |
-| `launchers/<Engine>/launcher.manifest.json` | **Overwritten** | Launcher metadata. |
-| `launchers/<Engine>/LauncherConfig.sample.ps1` | **Overwritten** | Sample tracked in repo. |
-| `launchers/<Engine>/LauncherConfig.ps1` | **NEVER in the repo** (`.gitignore`'d) | Your credentials stay on your machine. |
-| `docs/*` | **Overwritten** | Documentation. |
-
-> **Rule of thumb:** anything with `_Locked` in the name is ours. Anything with `_Custom` in
-> the name, or a bare `.csv` / `.json` in `data/`, or `LauncherConfig.ps1` — is yours. Edit
-> freely, it survives every update.
-
-## Running — quick start
-
-The walkthrough below takes a first-time user from zero to a working Summary report. It
-assumes PowerShell 7+ on a Windows box (the v1 engines also run on Windows PowerShell 5.1).
-
-### Step 1 — Get the files
-
-Pick either:
-
-**Option A — Download the release zip** (recommended for non-developers):
-
-1. Go to the [Releases page](https://github.com/KnudsenMorten/SecurityInsight/releases/latest).
-2. Under **Assets**, download `SecurityInsight-vX.Y.Z.zip`.
-3. Extract anywhere, e.g. `C:\SecurityInsight\`.
-
-**Option B — Clone with git** (recommended for developers — makes updates a `git pull`):
+3. **Run SecurityInsight** — clone this repo, copy `LauncherConfig.sample.ps1` to
+   `LauncherConfig.ps1` in the engine's launcher folder, pick one of the four auth
+   methods documented there, run the matching `launcher.community-vm.template.ps1` or
+   `launcher.community-azure.template.ps1`.
 
 ```powershell
+# download the latest stable release zip, extract to e.g. C:\SecurityInsight
+# → https://github.com/KnudsenMorten/SecurityInsight/releases/latest
+
+# OR clone directly
 git clone https://github.com/KnudsenMorten/SecurityInsight.git C:\SecurityInsight
-cd C:\SecurityInsight
-```
 
-(Tip: for early-access features, add `-b preview`.)
-
-### Step 2 — Create your Entra App registration (Service Principal)
-
-SecurityInsight needs its own Entra App (SPN) with read access to Defender + ARG. Full step-by-step
-with screenshots is in [Step 2 of the Implementation Guide below](#step-2-onboarding-of-entra-app-registration---to-be-used-with-securityinsight). Short version:
-
-1. **Entra portal → Identity → Applications → App registrations → New registration.** Name it
-   `SecurityInsight-SPN`, single-tenant, no redirect URI.
-2. **Overview tab** → copy the **Application (client) ID** and the **Directory (tenant) ID**.
-3. **Certificates & secrets → Client secrets → New client secret.** Copy the value immediately.
-4. **API permissions → Add a permission → APIs my organization uses**, then add these three
-   (all three require **Admin Consent** after adding):
-   - `Microsoft Threat Protection` → `AdvancedHunting.Read.All`
-   - `Microsoft Graph`             → `ThreatHunting.Read.All`
-   - `WindowsDefenderATP`          → `Machine.ReadWrite.All`
-5. **Azure RBAC** — on the target subscription(s) or management group, grant the SPN:
-   - `Reader` for read-only queries.
-   - `Tag Contributor` so the tagging engine can set tags. (Use management group scope to cover
-     all subscriptions at once.)
-
-After this step you should have: **tenant id**, **client id**, and **client secret** (the raw
-value, not the secret id).
-
-### Step 3 — Create your `LauncherConfig.ps1`
-
-Every launcher folder ships a `LauncherConfig.sample.ps1`. Copy it and fill in the three
-values you just got:
-
-```powershell
 cd C:\SecurityInsight\launchers\SecurityInsight_RiskAnalysis
 copy LauncherConfig.sample.ps1 LauncherConfig.ps1
-notepad LauncherConfig.ps1
-```
+notepad LauncherConfig.ps1    # paste Tenant/Client/Secret from PlatformOnboarding output
 
-Inside `LauncherConfig.ps1`:
-
-```powershell
-$global:SpnTenantId     = '<your-tenant-id>'
-$global:SpnClientId     = '<your-app-client-id>'
-$global:SpnClientSecret = '<your-client-secret-value>'
-
-# optional extras for scheduled runs:
-# $global:ReportTemplate_Default = 'RiskAnalysis_Summary_Bucket'
-# $global:SendMail               = $false
-```
-
-`LauncherConfig.ps1` is `.gitignore`'d and never overwritten by any update mechanism — it's
-yours, forever.
-
-> **Repeat Step 3 for each engine you plan to use.** Every launcher folder has its own
-> `LauncherConfig.sample.ps1`. For solutions that use the same SPN across every launcher,
-> see the "master config" pattern in [community-testing-guide.md](docs/community-testing-guide.md).
-
-### Step 4 — Run the launcher
-
-Run the community launcher for the engine you want. For a Summary risk analysis:
-
-```powershell
-cd C:\SecurityInsight\launchers\SecurityInsight_RiskAnalysis
 .\launcher.community-vm.template.ps1 -Summary
 ```
 
-First run will auto-install any missing PowerShell modules (`Az`, `Microsoft.Graph`,
-`MicrosoftGraphPS`, `ImportExcel`, `powershell-yaml`). Subsequent runs only load them.
+When you clone SecurityInsight you also get `dependencies/PlatformOnboarding/` and
+`dependencies/PlatformMonitoring/` bundled in — no need to clone them separately unless
+you want to update them independently.
 
-Same shape for the other engines:
+------
 
-```powershell
-# Apply SecurityInsight tier tags across Defender + Azure
-cd C:\SecurityInsight\launchers\CriticalAssetTagging
-.\launcher.community-vm.template.ps1 -Scope PROD
-
-# Identity-asset inventory + tier assignment
-cd C:\SecurityInsight\launchers\IdentityAssetsCollectDefineTierIngestLog
-.\launcher.community-vm.template.ps1
-```
-
-### Step 5 — (Cloud-hosted alternative) run from an Azure Function or Logic App
-
-If you don't want a Windows VM, you can host SecurityInsight in **Azure Functions** (PowerShell 7.4
-runtime) or trigger it from a **Logic App** / **Hybrid Runbook Worker**. The `-azure`
-launcher flavour is designed exactly for this — no credentials on disk, secret comes from
-Key Vault via a **Managed Identity** (MI).
-
-> **There is currently no provisioning script** that creates the Function App / Logic App
-> for you. You set the infra up once by hand (or via your existing IaC), then deploy the
-> SecurityInsight code on top. An opinionated provisioner (`Onboarding_SecurityInsight_Hosting.ps1`)
-> is on the roadmap — watch the [Discussions](https://github.com/KnudsenMorten/SecurityInsight/discussions)
-> for progress.
-
-#### 5.1 Provision the Azure resources (one-time)
-
-Create the following (portal / Bicep / Terraform — your choice):
-
-1. **Resource group** to hold everything (e.g. `rg-securityinsight-host`).
-2. **Storage account** — required backing store for the Function App. Standard LRS is fine.
-3. **Azure Function App**:
-   - **Runtime:** PowerShell 7.4.
-   - **Hosting plan:** Consumption or Premium (Consumption is cheapest; Premium if you need VNet
-     integration or always-on).
-   - **System-assigned Managed Identity:** **enabled**.
-4. **Azure Key Vault** in the same tenant (can be an existing one).
-   - Secrets to add:
-     - `Modern-ApplicationId-Azure` — the SPN's Application (client) ID.
-     - `Modern-Secret-Azure` — the SPN's client secret value.
-     - (optional) `Modern-CertificateThumbprint-Azure` — only if you're using cert auth
-       instead of secret. Leave blank otherwise.
-5. **RBAC on the Key Vault**: grant the Function App's system-assigned MI the
-   **Key Vault Secrets User** role on the Key Vault's access-policy or RBAC scope.
-6. **SPN permissions** (same as Step 2 for the VM flow) — the SPN whose secret you stored
-   in Key Vault needs the Defender / Graph / Azure permissions listed there.
-
-#### 5.2 Deploy SecurityInsight code into the Function App
-
-Simplest shape: a single HTTP-triggered (or timer-triggered) function whose body invokes
-the community-azure launcher. Conceptual layout inside the Function App:
+<details>
+<summary><b>📂 Repository layout (click to expand)</b></summary>
 
 ```
-wwwroot/
-├── host.json
-├── profile.ps1
-├── requirements.psd1                       ← lists Az, Microsoft.Graph, MicrosoftGraphPS, ImportExcel, powershell-yaml
-├── scripts/                                ← copied verbatim from the SecurityInsight repo
-├── launchers/
-│   └── SecurityInsight_RiskAnalysis/
-│       └── launcher.community-azure.template.ps1
-└── SecurityInsight_RiskAnalysis_Fn/
-    ├── function.json                       ← timer / HTTP trigger binding
-    └── run.ps1                             ← one-liner that dot-sources the launcher
+SecurityInsight/
+├── scripts/                        engine scripts (don't edit)
+├── launchers/<Engine>/             launcher matrix + LauncherConfig.sample.ps1
+├── data/                           YAML / CSV / JSON (Locked = overwrite; Custom / bare = preserve)
+│   └── _samples/                   full reference copies
+├── docs/                           documentation, images, Visio, PDFs
+├── dependencies/
+│   ├── PlatformOnboarding/         bundled — one-time Entra app / cert / VM MI setup
+│   └── PlatformMonitoring/         bundled — health-check engine + email alerts
+├── README.md
+└── ...
 ```
 
-`SecurityInsight_RiskAnalysis_Fn/run.ps1`:
+**Update rules** — customer-editable files (`data/*_Custom.*`, `data/SecurityInsight_RiskIndex.csv`,
+`data/SecurityInsight_IdentityTiering.json`, every `LauncherConfig.ps1`) are NEVER
+overwritten by `UpdateSecurityInsight.ps1` or a `git pull`. Everything else refreshes
+each release.
 
-```powershell
-param($Timer)
-$launcher = Join-Path $env:HOME 'site\wwwroot\launchers\SecurityInsight_RiskAnalysis\launcher.community-azure.template.ps1'
-& $launcher
-```
+</details>
 
-Deploy via your preferred path — `func azure functionapp publish`, GitHub Actions
-`Azure/functions-action`, or zip-deploy via Portal.
+<details>
+<summary><b>🔐 The four auth methods (click to expand)</b></summary>
 
-#### 5.3 Configure Function App settings
+Every community launcher resolves auth in priority order:
 
-In the Function App → **Configuration → Application settings**, add:
+1. **Managed Identity** — `$global:UseManagedIdentity = $true`
+2. **SPN + Key Vault-stored secret** — `$global:SpnKeyVaultName + $global:SpnSecretName`
+3. **SPN + certificate thumbprint** — `$global:SpnCertificateThumbprint`
+4. **SPN + plaintext secret** — `$global:SpnClientSecret`  **TESTING ONLY**
 
-| App setting | Value | Notes |
-| --- | --- | --- |
-| `PLATFORM_TENANT_ID` | `<your-tenant-id>` | Same SPN tenant as the secrets in Key Vault. |
-| `PLATFORM_SUBSCRIPTION_ID` | `<subscription to query>` | Used by Az cmdlets for scope. |
-| `PLATFORM_KEYVAULT` | `<kv-name>` | Short name, not full URI. |
-| `PLATFORM_STORAGE_ACCOUNT` | `<optional>` | Only if the engine writes state to Azure Table. |
+Methods 1 and 2 require a VM / Function App with a system-assigned Managed Identity that
+has `Key Vault Secrets User` on the target KV. PlatformOnboarding provisions this for
+you — see its README.
 
-The `launcher.community-azure.template.ps1` reads those env vars, calls
-`New-PlatformContext`, resolves the SPN secret via MI → Key Vault, and invokes the engine.
+Full copy-paste blocks for each method are in every
+`launchers/<Engine>/LauncherConfig.sample.ps1`.
 
-#### 5.4 Trigger + schedule
+</details>
 
-For timer trigger (run every 4 hours):
+<details>
+<summary><b>☁️ Azure Function / Logic App hosting (click to expand)</b></summary>
 
-```json
-// SecurityInsight_RiskAnalysis_Fn/function.json
-{
-  "bindings": [
-    {
-      "name": "Timer",
-      "type": "timerTrigger",
-      "direction": "in",
-      "schedule": "0 0 */4 * * *"
-    }
-  ]
-}
-```
+Use `launcher.community-azure.template.ps1` instead of `launcher.community-vm.template.ps1`.
+The Azure flavour reads the SPN secret from Key Vault via Managed Identity — nothing
+sensitive on disk.
 
-For HTTP trigger (invoke on-demand from Logic Apps / a dashboard):
+Required Function App settings:
+- `PLATFORM_TENANT_ID`
+- `PLATFORM_SUBSCRIPTION_ID`
+- `PLATFORM_KEYVAULT` (short name)
+- `PLATFORM_STORAGE_ACCOUNT` (optional)
 
-```json
-{
-  "bindings": [
-    { "name": "req",  "type": "httpTrigger",  "direction": "in",  "authLevel": "function", "methods": ["post"] },
-    { "name": "$return", "type": "http",     "direction": "out" }
-  ]
-}
-```
+Provisioning: run `New-AzureFunctionHost` from PlatformOnboarding — it creates the
+Function App + MI + storage + KV binding for you. See
+[PlatformOnboarding](https://github.com/KnudsenMorten/PlatformOnboarding#readme)
+for the full walkthrough.
 
-#### 5.5 Logic App pattern (alternative)
+</details>
 
-For a low-code wrapper, a **Logic App** can call the Function App's HTTP trigger on a schedule
-or in response to Defender / Sentinel events. Use a **system-assigned MI** on the Logic App
-and grant it `Invoke` on the Function App's scope if you want auth without function keys.
+<details>
+<summary><b>⏰ Scheduling unattended runs (click to expand)</b></summary>
 
-The engine itself doesn't change between Function and Logic App hosts — both end up running
-the same `launcher.community-azure.template.ps1`.
-
-## Passing arguments to the engine
-
-Many engines accept parameters that you'd previously pass to the v1 `Run*.ps1` files
-(e.g. `-Summary`, `-Detailed`, `-Scope PROD`, `-ReportTemplate`). In v2 you have two
-equivalent paths:
-
-1. **Edit `LauncherConfig.ps1`** and set the corresponding global (preferred for
-   unattended / scheduled runs):
-
-   ```powershell
-   # LauncherConfig.ps1
-   $global:SpnTenantId     = '...'
-   $global:SpnClientId     = '...'
-   $global:SpnClientSecret = '...'
-
-   # optional engine-level settings
-   $global:ReportTemplate_Default = 'RiskAnalysis_Detailed_Bucket'
-   $global:Mode_Default           = 'PROD'   # tagging: PROD / TEST
-   ```
-
-2. **Pass parameters directly to the launcher** (forwarded to the engine):
-
-   ```powershell
-   .\launcher.community-vm.template.ps1 -Summary
-   .\launcher.community-vm.template.ps1 -Detailed -ReportTemplate 'RiskAnalysis_Detailed_Bucket_Test'
-   .\launcher.community-vm.template.ps1 -Scope PROD            # for the tagging launchers
-   ```
-
-## Where samples live
-
-- **Full sample data files** → `data/_samples/` (tagging + queries — use these as a copy-paste source for `data/*_Custom.yaml`).
-- **Sample output reports** → `data/_samples/Sample - *.xlsx`.
-- **Sample email bodies (AI summary)** → `data/_samples/Sample mail - *.pdf`.
-- **All screenshots and diagrams** referenced from this README → `docs/Images/`.
-- **Executive summaries, PDFs, Visio** → `docs/Documentation/`.
-
-## Scheduling an unattended run
-
-Create a Windows Scheduled Task that runs the launcher as your service account:
+Windows Scheduled Task that runs the launcher as your service account:
 
 ```
 Program:    pwsh.exe
-Arguments:  -NoProfile -ExecutionPolicy Bypass -File "<path>\SecurityInsight\launchers\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1" -Summary
+Arguments:  -NoProfile -ExecutionPolicy Bypass -File "<path>\launchers\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1" -Summary
 ```
 
-Replace `<path>` with wherever you cloned the repo. The launcher resolves everything else relative to itself.
+Replace `<path>` with wherever you cloned the repo.
 
-------
+For Azure Function: use a timer-triggered function pointing at
+`launcher.community-azure.template.ps1`. See the hosting callout above.
+
+</details>
+
 
 # 🧪 Preview vs Stable — which branch should I use?
 
@@ -970,6 +626,9 @@ Copy-Item "scripts_SecurityInsight_RiskAnalysis.ps1.<timestamp>.bak" ..\scripts\
 Then remove that file from `$Files` temporarily, until the issue is fixed upstream.
 
 ------
+
+<details>
+<summary><b>📚 Executive Summary, Core Concepts, Risk Model (click to expand)</b></summary>
 
 # Executive Summary
 
@@ -1457,6 +1116,11 @@ The framework generates both summary and detailed reports.
 
 
 
+</details>
+
+<details>
+<summary><b>🏛️ Governance, Compliance, Operational Benefits, Collaboration (click to expand)</b></summary>
+
 # Governance and Compliance
 
 SecurityInsight supports several important security frameworks.
@@ -1543,6 +1207,8 @@ The goal of this collaboration is to explore how the principles behind SecurityI
 
 
 
+</details>
+
 # Files Overview
 
 > **v2 layout.** Engines live under `scripts/`, launchers under `launchers/<Engine>/`, and all data under
@@ -1616,29 +1282,35 @@ The goal of this collaboration is to explore how the principles behind SecurityI
 
 
 
-# High-level Overview of Implementation
+# 🚀 Implementation steps (high level)
 
-> **ℹ️ Note on command syntax.** The steps below describe the *conceptual* flow (SPN creation,
-> permissions, tagging approach, risk analysis). The **exact commands** in the code snippets are the
-> legacy v1 form (`RunRiskAnalysis.ps1 -Summary` etc.) and are kept here as illustrative samples.
-> For the **current v2 commands** — which launcher file to run, where `LauncherConfig.ps1` lives,
-> how to pass parameters — see [📦 Installation & Running](#-installation--running) near the top
-> of this document. The concepts (YAML structure, permissions, scheduling, AI integration) are
-> unchanged; only the entry-point filenames differ.
+The end-to-end flow uses three repos in order. Each has its own detailed README — this page tells you what to run and when.
 
-Detailed steps for each phase are outlined in the sections below.
+| # | Step | Repo | Purpose |
+| --- | --- | --- | --- |
+| **1** | Infrastructure onboarding | [**PlatformOnboarding**](https://github.com/KnudsenMorten/PlatformOnboarding#readme) | Create Entra App + SPN, certificate, VM Managed Identity, Key Vault, Azure Function host. One-time per tenant. |
+| **2** | Health checks (recommended) | [**PlatformMonitoring**](https://github.com/KnudsenMorten/PlatformMonitoring#readme) | Schedule the health-check engine so secret expiry / KV outage / Function problems land in your inbox instead of silently breaking reports. |
+| **3** | Asset Tagging (PROD + TEST) | SecurityInsight — this repo | Tag devices + Azure resources with SecurityInsight tier tags. See **Step 3** collapsible in the Detailed Implementation Guide below. |
+| **4** | Asset Criticality Classification | SecurityInsight | Validate the tagging rules match your estate. See **Step 4** collapsible below. |
+| **5** | Risk Analysis | SecurityInsight | Run `SecurityInsight_RiskAnalysis` for Summary / Detailed Excel output + optional AI summary email. See **Step 5** collapsible below. |
 
-| Step | Actions |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| Step 1: **Prepare** SecurityInsight **files** on automation-server | 1.1. Download all files from Github and create folder on automation/batch-server<br /><br />1.2. Install necessary PowerShell modules on server |
-| Step 2: **Onboard** Entra App registration | 2.1. Create Entra App registration (SPN) with Secret<br /><br />2.2. Delegate API permissions<br /><br />2.3. Delegate Azure permissions |
-| Step 3: Set **Asset Tier Level** using tagging | 3.1. Adjust authentication details in launcher file<br /><br />3.2. Validate WhatIfMode<br /><br />3.3. Run Critical Asset launcher to tag recommended tags in PROD mode<br /><br />3.4. [PROD] Setup recurring job to run every x hours<br /><br />3.5. [TEST] Adjust custom YAML-file to tag resources in Test-mode<br /><br />3.6. [TEST] Run Critical Asset launcher to tag recommended tags in TEST mode<br /><br />3.7. [PROD] Promote queries to Prod-mode once validated |
-| Step 4: Set **Asset Criticality Level** Classification | Step 4.1 – Setup Criticality Tier Level against Azure resources<br /><br />Step 4.2 – Setup Criticality Tier Level against Defender device resources<br /><br />Known gaps / missing capabilities |
-| Step 5: Run **Risk Analysis** | Step 5.1. Adjust authentication + SMTP details in launcher file<br /><br />Step 5.2A. Run in SUMMARY mode (cmdline)<br /><br />Step 5.2B. Run in DETAILED mode (GUI/ISE)<br /><br />Step 5.2C. Run in DETAILED mode (cmdline)<br /><br />Step 5.2D. Run in DETAILED mode (GUI/ISE, alternative)<br /><br />Step 5.2E. Run with Custom Report Template (cmdline)<br /><br />Step 5.3A. Deploy OpenAI instance<br /><br />Step 5.3B. Run deployment script<br /><br />Step 5.3C. Enable AI summary in launcher file |
+> **Steps 1 and 2 are cross-solution** — the same PlatformOnboarding / PlatformMonitoring
+> runs serve every solution from this author (SecurityInsight, EntraPolicySuite, PIM4EntraPS, ...).
+> You only onboard once per tenant; every solution reuses the resulting SPN / MI.
+>
+> **Steps 3–5 are SecurityInsight-specific** — those were "Step 1–5" in older versions
+> of this guide; they now live in the collapsed sections below.
 
 ------
 
+# 🔧 Detailed Implementation Guide
 
+Everything under this heading is SecurityInsight-specific configuration. If you haven't
+completed **Step 1 + Step 2** above, do those first — they cover the Entra App + Azure
+RBAC + Managed Identity + SMTP monitoring setup every section below assumes is in place.
+
+<details>
+<summary><b>🏷️ Step 3 — Asset Tagging  (click to expand)</b></summary>
 
 ## Step 1: Prepare SecurityInsight files on automation-server
 
@@ -2185,6 +1857,11 @@ Change to
 
 
 
+</details>
+
+<details>
+<summary><b>🎯 Step 4 — Asset Criticality Classification  (click to expand)</b></summary>
+
 ## Step 4: Setting Asset Criticality Level Classification
 
 Not all systems in an organization are equally important. Assets are classified into **4 criticality tiers**.
@@ -2255,6 +1932,11 @@ Assets are classified using two methods in Defender Critical Asset Management:
 
 
 
+</details>
+
+<details>
+<summary><b>📊 Step 5 — Run the Risk Analysis  (click to expand)</b></summary>
+
 ## Step 5: Run the Risk Analysis
 
 The solution consists of three main components:
@@ -2263,7 +1945,9 @@ The solution consists of three main components:
 | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------- |
 | Microsoft Defender<br />Exposure Graph<br />Azure Resource Graph | Kusto queries<br />YAML report definitions<br />Risk score calculations | Excel reports<br />Summary Email |
 
-## Files Overview (Risk Analysis)
+#</details>
+
+# Files Overview (Risk Analysis)
 
 | File Name | Purpose | Continues Updates via UpdateSecurityInsight-script |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------------- |
@@ -2877,3 +2561,5 @@ ReportTemplates:
         DefaultBucketCount: 2
         BucketPlaceholderToken: __BUCKET_FILTER__
 ```
+
+</details>

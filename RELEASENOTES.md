@@ -4,7 +4,7 @@
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream AutomateIT monorepo:
 
-- fix(.gitignore): allow platform-shipped *_Custom.yaml starters under SOLUTIONS/<X>/DATA/ (82bd464)
+- docs(SecurityInsight): move README to solution root + add v2 Installation section (1bd5339)
 
 ---
 

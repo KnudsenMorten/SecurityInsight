@@ -406,10 +406,10 @@ In the Function App → **Configuration → Application settings**, add:
 
 | App setting | Value | Notes |
 | --- | --- | --- |
-| `AUTOMATEIT_TENANT_ID` | `<your-tenant-id>` | Same SPN tenant as the secrets in Key Vault. |
-| `AUTOMATEIT_SUBSCRIPTION_ID` | `<subscription to query>` | Used by Az cmdlets for scope. |
-| `AUTOMATEIT_KEYVAULT` | `<kv-name>` | Short name, not full URI. |
-| `AUTOMATEIT_STORAGE_ACCOUNT` | `<optional>` | Only if the engine writes state to Azure Table. |
+| `PLATFORM_TENANT_ID` | `<your-tenant-id>` | Same SPN tenant as the secrets in Key Vault. |
+| `PLATFORM_SUBSCRIPTION_ID` | `<subscription to query>` | Used by Az cmdlets for scope. |
+| `PLATFORM_KEYVAULT` | `<kv-name>` | Short name, not full URI. |
+| `PLATFORM_STORAGE_ACCOUNT` | `<optional>` | Only if the engine writes state to Azure Table. |
 
 The `launcher.community-azure.template.ps1` reads those env vars, calls
 `New-PlatformContext`, resolves the SPN secret via MI → Key Vault, and invokes the engine.
@@ -550,7 +550,7 @@ never overwritten by a branch switch or a pull.
 
 ## When does something land on each branch?
 
-1. Every change lands on the upstream monorepo (`KnudsenMorten/AutomateIT`) first.
+1. Every change lands on the upstream monorepo (`upstream`) first.
 2. Cutting a `SecurityInsight-vX.Y.Z-preview` tag publishes to this repo's **`preview`** branch.
 3. After preview validation, cutting a `SecurityInsight-vX.Y.Z` tag publishes to **`main`**
    and creates a matching GitHub **Release** with the downloadable zip.
@@ -611,7 +611,7 @@ This repo **accepts PRs directly**. See [CONTRIBUTING.md](CONTRIBUTING.md) for t
 - Small fixes (typos, broken URLs, YAML sample additions) — welcome without prior discussion.
 - Larger changes (new engine, scoring-model changes, new report template) — please open an
   Issue or Discussion first so we can align on shape before you write code.
-- **Important:** this repo is auto-generated from the upstream `AutomateIT` monorepo. Accepted
+- **Important:** this repo is auto-generated from a private upstream monorepo. Accepted
   PRs are bridged upstream by the maintainer, and the next release republishes them here with
   your commit attribution preserved.
 
@@ -950,7 +950,7 @@ $Files = @(
 | --- | --- |
 | `git pull` | If you cloned the public repo with `git clone`. Pulls every file the repo tracks, respects `.gitignore`. Simplest for developers. |
 | `UpdateSecurityInsight` | Non-git install (you downloaded the repo as a zip), or you want to subscribe to a specific curated subset and ignore the rest. Has backup/rotation built in. |
-| `Update-Platform.ps1` | Internal customers running the full AutomateIT monorepo release bundle. Updates across the whole platform (all solutions, all platform modules, the updater itself). |
+| `Update-Platform.ps1` | Internal customers running the full upstream monorepo release bundle. Updates across the whole platform (all solutions, all platform modules, the updater itself). |
 
 All three honour the same rule: **customer-owned `*_Custom.*` and `LauncherConfig.ps1`
 files are never touched.**

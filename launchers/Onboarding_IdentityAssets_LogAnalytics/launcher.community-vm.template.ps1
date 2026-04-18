@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Resolve-AutomateITRepoRoot {
+function Resolve-RepoRoot {
     param([string]$Start = $PSScriptRoot)
     $cur = $Start
     while ($cur) {
@@ -26,9 +26,9 @@ function Resolve-AutomateITRepoRoot {
         if (-not $parent -or $parent -eq $cur) { break }
         $cur = $parent
     }
-    throw "Launcher: cannot locate AutomateIT repo root walking up from '$Start'."
+    throw "Launcher: cannot locate solution repo root walking up from '$Start'."
 }
-if (-not $InstallPath) { $InstallPath = Resolve-AutomateITRepoRoot }
+if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
 
 if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
 if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {

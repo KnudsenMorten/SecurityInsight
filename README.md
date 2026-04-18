@@ -171,41 +171,43 @@ My customers value SecurityInsight because it lets them make better remediation 
 
 ## Repository layout
 
-Once you clone the repo, the tree looks like this:
+Once you have the files on disk, the tree looks like this:
 
 ```
 SecurityInsight/
 ├── scripts/                                              ← engine scripts (don't edit)
+│   ├── Build_Tier_Definitions_JSON_File.ps1
 │   ├── CriticalAssetTagging.ps1
 │   ├── CriticalAssetTaggingMaintenance.ps1
 │   ├── CriticalAssetTaggingMaintenance_FixConflictingTags.ps1
 │   ├── Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
-│   └── SecurityInsight_RiskAnalysis.ps1
+│   ├── IdentityAssetsCollectDefineTierIngestLog.ps1
+│   ├── Onboarding_IdentityAssets_LogAnalytics.ps1
+│   ├── SecurityInsight_RiskAnalysis.ps1
+│   └── UpdateSecurityInsight.ps1
 ├── launchers/                                            ← one folder per engine
 │   ├── CriticalAssetTagging/
 │   │   ├── launcher.manifest.json
-│   │   ├── launcher.community-vm.template.ps1              ← run this on a Windows box
-│   │   ├── launcher.community-azure.template.ps1           ← run this from a Function/Logic App
+│   │   ├── launcher.community-vm.template.ps1              ← run this on a Windows box / dev PC
+│   │   ├── launcher.community-azure.template.ps1           ← run this from a Function / Logic App / Hybrid Worker
 │   │   └── LauncherConfig.sample.ps1                       ← copy to LauncherConfig.ps1, then edit
-│   ├── CriticalAssetTaggingMaintenance/
-│   ├── CriticalAssetTaggingMaintenance_FixConflictingTags/
-│   ├── SecurityInsight_RiskAnalysis/
-│   ├── Deploy_OpenAI_PAYG_Instance_SecurityInsights_Primary/
-│   └── Deploy_OpenAI_PAYG_Instance_SecurityInsights_Secondary/
-├── data/                                                 ← YAML / CSV the engines read
-│   ├── SecurityInsight_CriticalAssetTagging_Locked.yaml    ← platform-locked (updated on every release)
+│   ├── (one folder for every other engine, same shape)
+│   └── ...
+├── data/                                                 ← YAML / CSV / JSON the engines read
+│   ├── SecurityInsight_CriticalAssetTagging_Locked.yaml    ← platform-curated (overwritten on update)
 │   ├── SecurityInsight_CriticalAssetTagging_Custom.yaml    ← stripped starter — YOU edit this
-│   ├── SecurityInsight_RiskAnalysis_Queries_Locked.yaml    ← platform-locked
+│   ├── SecurityInsight_RiskAnalysis_Queries_Locked.yaml    ← platform-curated
 │   ├── SecurityInsight_RiskAnalysis_Queries_Custom.yaml    ← stripped starter — YOU edit this
-│   ├── SecurityInsight_RiskIndex.csv                       ← platform-locked
-│   └── _samples/                                           ← full reference copies (read-only)
-│       ├── SecurityInsight_CriticalAssetTagging_Custom.yaml  ← complete sample of the tagging custom file
-│       ├── SecurityInsight_RiskAnalysis_Queries_Custom.yaml  ← complete sample of the queries custom file
+│   ├── SecurityInsight_RiskIndex.csv                       ← customer-TUNABLE (preserved on update)
+│   ├── SecurityInsight_IdentityTiering.json                ← customer-TUNABLE (preserved on update)
+│   └── _samples/                                           ← full reference copies (overwritten on update)
+│       ├── SecurityInsight_CriticalAssetTagging_Custom.yaml  ← complete sample for the custom tagging file
+│       ├── SecurityInsight_RiskAnalysis_Queries_Custom.yaml  ← complete sample for the custom queries file
 │       ├── Sample - RiskAnalysis_Summary_Bucket.xlsx         ← what a Summary report looks like
 │       ├── Sample - RiskAnalysis_Detailed_Bucket.xlsx        ← what a Detailed report looks like
 │       └── Sample mail - Summary / Detailed report.pdf       ← what the AI summary email looks like
 ├── docs/                                                 ← all documentation, images, Visio, Word/PDF
-├── CONTRIBUTING.md                                       ← PR flow (see "Pull requests welcome")
+├── CONTRIBUTING.md                                       ← PR flow
 ├── LICENSE                                               ← MIT
 ├── RELEASENOTES.md                                       ← auto-generated per release
 └── README.md                                             ← this file
@@ -213,40 +215,79 @@ SecurityInsight/
 
 ## File update rules (important)
 
-When you later pull an updated release, Update-Platform (or a plain `git pull` if you cloned):
+When a new release is published you can refresh your local copy with `git pull`, with
+`UpdateSecurityInsight.ps1`, or by re-downloading the release zip. The rules are always:
 
 | Path | On update | Why |
 | --- | --- | --- |
-| `scripts/*` | **Overwritten** | Platform ships these; you should never edit them. |
-| `data/*_Locked.yaml`, `data/*.csv` | **Overwritten** | Platform-curated data. |
+| `scripts/*.ps1` | **Overwritten** | Platform ships these; you should never edit them. |
+| `data/*_Locked.*` | **Overwritten** | Platform-curated recommended content. |
 | `data/_samples/*` | **Overwritten** | Reference material, always fresh. |
-| `data/*_Custom.yaml` | **Preserved** (install-once) | Your edits are never touched. |
+| `data/*_Custom.*` | **Preserved** (install-once) | Your tagging + query customisations stay. |
+| `data/*.csv`, `data/*.json` (no suffix) | **Preserved** (install-once) | Customer-tunable defaults (e.g. `SecurityInsight_RiskIndex.csv`, `SecurityInsight_IdentityTiering.json`) — your edits stay. |
 | `launchers/<Engine>/launcher.*.template.ps1` | **Overwritten** | Template code. |
 | `launchers/<Engine>/launcher.manifest.json` | **Overwritten** | Launcher metadata. |
 | `launchers/<Engine>/LauncherConfig.sample.ps1` | **Overwritten** | Sample tracked in repo. |
 | `launchers/<Engine>/LauncherConfig.ps1` | **NEVER in the repo** (`.gitignore`'d) | Your credentials stay on your machine. |
 | `docs/*` | **Overwritten** | Documentation. |
 
-> **Rule of thumb:** anything with `_Locked` in the name is ours. Anything with `_Custom` in the name or
-> sitting at `LauncherConfig.ps1` is yours — edit freely, it survives every update.
+> **Rule of thumb:** anything with `_Locked` in the name is ours. Anything with `_Custom` in
+> the name, or a bare `.csv` / `.json` in `data/`, or `LauncherConfig.ps1` — is yours. Edit
+> freely, it survives every update.
 
 ## Running — quick start
 
-### 1. Clone the repo
+The walkthrough below takes a first-time user from zero to a working Summary report. It
+assumes PowerShell 7+ on a Windows box (the v1 engines also run on Windows PowerShell 5.1).
+
+### Step 1 — Get the files
+
+Pick either:
+
+**Option A — Download the release zip** (recommended for non-developers):
+
+1. Go to the [Releases page](https://github.com/KnudsenMorten/SecurityInsight/releases/latest).
+2. Under **Assets**, download `SecurityInsight-vX.Y.Z.zip`.
+3. Extract anywhere, e.g. `C:\SecurityInsight\`.
+
+**Option B — Clone with git** (recommended for developers — makes updates a `git pull`):
 
 ```powershell
-git clone https://github.com/KnudsenMorten/SecurityInsight.git
-cd SecurityInsight
+git clone https://github.com/KnudsenMorten/SecurityInsight.git C:\SecurityInsight
+cd C:\SecurityInsight
 ```
 
-(Tip: for early-access features, `git clone -b preview https://github.com/KnudsenMorten/SecurityInsight.git`.)
+(Tip: for early-access features, add `-b preview`.)
 
-### 2. Configure your Service Principal
+### Step 2 — Create your Entra App registration (Service Principal)
 
-Every engine's launcher folder has a `LauncherConfig.sample.ps1`. Copy it and fill in your SPN:
+SecurityInsight needs its own Entra App (SPN) with read access to Defender + ARG. Full step-by-step
+with screenshots is in [Step 2 of the Implementation Guide below](#step-2-onboarding-of-entra-app-registration---to-be-used-with-securityinsight). Short version:
+
+1. **Entra portal → Identity → Applications → App registrations → New registration.** Name it
+   `SecurityInsight-SPN`, single-tenant, no redirect URI.
+2. **Overview tab** → copy the **Application (client) ID** and the **Directory (tenant) ID**.
+3. **Certificates & secrets → Client secrets → New client secret.** Copy the value immediately.
+4. **API permissions → Add a permission → APIs my organization uses**, then add these three
+   (all three require **Admin Consent** after adding):
+   - `Microsoft Threat Protection` → `AdvancedHunting.Read.All`
+   - `Microsoft Graph`             → `ThreatHunting.Read.All`
+   - `WindowsDefenderATP`          → `Machine.ReadWrite.All`
+5. **Azure RBAC** — on the target subscription(s) or management group, grant the SPN:
+   - `Reader` for read-only queries.
+   - `Tag Contributor` so the tagging engine can set tags. (Use management group scope to cover
+     all subscriptions at once.)
+
+After this step you should have: **tenant id**, **client id**, and **client secret** (the raw
+value, not the secret id).
+
+### Step 3 — Create your `LauncherConfig.ps1`
+
+Every launcher folder ships a `LauncherConfig.sample.ps1`. Copy it and fill in the three
+values you just got:
 
 ```powershell
-cd launchers\SecurityInsight_RiskAnalysis
+cd C:\SecurityInsight\launchers\SecurityInsight_RiskAnalysis
 copy LauncherConfig.sample.ps1 LauncherConfig.ps1
 notepad LauncherConfig.ps1
 ```
@@ -256,26 +297,61 @@ Inside `LauncherConfig.ps1`:
 ```powershell
 $global:SpnTenantId     = '<your-tenant-id>'
 $global:SpnClientId     = '<your-app-client-id>'
-$global:SpnClientSecret = '<your-client-secret>'
+$global:SpnClientSecret = '<your-client-secret-value>'
+
+# optional extras for scheduled runs:
+# $global:ReportTemplate_Default = 'RiskAnalysis_Summary_Bucket'
+# $global:SendMail               = $false
 ```
 
-`LauncherConfig.ps1` is in `.gitignore`, so a `git pull` (or a platform update) never overwrites it.
+`LauncherConfig.ps1` is `.gitignore`'d and never overwritten by any update mechanism — it's
+yours, forever.
 
-### 3. Run the launcher
+> **Repeat Step 3 for each engine you plan to use.** Every launcher folder has its own
+> `LauncherConfig.sample.ps1`. For solutions that use the same SPN across every launcher,
+> see the "master config" pattern in [community-testing-guide.md](docs/community-testing-guide.md).
 
-**From a Windows VM (simplest):**
+### Step 4 — Run the launcher
+
+Run the community launcher for the engine you want. For a Summary risk analysis:
 
 ```powershell
+cd C:\SecurityInsight\launchers\SecurityInsight_RiskAnalysis
+.\launcher.community-vm.template.ps1 -Summary
+```
+
+First run will auto-install any missing PowerShell modules (`Az`, `Microsoft.Graph`,
+`MicrosoftGraphPS`, `ImportExcel`, `powershell-yaml`). Subsequent runs only load them.
+
+Same shape for the other engines:
+
+```powershell
+# Apply SecurityInsight tier tags across Defender + Azure
+cd C:\SecurityInsight\launchers\CriticalAssetTagging
+.\launcher.community-vm.template.ps1 -Scope PROD
+
+# Identity-asset inventory + tier assignment
+cd C:\SecurityInsight\launchers\IdentityAssetsCollectDefineTierIngestLog
 .\launcher.community-vm.template.ps1
 ```
 
-**From an Azure Function / Logic App / Hybrid Worker (uses Managed Identity + Key Vault, no credentials on disk):**
+### Step 5 — (Cloud-hosted alternative) run from a Function / Logic App
+
+If you'd rather run unattended without a Windows VM — use the `-azure` launcher instead of
+`-vm`. It reads the SPN secret from your own Key Vault via Managed Identity, so nothing
+sensitive lives on disk. The secret-name convention matches `AutomateITPS`
+(`Modern-ApplicationId-Azure`, `Modern-Secret-Azure`).
 
 ```powershell
 .\launcher.community-azure.template.ps1
 ```
 
-The launcher dot-sources `LauncherConfig.ps1`, sets the globals the engine expects, and calls the matching engine under `scripts/`.
+Required Function / Logic App environment variables:
+- `AUTOMATEIT_TENANT_ID`
+- `AUTOMATEIT_SUBSCRIPTION_ID`
+- `AUTOMATEIT_KEYVAULT`
+
+The Managed Identity needs `Key Vault Secrets User` on the Key Vault.
 
 ## Passing arguments to the engine
 

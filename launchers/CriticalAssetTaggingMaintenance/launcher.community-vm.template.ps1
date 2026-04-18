@@ -1,10 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community launcher for SecurityInsight\CriticalAssetTaggingMaintenance (user VM / box).
+    Community VM launcher for SecurityInsight\CriticalAssetTaggingMaintenance.
 .DESCRIPTION
-    Dot-sources LauncherConfig.ps1 (user copies from LauncherConfig.sample.ps1)
-    to set SPN tenant + client id + secret. No internal-only modules.
+    Runs the CriticalAssetTaggingMaintenance engine on a Windows box in the customer's own tenant.
+    Reads credentials from LauncherConfig.ps1 (.gitignore'd). Supports 4 auth
+    methods (MI, SPN+KV, SPN+cert, SPN+plaintext). See LauncherConfig.sample.ps1.
 #>
 [CmdletBinding()]
 param(
@@ -14,133 +15,201 @@ param(
     [switch]$SuppressErrors,
     [switch]$SuppressWarnings
 )
-
 $ErrorActionPreference = 'Stop'
+
+function Write-Banner {
+    param(
+        [Parameter(Mandatory)][string]$Solution,
+        [Parameter(Mandatory)][string]$Engine,
+        [Parameter(Mandatory)][string]$Flavour,
+        [string]$Description = ''
+    )
+    $line = '=' * 88
+    Write-Host $line -ForegroundColor Cyan
+    Write-Host ("  {0} -- {1}    [{2}]" -f $Solution, $Engine, $Flavour) -ForegroundColor Cyan
+    if ($Description) {
+        foreach ($chunk in ($Description -split '(?<=.{1,86})\s+')) {
+            Write-Host ("  {0}" -f $chunk) -ForegroundColor Gray
+        }
+    }
+    Write-Host '' -ForegroundColor Cyan
+    Write-Host '  Developed by Morten Knudsen -- Microsoft MVP' -ForegroundColor Cyan
+    Write-Host '  Blog:    https://mortenknudsen.net   (aka.ms/morten)' -ForegroundColor Cyan
+    Write-Host '  GitHub:  https://github.com/KnudsenMorten' -ForegroundColor Cyan
+    Write-Host '  Support: GitHub Issues on the public repo, or mok@mortenknudsen.net (internal)' -ForegroundColor Cyan
+    Write-Host $line -ForegroundColor Cyan
+    Write-Host ''
+}
+function Write-Step   { param([string]$m) Write-Host "[STEP]  $m" -ForegroundColor Cyan }
+function Write-Info   { param([string]$m) Write-Host "[INFO]  $m" -ForegroundColor Gray }
+function Write-Ok     { param([string]$m) Write-Host "[OK]    $m" -ForegroundColor Green }
+function Write-Warn2  { param([string]$m) Write-Host "[WARN]  $m" -ForegroundColor Yellow }
+function Write-Err2   { param([string]$m) Write-Host "[ERROR] $m" -ForegroundColor Red }
+
+function Test-LauncherModule {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [switch]$Required,
+        [switch]$AutoInstall
+    )
+    $mod = Get-Module -ListAvailable -Name $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($mod) { Write-Ok "module '$Name' v$($mod.Version) present"; return $true }
+    if ($AutoInstall) {
+        Write-Warn2 "module '$Name' missing -- attempting Install-Module -Scope CurrentUser"
+        try {
+            Install-Module $Name -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+            Write-Ok "installed '$Name'"
+            return $true
+        } catch {
+            if ($Required) { throw "Required module '$Name' could not be installed: $($_.Exception.Message)" }
+            Write-Warn2 "optional module '$Name' install failed: $($_.Exception.Message) (continuing)"
+            return $false
+        }
+    }
+    if ($Required) { throw "Required module '$Name' is not installed. Run: Install-Module $Name -Scope CurrentUser" }
+    Write-Warn2 "optional module '$Name' not installed (some features may be unavailable)"
+    return $false
+}
 
 function Resolve-RepoRoot {
     param([string]$Start = $PSScriptRoot)
     $cur = $Start
     while ($cur) {
         if (Test-Path (Join-Path $cur 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1')) { return $cur }
+        if (Test-Path (Join-Path $cur 'scripts') -and (Test-Path (Join-Path $cur 'launchers'))) { return $cur }
         $parent = Split-Path -Parent $cur
         if (-not $parent -or $parent -eq $cur) { break }
         $cur = $parent
     }
-    throw "Launcher: cannot locate solution repo root walking up from '$Start'."
+    throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected to find either FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a scripts/+launchers/ pair (published community repo)." -f $Start)
 }
-if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
 
-if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
-if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {
-    throw "Community launcher: $LauncherConfigPath not found. Copy LauncherConfig.sample.ps1 to LauncherConfig.ps1 and fill in SPN values."
+Write-Banner -Solution 'SecurityInsight' -Engine 'CriticalAssetTaggingMaintenance' -Flavour 'community-vm' -Description 'CriticalAssetTaggingMaintenance -- v2 ported engine under SecurityInsight.'
+
+try {
+    Write-Step "Resolving repo root"
+    if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
+    Write-Ok "repo root: $InstallPath"
+} catch {
+    Write-Err2 $_.Exception.Message
+    throw
 }
-. $LauncherConfigPath
 
+try {
+    Write-Step "Loading LauncherConfig.ps1"
+    if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
+    if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {
+        throw "LauncherConfig.ps1 not found at $LauncherConfigPath. Copy LauncherConfig.sample.ps1 to LauncherConfig.ps1 and fill in the values for whichever auth method you want to use."
+    }
+    . $LauncherConfigPath
+    Write-Ok "LauncherConfig loaded"
+} catch {
+    Write-Err2 "Failed to load LauncherConfig: $($_.Exception.Message)"
+    throw
+}
 
-# ================================================================================
-#  AUTHENTICATION  -- community launcher resolves the credential in this priority:
-#     1. Managed Identity              ($global:UseManagedIdentity = $true)
-#     2. SPN + Key Vault-stored secret ($global:SpnKeyVaultName + $global:SpnSecretName)
-#     3. SPN + certificate thumbprint  ($global:SpnCertificateThumbprint)
-#     4. SPN + plaintext secret        ($global:SpnClientSecret)  [TESTING ONLY]
-#
-#  Methods 1-3 are production-safe. Method 4 is kept for local labs / initial
-#  validation only -- see the big warning in LauncherConfig.sample.ps1.
-# ================================================================================
+Write-Step "Resolving authentication"
 if (-not $global:SpnTenantId -or [string]::IsNullOrWhiteSpace([string]$global:SpnTenantId)) {
     throw "Launcher: `$global:SpnTenantId is required (set it in LauncherConfig.ps1)."
 }
 
-# Helper: minimal Az + Graph module probe without forcing heavy imports.
-$haveAz = (Get-Module -ListAvailable -Name 'Az.Accounts')
-if (-not $haveAz) { throw "Launcher: Az.Accounts module not installed. Run 'Install-Module Az -Scope CurrentUser'." }
-Import-Module Az.Accounts -ErrorAction Stop -WarningAction SilentlyContinue
+try {
+    [void](Test-LauncherModule -Name 'Az.Accounts' -Required -AutoInstall)
+    Import-Module Az.Accounts -ErrorAction Stop -WarningAction SilentlyContinue
+} catch {
+    Write-Err2 "Failed to load Az.Accounts: $($_.Exception.Message)"
+    throw
+}
 
-$haveKv = (Get-Module -ListAvailable -Name 'Az.KeyVault')
-$haveMg = (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication')
+$haveKv = Test-LauncherModule -Name 'Az.KeyVault' -AutoInstall
+$haveMg = Test-LauncherModule -Name 'Microsoft.Graph.Authentication' -AutoInstall
 
 $authMethodUsed = $null
-
-if ([bool]$global:UseManagedIdentity) {
-    Write-Host "[LAUNCHER] Auth method: Managed Identity"
-    Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
-    if ($haveMg) {
-        # Graph via MI requires the MI to have the Graph app permissions directly.
-        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
-        Connect-MgGraph -Identity -NoWelcome -WarningAction SilentlyContinue | Out-Null
+try {
+    if ([bool]$global:UseManagedIdentity) {
+        Write-Step "Auth method: Managed Identity"
+        Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
+        if ($haveMg) {
+            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+            Connect-MgGraph -Identity -NoWelcome -WarningAction SilentlyContinue | Out-Null
+        }
+        $authMethodUsed = 'ManagedIdentity'
     }
-    $authMethodUsed = 'ManagedIdentity'
-}
-elseif ($global:SpnKeyVaultName -and $global:SpnSecretName) {
-    Write-Host ("[LAUNCHER] Auth method: SPN + Key Vault  (kv='{0}', secret='{1}')" -f $global:SpnKeyVaultName, $global:SpnSecretName)
-    if (-not $haveKv) { throw "Launcher: Az.KeyVault module not installed for Key Vault auth. Run 'Install-Module Az.KeyVault -Scope CurrentUser'." }
-    if (-not $global:SpnClientId) { throw "Launcher: `$global:SpnClientId is required for SPN + KV auth." }
-    Import-Module Az.KeyVault -ErrorAction Stop -WarningAction SilentlyContinue
-    # 1) MI session to read the secret.
-    Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
-    $secretSecure = (Get-AzKeyVaultSecret -VaultName $global:SpnKeyVaultName -Name $global:SpnSecretName -ErrorAction Stop).SecretValue
-    if (-not $secretSecure) { throw "Launcher: Key Vault returned no value for '$($global:SpnSecretName)' in '$($global:SpnKeyVaultName)'." }
-    # 2) Reconnect as the SPN with the KV-stored secret.
-    Disconnect-AzAccount -WarningAction SilentlyContinue | Out-Null
-    $cred = [pscredential]::new($global:SpnClientId, $secretSecure)
-    Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $cred -WarningAction SilentlyContinue | Out-Null
-    # 3) Expose plaintext to engines that still call Connect-MicrosoftGraphPS themselves.
-    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secretSecure)
-    try   { $global:SpnClientSecret = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) }
-    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
-    if ($haveMg) {
-        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
-        $credForGraph = [pscredential]::new($global:SpnClientId, (ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force))
-        Connect-MgGraph -TenantId $global:SpnTenantId -ClientSecretCredential $credForGraph -NoWelcome -WarningAction SilentlyContinue | Out-Null
+    elseif ($global:SpnKeyVaultName -and $global:SpnSecretName) {
+        Write-Step ("Auth method: SPN + Key Vault  (kv='{0}', secret='{1}')" -f $global:SpnKeyVaultName, $global:SpnSecretName)
+        if (-not $haveKv)             { throw "Az.KeyVault is required for Key Vault auth." }
+        if (-not $global:SpnClientId) { throw "`$global:SpnClientId is required for SPN + Key Vault auth." }
+        Import-Module Az.KeyVault -ErrorAction Stop -WarningAction SilentlyContinue
+        Connect-AzAccount -Identity -WarningAction SilentlyContinue | Out-Null
+        $secretSecure = (Get-AzKeyVaultSecret -VaultName $global:SpnKeyVaultName -Name $global:SpnSecretName -ErrorAction Stop).SecretValue
+        if (-not $secretSecure) { throw "Key Vault returned no value for secret '$($global:SpnSecretName)' in '$($global:SpnKeyVaultName)'." }
+        Disconnect-AzAccount -WarningAction SilentlyContinue | Out-Null
+        $cred = [pscredential]::new($global:SpnClientId, $secretSecure)
+        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $cred -WarningAction SilentlyContinue | Out-Null
+        $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secretSecure)
+        try   { $global:SpnClientSecret = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        if ($haveMg) {
+            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+            $credForGraph = [pscredential]::new($global:SpnClientId, (ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force))
+            Connect-MgGraph -TenantId $global:SpnTenantId -ClientSecretCredential $credForGraph -NoWelcome -WarningAction SilentlyContinue | Out-Null
+        }
+        $authMethodUsed = 'SPN-KeyVault'
     }
-    $authMethodUsed = 'SPN-KeyVault'
-}
-elseif ($global:SpnCertificateThumbprint) {
-    Write-Host ("[LAUNCHER] Auth method: SPN + certificate  (thumbprint='{0}')" -f $global:SpnCertificateThumbprint)
-    if (-not $global:SpnClientId) { throw "Launcher: `$global:SpnClientId is required for SPN + certificate auth." }
-    Connect-AzAccount -ServicePrincipal `
-        -Tenant $global:SpnTenantId `
-        -ApplicationId $global:SpnClientId `
-        -CertificateThumbprint $global:SpnCertificateThumbprint `
-        -WarningAction SilentlyContinue | Out-Null
-    if ($haveMg) {
-        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
-        Connect-MgGraph -TenantId $global:SpnTenantId `
-                         -ClientId  $global:SpnClientId `
-                         -CertificateThumbprint $global:SpnCertificateThumbprint `
-                         -NoWelcome -WarningAction SilentlyContinue | Out-Null
+    elseif ($global:SpnCertificateThumbprint) {
+        Write-Step ("Auth method: SPN + certificate (thumbprint='{0}')" -f $global:SpnCertificateThumbprint)
+        if (-not $global:SpnClientId) { throw "`$global:SpnClientId is required for SPN + certificate auth." }
+        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId `
+            -ApplicationId $global:SpnClientId -CertificateThumbprint $global:SpnCertificateThumbprint `
+            -WarningAction SilentlyContinue | Out-Null
+        if ($haveMg) {
+            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+            Connect-MgGraph -TenantId $global:SpnTenantId -ClientId $global:SpnClientId `
+                -CertificateThumbprint $global:SpnCertificateThumbprint -NoWelcome -WarningAction SilentlyContinue | Out-Null
+        }
+        $authMethodUsed = 'SPN-Certificate'
     }
-    $authMethodUsed = 'SPN-Certificate'
-}
-elseif ($global:SpnClientId -and $global:SpnClientSecret) {
-    Write-Host "[LAUNCHER] Auth method: SPN + plaintext secret  [TESTING ONLY]" -ForegroundColor Yellow
-    Write-Warning "Plaintext SPN secret in LauncherConfig.ps1 is fine for labs / initial validation but NOT recommended for production. Switch to Managed Identity, SPN+KeyVault, or SPN+certificate (see LauncherConfig.sample.ps1)."
-    $secretSecure = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
-    $cred = [pscredential]::new($global:SpnClientId, $secretSecure)
-    Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $cred -WarningAction SilentlyContinue | Out-Null
-    $authMethodUsed = 'SPN-PlaintextSecret'
-    # Engines that need Graph will connect themselves using $global:SpnClientSecret.
-}
-else {
-    throw @"
-Launcher: no authentication method configured in LauncherConfig.ps1.
-Pick one and populate the corresponding variables (see LauncherConfig.sample.ps1):
-  Method 1: `$global:UseManagedIdentity = `$true
-  Method 2: `$global:SpnKeyVaultName + `$global:SpnSecretName (+ SpnClientId)
-  Method 3: `$global:SpnCertificateThumbprint (+ SpnClientId)
-  Method 4: `$global:SpnClientSecret (+ SpnClientId)   [testing only]
+    elseif ($global:SpnClientId -and $global:SpnClientSecret) {
+        Write-Step "Auth method: SPN + plaintext secret  [TESTING ONLY]"
+        Write-Warn2 "Plaintext SPN secret in LauncherConfig.ps1 is acceptable for labs but NOT recommended for production. Switch to Managed Identity, SPN + Key Vault, or SPN + certificate when you can (see LauncherConfig.sample.ps1)."
+        $secretSecure = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
+        $cred = [pscredential]::new($global:SpnClientId, $secretSecure)
+        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $cred -WarningAction SilentlyContinue | Out-Null
+        $authMethodUsed = 'SPN-PlaintextSecret'
+    }
+    else {
+        throw @"
+No authentication method configured in LauncherConfig.ps1.
+Populate ONE of (see LauncherConfig.sample.ps1 for copy-pasteable blocks):
+  1. `$global:UseManagedIdentity = `$true  (Managed Identity)
+  2. `$global:SpnKeyVaultName + `$global:SpnSecretName + SpnClientId  (SPN + KV secret)
+  3. `$global:SpnCertificateThumbprint + SpnClientId                  (SPN + cert)
+  4. `$global:SpnClientSecret + SpnClientId                           (SPN + plaintext, testing only)
 "@
+    }
+} catch {
+    Write-Err2 "Authentication failed: $($_.Exception.Message)"
+    throw
 }
 
-Write-Host ("[LAUNCHER] Auth established ({0}). Invoking engine..." -f $authMethodUsed)
+Write-Ok ("Authentication established ({0})" -f $authMethodUsed)
 
-
+Write-Step "Setting engine globals"
 $global:AutomationFramework = $false
 $global:SettingsPath        = Join-Path $InstallPath 'SOLUTIONS\SecurityInsight\DATA'
 $global:WhatIfMode          = [bool]$WhatIfMode
 $global:SuppressErrors      = [bool]$SuppressErrors
 $global:SuppressWarnings    = [bool]$SuppressWarnings
 
-$engine = Join-Path $InstallPath 'SOLUTIONS\SecurityInsight\SCRIPTS\CriticalAssetTaggingMaintenance.ps1'
-if (-not (Test-Path -LiteralPath $engine)) { throw "Launcher: engine script not found at $engine." }
-& $engine
+try {
+    Write-Step "Invoking engine"
+    $engine = Join-Path $InstallPath 'SOLUTIONS\SecurityInsight\SCRIPTS\CriticalAssetTaggingMaintenance.ps1'
+    if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
+    Write-Info "engine: $engine"
+    & $engine
+    Write-Ok "Engine completed successfully"
+} catch {
+    Write-Err2 "Engine failed: $($_.Exception.Message)"
+    Write-Err2 $_.ScriptStackTrace
+    throw
+}

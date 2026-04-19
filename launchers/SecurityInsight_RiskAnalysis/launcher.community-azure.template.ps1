@@ -218,15 +218,9 @@ $global:SuppressErrors   = [bool]$SuppressErrors
 $global:SuppressWarnings = [bool]$SuppressWarnings
 
 # ----- Resolve runtime values: CLI bound > in-script Override > Default -----
-function Resolve-Switch {
-    param([string]$Name, $OverrideValue, $DefaultValue)
-    if ($PSBoundParameters['__caller_bound__'].ContainsKey($Name)) {
-        return [bool]$PSBoundParameters['__caller_bound__'][$Name]
-    }
-    if ($null -ne $OverrideValue) { return [bool]$OverrideValue }
-    return [bool]$DefaultValue
-}
-$PSBoundParameters['__caller_bound__'] = $PSBoundParameters
+# Inline (v1 pattern). See SecurityInsight_RiskAnalysis community-vm v2.1.27.
+$cliBound = @{}
+foreach ($k in $PSBoundParameters.Keys) { $cliBound[$k] = $PSBoundParameters[$k] }
 
 function Resolve-RunMode {
     param([hashtable]$Bound, [string]$DefaultMode, $SummaryOverride, $DetailedOverride, [bool]$AFFlag)
@@ -252,7 +246,7 @@ $global:AutomationFramework = $AutomationFramework_Default
 $global:OverwriteXlsx       = [bool]$OverwriteXlsx_Default
 
 $mode = Resolve-RunMode `
-    -Bound $PSBoundParameters `
+    -Bound $cliBound `
     -DefaultMode $RunMode_Default `
     -SummaryOverride $Summary_Override `
     -DetailedOverride $Detailed_Override `
@@ -260,21 +254,36 @@ $mode = Resolve-RunMode `
 $global:Summary  = [bool]$mode.Summary
 $global:Detailed = [bool]$mode.Detailed
 
-$global:BuildSummaryByAI = Resolve-Switch -Name 'BuildSummaryByAI' -OverrideValue $null                -DefaultValue $BuildSummaryByAI_Default
-$global:AutoBucketCount  = Resolve-Switch -Name 'AutoBucketCount'  -OverrideValue $null                -DefaultValue $AutoBucketCount_Default
-$global:AutoBucketCache  = Resolve-Switch -Name 'AutoBucketCache'  -OverrideValue $null                -DefaultValue $AutoBucketCache_Default
-$global:ResetCache       = Resolve-Switch -Name 'ResetCacheSwitch' -OverrideValue $ResetCache_Override -DefaultValue $ResetCache_Default
-$global:ShowConfig       = Resolve-Switch -Name 'ShowConfig'       -OverrideValue $null                -DefaultValue $ShowConfig_Default
-$global:DebugQueryHash   = Resolve-Switch -Name 'DebugQueryHash'   -OverrideValue $null                -DefaultValue $DebugQueryHash_Default
+$global:BuildSummaryByAI = $BuildSummaryByAI_Default
+if ($cliBound.ContainsKey('BuildSummaryByAI')) { $global:BuildSummaryByAI = [bool]$cliBound['BuildSummaryByAI'] }
 
-if ($PSBoundParameters.ContainsKey('AutoBucketMax')) {
-    $global:AutoBucketMax = [int]$AutoBucketMax
+$global:AutoBucketCount = $AutoBucketCount_Default
+if ($cliBound.ContainsKey('AutoBucketCount')) { $global:AutoBucketCount = [bool]$cliBound['AutoBucketCount'] }
+
+$global:AutoBucketCache = $AutoBucketCache_Default
+if ($cliBound.ContainsKey('AutoBucketCache')) { $global:AutoBucketCache = [bool]$cliBound['AutoBucketCache'] }
+
+$global:ShowConfig = $ShowConfig_Default
+if ($cliBound.ContainsKey('ShowConfig')) { $global:ShowConfig = [bool]$cliBound['ShowConfig'] }
+
+$global:DebugQueryHash = $DebugQueryHash_Default
+if ($cliBound.ContainsKey('DebugQueryHash')) { $global:DebugQueryHash = [bool]$cliBound['DebugQueryHash'] }
+
+$global:ResetCache = $ResetCache_Default
+if ($cliBound.ContainsKey('ResetCacheSwitch')) {
+    $global:ResetCache = [bool]$cliBound['ResetCacheSwitch']
+} elseif ($null -ne $ResetCache_Override) {
+    $global:ResetCache = [bool]$ResetCache_Override
+}
+
+if ($cliBound.ContainsKey('AutoBucketMax')) {
+    $global:AutoBucketMax = [int]$cliBound['AutoBucketMax']
 } else {
     $global:AutoBucketMax = [int]$AutoBucketMax_Default
 }
 
-if ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
-    $global:ReportTemplate = $ReportTemplate
+if ($cliBound.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace([string]$cliBound['ReportTemplate'])) {
+    $global:ReportTemplate = [string]$cliBound['ReportTemplate']
 } elseif (-not [string]::IsNullOrWhiteSpace($ReportTemplate_Default)) {
     $global:ReportTemplate = $ReportTemplate_Default
 } elseif ($global:Detailed -and -not $global:Summary) {
@@ -282,8 +291,6 @@ if ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullO
 } else {
     $global:ReportTemplate = $ReportTemplate_Default_Summary
 }
-
-$PSBoundParameters.Remove('__caller_bound__') | Out-Null
 
 Write-Info ("[LAUNCHER] AutomationFramework={0} Summary={1} Detailed={2} BuildSummaryByAI={3}" -f `
     $global:AutomationFramework, $global:Summary, $global:Detailed, $global:BuildSummaryByAI)

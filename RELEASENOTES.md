@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.23
+## v2.1.24
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI Onboarding): mode-aware cheat-sheet with correct destination + fix quoting (e8382cf)
+- feat(SI RiskAnalysis community-vm): layered config (defaults + customer overrides) (947fa3d)
 
 ---
 

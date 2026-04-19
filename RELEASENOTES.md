@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.43
+## v2.1.44
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI RiskAnalysis): two hardcoded DCRs (summary + detailed); drop SI_RiskAnalysis_DcrName global (2d2db13)
+- docs(SI RiskAnalysis): clarify ExportDestination auto-detects UNC vs Azure from prefix (8f3a0b7)
 
 ---
 

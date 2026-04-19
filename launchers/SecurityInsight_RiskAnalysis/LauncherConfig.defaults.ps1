@@ -68,6 +68,32 @@ $global:SI_RiskAnalysis_TableName_Detailed    = 'SI_RiskAnalysis_Detailed'
 
 
 # ============================================================================
+#  EXPORT UPLOAD (Phase 3)
+# ============================================================================
+# Optional. After the Excel + JSON are written, the engine also uploads BOTH
+# files to a UNC share or an Azure Storage container. Set this global to
+# enable; leave $null to skip.
+#
+# Supported formats:
+#   '\\server\share\subpath\'                          -> UNC. Uses the caller's
+#                                                          Windows identity (SPN
+#                                                          auth doesn't help SMB).
+#   'https://<acct>.blob.core.windows.net/<container>/'        -> Az Storage blob.
+#   'https://<acct>.blob.core.windows.net/<container>/<prefix>/'  ditto with prefix.
+#
+# Behaviour:
+#   - If a file with the same name already exists at the destination, it is
+#     RENAMED to <name>.<yyyy-MM-dd_HHmmss>.<ext>.bak (UNC: Move-Item; Azure:
+#     Start-AzStorageBlobCopy) BEFORE the new file is written. So the latest
+#     run's file always sits at the canonical path; older copies are
+#     timestamped backups next to it.
+#   - Auth: UNC needs the caller to be a Windows identity with share write.
+#           Azure needs the SPN to have 'Storage Blob Data Contributor' on
+#           the destination container or its parent storage account.
+$global:ExportDestination = $null
+
+
+# ============================================================================
 #  EMAIL DELIVERY
 # ============================================================================
 # Engine writes the .xlsx either way. SendMail attaches it to an HTML email

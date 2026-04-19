@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.36
+## v2.1.37
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- chore(SI launchers): bring all 40 templates up to v2.1.31 banner standard (a91f5f0)
+- feat(SI Build_Tier launcher): full layered config + OpenAI defaults/sample (be5b63b)
 
 ---
 

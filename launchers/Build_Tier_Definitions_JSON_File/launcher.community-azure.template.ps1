@@ -119,6 +119,21 @@ Write-Step "Resolving repo root"
 Write-Ok "repo root: $InstallPath"
 
 try {
+    # Layered config (community-azure: no per-engine custom; engine knobs
+    # not in defaults come from App Settings env vars downstream).
+    . (Join-Path $PSScriptRoot '..\_lib\Initialize-LauncherConfig.ps1')
+    Initialize-LauncherConfig `
+        -Solution    'SecurityInsight' `
+        -Engine      'Build_Tier_Definitions_JSON_File' `
+        -LauncherDir $PSScriptRoot `
+        -RepoRoot    $InstallPath `
+        -Mode        'community'
+} catch {
+    Write-Err2 "Failed to load layered config: $($_.Exception.Message)"
+    throw
+}
+
+try {
     Write-Step "Checking required modules (Az.Accounts, Az.KeyVault)"
     [void](Test-LauncherModule -Name 'Az.Accounts' -Required -AutoInstall)
     [void](Test-LauncherModule -Name 'Az.KeyVault' -Required -AutoInstall)

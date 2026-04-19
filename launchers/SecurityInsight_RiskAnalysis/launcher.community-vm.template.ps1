@@ -18,11 +18,28 @@
 #>
 [CmdletBinding()]
 param(
+    # Generic launcher knobs
     [string]$InstallPath,
     [string]$LauncherConfigPath,
     [switch]$WhatIfMode,
     [switch]$SuppressErrors,
-    [switch]$SuppressWarnings
+    [switch]$SuppressWarnings,
+
+    # Engine-specific switches (override LauncherConfig.ps1 + engine defaults)
+    [string]$ReportTemplate,
+    [switch]$Summary,
+    [switch]$Detailed,
+    [switch]$BuildSummaryByAI,
+
+    # Adaptive bucketing
+    [switch]$AutoBucketCount,
+    [switch]$AutoBucketCache,
+    [ValidateRange(1,512)][int]$AutoBucketMax,
+    [Alias('ResetCache')][switch]$ResetCacheSwitch,
+
+    # Other engine knobs
+    [switch]$ShowConfig,
+    [switch]$DebugQueryHash
 )
 $ErrorActionPreference = 'Stop'
 
@@ -220,6 +237,31 @@ $global:SettingsPath = if ($settingsResolved) { $settingsResolved } else { $PSSc
 $global:WhatIfMode          = [bool]$WhatIfMode
 $global:SuppressErrors      = [bool]$SuppressErrors
 $global:SuppressWarnings    = [bool]$SuppressWarnings
+
+# ----- CLI switch overrides (CLI > LauncherConfig.ps1 > engine defaults) -----
+# A switch only counts as "set on the CLI" when explicitly bound. Switches
+# default to $false but we don't want to overwrite a config file's $true
+# unless the user actually typed -Switch on the command line.
+if ($PSBoundParameters.ContainsKey('Summary'))          { $global:Summary          = [bool]$Summary }
+if ($PSBoundParameters.ContainsKey('Detailed'))         { $global:Detailed         = [bool]$Detailed }
+if ($PSBoundParameters.ContainsKey('BuildSummaryByAI')) { $global:BuildSummaryByAI = [bool]$BuildSummaryByAI }
+if ($PSBoundParameters.ContainsKey('AutoBucketCount'))  { $global:AutoBucketCount  = [bool]$AutoBucketCount }
+if ($PSBoundParameters.ContainsKey('AutoBucketCache'))  { $global:AutoBucketCache  = [bool]$AutoBucketCache }
+if ($PSBoundParameters.ContainsKey('AutoBucketMax'))    { $global:AutoBucketMax    = [int]$AutoBucketMax }
+if ($PSBoundParameters.ContainsKey('ResetCacheSwitch')) { $global:ResetCache       = [bool]$ResetCacheSwitch }
+if ($PSBoundParameters.ContainsKey('ShowConfig'))       { $global:ShowConfig       = [bool]$ShowConfig }
+if ($PSBoundParameters.ContainsKey('DebugQueryHash'))   { $global:DebugQueryHash   = [bool]$DebugQueryHash }
+
+# ReportTemplate resolution: explicit -ReportTemplate wins. Otherwise if
+# -Summary or -Detailed is on, pick the matching default. Otherwise honour
+# whatever LauncherConfig.ps1 set (or fall through to the engine's own default).
+if ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
+    $global:ReportTemplate = $ReportTemplate
+} elseif ([bool]$global:Summary  -and -not [bool]$global:Detailed) {
+    $global:ReportTemplate = 'RiskAnalysis_Summary_Bucket'
+} elseif ([bool]$global:Detailed -and -not [bool]$global:Summary) {
+    $global:ReportTemplate = 'RiskAnalysis_Detailed_Bucket'
+}
 
 try {
     Write-Step "Invoking engine"

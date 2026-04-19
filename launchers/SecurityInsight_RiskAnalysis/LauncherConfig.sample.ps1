@@ -94,6 +94,11 @@
 # ----- Run-mode --------------------------------------------------------------
 # $global:ReportTemplate = 'RiskAnalysis_Detailed_Bucket'   # or '_Summary_Bucket' (default)
 
+# ----- JSON sibling of the XLSX ----------------------------------------------
+# A .json with the same dataset is written next to the .xlsx by default.
+# Disable if you only want the Excel:
+# $global:WriteJsonOutput = $false
+
 
 # ============================================================================
 #  EVERYTHING ELSE

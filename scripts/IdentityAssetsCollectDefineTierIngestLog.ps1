@@ -1588,13 +1588,24 @@ Write-Step "Loading IdentityInfo from Log Analytics workspace"
 $identityInfoLookup  = @{}
 $isCrossWorkspace    = -not [string]::IsNullOrWhiteSpace($DefenderWorkspaceResourceId)
 
-# Helper: resolve workspace GUID from resource ID
+# Helper: resolve workspace GUID from resource ID.
+# Uses ARM REST directly so we work even when the workspace lives in a
+# different Az subscription than the SPN's current context (typical when the
+# SI ingestion sub differs from the Defender/Sentinel sub). The resource ID
+# already contains the subscription, so we never need to Set-AzContext.
 function Get-WorkspaceGuid ([string]$ResourceId) {
-    if ($ResourceId -notmatch '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/[^/]+/workspaces/([^/]+)') {
+    if ($ResourceId -notmatch '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/[^/]+/workspaces/[^/]+$') {
         throw "Cannot parse workspace resource ID: $ResourceId"
     }
-    $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $Matches[2] -Name $Matches[3] -ErrorAction Stop
-    return [string]$ws.CustomerId
+    $resp = Invoke-AzRestMethod -Method GET -Uri "https://management.azure.com$ResourceId`?api-version=2022-10-01" -ErrorAction Stop
+    if ($resp.StatusCode -ne 200) {
+        throw ("ARM lookup of workspace failed (HTTP {0}): {1}" -f $resp.StatusCode, $resp.Content)
+    }
+    $obj = $resp.Content | ConvertFrom-Json
+    if (-not $obj.properties.customerId) {
+        throw "Workspace ARM response missing properties.customerId for: $ResourceId"
+    }
+    return [string]$obj.properties.customerId
 }
 
 # Resolve the workspace GUID where IdentityInfo lives
@@ -4413,13 +4424,24 @@ Write-Step "Loading IdentityInfo from Log Analytics workspace"
 $identityInfoLookup  = @{}
 $isCrossWorkspace    = -not [string]::IsNullOrWhiteSpace($DefenderWorkspaceResourceId)
 
-# Helper: resolve workspace GUID from resource ID
+# Helper: resolve workspace GUID from resource ID.
+# Uses ARM REST directly so we work even when the workspace lives in a
+# different Az subscription than the SPN's current context (typical when the
+# SI ingestion sub differs from the Defender/Sentinel sub). The resource ID
+# already contains the subscription, so we never need to Set-AzContext.
 function Get-WorkspaceGuid ([string]$ResourceId) {
-    if ($ResourceId -notmatch '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/[^/]+/workspaces/([^/]+)') {
+    if ($ResourceId -notmatch '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/[^/]+/workspaces/[^/]+$') {
         throw "Cannot parse workspace resource ID: $ResourceId"
     }
-    $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $Matches[2] -Name $Matches[3] -ErrorAction Stop
-    return [string]$ws.CustomerId
+    $resp = Invoke-AzRestMethod -Method GET -Uri "https://management.azure.com$ResourceId`?api-version=2022-10-01" -ErrorAction Stop
+    if ($resp.StatusCode -ne 200) {
+        throw ("ARM lookup of workspace failed (HTTP {0}): {1}" -f $resp.StatusCode, $resp.Content)
+    }
+    $obj = $resp.Content | ConvertFrom-Json
+    if (-not $obj.properties.customerId) {
+        throw "Workspace ARM response missing properties.customerId for: $ResourceId"
+    }
+    return [string]$obj.properties.customerId
 }
 
 # Resolve the workspace GUID where IdentityInfo lives
@@ -7238,13 +7260,24 @@ Write-Step "Loading IdentityInfo from Log Analytics workspace"
 $identityInfoLookup  = @{}
 $isCrossWorkspace    = -not [string]::IsNullOrWhiteSpace($DefenderWorkspaceResourceId)
 
-# Helper: resolve workspace GUID from resource ID
+# Helper: resolve workspace GUID from resource ID.
+# Uses ARM REST directly so we work even when the workspace lives in a
+# different Az subscription than the SPN's current context (typical when the
+# SI ingestion sub differs from the Defender/Sentinel sub). The resource ID
+# already contains the subscription, so we never need to Set-AzContext.
 function Get-WorkspaceGuid ([string]$ResourceId) {
-    if ($ResourceId -notmatch '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/[^/]+/workspaces/([^/]+)') {
+    if ($ResourceId -notmatch '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/[^/]+/workspaces/[^/]+$') {
         throw "Cannot parse workspace resource ID: $ResourceId"
     }
-    $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $Matches[2] -Name $Matches[3] -ErrorAction Stop
-    return [string]$ws.CustomerId
+    $resp = Invoke-AzRestMethod -Method GET -Uri "https://management.azure.com$ResourceId`?api-version=2022-10-01" -ErrorAction Stop
+    if ($resp.StatusCode -ne 200) {
+        throw ("ARM lookup of workspace failed (HTTP {0}): {1}" -f $resp.StatusCode, $resp.Content)
+    }
+    $obj = $resp.Content | ConvertFrom-Json
+    if (-not $obj.properties.customerId) {
+        throw "Workspace ARM response missing properties.customerId for: $ResourceId"
+    }
+    return [string]$obj.properties.customerId
 }
 
 # Resolve the workspace GUID where IdentityInfo lives
@@ -10063,13 +10096,24 @@ Write-Step "Loading IdentityInfo from Log Analytics workspace"
 $identityInfoLookup  = @{}
 $isCrossWorkspace    = -not [string]::IsNullOrWhiteSpace($DefenderWorkspaceResourceId)
 
-# Helper: resolve workspace GUID from resource ID
+# Helper: resolve workspace GUID from resource ID.
+# Uses ARM REST directly so we work even when the workspace lives in a
+# different Az subscription than the SPN's current context (typical when the
+# SI ingestion sub differs from the Defender/Sentinel sub). The resource ID
+# already contains the subscription, so we never need to Set-AzContext.
 function Get-WorkspaceGuid ([string]$ResourceId) {
-    if ($ResourceId -notmatch '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/[^/]+/workspaces/([^/]+)') {
+    if ($ResourceId -notmatch '^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/[^/]+/workspaces/[^/]+$') {
         throw "Cannot parse workspace resource ID: $ResourceId"
     }
-    $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $Matches[2] -Name $Matches[3] -ErrorAction Stop
-    return [string]$ws.CustomerId
+    $resp = Invoke-AzRestMethod -Method GET -Uri "https://management.azure.com$ResourceId`?api-version=2022-10-01" -ErrorAction Stop
+    if ($resp.StatusCode -ne 200) {
+        throw ("ARM lookup of workspace failed (HTTP {0}): {1}" -f $resp.StatusCode, $resp.Content)
+    }
+    $obj = $resp.Content | ConvertFrom-Json
+    if (-not $obj.properties.customerId) {
+        throw "Workspace ARM response missing properties.customerId for: $ResourceId"
+    }
+    return [string]$obj.properties.customerId
 }
 
 # Resolve the workspace GUID where IdentityInfo lives

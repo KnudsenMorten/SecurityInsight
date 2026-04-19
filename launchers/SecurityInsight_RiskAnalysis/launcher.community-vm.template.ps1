@@ -179,7 +179,7 @@ try {
 }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'SecurityInsight_RiskAnalysis' -Flavour 'community-vm' -Description 'SecurityInsight_RiskAnalysis -- v2 ported engine under SecurityInsight.' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'SecurityInsight_RiskAnalysis' -Flavour 'community-vm' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message

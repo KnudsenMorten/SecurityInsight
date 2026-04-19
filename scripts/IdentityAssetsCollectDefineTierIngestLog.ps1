@@ -737,6 +737,19 @@ function Write-Warn  ($m) { Write-Host "[WARN] $m" -ForegroundColor Yellow }
 function Write-Err2  ($m) { Write-Host "[ERR]  $m" -ForegroundColor Red   }
 function Write-Sep         { Write-Host ("-" * 80) -ForegroundColor DarkGray }
 
+# Returns $true if a subscription name matches ANY exclude pattern.
+# Patterns are PowerShell wildcards (e.g. '*Azure for Students*').
+# Empty/null pattern list => never excludes.
+function Test-SubscriptionExcluded {
+    param([string]$Name, [string[]]$Patterns)
+    if (-not $Patterns -or $Patterns.Count -eq 0) { return $false }
+    foreach ($pat in $Patterns) {
+        if ([string]::IsNullOrWhiteSpace($pat)) { continue }
+        if ($Name -like $pat) { return $true }
+    }
+    return $false
+}
+
 function Invoke-Graph {
     param([string]$Uri, [string]$Method = "GET")
     # Use Invoke-RestMethod with the Bearer token read from script scope at call time.
@@ -1174,6 +1187,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:SecurityInsight_Defender_WorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SecurityInsight_Identity_SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 } else {
     $TroubleshootingMode  = if ($null -ne $global:TroubleshootingMode)                                                        { [bool]$global:TroubleshootingMode                            } else { $false }
     $CsaAttributeSet      = if (-not [string]::IsNullOrWhiteSpace([string]$global:CsaAttributeSet))                           { [string]$global:CsaAttributeSet                              } else { 'SecurityInsight' }
@@ -1188,6 +1203,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:DefenderWorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 }
 
 #########################################################################################################
@@ -2278,8 +2295,15 @@ try {
     Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $azCred -ErrorAction Stop | Out-Null
     Write-Ok "Az module connected"
 
-    $subscriptions = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
-    Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    $subsAll = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
+    if ($SubscriptionNameExcludePatterns -and $SubscriptionNameExcludePatterns.Count -gt 0) {
+        $excluded = @($subsAll | Where-Object { Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns })
+        $subscriptions = @($subsAll | Where-Object { -not (Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns) })
+        Write-Ok ("Subscriptions found: $($subscriptions.Count) (excluded $($excluded.Count) by SubscriptionNameExcludePatterns: " + (($excluded | ForEach-Object { $_.Name }) -join ', ') + ")")
+    } else {
+        $subscriptions = $subsAll
+        Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    }
 
     if ($TroubleshootingMode) {
         $subscriptions = @($subscriptions | Select-Object -First $TroubleshootingLimit)
@@ -3538,6 +3562,19 @@ function Write-Warn  ($m) { Write-Host "[WARN] $m" -ForegroundColor Yellow }
 function Write-Err2  ($m) { Write-Host "[ERR]  $m" -ForegroundColor Red   }
 function Write-Sep         { Write-Host ("-" * 80) -ForegroundColor DarkGray }
 
+# Returns $true if a subscription name matches ANY exclude pattern.
+# Patterns are PowerShell wildcards (e.g. '*Azure for Students*').
+# Empty/null pattern list => never excludes.
+function Test-SubscriptionExcluded {
+    param([string]$Name, [string[]]$Patterns)
+    if (-not $Patterns -or $Patterns.Count -eq 0) { return $false }
+    foreach ($pat in $Patterns) {
+        if ([string]::IsNullOrWhiteSpace($pat)) { continue }
+        if ($Name -like $pat) { return $true }
+    }
+    return $false
+}
+
 function Invoke-Graph {
     param([string]$Uri, [string]$Method = "GET")
     # Use Invoke-RestMethod with the Bearer token read from script scope at call time.
@@ -3975,6 +4012,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:SecurityInsight_Defender_WorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SecurityInsight_Identity_SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 } else {
     $TroubleshootingMode  = if ($null -ne $global:TroubleshootingMode)                                                        { [bool]$global:TroubleshootingMode                            } else { $false }
     $CsaAttributeSet      = if (-not [string]::IsNullOrWhiteSpace([string]$global:CsaAttributeSet))                           { [string]$global:CsaAttributeSet                              } else { 'SecurityInsight' }
@@ -3989,6 +4028,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:DefenderWorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 }
 
 #########################################################################################################
@@ -5079,8 +5120,15 @@ try {
     Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $azCred -ErrorAction Stop | Out-Null
     Write-Ok "Az module connected"
 
-    $subscriptions = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
-    Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    $subsAll = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
+    if ($SubscriptionNameExcludePatterns -and $SubscriptionNameExcludePatterns.Count -gt 0) {
+        $excluded = @($subsAll | Where-Object { Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns })
+        $subscriptions = @($subsAll | Where-Object { -not (Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns) })
+        Write-Ok ("Subscriptions found: $($subscriptions.Count) (excluded $($excluded.Count) by SubscriptionNameExcludePatterns: " + (($excluded | ForEach-Object { $_.Name }) -join ', ') + ")")
+    } else {
+        $subscriptions = $subsAll
+        Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    }
 
     if ($TroubleshootingMode) {
         $subscriptions = @($subscriptions | Select-Object -First $TroubleshootingLimit)
@@ -6339,6 +6387,19 @@ function Write-Warn  ($m) { Write-Host "[WARN] $m" -ForegroundColor Yellow }
 function Write-Err2  ($m) { Write-Host "[ERR]  $m" -ForegroundColor Red   }
 function Write-Sep         { Write-Host ("-" * 80) -ForegroundColor DarkGray }
 
+# Returns $true if a subscription name matches ANY exclude pattern.
+# Patterns are PowerShell wildcards (e.g. '*Azure for Students*').
+# Empty/null pattern list => never excludes.
+function Test-SubscriptionExcluded {
+    param([string]$Name, [string[]]$Patterns)
+    if (-not $Patterns -or $Patterns.Count -eq 0) { return $false }
+    foreach ($pat in $Patterns) {
+        if ([string]::IsNullOrWhiteSpace($pat)) { continue }
+        if ($Name -like $pat) { return $true }
+    }
+    return $false
+}
+
 function Invoke-Graph {
     param([string]$Uri, [string]$Method = "GET")
     # Use Invoke-RestMethod with the Bearer token read from script scope at call time.
@@ -6776,6 +6837,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:SecurityInsight_Defender_WorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SecurityInsight_Identity_SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 } else {
     $TroubleshootingMode  = if ($null -ne $global:TroubleshootingMode)                                                        { [bool]$global:TroubleshootingMode                            } else { $false }
     $CsaAttributeSet      = if (-not [string]::IsNullOrWhiteSpace([string]$global:CsaAttributeSet))                           { [string]$global:CsaAttributeSet                              } else { 'SecurityInsight' }
@@ -6790,6 +6853,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:DefenderWorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 }
 
 #########################################################################################################
@@ -7880,8 +7945,15 @@ try {
     Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $azCred -ErrorAction Stop | Out-Null
     Write-Ok "Az module connected"
 
-    $subscriptions = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
-    Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    $subsAll = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
+    if ($SubscriptionNameExcludePatterns -and $SubscriptionNameExcludePatterns.Count -gt 0) {
+        $excluded = @($subsAll | Where-Object { Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns })
+        $subscriptions = @($subsAll | Where-Object { -not (Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns) })
+        Write-Ok ("Subscriptions found: $($subscriptions.Count) (excluded $($excluded.Count) by SubscriptionNameExcludePatterns: " + (($excluded | ForEach-Object { $_.Name }) -join ', ') + ")")
+    } else {
+        $subscriptions = $subsAll
+        Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    }
 
     if ($TroubleshootingMode) {
         $subscriptions = @($subscriptions | Select-Object -First $TroubleshootingLimit)
@@ -9140,6 +9212,19 @@ function Write-Warn  ($m) { Write-Host "[WARN] $m" -ForegroundColor Yellow }
 function Write-Err2  ($m) { Write-Host "[ERR]  $m" -ForegroundColor Red   }
 function Write-Sep         { Write-Host ("-" * 80) -ForegroundColor DarkGray }
 
+# Returns $true if a subscription name matches ANY exclude pattern.
+# Patterns are PowerShell wildcards (e.g. '*Azure for Students*').
+# Empty/null pattern list => never excludes.
+function Test-SubscriptionExcluded {
+    param([string]$Name, [string[]]$Patterns)
+    if (-not $Patterns -or $Patterns.Count -eq 0) { return $false }
+    foreach ($pat in $Patterns) {
+        if ([string]::IsNullOrWhiteSpace($pat)) { continue }
+        if ($Name -like $pat) { return $true }
+    }
+    return $false
+}
+
 function Invoke-Graph {
     param([string]$Uri, [string]$Method = "GET")
     # Use Invoke-RestMethod with the Bearer token read from script scope at call time.
@@ -9577,6 +9662,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:SecurityInsight_Defender_WorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SecurityInsight_Identity_SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 } else {
     $TroubleshootingMode  = if ($null -ne $global:TroubleshootingMode)                                                        { [bool]$global:TroubleshootingMode                            } else { $false }
     $CsaAttributeSet      = if (-not [string]::IsNullOrWhiteSpace([string]$global:CsaAttributeSet))                           { [string]$global:CsaAttributeSet                              } else { 'SecurityInsight' }
@@ -9591,6 +9678,8 @@ if ($AutomationFramework) {
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
     # than the identity table workspace. When set, queries use cross-workspace KQL.
     $DefenderWorkspaceResourceId  = [string]$global:DefenderWorkspaceResourceId
+    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+    $SubscriptionNameExcludePatterns = @($global:SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
 }
 
 #########################################################################################################
@@ -10681,8 +10770,15 @@ try {
     Connect-AzAccount -ServicePrincipal -TenantId $TenantId -Credential $azCred -ErrorAction Stop | Out-Null
     Write-Ok "Az module connected"
 
-    $subscriptions = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
-    Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    $subsAll = @(Get-AzSubscription -TenantId $TenantId -ErrorAction Stop | Where-Object { $_.State -eq "Enabled" })
+    if ($SubscriptionNameExcludePatterns -and $SubscriptionNameExcludePatterns.Count -gt 0) {
+        $excluded = @($subsAll | Where-Object { Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns })
+        $subscriptions = @($subsAll | Where-Object { -not (Test-SubscriptionExcluded -Name $_.Name -Patterns $SubscriptionNameExcludePatterns) })
+        Write-Ok ("Subscriptions found: $($subscriptions.Count) (excluded $($excluded.Count) by SubscriptionNameExcludePatterns: " + (($excluded | ForEach-Object { $_.Name }) -join ', ') + ")")
+    } else {
+        $subscriptions = $subsAll
+        Write-Ok "Subscriptions found: $($subscriptions.Count)"
+    }
 
     if ($TroubleshootingMode) {
         $subscriptions = @($subscriptions | Select-Object -First $TroubleshootingLimit)

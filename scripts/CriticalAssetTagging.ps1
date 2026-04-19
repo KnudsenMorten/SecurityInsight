@@ -1,4 +1,17 @@
-﻿Write-host "***********************************************************************************************"
+<#
+.SYNOPSIS
+    CriticalAssetTagging - engine script in the SecurityInsight solution.
+
+.NOTES
+    Solution       : SecurityInsight
+    File           : CriticalAssetTagging.ps1
+    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    GitHub         : https://github.com/KnudsenMorten
+    Support        : For public repos, open a GitHub Issue on that solution's repo.
+
+#>
+Write-host "***********************************************************************************************"
 Write-host "Critical Asset Tagging using YAML-file"
 Write-host ""
 Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
@@ -1225,37 +1238,24 @@ Ensure-Module powershell-yaml
 
 if ($AutomationFramework) {
 
-  $ScriptDirectory = $PSScriptRoot
-  $global:PathScripts = Split-Path -parent $ScriptDirectory
+  # v2 AutomationFramework bootstrap (replaces v1 Connect_Azure.ps1 chain).
+  # Walks up to the AutomateITPS module, then one call to
+  # Initialize-PlatformAutomationFramework does cert-based Connect-AzAccount,
+  # fetches Modern secrets from KV, and populates the v1-contract
+  # $global:HighPriv_* / $global:AzureTenantId names. Zero v1 module imports.
+  $repoRoot = $PSScriptRoot
+  while ($repoRoot -and -not (Test-Path (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'))) {
+      $repoRoot = Split-Path -Parent $repoRoot
+  }
+  if (-not $repoRoot) {
+      throw "AutomationFramework bootstrap: cannot find FUNCTIONS\AutomateITPS\AutomateITPS.psd1 walking up from '$PSScriptRoot'."
+  }
+  $global:PathScripts = $repoRoot
   Write-Output ""
-  Write-Output "Script Directory -> $($global:PathScripts)"
+  Write-Output "Repo root          -> $($global:PathScripts)"
 
-  Write-Step "importing function modules"
-  Tock
-  try {
-    Import-Module "$($global:PathScripts)\FUNCTIONS\2LINKIT-Functions.psm1" -Global -Force -WarningAction SilentlyContinue
-    Import-Module "$($global:PathScripts)\FUNCTIONS\Automation-ConnectDetails.psm1" -Global -Force -WarningAction SilentlyContinue
-    Write-Ok "modules imported"
-  } catch { Write-Err2 "failed to import one or more modules: $($_.Exception.Message)"; throw }
-  Tick "module import"
-
-  Write-Step "loading connect details and defaults"
-  Tock
-  try {
-    ConnectDetails
-    Import-Module "$($global:PathScripts)\FUNCTIONS\Automation-DefaultVariables.psm1" -Global -Force -WarningAction SilentlyContinue
-    Default_Variables
-    Write-Ok "connect details and defaults loaded"
-  } catch { Write-Err2 "failed while loading connect details/defaults: $($_.Exception.Message)"; throw }
-  Tick "connect details + defaults"
-
-  Write-Step "connecting to Azure (helper Connect_Azure.ps1)"
-  Tock
-  try {
-    & "$($global:PathScripts)\FUNCTIONS\Connect_Azure.ps1"
-    Write-Ok "azure connection step done"
-  } catch { Write-Err2 "azure connection failed: $($_.Exception.Message)"; throw }
-
+  Import-Module (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1') -Global -Force -WarningAction SilentlyContinue
+  $null = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets
   $global:SpnTenantId     = $global:AzureTenantId
   $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure
   $global:SpnClientSecret = $global:HighPriv_Modern_Secret_Azure

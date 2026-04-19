@@ -7,6 +7,15 @@
     Runs the Onboarding_IdentityAssets_LogAnalytics engine from an Azure host that has a system-assigned MI.
     MI -> Key Vault -> SPN secret -> SPN login. Requires App Settings:
     PLATFORM_TENANT_ID, PLATFORM_SUBSCRIPTION_ID, PLATFORM_KEYVAULT.
+
+.NOTES
+    Solution       : SecurityInsight
+    File           : launcher.community-azure.template.ps1
+    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    GitHub         : https://github.com/KnudsenMorten
+    Support        : For public repos, open a GitHub Issue on that solution's repo.
+
 #>
 [CmdletBinding()]
 param(
@@ -74,16 +83,20 @@ function Test-LauncherModule {
 function Resolve-RepoRoot {
     param([string]$Start = $PSScriptRoot)
     $cur = $Start
+    $communityMatch = $null
     while ($cur) {
         if (Test-Path (Join-Path $cur 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1')) { return $cur }
-        if (Test-Path (Join-Path $cur 'scripts') -and (Test-Path (Join-Path $cur 'launchers'))) { return $cur }
+        if (-not $communityMatch) {
+            $dirs = Get-ChildItem -LiteralPath $cur -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+            if (($dirs -ccontains 'scripts') -and ($dirs -ccontains 'launchers')) { $communityMatch = $cur }
+        }
         $parent = Split-Path -Parent $cur
         if (-not $parent -or $parent -eq $cur) { break }
         $cur = $parent
     }
-    throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected to find either FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a scripts/+launchers/ pair (published community repo)." -f $Start)
+    if ($communityMatch) { return $communityMatch }
+    throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a lowercase scripts/+launchers/ pair (community repo)." -f $Start)
 }
-
 Write-Banner -Solution 'SecurityInsight' -Engine 'Onboarding_IdentityAssets_LogAnalytics' -Flavour 'community-azure' -Description 'Onboarding_IdentityAssets_LogAnalytics -- v2 ported engine under SecurityInsight.'
 
 try {
@@ -132,6 +145,7 @@ try {
 
 Write-Step "Setting engine globals"
 $global:AutomationFramework = $false
+$engineOwner  = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $settingsOwner = $engineOwner
 $settingsResolved = $null
 foreach ($case in 'DATA','data') {

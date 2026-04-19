@@ -80,7 +80,9 @@ if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:S
   $global:SettingsPath = $PSScriptRoot
 }
 if (-not $global:ReportTemplate -or [string]::IsNullOrWhiteSpace([string]$global:ReportTemplate)) {
-  $global:ReportTemplate = 'RiskAnalysis_Summary'
+  # Default matches a template name actually shipped in the Locked YAML.
+  # Other choice: RiskAnalysis_Detailed_Bucket (full per-row detail).
+  $global:ReportTemplate = 'RiskAnalysis_Summary_Bucket'
 }
 if ($null -eq $global:OverwriteXlsx)          { $global:OverwriteXlsx = $true  }
 if ($null -eq $global:AutomationFramework)   { $global:AutomationFramework = $false }

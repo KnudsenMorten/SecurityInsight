@@ -82,7 +82,70 @@ $global:SpnClientSecret = '<your-client-secret>'
 
 
 # ================================================================================
-#  Optional engine-level settings (apply regardless of auth method)
+#  REPORT SELECTION
 # ================================================================================
-# $global:Scope            = @('PROD')            # or @('TEST')
-# $global:WhatIfMode        = $false               # $true = dry run, no changes
+# The Locked YAML ships two templates -- pick one:
+#   RiskAnalysis_Summary_Bucket    (default; compact summary, faster)
+#   RiskAnalysis_Detailed_Bucket   (full per-row detail, larger Excel, slower)
+$global:ReportTemplate    = 'RiskAnalysis_Summary_Bucket'
+$global:OverwriteXlsx     = $true       # overwrite the previous .xlsx
+$global:ShowConfig        = $false      # $true = dump resolved config and exit
+
+
+# ================================================================================
+#  EMAIL DELIVERY  (only needed if SendMail = $true)
+# ================================================================================
+# Engine writes the Excel either way. SendMail just attaches it to an HTML email
+# (with the AI summary if BuildSummaryByAI = $true) and SMTP-relays it.
+# $global:SendMail            = $false                              # toggle on
+# $global:MailTo              = @('you@yourdomain.com')             # one or more
+# $global:SmtpServer          = '<smtp.yourdomain.com>'
+# $global:SMTPPort            = 587
+# $global:SMTP_UseSSL         = $true
+# $global:Mail_SendAnonymous  = $false                              # $true = no creds
+# $global:SMTPUser            = '<smtp-username-or-from-address>'   # also used as From
+# $global:SMTPPassword        = '<smtp-password>'                   # only if not anonymous
+
+
+# ================================================================================
+#  AI SUMMARY  (Azure OpenAI)  -- only needed if BuildSummaryByAI = $true
+# ================================================================================
+# Engine builds an executive summary of the risk analysis from the rows it
+# generated and writes it as a 'Summary' tab in the Excel + the email body.
+# The OpenAI URL is constructed as:
+#   <endpoint>/openai/deployments/<deployment>/chat/completions?api-version=<apiVersion>
+# $global:BuildSummaryByAI            = $false                       # toggle on
+# $global:OpenAI_endpoint             = 'https://<your-aoai-account>.openai.azure.com'
+# $global:OpenAI_deployment           = 'gpt-4o-mini'                # your model deployment name
+# $global:OpenAI_apiVersion           = '2024-08-01-preview'
+# $global:OpenAI_apiKey               = '<your-azure-openai-key>'
+# $global:OpenAI_MaxTokensPerRequest  = 16384
+
+
+# ================================================================================
+#  ADAPTIVE BUCKETING  (handles Defender's 30k-row query ceiling)
+# ================================================================================
+# Defaults handle most tenants. Only touch if a query is being truncated.
+# $global:UseQueryBucketing     = $false       # auto-on per query if needed
+# $global:DefaultBucketCount    = 2
+# $global:AutoBucketCount       = $false       # adaptive probe (1..AutoBucketMax)
+# $global:AutoBucketMax         = 64
+# $global:AutoBucketCache       = $true        # cache discovered counts to disk
+# $global:ResetCache            = $true        # one-shot purge of the bucket cache
+
+
+# ================================================================================
+#  GRAPH TUNING  (rarely changed)
+# ================================================================================
+# $global:GraphReconnectMaxAgeMinutes = 45
+# $global:GraphQueryMaxRetries        = 4
+
+
+# ================================================================================
+#  RUNTIME FLAGS  (also available on the launcher command line)
+# ================================================================================
+# $global:WhatIfMode    = $false   # $true = dry run, no Excel/mail writes
+# $global:Summary       = $false   # force RiskAnalysis_Summary_Bucket
+# $global:Detailed      = $false   # force RiskAnalysis_Detailed_Bucket
+# $global:DebugQueryHash = $false  # log query hash + cache key per query
+# $global:Scope         = @('PROD')   # or @('TEST')

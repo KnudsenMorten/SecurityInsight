@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.24
+## v2.1.25
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI RiskAnalysis community-vm): layered config (defaults + customer overrides) (947fa3d)
+- feat(SI): layered config across IdentityAssetsCollect (all 4) + RiskAnalysis remaining 3 (5b38d74)
 
 ---
 

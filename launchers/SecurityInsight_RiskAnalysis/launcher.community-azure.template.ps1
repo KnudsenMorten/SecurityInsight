@@ -12,19 +12,64 @@
     Solution       : SecurityInsight
     File           : launcher.community-azure.template.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
-    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    Blog           : https://mortenknudsen.net   (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : For public repos, open a GitHub Issue on that solution's repo.
-
 #>
 [CmdletBinding()]
 param(
+    # Generic launcher knobs
     [string]$InstallPath,
     [switch]$WhatIfMode,
     [switch]$SuppressErrors,
-    [switch]$SuppressWarnings
+    [switch]$SuppressWarnings,
+
+    # Engine-specific switches (override Defaults block + engine defaults)
+    [string]$ReportTemplate,
+    [switch]$Summary,
+    [switch]$Detailed,
+    [switch]$BuildSummaryByAI,
+
+    # Adaptive bucketing
+    [switch]$AutoBucketCount,
+    [switch]$AutoBucketCache,
+    [ValidateRange(1,512)][int]$AutoBucketMax,
+    [Alias('ResetCache')][switch]$ResetCacheSwitch,
+
+    # Other engine knobs
+    [switch]$ShowConfig,
+    [switch]$DebugQueryHash
 )
 $ErrorActionPreference = 'Stop'
+
+# ============================================================================
+#  DEFAULTS (single source of truth) -- edit here to change baseline behaviour
+#  for ALL invocations of this launcher. CLI switches override these per run.
+# ============================================================================
+
+$RunMode_Default = 'Auto'
+
+$Summary_Override   = $null
+$Detailed_Override  = $null
+$ResetCache_Override = $null
+
+$AutomationFramework_Default = $false
+$OverwriteXlsx_Default       = $true
+$BuildSummaryByAI_Default    = $false
+
+$ReportTemplate_Default          = $null
+$ReportTemplate_Default_Summary  = 'RiskAnalysis_Summary_Bucket'
+$ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_Bucket'
+
+$AutoBucketCount_Default = $true
+$AutoBucketCache_Default = $true
+$AutoBucketMax_Default   = 512
+
+$ResetCache_Default      = $false
+$DebugQueryHash_Default  = $false
+$ShowConfig_Default      = $false
+
+# ============================================================================
 
 function Write-Banner {
     param(
@@ -49,11 +94,11 @@ function Write-Banner {
     Write-Host $line -ForegroundColor Cyan
     Write-Host ''
 }
-function Write-Step   { param([string]$m) Write-Host "[STEP]  $m" -ForegroundColor Cyan }
-function Write-Info   { param([string]$m) Write-Host "[INFO]  $m" -ForegroundColor Gray }
-function Write-Ok     { param([string]$m) Write-Host "[OK]    $m" -ForegroundColor Green }
-function Write-Warn2  { param([string]$m) Write-Host "[WARN]  $m" -ForegroundColor Yellow }
-function Write-Err2   { param([string]$m) Write-Host "[ERROR] $m" -ForegroundColor Red }
+function Write-Step  { param([string]$m) Write-Host "[STEP]  $m" -ForegroundColor Cyan }
+function Write-Info  { param([string]$m) Write-Host "[INFO]  $m" -ForegroundColor Gray }
+function Write-Ok    { param([string]$m) Write-Host "[OK]    $m" -ForegroundColor Green }
+function Write-Warn2 { param([string]$m) Write-Host "[WARN]  $m" -ForegroundColor Yellow }
+function Write-Err2  { param([string]$m) Write-Host "[ERROR] $m" -ForegroundColor Red }
 
 function Test-LauncherModule {
     param(
@@ -97,6 +142,7 @@ function Resolve-RepoRoot {
     if ($communityMatch) { return $communityMatch }
     throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a lowercase scripts/+launchers/ pair (community repo)." -f $Start)
 }
+
 Write-Banner -Solution 'SecurityInsight' -Engine 'SecurityInsight_RiskAnalysis' -Flavour 'community-azure' -Description 'SecurityInsight_RiskAnalysis -- v2 ported engine under SecurityInsight.'
 
 try {
@@ -105,6 +151,22 @@ try {
     Write-Ok "repo root: $InstallPath"
 } catch {
     Write-Err2 $_.Exception.Message
+    throw
+}
+
+try {
+    # Layer 1: defaults.ps1 (ours, replaceable). On Azure hosts, customer
+    # overrides for engine knobs come from App Settings (env vars) consumed
+    # by the engine downstream; this file populates everything else.
+    Write-Step "Loading LauncherConfig.defaults.ps1 (baseline)"
+    $defaultsPath = Join-Path $PSScriptRoot 'LauncherConfig.defaults.ps1'
+    if (-not (Test-Path -LiteralPath $defaultsPath)) {
+        throw "LauncherConfig.defaults.ps1 missing at $defaultsPath. This file ships with each release; redeploy the function with the latest SecurityInsight package to restore it."
+    }
+    . $defaultsPath
+    Write-Ok "defaults loaded"
+} catch {
+    Write-Err2 "Failed to load defaults: $($_.Exception.Message)"
     throw
 }
 
@@ -144,31 +206,103 @@ try {
 }
 
 Write-Step "Setting engine globals"
-$global:AutomationFramework = $false
-$engineOwner  = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$engineOwner = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $settingsOwner = $engineOwner
 $settingsResolved = $null
 foreach ($case in 'DATA','data') {
     $candidate = Join-Path $settingsOwner $case
     if (Test-Path -LiteralPath $candidate) { $settingsResolved = $candidate; break }
 }
-$global:SettingsPath = if ($settingsResolved) { $settingsResolved } else { $PSScriptRoot }
-$global:WhatIfMode          = [bool]$WhatIfMode
-$global:SuppressErrors      = [bool]$SuppressErrors
-$global:SuppressWarnings    = [bool]$SuppressWarnings
+$global:SettingsPath     = if ($settingsResolved) { $settingsResolved } else { $PSScriptRoot }
+$global:WhatIfMode       = [bool]$WhatIfMode
+$global:SuppressErrors   = [bool]$SuppressErrors
+$global:SuppressWarnings = [bool]$SuppressWarnings
+
+# ----- Resolve runtime values: CLI bound > in-script Override > Default -----
+function Resolve-Switch {
+    param([string]$Name, $OverrideValue, $DefaultValue)
+    if ($PSBoundParameters['__caller_bound__'].ContainsKey($Name)) {
+        return [bool]$PSBoundParameters['__caller_bound__'][$Name]
+    }
+    if ($null -ne $OverrideValue) { return [bool]$OverrideValue }
+    return [bool]$DefaultValue
+}
+$PSBoundParameters['__caller_bound__'] = $PSBoundParameters
+
+function Resolve-RunMode {
+    param([hashtable]$Bound, [string]$DefaultMode, $SummaryOverride, $DetailedOverride, [bool]$AFFlag)
+    $cliS = $Bound.ContainsKey('Summary')  -and [bool]$Bound['Summary']
+    $cliD = $Bound.ContainsKey('Detailed') -and [bool]$Bound['Detailed']
+    if ($cliS -and $cliD) { throw '-Summary and -Detailed are mutually exclusive.' }
+    if ($cliS) { return @{ Summary=$true;  Detailed=$false } }
+    if ($cliD) { return @{ Summary=$false; Detailed=$true  } }
+    if ($SummaryOverride -eq $true -and $DetailedOverride -eq $true) {
+        throw 'Summary_Override and Detailed_Override cannot both be true.'
+    }
+    if ($DetailedOverride -eq $true) { return @{ Summary=$false; Detailed=$true  } }
+    if ($SummaryOverride  -eq $true) { return @{ Summary=$true;  Detailed=$false } }
+    switch (([string]$DefaultMode).Trim().ToLowerInvariant()) {
+        'detailed' { return @{ Summary=$false; Detailed=$true  } }
+        'summary'  { return @{ Summary=$true;  Detailed=$false } }
+    }
+    if ($AFFlag) { return @{ Summary=$true; Detailed=$false } }
+    return @{ Summary=$false; Detailed=$false }
+}
+
+$global:AutomationFramework = $AutomationFramework_Default
+$global:OverwriteXlsx       = [bool]$OverwriteXlsx_Default
+
+$mode = Resolve-RunMode `
+    -Bound $PSBoundParameters `
+    -DefaultMode $RunMode_Default `
+    -SummaryOverride $Summary_Override `
+    -DetailedOverride $Detailed_Override `
+    -AFFlag $global:AutomationFramework
+$global:Summary  = [bool]$mode.Summary
+$global:Detailed = [bool]$mode.Detailed
+
+$global:BuildSummaryByAI = Resolve-Switch -Name 'BuildSummaryByAI' -OverrideValue $null                -DefaultValue $BuildSummaryByAI_Default
+$global:AutoBucketCount  = Resolve-Switch -Name 'AutoBucketCount'  -OverrideValue $null                -DefaultValue $AutoBucketCount_Default
+$global:AutoBucketCache  = Resolve-Switch -Name 'AutoBucketCache'  -OverrideValue $null                -DefaultValue $AutoBucketCache_Default
+$global:ResetCache       = Resolve-Switch -Name 'ResetCacheSwitch' -OverrideValue $ResetCache_Override -DefaultValue $ResetCache_Default
+$global:ShowConfig       = Resolve-Switch -Name 'ShowConfig'       -OverrideValue $null                -DefaultValue $ShowConfig_Default
+$global:DebugQueryHash   = Resolve-Switch -Name 'DebugQueryHash'   -OverrideValue $null                -DefaultValue $DebugQueryHash_Default
+
+if ($PSBoundParameters.ContainsKey('AutoBucketMax')) {
+    $global:AutoBucketMax = [int]$AutoBucketMax
+} else {
+    $global:AutoBucketMax = [int]$AutoBucketMax_Default
+}
+
+if ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
+    $global:ReportTemplate = $ReportTemplate
+} elseif (-not [string]::IsNullOrWhiteSpace($ReportTemplate_Default)) {
+    $global:ReportTemplate = $ReportTemplate_Default
+} elseif ($global:Detailed -and -not $global:Summary) {
+    $global:ReportTemplate = $ReportTemplate_Default_Detailed
+} else {
+    $global:ReportTemplate = $ReportTemplate_Default_Summary
+}
+
+$PSBoundParameters.Remove('__caller_bound__') | Out-Null
+
+Write-Info ("[LAUNCHER] AutomationFramework={0} Summary={1} Detailed={2} BuildSummaryByAI={3}" -f `
+    $global:AutomationFramework, $global:Summary, $global:Detailed, $global:BuildSummaryByAI)
+Write-Info ("[LAUNCHER] AutoBucketCount={0} AutoBucketCache={1} AutoBucketMax={2} ResetCache={3}" -f `
+    $global:AutoBucketCount, $global:AutoBucketCache, $global:AutoBucketMax, $global:ResetCache)
+Write-Info ("[LAUNCHER] ReportTemplate={0}  ShowConfig={1}  DebugQueryHash={2}" -f `
+    $global:ReportTemplate, $global:ShowConfig, $global:DebugQueryHash)
 
 try {
     Write-Step "Invoking engine"
-    # Resolve engine path portably -- works in the monorepo, in a published
-# community repo, and inside a bundled dependency under dependencies/<dep>/.
-$launcherDir = $PSScriptRoot
-$engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
-$engine = $null
-foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'SecurityInsight_RiskAnalysis.ps1')
-    if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
-}
-if (-not $engine) { throw "Launcher: engine 'SecurityInsight_RiskAnalysis.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
+    $launcherDir = $PSScriptRoot
+    $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
+    $engine = $null
+    foreach ($case in 'SCRIPTS','scripts') {
+        $candidate = Join-Path $engineOwner (Join-Path $case 'SecurityInsight_RiskAnalysis.ps1')
+        if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
+    }
+    if (-not $engine) { throw "Launcher: engine 'SecurityInsight_RiskAnalysis.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

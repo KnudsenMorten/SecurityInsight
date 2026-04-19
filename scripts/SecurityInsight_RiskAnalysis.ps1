@@ -2085,6 +2085,33 @@ if (-not $global:Exposure_Template_ReportsIncluded) {
   throw "ReportTemplate '$($global:ReportTemplate)' has no ReportsIncluded."
 }
 
+#------------------------------------------------------------------------------------------------------------
+# Per-template mail override (optional fields in the template definition)
+#------------------------------------------------------------------------------------------------------------
+# Schema in the YAML (Locked or Custom):
+#   - ReportName: RiskAnalysis_Detailed_Bucket
+#     Mail_To:
+#       - someone@yourdomain.com
+#       - audit@yourdomain.com
+#     Mail_SendMail: true       # optional; when present overrides the global toggle
+#     ...
+#
+# When Mail_To / Mail_SendMail are present on the chosen template, they win over
+# the globals resolved earlier (community $global:MailTo / AF $global:Mail_*_To).
+# Useful when a particular template needs to be routed to different stakeholders.
+$tplProps = @($global:Exposure_Template.PSObject.Properties | ForEach-Object { $_.Name })
+if ('Mail_To' -in $tplProps -and $global:Exposure_Template.Mail_To) {
+    $tplMailTo = @($global:Exposure_Template.Mail_To | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($tplMailTo.Count -gt 0) {
+        $global:Report_To = $tplMailTo
+        Write-Info ("Mail recipients overridden by template '{0}': {1}" -f $global:ReportTemplate, ($global:Report_To -join ', '))
+    }
+}
+if ('Mail_SendMail' -in $tplProps -and $null -ne $global:Exposure_Template.Mail_SendMail) {
+    $global:Report_SendMail = [bool]$global:Exposure_Template.Mail_SendMail
+    Write-Info ("Mail send-flag overridden by template '{0}': SendMail={1}" -f $global:ReportTemplate, $global:Report_SendMail)
+}
+
 # Log resolved report names
 $incNamesForLog = @()
 foreach ($x in $global:Exposure_Template_ReportsIncluded) {

@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.30
+## v2.1.31
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- refactor(SI IdentityAssetsCollect): delete duplicated phases 2-4 (-8151 lines) (ab066c0)
+- feat(SI launchers): version-stamped banner for internal-vm + git-describe fallback (c35b54e)
 
 ---
 

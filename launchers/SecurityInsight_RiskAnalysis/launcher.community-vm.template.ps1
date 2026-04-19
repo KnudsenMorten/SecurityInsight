@@ -84,19 +84,10 @@ $ShowConfig_Default      = $false
 
 # ============================================================================
 
-function Get-PublishedVersion {
-    # Reads VERSION.txt at the resolved repo root. The publish workflow stamps
-    # this file from the git tag (e.g. 'SecurityInsight-v2.1.16') so a customer
-    # can see exactly which release they are running. In the monorepo there is
-    # no VERSION.txt -> returns '(dev)'.
-    param([string]$RepoRoot)
-    if (-not $RepoRoot) { return '(dev)' }
-    $verFile = Join-Path $RepoRoot 'VERSION.txt'
-    if (-not (Test-Path -LiteralPath $verFile)) { return '(dev)' }
-    $raw = (Get-Content -Raw -LiteralPath $verFile -ErrorAction SilentlyContinue)
-    if (-not $raw) { return '(dev)' }
-    return $raw.Trim()
-}
+# Get-PublishedVersion: shared helper in _lib/. Dot-sourced before the banner
+# so the version shows on the very first line. Falls back from VERSION.txt
+# (community installs) to `git describe` (monorepo) to '(dev)' (neither).
+. (Join-Path $PSScriptRoot '..\_lib\Get-PublishedVersion.ps1')
 
 function Write-Banner {
     param(

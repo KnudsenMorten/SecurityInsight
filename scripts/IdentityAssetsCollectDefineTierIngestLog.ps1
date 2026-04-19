@@ -3917,6 +3917,14 @@ function Join-Array ([object]$Value) {
     return [string]$Value
 }
 
+#########################################################################################################
+# QUICK-EXIT GUARD (v2.1.29) -- everything below this line is DUPLICATED phase 2/3/4 code that re-runs
+# the entire collection+ingest pipeline 3 more times for no functional benefit. Confirmed via diff that
+# phases 2-4 are byte-identical copies of phase 1. Returning here cuts a single-launcher invocation
+# from 4x to 1x. Structural cleanup (delete phases 2-4) lands in a follow-up commit.
+#########################################################################################################
+return
+
 
 ########################################################################################################
 # # GLOBAL-ONLY CONFIG - PHASE 1: execution-control globals (available before AF module load)

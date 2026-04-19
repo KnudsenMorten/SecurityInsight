@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.38
+## v2.1.39
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI RiskAnalysis): per-template Mail_To/Mail_SendMail YAML override + sample doc (5e45121)
+- refactor(SI tier-defs): write to + read from DATA\, drop the v1 SCRIPTS\Output\ subfolder (1caf43c)
 
 ---
 

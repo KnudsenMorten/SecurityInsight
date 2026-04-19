@@ -26,16 +26,31 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+function Get-PublishedVersion {
+    # Reads VERSION.txt at the resolved repo root. The publish workflow stamps
+    # this file from the git tag (e.g. 'SecurityInsight-v2.1.16') so a customer
+    # can see exactly which release they are running. In the monorepo there is
+    # no VERSION.txt -> returns '(dev)'.
+    param([string]$RepoRoot)
+    if (-not $RepoRoot) { return '(dev)' }
+    $verFile = Join-Path $RepoRoot 'VERSION.txt'
+    if (-not (Test-Path -LiteralPath $verFile)) { return '(dev)' }
+    $raw = (Get-Content -Raw -LiteralPath $verFile -ErrorAction SilentlyContinue)
+    if (-not $raw) { return '(dev)' }
+    return $raw.Trim()
+}
+
 function Write-Banner {
     param(
         [Parameter(Mandatory)][string]$Solution,
         [Parameter(Mandatory)][string]$Engine,
         [Parameter(Mandatory)][string]$Flavour,
-        [string]$Description = ''
+        [string]$Description = '',
+        [string]$Version = '(dev)'
     )
     $line = '=' * 88
     Write-Host $line -ForegroundColor Cyan
-    Write-Host ("  {0} -- {1}    [{2}]" -f $Solution, $Engine, $Flavour) -ForegroundColor Cyan
+    Write-Host ("  {0} -- {1}    [{2}]   {3}" -f $Solution, $Engine, $Flavour, $Version) -ForegroundColor Cyan
     if ($Description) {
         foreach ($chunk in ($Description -split '(?<=.{1,86})\s+')) {
             Write-Host ("  {0}" -f $chunk) -ForegroundColor Gray
@@ -97,16 +112,22 @@ function Resolve-RepoRoot {
     if ($communityMatch) { return $communityMatch }
     throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a lowercase scripts/+launchers/ pair (community repo)." -f $Start)
 }
-Write-Banner -Solution 'SecurityInsight' -Engine 'IdentityAssetsCollectDefineTierIngestLog' -Flavour 'community-vm' -Description 'IdentityAssetsCollectDefineTierIngestLog -- v2 ported engine under SecurityInsight.'
-
+# Resolve repo root + version BEFORE the banner so the banner can show the version.
 try {
-    Write-Step "Resolving repo root"
     if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
-    Write-Ok "repo root: $InstallPath"
 } catch {
-    Write-Err2 $_.Exception.Message
-    throw
+    $resolveError = $_
 }
+$versionStamp = Get-PublishedVersion -RepoRoot $InstallPath
+
+Write-Banner -Solution 'SecurityInsight' -Engine 'IdentityAssetsCollectDefineTierIngestLog' -Flavour 'community-vm' -Description 'IdentityAssetsCollectDefineTierIngestLog -- v2 ported engine under SecurityInsight.' -Version $versionStamp
+
+if ($resolveError) {
+    Write-Err2 $resolveError.Exception.Message
+    throw $resolveError
+}
+Write-Step "Resolving repo root"
+Write-Ok "repo root: $InstallPath"
 
 try {
     Write-Step "Loading LauncherConfig.ps1"

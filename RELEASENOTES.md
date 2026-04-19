@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.11
+## v2.1.12
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI): default ReportTemplate matches YAML + sample.ps1 documents all knobs (c112946)
+- feat(SI launcher): add -Summary/-Detailed/-BuildSummaryByAI/-AutoBucket* CLI switches (af55489)
 
 ---
 

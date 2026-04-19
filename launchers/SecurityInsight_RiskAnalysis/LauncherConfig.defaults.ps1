@@ -52,11 +52,13 @@ $global:WriteJsonOutput = $true
 # AzLogDcrIngestPS module auto-creates the table + DCR on first ingest.
 $global:SendToLogAnalytics                    = $false
 
-# DCR is RiskAnalysis-specific (separate from IAC's dcr-si-identity-assets).
+# Two DCRs (one per table) -- HARDCODED in the engine ('dcr-si-risk-analysis-summary'
+# + 'dcr-si-risk-analysis-detailed'); customer doesn't pick the names. The
+# customer-tunable bit is only the resource group that holds them.
+#
 # DCE + Workspace can be shared with IAC; the engine falls back to the IAC
 # short names ($global:DceIngestionUri / WorkspaceResourceId / DcrResourceGroup
 # / DceName) if the SI_RiskAnalysis_* per-engine globals below are not set.
-$global:SI_RiskAnalysis_DcrName               = $null     # required when SendToLogAnalytics=$true (e.g. 'dcr-si-risk-analysis')
 $global:SI_RiskAnalysis_DcrResourceGroup      = $null     # falls back to $global:DcrResourceGroup
 $global:SI_RiskAnalysis_DceName               = $null     # falls back to $global:DceName
 $global:SI_RiskAnalysis_DceIngestionUri       = $null     # falls back to $global:DceIngestionUri

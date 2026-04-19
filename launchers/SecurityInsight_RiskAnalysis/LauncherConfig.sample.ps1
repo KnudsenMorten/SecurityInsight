@@ -106,14 +106,18 @@
 # Requires the AzLogDcrIngestPS module installed (Install-Module AzLogDcrIngestPS).
 # Table + DCR are auto-created on first ingest by the module.
 #
+# Two DCRs (one per table) are HARDCODED in the engine:
+#   dcr-si-risk-analysis-summary   ->  SI_RiskAnalysis_Summary_CL
+#   dcr-si-risk-analysis-detailed  ->  SI_RiskAnalysis_Detailed_CL
+# Customer never picks DCR names -- only the resource group that holds them.
+#
 # $global:SendToLogAnalytics              = $true
-# $global:SI_RiskAnalysis_DcrName         = 'dcr-si-risk-analysis'
 #
 # Optional -- only set if RiskAnalysis uses a different DCE / workspace / RG
 # than the IAC engine. Otherwise the engine reuses the IAC short names
 # ($global:DceIngestionUri / WorkspaceResourceId / DcrResourceGroup / DceName)
 # already set for IAC.
-# $global:SI_RiskAnalysis_DcrResourceGroup    = '<rg-holding-the-dcr>'
+# $global:SI_RiskAnalysis_DcrResourceGroup    = '<rg-holding-the-dcrs>'
 # $global:SI_RiskAnalysis_DceName             = '<dce-name>'
 # $global:SI_RiskAnalysis_DceIngestionUri     = 'https://...ingest.monitor.azure.com'
 # $global:SI_RiskAnalysis_WorkspaceResourceId = '/subscriptions/.../workspaces/<ws>'

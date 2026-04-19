@@ -118,6 +118,21 @@
 # $global:SI_RiskAnalysis_DceIngestionUri     = 'https://...ingest.monitor.azure.com'
 # $global:SI_RiskAnalysis_WorkspaceResourceId = '/subscriptions/.../workspaces/<ws>'
 
+# ----- Export upload (Phase 3) -----------------------------------------------
+# Uploads BOTH the .xlsx and the .json to a destination after they are written
+# locally. Existing files at the destination are RENAMED to
+# <name>.<yyyy-MM-dd_HHmmss>.<ext>.bak before the new file is written, so the
+# canonical path always holds the latest run.
+#
+# Pick ONE format:
+#
+# UNC share (caller's Windows identity needs share write):
+# $global:ExportDestination = '\\fileserver\reports\SecurityInsight\'
+#
+# Azure Storage blob (SPN needs 'Storage Blob Data Contributor' on the container):
+# $global:ExportDestination = 'https://<storacct>.blob.core.windows.net/<container>/'
+# $global:ExportDestination = 'https://<storacct>.blob.core.windows.net/<container>/<prefix>/'
+
 
 # ============================================================================
 #  EVERYTHING ELSE

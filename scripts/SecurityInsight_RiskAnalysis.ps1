@@ -3005,10 +3005,16 @@ if ([bool]$global:WriteJsonOutput) {
 # Default OFF. Set $global:SendToLogAnalytics = $true to enable.
 #
 # DCR is per-RiskAnalysis (separate from the IAC DCR -- different schema, own
-# lifecycle). DCE + Workspace can be shared with IAC by setting only
-# $global:SI_RiskAnalysis_DcrName + DcrResourceGroup; the DCE / WorkspaceResourceId
+# lifecycle). DCE + Workspace can be shared with IAC; the DCE / WorkspaceResourceId
 # globals fall back to the IAC short names if not explicitly set.
+#
+# Two DCRs (one per table) are HARDCODED below by name; only the DcrResourceGroup
+# is customer-configurable. Customer never has to invent DCR names.
 #########################################################################################################
+
+# Hardcoded DCR names (one per Summary / Detailed table). Customer doesn't pick these.
+$RiskAnalysis_DcrName_Summary  = 'dcr-si-risk-analysis-summary'
+$RiskAnalysis_DcrName_Detailed = 'dcr-si-risk-analysis-detailed'
 
 if ($null -eq $global:SendToLogAnalytics) { $global:SendToLogAnalytics = $false }
 
@@ -3020,17 +3026,23 @@ if ([bool]$global:SendToLogAnalytics) {
     $laWs        = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_WorkspaceResourceId)) { [string]$global:SI_RiskAnalysis_WorkspaceResourceId } else { [string]$global:WorkspaceResourceId }
     $laDceName   = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DceName))             { [string]$global:SI_RiskAnalysis_DceName }             else { [string]$global:DceName }
     $laDcrRg     = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DcrResourceGroup))    { [string]$global:SI_RiskAnalysis_DcrResourceGroup }    else { [string]$global:DcrResourceGroup }
-    $laDcrName   = [string]$global:SI_RiskAnalysis_DcrName
     $tblSummary  = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_TableName_Summary))   { [string]$global:SI_RiskAnalysis_TableName_Summary }   else { 'SI_RiskAnalysis_Summary' }
     $tblDetailed = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_TableName_Detailed))  { [string]$global:SI_RiskAnalysis_TableName_Detailed }  else { 'SI_RiskAnalysis_Detailed' }
-    $laTable     = if ([bool]$global:Detailed) { $tblDetailed } else { $tblSummary }   # Summary catches the "neither set" fall-through
+
+    # Pick the DCR + table for this run (Summary catches the "neither set" fall-through)
+    if ([bool]$global:Detailed) {
+        $laTable   = $tblDetailed
+        $laDcrName = $RiskAnalysis_DcrName_Detailed
+    } else {
+        $laTable   = $tblSummary
+        $laDcrName = $RiskAnalysis_DcrName_Summary
+    }
 
     # Validate required values
     $missing = @()
     if ([string]::IsNullOrWhiteSpace($laDce))     { $missing += 'DceIngestionUri (or SI_RiskAnalysis_DceIngestionUri)' }
     if ([string]::IsNullOrWhiteSpace($laWs))      { $missing += 'WorkspaceResourceId (or SI_RiskAnalysis_WorkspaceResourceId)' }
     if ([string]::IsNullOrWhiteSpace($laDcrRg))   { $missing += 'DcrResourceGroup (or SI_RiskAnalysis_DcrResourceGroup)' }
-    if ([string]::IsNullOrWhiteSpace($laDcrName)) { $missing += 'SI_RiskAnalysis_DcrName' }
     if ([string]::IsNullOrWhiteSpace($laDceName)) { $missing += 'DceName (or SI_RiskAnalysis_DceName)' }
 
     if ($missing.Count -gt 0) {

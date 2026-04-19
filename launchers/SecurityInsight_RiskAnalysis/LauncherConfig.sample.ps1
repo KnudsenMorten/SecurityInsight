@@ -128,12 +128,22 @@
 # <name>.<yyyy-MM-dd_HHmmss>.<ext>.bak before the new file is written, so the
 # canonical path always holds the latest run.
 #
-# Pick ONE format:
+# Destination type is AUTO-DETECTED from the value's prefix -- you don't pick
+# UNC vs Azure separately, you just set one variable to one of these formats:
 #
-# UNC share (caller's Windows identity needs share write):
+#   '\\server\share\path\'                              -> UNC share
+#   'https://<acct>.blob.core.windows.net/<container>/' -> Azure Storage blob
+#
+# Auth requirements differ by detected type:
+#   UNC    -- the calling Windows identity needs write to the share
+#             (pure SPN auth doesn't help SMB; run the launcher under a
+#             service account, OR use Azure Storage instead).
+#   Azure  -- the SPN that ran the engine needs 'Storage Blob Data Contributor'
+#             on the destination container or its parent storage account.
+#             Uses the existing Az session -- no extra credentials.
+#
+# Examples (uncomment ONE):
 # $global:ExportDestination = '\\fileserver\reports\SecurityInsight\'
-#
-# Azure Storage blob (SPN needs 'Storage Blob Data Contributor' on the container):
 # $global:ExportDestination = 'https://<storacct>.blob.core.windows.net/<container>/'
 # $global:ExportDestination = 'https://<storacct>.blob.core.windows.net/<container>/<prefix>/'
 

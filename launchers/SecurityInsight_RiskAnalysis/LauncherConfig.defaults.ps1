@@ -37,6 +37,10 @@ $global:ReportTemplate = 'RiskAnalysis_Summary_Bucket'
 $global:OverwriteXlsx  = $true
 $global:ShowConfig     = $false
 
+# JSON sibling of the XLSX. Same dataset, same dir, .json next to .xlsx.
+# Default ON; set $false to skip. Filename mirrors the report template.
+$global:WriteJsonOutput = $true
+
 
 # ============================================================================
 #  EMAIL DELIVERY

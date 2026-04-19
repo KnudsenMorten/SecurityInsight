@@ -2968,6 +2968,28 @@ Write-Host ""
 Write-Ok ("excel file ready: {0}" -f $global:OutputXlsx)
 
 #########################################################################################################
+# JSON SIBLING  -- same dataset as the .xlsx, written next to it as .json
+# Default: ON. Toggle off via $global:WriteJsonOutput = $false in LauncherConfig.
+# Filename mirrors the XLSX (e.g. RiskAnalysis_Summary_Bucket.xlsx ->
+# RiskAnalysis_Summary_Bucket.json) so the customer's downstream tools always
+# find the matching pair.
+#########################################################################################################
+
+if ($null -eq $global:WriteJsonOutput) { $global:WriteJsonOutput = $true }
+
+if ([bool]$global:WriteJsonOutput) {
+    $global:OutputJson = [System.IO.Path]::ChangeExtension($global:OutputXlsx, 'json')
+    Write-Step "exporting JSON sibling"
+    Write-Info ("path: {0}" -f $global:OutputJson)
+    try {
+        @($global:final) | ConvertTo-Json -Depth 20 | Out-File -FilePath $global:OutputJson -Encoding UTF8 -Force
+        Write-Ok ("json file ready: {0}" -f $global:OutputJson)
+    } catch {
+        Write-Warn "JSON export failed: $($_.Exception.Message) (continuing -- xlsx is still on disk)"
+    }
+}
+
+#########################################################################################################
 # BUILD AI SUMMARY CONTEXT
 #########################################################################################################
 

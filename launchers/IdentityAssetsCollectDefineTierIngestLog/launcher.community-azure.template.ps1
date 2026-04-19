@@ -109,18 +109,17 @@ try {
 }
 
 try {
-    # Layer 1: defaults.ps1 (ours, replaceable). On Azure hosts, customer
-    # overrides for engine knobs come from App Settings (env vars) consumed
-    # by the engine downstream; this file populates everything else.
-    Write-Step "Loading LauncherConfig.defaults.ps1 (baseline)"
-    $defaultsPath = Join-Path $PSScriptRoot 'LauncherConfig.defaults.ps1'
-    if (-not (Test-Path -LiteralPath $defaultsPath)) {
-        throw "LauncherConfig.defaults.ps1 missing at $defaultsPath. This file ships with each release; redeploy the function with the latest SecurityInsight package to restore it."
-    }
-    . $defaultsPath
-    Write-Ok "defaults loaded"
+    # Layered config (community-azure: no per-engine custom; engine knobs
+    # not in defaults come from App Settings env vars downstream).
+    . (Join-Path $PSScriptRoot '..\_lib\Initialize-LauncherConfig.ps1')
+    Initialize-LauncherConfig `
+        -Solution    'SecurityInsight' `
+        -Engine      'IdentityAssetsCollectDefineTierIngestLog' `
+        -LauncherDir $PSScriptRoot `
+        -RepoRoot    $InstallPath `
+        -Mode        'community'
 } catch {
-    Write-Err2 "Failed to load defaults: $($_.Exception.Message)"
+    Write-Err2 "Failed to load layered config: $($_.Exception.Message)"
     throw
 }
 

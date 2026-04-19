@@ -125,8 +125,10 @@ if ([bool]$global:AutomationFramework) {
 # Force TLS 1.2 for .NET Framework HTTP stack (PS 5.1 default can be TLS 1.0/1.1)
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
-$OutputFolder = "$PSScriptRoot\Output"
-$OutputFile   = "$OutputFolder\SecurityInsight_IdentityTiering.json"
+# Output goes to the solution's DATA\ folder (shared shipped/generated location).
+# Drop the v1-style SCRIPTS\Output\ subfolder.
+$OutputFolder = Join-Path (Split-Path -Parent $PSScriptRoot) 'DATA'
+$OutputFile   = Join-Path $OutputFolder 'SecurityInsight_IdentityTiering.json'
 
 # ============================================================
 # AI SYSTEM PROMPT  tiering definitions and output contract

@@ -706,7 +706,8 @@
 
 .PARAMETER TierDefinitionsPath
     Path to SecurityInsight_IdentityTiering.json. Defaults to
-    .\Output\SecurityInsight_IdentityTiering.json relative to the script directory.
+    ..\DATA\SecurityInsight_IdentityTiering.json relative to this script
+    (the same path Build_Tier_Definitions_JSON_File.ps1 writes to).
 
 .EXAMPLE
     # Run via launcher (recommended):
@@ -714,7 +715,7 @@
 
 .EXAMPLE
     # Override tier definitions path:
-    $TierDefinitionsPath = "D:\SecurityInsight\Output\SecurityInsight_IdentityTiering.json"
+    $TierDefinitionsPath = "D:\SecurityInsight\DATA\SecurityInsight_IdentityTiering.json"
     . .\IdentityAssetsCollectDefineTierIngestLog.ps1
 #>
 
@@ -1260,29 +1261,14 @@ $GRAPH_APP_ID  = "00000003-0000-0000-c000-000000000000"  # Microsoft Graph SP
 #########################################################################################################
 
 if ([string]::IsNullOrWhiteSpace($TierDefinitionsPath)) {
-    # Lookup order (first existing file wins):
-    #   1. SCRIPTS\Output\SecurityInsight_IdentityTiering.json
-    #        -- freshly built by Build_Tier_Definitions_JSON_File.ps1
-    #   2. ..\DATA\SecurityInsight_IdentityTiering.json
-    #        -- platform-shipped sample at the solution's DATA folder
-    #           (shipped in every release; good enough if the customer does
-    #            not run the builder themselves).
-    $freshBuild    = Join-Path $PSScriptRoot "Output\SecurityInsight_IdentityTiering.json"
-    $solutionData  = Join-Path (Split-Path -Parent $PSScriptRoot) "DATA\SecurityInsight_IdentityTiering.json"
-
-    if (Test-Path -LiteralPath $freshBuild) {
-        $TierDefinitionsPath = $freshBuild
-        Write-Host "[INFO] Using freshly-built tier definitions from SCRIPTS\Output\." -ForegroundColor DarkGray
-    } elseif (Test-Path -LiteralPath $solutionData) {
-        $TierDefinitionsPath = $solutionData
-        Write-Host "[INFO] Using platform-shipped tier definitions from DATA\." -ForegroundColor DarkGray
-    } else {
-        $TierDefinitionsPath = $freshBuild  # fall through so the error below reports the expected path
-    }
+    # Single canonical location: the solution's DATA\ folder. Both
+    # Build_Tier_Definitions_JSON_File.ps1 (writer) and this engine (reader)
+    # use the same path. v1's SCRIPTS\Output\ subfolder is no longer used.
+    $TierDefinitionsPath = Join-Path (Split-Path -Parent $PSScriptRoot) 'DATA\SecurityInsight_IdentityTiering.json'
 }
 
 if (-not (Test-Path $TierDefinitionsPath)) {
-    throw "Tier definitions JSON not found. Looked at:`n  $freshBuild`n  $solutionData`nRun Build_Tier_Definitions_JSON_File.ps1 to generate a fresh copy under SCRIPTS\Output\, or ensure the platform-shipped sample at DATA\SecurityInsight_IdentityTiering.json is present. You can also set `$TierDefinitionsPath explicitly."
+    throw "Tier definitions JSON not found at:`n  $TierDefinitionsPath`nRun Build_Tier_Definitions_JSON_File.ps1 to generate it (writes to the same DATA\ path). You can also set `$TierDefinitionsPath explicitly to point at a different file."
 }
 
 Write-Host "[INFO] Loading tier definitions from: $TierDefinitionsPath" -ForegroundColor Cyan

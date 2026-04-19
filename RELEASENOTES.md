@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.26
+## v2.1.27
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI): single-helper layered config (Initialize-LauncherConfig) (e34aca3)
+- fix(publish): preserve underscore-prefixed dirs (e.g. _lib/) under launchers/ (1987f33)
 
 ---
 

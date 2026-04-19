@@ -120,7 +120,7 @@ try {
 }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Onboarding_IdentityAssets_LogAnalytics' -Flavour 'community-vm' -Description 'Onboarding_IdentityAssets_LogAnalytics -- v2 ported engine under SecurityInsight.' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'Onboarding_IdentityAssets_LogAnalytics' -Flavour 'community-vm' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message

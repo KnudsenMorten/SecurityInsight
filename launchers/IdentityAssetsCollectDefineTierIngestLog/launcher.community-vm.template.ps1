@@ -120,7 +120,7 @@ try {
 }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'IdentityAssetsCollectDefineTierIngestLog' -Flavour 'community-vm' -Description 'IdentityAssetsCollectDefineTierIngestLog -- v2 ported engine under SecurityInsight.' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'IdentityAssetsCollectDefineTierIngestLog' -Flavour 'community-vm' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message

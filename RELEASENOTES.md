@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.31
+## v2.1.32
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI launchers): version-stamped banner for internal-vm + git-describe fallback (c35b54e)
+- feat(SI): add OnboardValidate-Permissions + fix Resolve-Switch in 3 launchers (8324a7e)
 
 ---
 

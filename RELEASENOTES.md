@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.34
+## v2.1.35
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI Build_Tier_Definitions): MSAL cache-corruption auto-recovery + Mg safety net + auth-method log (d2c34e6)
+- chore(SI Build_Tier launchers): bring all 4 flavors up to v2.1.31 banner standard (a64d150)
 
 ---
 

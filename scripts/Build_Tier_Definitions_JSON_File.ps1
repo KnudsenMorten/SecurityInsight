@@ -69,7 +69,45 @@ if ([bool]$global:AutomationFramework) {
     Write-Output "Repo root          -> $($global:PathScripts)"
 
     Import-Module (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1') -Global -Force -WarningAction SilentlyContinue
-    $null = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets
+
+    # Initialize-PlatformAutomationFramework does cert-based Connect-MgGraph
+    # internally. MSAL caches the resulting token under %LOCALAPPDATA%; if that
+    # cache is corrupted (e.g. partial write, version mismatch, half-encrypted
+    # remnant) the bootstrap fails with:
+    #   "ClientCertificateCredential authentication failed:
+    #    MSAL deserialization failed to parse the cache contents."
+    # Wipe the cache and retry once. This is harmless -- the next sign-in just
+    # recreates the cache from scratch.
+    $bootstrapAttempt = 0
+    while ($true) {
+        $bootstrapAttempt++
+        try {
+            $null = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets
+            Write-Output "[INFO] Auth method (bootstrap)  : SPN + Certificate (Initialize-PlatformAutomationFramework)"
+            break
+        } catch {
+            $msg = "$($_.Exception.Message) $($_.Exception.InnerException.Message)"
+            $isCacheCorruption = $msg -match 'MSAL deserialization' -or $msg -match 'cache contents' -or $msg -match 'token cache encryption'
+            if ($isCacheCorruption -and $bootstrapAttempt -lt 2) {
+                Write-Warning "Initialize-PlatformAutomationFramework failed with MSAL cache corruption -- clearing cache and retrying once."
+                foreach ($p in @(
+                    (Join-Path $env:LOCALAPPDATA '.IdentityService'),
+                    (Join-Path $env:LOCALAPPDATA 'Microsoft\IdentityCache'),
+                    (Join-Path $env:LOCALAPPDATA '.mgraph')
+                )) {
+                    if (Test-Path -LiteralPath $p) {
+                        Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
+                        Write-Output "[INFO] Cleared cache: $p"
+                    }
+                }
+                try { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null } catch {}
+                Start-Sleep -Seconds 2
+                continue
+            }
+            throw
+        }
+    }
+
     # Map AF-mode variables to the SPN globals the rest of this script expects.
     $global:SpnTenantId     = $global:AzureTenantId
     $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure
@@ -257,17 +295,37 @@ function Sanitize-ForJson {
 }
 
 function Connect-GraphWithSPN {
+    # Idempotent: if a Graph context already exists for our SPN, no-op.
+    try {
+        $ctx = Get-MgContext -ErrorAction SilentlyContinue
+        if ($ctx -and $ctx.ClientId -eq $global:SpnClientId) {
+            Write-Log "Microsoft Graph already connected as SPN $($global:SpnClientId)" "INFO"
+            Write-Log "Auth method (Graph)        : already connected (re-using existing session)" "INFO"
+            return
+        }
+    } catch {}
     $secureSecret = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
     $credential   = New-Object System.Management.Automation.PSCredential($global:SpnClientId, $secureSecret)
     Connect-MgGraph -TenantId $global:SpnTenantId -ClientSecretCredential $credential -NoWelcome -ErrorAction Stop
     Write-Log "Connected to Microsoft Graph" "SUCCESS"
+    Write-Log ("Auth method (Graph)        : SPN + Secret  (clientId={0}, tenant={1})" -f $global:SpnClientId, $global:SpnTenantId) "INFO"
 }
 
 function Connect-AzWithSPN {
+    # Idempotent: if an Az context already exists for our SPN, no-op.
+    try {
+        $ctx = Get-AzContext -ErrorAction SilentlyContinue
+        if ($ctx -and $ctx.Account.Id -eq $global:SpnClientId) {
+            Write-Log "Azure already connected as SPN $($global:SpnClientId)" "INFO"
+            Write-Log "Auth method (Azure)        : already connected (re-using existing session)" "INFO"
+            return
+        }
+    } catch {}
     $secureSecret = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
     $credential   = New-Object System.Management.Automation.PSCredential($global:SpnClientId, $secureSecret)
     Connect-AzAccount -ServicePrincipal -TenantId $global:SpnTenantId -Credential $credential -ErrorAction Stop | Out-Null
     Write-Log "Connected to Azure" "SUCCESS"
+    Write-Log ("Auth method (Azure)        : SPN + Secret  (clientId={0}, tenant={1})" -f $global:SpnClientId, $global:SpnTenantId) "INFO"
 }
 
 # ============================================================
@@ -526,6 +584,11 @@ function Get-ADBuiltInGroupData {
 function Get-EntraRoleDefinitions {
     Write-Log "=== SECTION B: Entra ID Role Definitions ===" "INFO"
 
+    # Safety net: ensure a clean Mg context. The platform bootstrap may have
+    # connected with cert auth (which can have stale-cache issues); this
+    # connects with SPN+secret which is more robust for unattended runs.
+    try { Connect-GraphWithSPN } catch { Write-Log "Connect-GraphWithSPN failed: $_" "ERROR" }
+
     $roles = [System.Collections.Generic.List[PSCustomObject]]::new()
 
     try {
@@ -561,6 +624,9 @@ function Get-EntraRoleDefinitions {
 
 function Get-EntraAPIPermissionCatalog {
     Write-Log "=== SECTION C: Entra API Permission Catalog ===" "INFO"
+
+    # Safety net: ensure Mg context (idempotent if already connected).
+    try { Connect-GraphWithSPN } catch { Write-Log "Connect-GraphWithSPN failed: $_" "ERROR" }
 
     $permissions = [System.Collections.Generic.List[PSCustomObject]]::new()
 

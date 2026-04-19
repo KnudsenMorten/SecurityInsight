@@ -1326,9 +1326,11 @@ function Import-AssetTaggingYaml {
   }
 
   $y = Get-Content -Raw -LiteralPath $Path | ConvertFrom-Yaml
-  if (-not $y -or -not $y.AssetTagging) {
+  if (-not $y) { return @() }
+  if (-not $y.ContainsKey('AssetTagging')) {
     throw "YAML file is missing AssetTagging root: $Path"
   }
+  if ($null -eq $y.AssetTagging) { return @() }
 
   return @($y.AssetTagging)
 }

@@ -109,6 +109,22 @@ try {
 }
 
 try {
+    # Layer 1: defaults.ps1 (ours, replaceable). On Azure hosts, customer
+    # overrides for engine knobs come from App Settings (env vars) consumed
+    # by the engine downstream; this file populates everything else.
+    Write-Step "Loading LauncherConfig.defaults.ps1 (baseline)"
+    $defaultsPath = Join-Path $PSScriptRoot 'LauncherConfig.defaults.ps1'
+    if (-not (Test-Path -LiteralPath $defaultsPath)) {
+        throw "LauncherConfig.defaults.ps1 missing at $defaultsPath. This file ships with each release; redeploy the function with the latest SecurityInsight package to restore it."
+    }
+    . $defaultsPath
+    Write-Ok "defaults loaded"
+} catch {
+    Write-Err2 "Failed to load defaults: $($_.Exception.Message)"
+    throw
+}
+
+try {
     Write-Step "Checking required modules (Az.Accounts, Az.KeyVault)"
     [void](Test-LauncherModule -Name 'Az.Accounts' -Required -AutoInstall)
     [void](Test-LauncherModule -Name 'Az.KeyVault' -Required -AutoInstall)

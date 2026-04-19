@@ -1201,7 +1201,12 @@ if ([string]::IsNullOrWhiteSpace($DcrResourceGroup))     { $missing += "DcrResou
 
 if ($missing.Count -gt 0) {
     $src = if ($AutomationFramework) { "global:SecurityInsight_LOG_* / SecurityInsight_Identity_*" } else { "launcher globals" }
-    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  "))
+    $hint = if ($AutomationFramework) {
+        ""
+    } else {
+        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Onboarding_IdentityAssets_LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.ps1."
+    }
+    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  ") + $hint)
 }
 
 #########################################################################################################
@@ -3997,7 +4002,12 @@ if ([string]::IsNullOrWhiteSpace($DcrResourceGroup))     { $missing += "DcrResou
 
 if ($missing.Count -gt 0) {
     $src = if ($AutomationFramework) { "global:SecurityInsight_LOG_* / SecurityInsight_Identity_*" } else { "launcher globals" }
-    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  "))
+    $hint = if ($AutomationFramework) {
+        ""
+    } else {
+        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Onboarding_IdentityAssets_LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.ps1."
+    }
+    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  ") + $hint)
 }
 
 #########################################################################################################
@@ -6793,7 +6803,12 @@ if ([string]::IsNullOrWhiteSpace($DcrResourceGroup))     { $missing += "DcrResou
 
 if ($missing.Count -gt 0) {
     $src = if ($AutomationFramework) { "global:SecurityInsight_LOG_* / SecurityInsight_Identity_*" } else { "launcher globals" }
-    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  "))
+    $hint = if ($AutomationFramework) {
+        ""
+    } else {
+        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Onboarding_IdentityAssets_LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.ps1."
+    }
+    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  ") + $hint)
 }
 
 #########################################################################################################
@@ -9589,7 +9604,12 @@ if ([string]::IsNullOrWhiteSpace($DcrResourceGroup))     { $missing += "DcrResou
 
 if ($missing.Count -gt 0) {
     $src = if ($AutomationFramework) { "global:SecurityInsight_LOG_* / SecurityInsight_Identity_*" } else { "launcher globals" }
-    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  "))
+    $hint = if ($AutomationFramework) {
+        ""
+    } else {
+        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Onboarding_IdentityAssets_LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.ps1."
+    }
+    throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  ") + $hint)
 }
 
 #########################################################################################################

@@ -162,7 +162,20 @@ $global:TableName = 'SI_IdentityAssets'
 
 
 # ============================================================================
-# 5.  TROUBLESHOOTING / WHATIF FLAGS  (optional)
+# 5.  AZURE SUBSCRIPTION SCOPE  (optional)
+# ============================================================================
+# Wildcard patterns of subscription NAMES to skip during the Azure-side
+# enumeration (Get-AzSubscription). Useful for excluding sandbox / training
+# / personal-MSDN subs you never want SecurityInsight to touch.
+# Patterns are PowerShell -like wildcards. Empty / unset = scan all enabled subs.
+# $global:SubscriptionNameExcludePatterns = @(
+#     '*Azure for Students*',
+#     '*Visual Studio*'
+# )
+
+
+# ============================================================================
+# 6.  TROUBLESHOOTING / WHATIF FLAGS  (optional)
 # ============================================================================
 # $global:TroubleshootingMode = $false      # $true = process only first 10 rows for fast iteration
 # $global:WhatIfMode          = $false      # $true = dry run, no DCR ingestion

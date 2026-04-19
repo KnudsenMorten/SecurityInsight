@@ -1,4 +1,7 @@
-﻿<#
+<#
+.SYNOPSIS
+    Deploy_OpenAI_PAYG_Instance_SecurityInsights - engine script in the SecurityInsight solution.
+
 ================================================================================
 Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
 ================================================================================
@@ -16,6 +19,15 @@ USAGE
   Force a model (still tries SKUs if needed):
     .\Deploy_OpenAI_PAYG_Instance.ps1 -ModelName "gpt-4" -ModelVersion "latest" -Verbose
 ================================================================================
+
+.NOTES
+    Solution       : SecurityInsight
+    File           : Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    GitHub         : https://github.com/KnudsenMorten
+    Support        : For public repos, open a GitHub Issue on that solution's repo.
+
 #>
 
 [CmdletBinding()]

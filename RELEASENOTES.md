@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.9
+## v2.1.10
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- workflow(publish): port to ubuntu-latest (silences Windows git-128 post-cleanup warning) (1fc05ee)
+- docs(EPS): clarify extensionAttribute6/7 are configurable defaults (663daf2)
 
 ---
 

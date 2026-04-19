@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     SecurityInsight Identity Tiering -- collects AD groups, Entra roles, API permissions,
@@ -21,18 +21,14 @@
       Single structured JSON file with all tier sections
 
 .NOTES
-    Author  : SecurityInsight
-    Version : 2.0
-    Requires: ActiveDirectory module
-              Microsoft.Graph PowerShell SDK
-              Az PowerShell module
-              OpenAI / Azure OpenAI endpoint
+    Solution       : SecurityInsight
+    File           : Build_Tier_Definitions_JSON_File.ps1
+    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    GitHub         : https://github.com/KnudsenMorten
+    Support        : For public repos, open a GitHub Issue on that solution's repo.
 
-    SPN API permissions required:
-      Microsoft Graph -> Directory.Read.All
-      Microsoft Graph -> RoleManagement.Read.Directory
-      Microsoft Graph -> Application.Read.All
-      Azure            -> Reader at tenant root scope (for Az role enumeration)
+
 #>
 
 # ============================================================
@@ -55,18 +51,25 @@ if (-not [bool]$global:AutomationFramework) {
 if ([bool]$global:AutomationFramework) {
     # --- Automation Framework branch (internal 2LINKIT infra) ---
     $ScriptDirectory = $PSScriptRoot
-    $global:PathScripts = Split-Path -parent $ScriptDirectory
+
+    # v2 bootstrap: walk up to find the AutomateITPS module (= repo root),
+    # then one call to Initialize-PlatformAutomationFramework takes care of
+    # cert-based Connect-AzAccount, fetching Modern secrets from KV, and
+    # populating the v1-contract $global:HighPriv_* / $global:AzureTenantId
+    # names. Zero v1 module imports.
+    $repoRoot = $ScriptDirectory
+    while ($repoRoot -and -not (Test-Path (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'))) {
+        $repoRoot = Split-Path -Parent $repoRoot
+    }
+    if (-not $repoRoot) {
+        throw "AutomationFramework bootstrap: cannot find FUNCTIONS\AutomateITPS\AutomateITPS.psd1 walking up from '$ScriptDirectory'."
+    }
+    $global:PathScripts = $repoRoot
     Write-Output ""
-    Write-Output "Script Directory -> $($global:PathScripts)"
+    Write-Output "Repo root          -> $($global:PathScripts)"
 
-    Import-Module "$($global:PathScripts)\FUNCTIONS\2LINKIT-Functions.psm1"         -Global -Force -WarningAction SilentlyContinue
-    Import-Module "$($global:PathScripts)\FUNCTIONS\Automation-ConnectDetails.psm1" -Global -Force -WarningAction SilentlyContinue
-    ConnectDetails
-    Import-Module "$($global:PathScripts)\FUNCTIONS\Automation-DefaultVariables.psm1" -Global -Force -WarningAction SilentlyContinue
-    Default_Variables
-
-    & "$($global:PathScripts)\FUNCTIONS\Connect_Azure.ps1"
-
+    Import-Module (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1') -Global -Force -WarningAction SilentlyContinue
+    $null = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets
     # Map AF-mode variables to the SPN globals the rest of this script expects.
     $global:SpnTenantId     = $global:AzureTenantId
     $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure

@@ -6,7 +6,7 @@ Cross-solution **health-check engine** with an email-alert hook. Runs a configur
 battery of checks against a customer's Entra tenant / Azure subscription / Key Vault /
 Function App / internet connectivity, aggregates the results, and sends an alert email
 on failure. Pairs with any of the solutions published from the same author
-(SecurityInsight, PlatformOnboarding, EntraPolicySuite, PIM4EntraPS, ...).
+(SecurityInsight, PlatformConfiguration, EntraPolicySuite, PIM4EntraPS, ...).
 
 ## What it checks (all optional, each individually switchable)
 
@@ -60,7 +60,7 @@ as your service account, or into an Azure Function timer trigger via
 
 ## Why this matters
 
-Every SecurityInsight / PlatformOnboarding / etc. deployment depends on a running
+Every SecurityInsight / PlatformConfiguration / etc. deployment depends on a running
 SPN secret and working Azure/Graph/KV connectivity. Without a check like this, a
 silent secret expiry or a KV RBAC drift means you find out your risk reports have
 stopped producing only after weeks — when someone notices the Monday-morning Excel

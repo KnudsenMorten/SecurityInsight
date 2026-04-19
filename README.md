@@ -6,6 +6,492 @@ SecurityInsight is a **risk-based prioritization add-on for Microsoft Defender**
 
 My customers value SecurityInsight because it lets them make better remediation decisions by combining **asset criticality** with **real-world exploitability context** — rather than treating every finding as equally urgent.
 
+# Executive Summary
+
+## 🧩 What it is
+
+**SecurityInsight is a risk-based prioritization solution for Microsoft security findings.**
+
+It rethinks traditional tools like Secure Score by introducing a **custom risk scoring model** based on:
+
+- consequence (impact)
+- probability (likelihood)
+- contextual risk factors
+
+Its core purpose is simple:
+
+> **Help security teams decide what to fix first — based on real risk, not just severity.**
+
+
+
+## 🚨 Problem it solves
+
+**SecurityInsight addresses the lack of meaningful prioritization in modern security tooling.**
+
+In typical environments:
+
+- Thousands of vulnerabilities and recommendations exist
+- Many are labeled "high" or "critical"
+- Prioritization is based mostly on technical severity
+
+**SecurityInsight solves this by:**
+
+- Incorporating **business impact (asset criticality)**
+- Considering **likelihood of exploitation**
+- Understanding **relationships and attack paths**
+
+👉 Instead of treating all findings equally, it highlights the ones that actually matter.
+
+
+
+## ⚙️ How it works
+
+### 🔢 Risk model
+
+**SecurityInsight uses a simple core formula:**
+
+Risk Score = Consequence × Probability
+
+- **Consequence** → impact if exploited
+- **Probability** → likelihood of exploitation
+
+The score is further refined with contextual factors such as:
+
+- Internet Exposure
+- Contains Verified Secret
+- Critical Resource
+- Lateral Movement
+- Sensitive Data
+- LegacyEndOfSupport
+- ExploitSignals → Vulnerability Exploitkit exist? Yes, choose before others
+
+
+
+### 🏷️ Critical asset tagging
+
+**SecurityInsight classifies assets by importance**, for example:
+
+- **Tier-0 (Critical):** Global Admins, Domain Admins, break-glass accounts
+- **Tier-1 / Tier-2 / Tier-3:** decreasing importance
+
+👉 The same vulnerability becomes higher priority when it affects critical assets.
+
+
+
+### 🕸️ Graph-based analysis
+
+SecurityInsight uses graph-based security data (Exposure Graph) to:
+
+- Map relationships between users, devices, identities, and resources
+- Identify attack paths and lateral movement
+- Correlate findings instead of treating them in isolation
+
+👉 This aligns defensive prioritization with how attackers actually operate.
+
+
+
+### 🧮 Risk analysis engine
+
+**SecurityInsight includes a PowerShell-based analysis engine that:**
+
+- Executes Kusto (KQL) queries against Microsoft security data
+- Processes graph data (nodes + edges)
+- Applies the risk model
+- Produces a prioritized **risk index**
+
+Core components:
+
+- `RunSecurityInsight.ps1` (entry point)
+- Risk analysis scripts
+- KQL query definitions (YAML)
+- Risk index configuration (CSV)
+
+
+
+### 📊 Reporting
+
+**SecurityInsight generates actionable outputs such as:**
+
+- Summary reports
+- Detailed findings
+- Prioritized remediation lists
+
+Optional:
+
+- AI-generated summaries via OpenAI integration
+
+
+
+## 💡 Key idea
+
+> **SecurityInsight transforms raw security findings into a prioritized, business-aware risk view.**
+
+------
+
+
+
+# The Challenge: Too Many Security Recommendations
+
+Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings. Security teams are often faced with:
+
+- thousands of vulnerabilities
+- hundreds of security recommendations
+- many findings marked as High or Critical
+
+Traditional vulnerability management often focuses on CVSS scores or severity classifications. This approach creates several challenges:
+
+- the same vulnerability is evaluated equally regardless of the asset
+- business impact is not considered
+- attack chains and relationships are not identified
+
+Although these tools are effective at identifying problems, they rarely answer the most important question: **Which issues should be addressed first?**
+
+In practice, remediation work is often prioritized according to:
+
+- technical severity
+- number of affected systems
+- ease of remediation
+
+This often leads organizations to spend resources resolving issues with limited real risk while more critical exposures remain unaddressed.
+
+------
+
+
+
+# A Risk-Based Prioritization Model
+
+The **SecurityInsight** framework introduces a **risk-based prioritization model** that evaluates security findings based on both consequence and probability.
+
+```
+Risk Score = Consequence Score × Probability Score
+```
+
+**Consequence Score** represents the potential impact if a vulnerability is exploited.
+
+**Probability Score** represents the likelihood that the vulnerability will actually be exploited.
+
+The model can also be influenced by **contextual risk factors** such as:
+
+- Internet Exposure
+- Contains Verified Secret
+- Critical Resource
+- Lateral Movement
+- Sensitive Data
+- LegacyEndOfSupport
+- ExploitSignals → Vulnerability Exploitkit exist? Yes, choose before others
+- +more can be added along the way
+
+These factors will each increase the probability score with +1 — and therefore indirectly increase the overall risk score.
+
+------
+
+
+
+# Why We Use a Graph — Understanding Exposure Graph Architecture
+
+**Defenders typically think in lists.** Security tools often present data as separate inventories such as:
+
+- Devices
+- Users
+- Software
+- Vulnerabilities
+- Cloud resources
+
+These lists help with management and reporting, but they **do not show how systems interact with each other**.
+
+**Attackers, however, do not think in lists.** They think in **relationships between systems** and look for ways to move laterally through an environment. Instead of focusing on individual assets, they focus on **how one compromised system can lead to another**.
+
+This is why modern security platforms like **Microsoft Exposure Graph** represent security data as a **graph of connected entities** rather than isolated lists.
+
+A graph structure allows security tools such as **Microsoft Defender** and **Microsoft Security Copilot** to map relationships between users, devices, applications, and privileges.
+
+------
+
+
+
+## Example of an Attack Path
+
+A typical attack rarely targets the most critical system directly. Instead, attackers move through connected systems step by step.
+
+For example:
+
+```
+User device → Application server → Service account → Domain Controller
+```
+
+This path can represent the following scenario:
+
+1. An attacker compromises a **user device** through phishing or malware.
+2. That device has access to an **application server**.
+3. The application server runs using a **service account**.
+4. The service account has elevated privileges on the **domain controller**.
+
+By following this chain of relationships, the attacker can eventually gain control of the **domain controller**, even though the original compromise happened on a normal user machine.
+
+
+
+### Example of Attack Path
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-1.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-2.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-3.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-4.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-5.png)
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-6.png)
+
+------
+
+
+
+## Why Graph Architecture Matters
+
+A **graph model** allows security platforms to:
+
+- **Map relationships between assets**
+- **Identify possible attack paths**
+- **Detect lateral movement opportunities**
+- **Prioritize exposures that could lead to high-impact compromise**
+
+Instead of asking *"What vulnerabilities exist?"*, a graph-based system asks:
+
+> *"Which vulnerabilities could actually lead to a critical system being compromised?"*
+
+This relationship-based view is what makes exposure graphs powerful for **modern threat detection and attack path analysis**.
+
+The **SecurityInsight model** therefore uses **Exposure Graph** analysis to identify relationships between assets, identities, vulnerabilities and configuration issues. Data is sourced from:
+
+- ExposureGraphNodes
+- ExposureGraphEdges
+- Defender Vulnerability Management findings
+- Configuration assessments
+
+These datasets allow analysis of relationships between systems and security findings.
+
+------
+
+
+
+# Risk Score Model
+
+**Risk Score** is calculated using two dimensions:
+
+**Consequence Score** – the potential impact if exploitation occurs.
+
+**Probability Score** – the likelihood of exploitation based on asset tier and exposure context.
+
+**Probability Score** may be adjusted using **contextual risk indicators (risk factors)** that increase the likelihood of exploitation, such as:
+
+- **Active exploitation:** If the vulnerability is currently being exploited in the wild, the likelihood of compromise is significantly higher.
+- **Public exploit code:** Proof-of-concept exploit code is publicly available, lowering the barrier for attackers to exploit the vulnerability.
+- **Internet exposure:** Systems accessible from the internet increase the likelihood of exploitation.
+- **Legacy systems:** Older or unsupported systems may lack security updates and increase vulnerability risk.
+- Contains Verified Secret
+- Critical Resource
+- Lateral Movement
+- Sensitive Data
+
+Each of these influences the score by increasing the probability score with +1 due to the risk factor.
+
+Future possible risk factors being considered are:
+
+- **Large attack surface** – The system exposes multiple services, APIs, or open ports that increase discovery and exploitation opportunities.
+- **Third-party exposure** – The system is accessible by external partners, vendors, or suppliers.
+- **Shared infrastructure** – The vulnerable system is shared across many users or business units, increasing attacker opportunity.
+- **Weak network segmentation** – The system is poorly isolated, allowing attackers easier lateral movement once access is gained.
+- **Credential exposure risk** – The environment has higher likelihood of credential compromise (e.g., shared accounts, weak MFA adoption).
+- **Remote access enabled** – Services such as VPN, RDP, SSH, or remote administration interfaces increase potential entry points.
+
+The **final risk score** is calculated as:
+
+**Risk Score = Consequence Score × Probability Score**
+
+This score is used to prioritize remediation activities.
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/Riskscore-Sample-Zoom.png)
+
+Line #1 with score of 20 is the most critical thing to fix, based on the calculation. Then the next lines with risk score 15, 12, 10, etc.
+
+Calculation sample (line #1):
+
+```
+Severity: 4
+Probability: 5 (4 + 1 due to risk factor 'internet exposed'). 4 is coming from risk index
+Risk Score: 20 (4 x 5)
+```
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/Riskscore-Sample.png)
+
+
+
+#### Another example with more risk factors impacting risk score
+
+![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/RiskFactorsSamples.png)
+
+
+
+### Severity Prioritization | Risk Score Definitions
+
+**Disclaimer:** The severity scores and risk impact classifications presented here are based on my own professional judgment and experience working with attacker-centric security frameworks. Actual exploitation impact may vary depending on each organization's specific environment, existing detective and preventive controls, risk tolerance, regulatory requirements, and architectural decisions. Scores should be used as a prioritization guide, not as absolute measures of risk.
+
+| Defender Score | Risk Impact | Attack Impact |
+| ----------------------- | ------------------------------- | ------------------------------------------------------------ |
+| 10                      | Very High                       | **Absence of this control gives attackers an immediate and decisive advantage.** <br/><br/>Either a critical attack path is left fully exposed, or a single exploitation leads directly to full environment compromise with no further steps required. |
+| 9                       | High                            | This control addresses **weaknesses that are actively weaponized in the wild by ransomware operators, credential theft campaigns, and advanced persistent threat actors**. <br/><br/>Exploitation is well-documented, tooling is widely available, and remediation should be treated as urgent. |
+| 8                       | Medium-High                     | This control is a **foundational hardening measure that meaningfully shrinks the attack surface and disrupts common lateral movement techniques**. <br/><br/>While not immediately catastrophic if missing, its absence creates conditions that attackers routinely chain together to escalate privileges or move laterally. |
+| 5-7                     | Medium                          | This control reflects **established security best practice and reduces exposure to known attack patterns**. <br/>Exploitation is possible but less consistent, typically requiring specific environmental conditions or attacker patience. Prioritize after higher-severity items are addressed. |
+| 1-4                     | Low                             | This control contributes to **security hygiene and long-term posture improvement**. <br/><br/>Missing controls in this range are unlikely to be directly targeted but may marginally increase the cost or noise for an attacker operating in the environment. |
+
+
+
+### Criticality Prioritization | Risk Score Definitions
+
+**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk.
+
+| Criticality Level | Attack Impact | Defender terms |
+| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(Tier-0)**                    | **Immediate full environment compromise if taken**<br />Compromise of a Domain Controller, krbtgt account, or Global Administrator yields unrestricted control over every identity, credential, and resource in the environment.<br /><br />An attacker can forge Kerberos tickets, replicate the entire AD database, assign any Entra role, and persist indefinitely without detection. Recovery requires full forest rebuild. | **Portal:** Very High - tier 0 <br /><br />**API:** 0 |
+| **High<br />(Tier-1)**                        | **High impact, one or two pivots to full compromise**<br />Compromise of an Exchange server, Authentication Administrator, or jump server provides credential material, token abuse opportunities, or lateral movement paths that lead to tier 0 within one or two steps. <br /><br />An attacker can reset MFA, intercept authentication flows, abuse unconstrained delegation, or exploit ADCS misconfigurations to escalate without direct access to tier 0 assets. | **Portal:** High - tier 1<br />**API:** 1 |
+| **Medium<br />(Tier-2)**                      | **Significant workload impact, conditional path to escalation**<br />Compromise of a file server, developer workstation, or SharePoint environment enables mass data exfiltration, credential harvesting from application configs, and abuse of scoped service accounts.<br /><br />Escalation to tier 0 is possible but requires chaining multiple weaknesses such as finding reused credentials, misconfigured delegation, or an over-permissioned service principal. | **Portal:** Medium - tier 2 <br />**API:** 2 |
+| **Low<br />(Tier-3)**                         | **Low blast radius, limited lateral movement potential**<br />Compromise of a standard employee workstation, guest PC, or read-only service account yields limited immediate value.<br /><br />An attacker gains a foothold for phishing, internal reconnaissance, or credential capture via keylogging, but cannot directly access sensitive systems or escalate without exploiting additional misconfigurations elsewhere in the environment. | **Portal:** Low - tier 3 <br />**API:** 3 |
+
+
+
+### Identity Asset Criticality Classification
+
+**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
+
+| Criticality Level | Typical Assets |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(Tier-0)**<br /><br />Immediate Domain Takeover | **Entra ID Roles (built-in) – users/managed identities:** Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator, Partner / GDAP Delegated Admin, Directory Synchronization Accounts, Hybrid Identity Administrator (when Entra Connect is in password hash sync mode)<br /><br />**Application Permissions (Graph / API):** RoleManagement.ReadWrite.Directory, Directory.ReadWrite.All, AppRoleAssignment.ReadWrite.All, Policy.ReadWrite.AuthenticationMethod, PrivilegedAccess.ReadWrite.AzureAD, RoleManagement.ReadWrite.CloudPC, Organization.ReadWrite.All, Domain.ReadWrite.All, CrossTenantUserProfileSharing.ReadWrite.All, OnPremDirectorySynchronization.ReadWrite.All<br /><br />**Azure Built-in Roles:** Owner (root management group), User Access Administrator (root management group), Owner (tenant root subscription)<br /><br />**Azure Permissions:** Contributor + blueprint assign (root MG), Managed Identity Contributor (root scope), Entra ID joined device with Global Admin token cache, Subscription Owner with Az AD write federation<br/><br/>**AD Built-in Groups:** Domain Admins, Enterprise Admins, Schema Admins, Administrators (builtin), Group Policy Creator Owners, Cert Publishers, Domain Controllers group<br/><br/>**AD Permissions:** Replication rights (DCSync), DnsAdmins (with DC write), SYSTEM on any DC<br /><br />**Accounts (list not complete):** krbtgt account, SYSTEM on DC, Entra Connect sync account (MSOL_), ADConnect service account, Break-glass emergency access accounts, Service accounts with DCSync rights, Accounts with AdminSDHolder propagated ACLs |
+| **High<br />(Tier-1)**<br /><br />Fast-Track Takeover (Abusable Privileges) | **Entra ID Roles (built-in) – users/managed identities:** Authentication Administrator, Hybrid Identity Administrator, Exchange Administrator, Cloud App Administrator, Application Administrator, Security Administrator, Intune Administrator, Identity Governance Administrator, External Identity Provider Administrator, B2C IEF Policy Administrator, Domain Name Administrator, Password Administrator (when targeting admins), Helpdesk Administrator (when targeting admins), Billing Administrator, Azure DevOps Administrator, Windows 365 Administrator<br/><br/>**Application Permissions (Graph / API):** Application.ReadWrite.All, Mail.ReadWrite (app all users), User.ReadWrite.All, Group.ReadWrite.All, Sites.FullControl.All, DeviceManagementServiceConfig.ReadWrite.All, DeviceManagementApps.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, ServicePrincipalEndpoint.ReadWrite.All, Policy.ReadWrite.ConditionalAccess, Policy.ReadWrite.PermissionGrant, EntitlementManagement.ReadWrite.All, PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup, AuthenticationContext.ReadWrite.All, TrustFrameworkKeySet.ReadWrite.All, UserAuthenticationMethod.ReadWrite.All, IdentityProvider.ReadWrite.All, Organization.ReadWrite.All, Domain.ReadWrite.All, AccessReview.ReadWrite.All, Agreement.ReadWrite.All, RoleEligibilitySchedule.ReadWrite.Directory, RoleAssignmentSchedule.ReadWrite.Directory<br /><br />**Azure Built-in Roles (list not complete):** Owner (subscription or resource group), User Access Administrator (subscription scope), Key Vault Administrator, Azure Kubernetes Service Cluster Admin, Managed Identity Operator (on high-privilege MIs), Virtual Machine Contributor, Automation Account Contributor, Logic App Contributor<br/><br/>**Azure Permissions (list not complete):** Contributor on Key Vault (with access policy model), Azure Arc onboarding with connected machine agent, Storage Account Contributor (with Entra-integrated storage), Azure DevOps project admin (with service connection to high-priv MI), Defender for Cloud admin, IMDS token theft via VM access, Runbook execution as managed identity<br /><br />**AD Built-in Groups:** Account Operators, Backup Operators, Server Operators, Print Operators<br/><br/>**AD Permissions (list not complete):** GPO edit rights on tier 0 OUs, AdminSDHolder write access, msDS-KeyCredentialLink write, WriteOwner on domain root, WriteDACL on domain root, GenericAll on tier 0 groups, GenericWrite on Domain Controllers OU, AllExtendedRights on domain root, ForceChangePassword on admin accounts, Manage CA (AD CS), Certificate enrollment agents, ESC1–ESC8 vulnerable certificate templates, SeBackupPrivilege holders, SeRestorePrivilege holders, SeTakeOwnershipPrivilege holders, SeDebugPrivilege on DC, SeImpersonatePrivilege on DC, Unconstrained delegation computers, Unconstrained delegation service accounts, Shadow Credentials write on admin accounts, SID History injection rights, Trust account manipulation rights, GPO link rights on tier 0 OUs, OU owner on Domain Controllers OU<br /><br />**Accounts (list not complete):** Entra Connect service account, High-privilege service principals with T0 Graph permissions, Admin-consented OAuth apps with T1 permissions, AD CS enrollment agent accounts, Service accounts with unconstrained delegation, Accounts with GenericAll on tier 0 objects, Federated identity credentials on high-privilege app registrations, Managed identities with Owner or UAA at subscription scope, Workload identities bound to high-privilege Azure RBAC roles, Azure Automation Run As accounts, Service principals with client secrets stored in Key Vault accessible to lower-trust identities |
+| **Medium<br />(Tier-2)**<br /><br />Conditional Takeover (Needs Chaining / Misconfig) | **Entra ID Roles (built-in) – users/managed identities (list not complete):** User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator<br/><br/>**Application Permissions (Graph / API) (list not complete):** Mail.Read (app all users), Calendars.ReadWrite, Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All<br/><br/>**Azure Built-in Roles (list not complete):** Network Contributor, Log Analytics Contributor, Automation Operator, Azure DevOps stakeholder, Azure Kubernetes Service Cluster User<br /><br />**Azure Permissions (list not complete):** Contributor (single non-sensitive resource group), Storage Blob Data Reader (scoped to non-sensitive storage), Log Analytics Reader, Monitoring Reader, Security Reader (Defender for Cloud), Managed Identity on low-privilege workload, Service principal scoped to single resource group<br/><br />**AD Built-in Groups:** DNS Admins<br/><br />**AD Permissions (list not complete):** OU-scoped write ACLs, LAPS read rights, Constrained delegation (msDS-AllowedToDelegateTo), RBCD write rights, Kerberoastable high-priv SAs<br/><br />**Accounts (list not complete):** High-privilege service principals scoped to workload, Admin-consented OAuth apps with scoped permissions, Automation accounts with limited RBAC, Azure DevOps service connections scoped to single subscription |
+| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Entra ID Roles (built-in) – users/managed identities:** Global Reader, Security Reader, Reports Reader, Message Center Reader, Usage Summary Reports Reader, Directory Readers, Guest User (default)<br/><br/>**Application Permissions (Graph / API) (list not complete):** User.Read (delegated), Mail.Read (delegated self), Calendars.Read (delegated), Directory.Read.All, AuditLog.Read.All (delegated), IdentityRiskEvent.Read.All<br/><br/>**Azure Built-in Roles (list not complete):** Reader (subscription or resource group), Billing Reader, Cost Management Reader, Tag Contributor, Azure DevOps Basic user (no pipeline access)<br /><br />**Azure Permissions (list not complete):** Storage Blob Data Reader (scoped, non-sensitive), Managed Identity with Reader only, Service principal with Reader on isolated resource group<br/><br/>**AD Built-in Groups:** Domain Users (default), Read-only DC (RODC)<br/><br/>**AD Permissions (list not complete):** Scoped helpdesk OU read, GenericRead on non-priv objects<br /><br />**Accounts (list not complete):** Standard user accounts, Guest accounts, Read-only service accounts, Managed identities with no RBAC assignments, Expired or disabled service principals |
+
+
+
+### Endpoint / Device Asset Criticality Classification
+
+**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
+
+| Criticality Level | Typical Assets |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(Tier-0)**<br /><br />Immediate full environment compromise if taken | **Server Roles:** Domain Controllers (Primary/Additional), Read-Only Domain Controllers (RODC), AD CS servers (Certificate Authority — root and subordinate), Entra Connect / AD Connect servers, Federation servers (AD FS primary)<br/><br/>**Management:** Privileged Access Workstations (PAW) used by tier 0 admins, Backup servers with DC/CA backup data, Monitoring servers with domain-level agent credentials, Key Management Services (KMS) servers with domain-joined credential store<br/><br/>**Infrastructure:** HSM-attached servers (storing root CA private keys), SAN / storage controllers backing tier 0 VMs<br/><br/>**Hypervisor:** Hypervisor hosts running tier 0 guest VMs (VMware ESXi, Hyper-V, KVM), vCenter / SCVMM management servers (managing tier 0 hypervisors)<br/><br/>**Network Equipment:** Core routers (BGP, MPLS backbone), Core switches (spanning all VLANs), Firewall clusters (perimeter and internal segmentation), Out-of-band management network devices (iDRAC, iLO, IPMI), Network management servers (Cisco DNA, SolarWinds — full network write access), SD-WAN controllers, Load balancers (handling auth traffic)<br/><br/>**IoT / OT:** Building management systems (BMS) controllers with domain integration, Physical security controllers (badge access, CCTV management) with domain integration, OT / ICS controllers with direct network adjacency to tier 0 systems |
+| **High<br />(Tier-1)**<br /><br />High impact, one or two pivots to full compromise | **Server Roles:** Exchange servers, MFA / RADIUS servers, PKI subordinate CA servers, DNS servers (non-DC hosted), Active Directory Federation Services (AD FS) proxy servers<br/><br/>**Management:** Privileged Access Workstations (PAW) used by tier 1 admins, Jump servers / bastion hosts, SIEM servers, Endpoint Detection and Response (EDR) management servers, SCCM / MECM primary site servers, Privileged Identity Management (PIM) approval workflow servers, Secret management servers (HashiCorp Vault, Azure Key Vault private endpoints), Password managers with admin credential stores, Patch management servers (WSUS), Admin workstations used by tier 1 staff without PAW controls<br/><br/>**Infrastructure:** Network Access Control (NAC) servers, VPN concentrators / remote access servers, Azure Arc-connected servers with high-privilege managed identity, Privileged developer machines with production secrets or pipeline credentials<br/><br/>**Hypervisor:** Hypervisor hosts running tier 1 guest VMs, vCenter / SCVMM management servers (managing tier 1 hypervisors)<br/><br/>**Network Equipment:** Distribution switches, Wireless LAN controllers (WLC), Proxy servers (SSL inspection — credential visibility), RADIUS / TACACS+ network authentication servers, Network packet brokers / TAP aggregators, Remote access concentrators (Citrix ADC, F5 BIG-IP), DNS resolvers (internal recursive), DHCP servers (domain-integrated), Network time protocol (NTP) primary servers<br/><br/>**IoT / OT:** SCADA / ICS servers (non-tier 0 adjacent), Industrial IoT gateways with network bridging, UPS management controllers (power disruption potential), HVAC controllers (data center environment impact), Building automation system (BAS) servers, Medical device management servers, Surveillance / CCTV management servers (non-domain integrated)<br/><br/>**Client Devices:** IT staff personal workstations (helpdesk, sysadmin, network engineers — cached credentials, admin tools, RDP session history), IT management laptops (used for remote administration without formal PAW controls), Security operations workstations (SOC analyst machines with SIEM and EDR console access), Senior IT personal workstations (IT managers, architects — broad access scope) |
+| **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Server Roles:** File servers, SharePoint servers, SQL servers hosting sensitive databases, Citrix / RDS session hosts, Web application servers with Entra integrated auth, API gateway servers, Collaboration servers (Teams on-prem, Skype for Business), HR and identity lifecycle management servers, Internal certificate registration authority (RA) servers, IT service management servers (ServiceNow, Jira)<br/><br/>**Management:** Log aggregation servers, DevOps / CI-CD build agents, Container orchestration nodes (Kubernetes worker nodes)<br/><br />**Hypervisor:** Hypervisor hosts running tier 2 guest VMs<br/><br/>**Network Equipment:** Access layer switches (user-facing VLANs), Wireless access points (managed), Network monitoring appliances (read-only), Standalone DHCP servers (non-domain integrated), Content filtering / web proxy appliances, VoIP / SIP gateways<br/><br/>**IoT / OT:** Smart meeting room devices (displays, conferencing systems), Environmental sensors (temperature, humidity — data center), Badge readers (non-domain integrated, isolated), Laboratory equipment with network interfaces, IP cameras (isolated VLAN, no domain integration), Industrial sensors (read-only, no control plane access), Retail / POS terminals (isolated network segment)<br/><br/>**Client Devices:** Production workstations, Lab workstations, Shared devices, Developer workstations, Power user workstations (finance, legal, HR) |
+| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Server Roles:** Print servers, DHCP servers, Time servers (NTP), VoIP servers, Internal wiki / intranet servers, Archival / cold storage servers, Physical access control servers, Test / sandbox servers<br/><br/>**Management:** Network monitoring probes<br/><br/>**Network Equipment:** Unmanaged access switches, Consumer-grade wireless access points, Out-of-band console servers (isolated, read-only access), Standalone print servers (network-connected, no domain join)<br/><br/>**IoT / OT:** Smart lighting controllers (isolated network), Consumer IoT devices (isolated guest VLAN), Non-networked or air-gapped sensors, Vending machines / coffee machines with network connectivity, Digital signage players (isolated, read-only content), Wearables / smart badges (no domain integration), USB-only peripheral devices with firmware update capability<br/><br/>**Client Devices:** Standard employee workstations, Student workstations, Kiosk machines, Guest PCs, Shared classroom / library computers, Development workstations (non-privileged, isolated, no production access), Personally-owned BYOD devices, Retired / decommissioned machines |
+
+
+
+### Cloud (Azure) Asset Criticality Classification
+
+**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
+
+| Criticality Level | Typical Assets |
+| ------------------------------------------------------------ | ------------------------------------------------------------ |
+| **Critical<br />(Tier-0)**<br /><br />Immediate full environment compromise if taken | **Compute:** Virtual Machines hosting tier 0 workloads (DC, ADCS, Entra Connect), Virtual Machines with privileged tokens or highly privileged managed identities assigned, VM Scale Sets running privileged workloads, Azure Bastion hosts (gateway to tier 0 VMs), Confidential compute instances handling key material<br/><br/>**Storage:** Storage accounts containing DC/CA backup data, Storage accounts containing Entra Connect configuration, Azure Blob Storage backing tier 0 audit and log pipelines, Storage accounts with Entra-integrated RBAC and tier 0 data, Immutable and locked Azure Storage holding identity bootstrap data<br/><br/>**Identity & Access:** Entra ID tenant root, Management group root (tenant root group), Subscriptions containing tier 0 workloads, Azure Key Vault storing root CA private keys, Azure Key Vault storing tenant-wide secrets and certificates, Azure Key Vaults storing tenant root keys or certificate authorities, Managed Identity with Owner or User Access Administrator at subscription or MG scope, App registrations with RoleManagement.ReadWrite.Directory or Directory.ReadWrite.All, Service principals with tenant-wide privileged Graph API permissions<br/><br/>**Networking:** Virtual Networks hosting tier 0 VMs, Network Security Groups governing tier 0 subnet traffic, Azure Firewall (central hub — controls all east-west and north-south traffic), ExpressRoute circuits (direct on-prem to cloud bridge), Azure Private DNS zones (name resolution for tier 0 services), VPN Gateways (site-to-site tunnels into on-prem tier 0 networks), Azure DDoS Protection plans, Azure Network and Security Policy control plane resources<br/><br/>**Management & Governance:** Azure Management Groups with root tenant-level access, Azure Subscription Owner roles over security-critical subscriptions, Azure Policy assignments at root MG scope, Azure Blueprints assigned at root MG scope, Microsoft Defender for Cloud, Azure Monitor (Log Analytics workspaces ingesting tier 0 signals), Microsoft Sentinel workspace, Azure Automation accounts running as high-privilege managed identity, Azure Automation / Runbook accounts with privileged role assignments, Azure DevOps organizations with service connections to tier 0 subscriptions, Azure Arc control plane (manages on-prem servers as Azure resources), Azure Arc / Hybrid management orchestrators<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 0 VMs, Azure VMware Solution (AVS) management clusters, Azure Stack HCI clusters running tier 0 guest VMs |
+| **High<br />(Tier-1)**<br /><br />High impact, one or two pivots to full compromise | **Compute:** Virtual Machines hosting Exchange, ADFS, MFA, or SIEM workloads, Virtual Machines with scoped privileged tokens or identities, Azure Kubernetes Service (AKS) clusters with privileged workloads, Azure Container Apps running privileged services, Azure Batch accounts with high-privilege managed identity<br/><br/>**Storage:** Storage accounts backing SIEM and log aggregation, Storage accounts containing application secrets or config, Azure File shares mounted by privileged VMs, Azure Data Lake storing sensitive identity or security telemetry, Highly active Azure Key Vaults with large number of operations<br/><br/>**Identity & Access:** App registrations with Application.ReadWrite.All or User.ReadWrite.All, Service principals with Exchange, Intune, or Security Administrator equivalent permissions, Managed Identities with Contributor or Key Vault Administrator at subscription scope, Azure AD B2C tenants federated to production tenant, Federated identity credentials on privileged app registrations<br/><br/>**Networking:** Hub Virtual Networks (peered to tier 0 VNets), Azure Application Gateway (WAF — handles auth traffic), Azure Front Door (global entry point — SSL termination), Azure Load Balancer (fronting tier 1 workloads), Network Virtual Appliances (NVA — routing and inspection), Azure Private Endpoints for tier 1 services, Azure DNS resolvers (recursive — name resolution for all workloads)<br/><br/>**Management & Governance:** Azure Automation accounts with scoped privileged runbooks, Azure Automation / Runbook accounts with scoped role assignments, Log Analytics workspaces ingesting tier 1 signals, Azure DevOps pipelines deploying to tier 1 environments, Azure Key Vault storing tier 1 application secrets, Microsoft Defender for Endpoint, Azure Update Manager, Azure Lighthouse delegations with privileged access, Azure Arc / Hybrid management orchestrators (scoped to tier 1 systems)<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 1 VMs, Azure Stack HCI clusters running tier 1 guest VMs, Azure VMware Solution (AVS) workload clusters |
+| **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Compute:** Virtual Machines hosting file, SharePoint, SQL, or collaboration workloads, Azure Kubernetes Service (AKS) worker nodes (non-privileged workloads), Azure App Service plans hosting internal applications, Azure Functions with scoped managed identity, Azure Logic Apps with limited connector scope, Azure Virtual Desktop (AVD) / Windows 365 for non-admin users, Dev/Test virtual machines without production data<br/><br/>**Storage:** Storage accounts hosting application data (non-sensitive), Azure SQL databases (non-sensitive schemas), Azure Cosmos DB instances (application data), Azure File shares mounted by standard workload VMs, Azure Blob Storage for application asset delivery<br/><br/>**Identity & Access:** App registrations with scoped delegated permissions, Service principals scoped to single resource group, Managed Identities with Contributor on isolated resource group, App registrations with Mail.Read or Files.ReadWrite.All<br/><br/>**Networking:** Spoke Virtual Networks (workload-specific, peered to hub), Azure Application Gateway (non-auth workloads), Network Security Groups on workload subnets, Azure Traffic Manager profiles, Azure Content Delivery Network (CDN) endpoints<br/><br/>**Management & Governance:** Dev/Test subscriptions and resource groups, Non-production workloads (dev, test, QA, staging) without production data, Azure DevOps pipelines deploying to tier 2 environments, Log Analytics workspaces (workload-scoped), Azure Key Vault storing tier 2 application secrets, Azure Monitor alert rules (workload-scoped), Azure Backup vaults (tier 2 workload data)<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 2 VMs, Azure Stack HCI clusters running tier 2 guest VMs |
+| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Compute:** Virtual Machines hosting non-sensitive workloads (print, NTP, intranet), Azure App Service (public-facing, no internal integration), Azure Static Web Apps, Azure Container Instances (isolated, ephemeral), Sandbox subscriptions designed for experimentation, Proof-of-concept / pilot workloads with no sensitive data, Lab resource groups intended to be wiped/reset<br/><br/>**Storage:** Storage accounts hosting public or non-sensitive content, Azure Blob Storage for static asset delivery, Azure Archive storage (cold, no active credentials)<br/><br/>**Identity & Access:** App registrations with User.Read delegated only, Service principals with Reader on isolated resource group, Managed Identities with no RBAC assignments, Expired or disabled service principals, Guest user accounts with default permissions, Personal / sandbox resources with no privileged role assignments<br/><br/>**Networking:** Azure CDN endpoints (public content delivery), Azure DNS public zones (external name resolution only), Network Security Groups on isolated low-trust subnets, Azure Virtual WAN branches (read-only monitoring)<br/><br/>**Management & Governance:** Azure Cost Management (read-only), Azure Policy (read-only assignments), Azure Monitor (read-only, non-sensitive workloads), Azure Advisor (recommendations only), Azure Service Health alerts (read-only), Sandbox subscriptions for experimentation, Proof-of-concept and pilot resource groups with no sensitive data<br/><br/>**Hypervisor / Fabric:** Azure Sandbox / dev-test dedicated hosts, Non-production Azure Stack HCI clusters |
+
+
+
+### Risk Index - How we prioritize scoring (customizable)?
+
+**Disclaimer:** The risk scoring and prioritization model presented in this table is based on my personal assessment and general security best practices. The scoring methodology, severity levels, and criticality tiers are intended as a customizable reference framework. Actual risk prioritization may vary between organizations depending on their infrastructure, business impact, regulatory requirements, threat landscape, and risk tolerance.
+
+[Download as CSV-file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/SecurityInsight_RiskIndex.csv)
+
+| Security<br />Domain | Category           | Sub<br />Category | ConfigurationId | Security<br />Severity | Risk<br />Consequence<br />Score_<br />Security<br />Severity | Criticality<br />TierLevel | Risk<br />Probability<br />Score_<br />Criticality<br />TierLevel | Comments                                                     |
+| -------------------- | ------------------ | ----------------- | --------------- | ---------------------- | ------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
+|                      |                    |                   |                 | Very High              | 4                                                            | Critical - tier  0         | 4                                                            |                                                              |
+|                      |                    |                   |                 | Very High              | 4                                                            | High - tier 1              | 3                                                            |                                                              |
+|                      |                    |                   |                 | Very High              | 4                                                            | Medium - tier 2            | 2                                                            |                                                              |
+|                      |                    |                   |                 | Very High              | 4                                                            | Low - tier 3               | 1                                                            |                                                              |
+|                      |                    |                   |                 | High                   | 3                                                            | Critical - tier  0         | 4                                                            |                                                              |
+|                      |                    |                   |                 | High                   | 3                                                            | High - tier 1              | 3                                                            |                                                              |
+|                      |                    |                   |                 | High                   | 3                                                            | Medium - tier 2            | 2                                                            |                                                              |
+|                      |                    |                   |                 | High                   | 3                                                            | Low - tier 3               | 1                                                            |                                                              |
+|                      |                    |                   |                 | Medium-High            | 2                                                            | Critical - tier  0         | 4                                                            |                                                              |
+|                      |                    |                   |                 | Medium-High            | 2                                                            | High - tier 1              | 3                                                            |                                                              |
+|                      |                    |                   |                 | Medium-High            | 2                                                            | Medium - tier 2            | 2                                                            |                                                              |
+|                      |                    |                   |                 | Medium-High            | 2                                                            | Low - tier 3               | 1                                                            |                                                              |
+|                      |                    |                   |                 | Medium                 | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
+|                      |                    |                   |                 | Medium                 | 1                                                            | High - tier 1              | 3                                                            |                                                              |
+|                      |                    |                   |                 | Medium                 | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
+|                      |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
+|                      |                    |                   |                 | Low                    | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
+|                      |                    |                   |                 | Low                    | 1                                                            | High - tier 1              | 3                                                            |                                                              |
+|                      |                    |                   |                 | Low                    | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
+|                      |                    |                   |                 | Low                    | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Very High              | 4                                                            | Critical - tier  0         | 4                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Very High              | 4                                                            | High - tier 1              | 3                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Very High              | 4                                                            | Medium - tier 2            | 2                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Very High              | 4                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | High                   | 3                                                            | Critical - tier  0         | 4                                                            |                                                              |
+| Endpoint             |                    |                   |                 | High                   | 3                                                            | High - tier 1              | 3                                                            |                                                              |
+| Endpoint             |                    |                   |                 | High                   | 3                                                            | Medium - tier 2            | 2                                                            |                                                              |
+| Endpoint             |                    |                   |                 | High                   | 3                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | Critical - tier  0         | 4                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | High - tier 1              | 3                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | Medium - tier 2            | 2                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | High - tier 1              | 3                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Low                    | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Low                    | 1                                                            | High - tier 1              | 3                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Low                    | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
+| Endpoint             |                    |                   |                 | Low                    | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             | Security  controls |                   |                 | Very High              | 5                                                            | Critical - tier  0         | 4                                                            |                                                              |
+| Endpoint             | Security controls  |                   |                 | Very High              | 5                                                            | High - tier 1              | 3                                                            |                                                              |
+| Endpoint             | Security  controls |                   |                 | Very High              | 5                                                            | Medium - tier 2            | 2                                                            |                                                              |
+| Endpoint             | Security controls  | Antivirus         | scid-2014       |                        | 5                                                            | Critical - tier 0          | 4                                                            |                                                              |
+| Endpoint             | Security  controls | Antivirus         | scid-2014       |                        | 5                                                            | High - tier 1              | 3                                                            |                                                              |
+| Endpoint             | Security controls  | Antivirus         | scid-2014       |                        | 5                                                            | Medium - tier 2            | 2                                                            |                                                              |
+| Endpoint             | Security  controls | Antivirus         | scid-2014       |                        | 5                                                            | Low - tier 3               | 1                                                            |                                                              |
+| Endpoint             | Security controls  | EDR               | scid-2002       | Very High              | 4                                                            | Critical - tier 0          | 4                                                            | Fix Microsoft Defender for Endpoint  impaired communications |
+| Endpoint             | Security  controls | EDR               | scid-2002       | Very High              | 3                                                            | High - tier 1              | 3                                                            | Fix  Microsoft Defender for Endpoint impaired communications |
+| Endpoint             | Security controls  | EDR               | scid-2002       | Very High              | 2                                                            | Medium - tier 2            | 2                                                            | Fix Microsoft Defender for Endpoint  impaired communications |
+| Endpoint             | Security  controls | EDR               | scid-2002       | Very High              | 1                                                            | Low - tier 3               | 1                                                            | Fix  Microsoft Defender for Endpoint impaired communications |
+| Endpoint             | Security controls  | EDR               | scid-2001       | Very High              | 2                                                            | Critical - tier 0          | 1                                                            | Fix Microsoft Defender for Endpoint  sensor data collection  |
+| Endpoint             | Security  controls | EDR               | scid-2001       | Very High              | 2                                                            | High - tier 1              | 1                                                            | Fix  Microsoft Defender for Endpoint sensor data collection  |
+| Endpoint             | Security controls  | EDR               | scid-2001       | Very High              | 2                                                            | Medium - tier 2            | 1                                                            | Fix Microsoft Defender for Endpoint  sensor data collection  |
+| Endpoint             | Security  controls | EDR               | scid-2001       | Very High              | 2                                                            | Low - tier 3               | 1                                                            | Fix  Microsoft Defender for Endpoint sensor data collection  |
+| Endpoint             | Security controls  | EDR               | scid-2000       | Very High              | 2                                                            | Critical - tier 0          | 1                                                            | Turn on Microsoft Defender for Endpoint  sensor              |
+| Endpoint             | Security  controls | EDR               | scid-2000       | Very High              | 2                                                            | High - tier 1              | 1                                                            | Turn  on Microsoft Defender for Endpoint sensor              |
+| Endpoint             | Security controls  | EDR               | scid-2000       | Very High              | 2                                                            | Medium - tier 2            | 1                                                            | Turn on Microsoft Defender for Endpoint  sensor              |
+| Endpoint             | Security  controls | EDR               | scid-2000       | Very High              | 2                                                            | Low - tier 3               | 1                                                            | Turn  on Microsoft Defender for Endpoint sensor              |
+
+
+
+## Reporting
+
+The framework generates both summary and detailed reports.
+
+**Summary reports** include number of findings per tier, overall risk levels, and configuration status.
+
+**Detailed reports** include affected assets, vulnerability identifiers, and remediation guidance.
+
+| File Name | Purpose |
+| ------------------------------------------------------------ | ----------------------------------------------- |
+| [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file |
+| [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file |
+| [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/data/_samples/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary |
+| [Sample mail - Detailed report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/data/_samples/Sample%20mail%20-%20Detailed%20report%20with%20AI%20summary.pdf) | Sample mail for Detailed report with AI summary |
+
+------
+
+---
+
 ---
 
 ## 📺 Video Walkthroughs
@@ -26,16 +512,16 @@ My customers value SecurityInsight because it lets them make better remediation 
 
 ## 📑 What's in this doc
 
-1. **[Quick Start](#-quick-start--tldr)** — three steps, three repos, working install.
-2. **[Preview vs Stable](#-preview-vs-stable--which-branch-should-i-use)** — main branch vs preview branch.
-3. **[Contributing, bugs & discussions](#-contributing-bugs--discussions)** — how to file issues / PRs.
-4. **[Engines in this solution](#-engines-in-this-solution--what-each-one-does)** — one-paragraph description of each engine.
-5. **[Implementation steps (high level)](#-implementation-steps-high-level)** — the full three-repo flow with links.
-6. **[Detailed Implementation Guide](#-detailed-implementation-guide)** — collapsible deep-dives for Steps 3–5 (SecurityInsight-specific).
-7. Reference material (all collapsed by default):
-   - 📚 Executive Summary, Core Concepts, Risk Model, Asset Classification
+1. **[Executive Summary](#executive-summary)** — what SecurityInsight is, the problem it solves, how it works.
+2. **[Quick Start](#-quick-start--tldr)** — three steps, three repos, working install.
+3. **[Preview vs Stable](#-preview-vs-stable--which-branch-should-i-use)** — main branch vs preview branch.
+4. **[Contributing, bugs & discussions](#-contributing-bugs--discussions)** — how to file issues / PRs.
+5. **[Engines in this solution](#-engines-in-this-solution--what-each-one-does)** — one-paragraph description of each engine.
+6. **[Implementation steps (high level)](#-implementation-steps-high-level)** — the full three-repo flow with links.
+7. **[Detailed Implementation Guide](#-detailed-implementation-guide)** — collapsible deep-dives for Steps 3–5 (SecurityInsight-specific).
+8. Reference material (all collapsed by default):
    - 🏛️ Governance, Compliance, Operational Benefits, Future Opportunities
-8. **[Files Overview](#files-overview)** — paths + update rules for every file in the solution.
+9. **[Files Overview](#files-overview)** — paths + update rules for every file in the solution.
 # 📦 Quick Start  (TL;DR)
 
 > **Three repos, three steps, one working SecurityInsight deployment.** Each piece below
@@ -44,7 +530,7 @@ My customers value SecurityInsight because it lets them make better remediation 
 
 1. **Onboard** — create the Entra App + SPN, (optional) certificate, (optional) Key Vault
    and VM Managed Identity. One-time setup per tenant.
-   → [KnudsenMorten/PlatformOnboarding](https://github.com/KnudsenMorten/PlatformOnboarding#readme)
+   → [KnudsenMorten/PlatformConfiguration](https://github.com/KnudsenMorten/PlatformConfiguration#readme)
 
 2. **Monitor** — (optional but recommended) stand up the health-check engine so you get
    emailed if a secret expires, Key Vault becomes unreachable, or the Function App stops
@@ -65,12 +551,12 @@ git clone https://github.com/KnudsenMorten/SecurityInsight.git C:\SecurityInsigh
 
 cd C:\SecurityInsight\launchers\SecurityInsight_RiskAnalysis
 copy LauncherConfig.sample.ps1 LauncherConfig.ps1
-notepad LauncherConfig.ps1    # paste Tenant/Client/Secret from PlatformOnboarding output
+notepad LauncherConfig.ps1    # paste Tenant/Client/Secret from PlatformConfiguration output
 
 .\launcher.community-vm.template.ps1 -Summary
 ```
 
-When you clone SecurityInsight you also get `dependencies/PlatformOnboarding/` and
+When you clone SecurityInsight you also get `dependencies/PlatformConfiguration/` and
 `dependencies/PlatformMonitoring/` bundled in — no need to clone them separately unless
 you want to update them independently.
 
@@ -87,7 +573,7 @@ SecurityInsight/
 │   └── _samples/                   full reference copies
 ├── docs/                           documentation, images, Visio, PDFs
 ├── dependencies/
-│   ├── PlatformOnboarding/         bundled — one-time Entra app / cert / VM MI setup
+│   ├── PlatformConfiguration/         bundled — one-time Entra app / cert / VM MI setup
 │   └── PlatformMonitoring/         bundled — health-check engine + email alerts
 ├── README.md
 └── ...
@@ -111,7 +597,7 @@ Every community launcher resolves auth in priority order:
 4. **SPN + plaintext secret** — `$global:SpnClientSecret`  **TESTING ONLY**
 
 Methods 1 and 2 require a VM / Function App with a system-assigned Managed Identity that
-has `Key Vault Secrets User` on the target KV. PlatformOnboarding provisions this for
+has `Key Vault Secrets User` on the target KV. PlatformConfiguration provisions this for
 you — see its README.
 
 Full copy-paste blocks for each method are in every
@@ -132,9 +618,9 @@ Required Function App settings:
 - `PLATFORM_KEYVAULT` (short name)
 - `PLATFORM_STORAGE_ACCOUNT` (optional)
 
-Provisioning: run `New-AzureFunctionHost` from PlatformOnboarding — it creates the
+Provisioning: run `New-AzureFunctionHost` from PlatformConfiguration — it creates the
 Function App + MI + storage + KV binding for you. See
-[PlatformOnboarding](https://github.com/KnudsenMorten/PlatformOnboarding#readme)
+[PlatformConfiguration](https://github.com/KnudsenMorten/PlatformConfiguration#readme)
 for the full walkthrough.
 
 </details>
@@ -627,496 +1113,6 @@ Then remove that file from `$Files` temporarily, until the issue is fixed upstre
 
 ------
 
-<details>
-<summary><b>📚 Executive Summary, Core Concepts, Risk Model (click to expand)</b></summary>
-
-# Executive Summary
-
-## 🧩 What it is
-
-**SecurityInsight is a risk-based prioritization solution for Microsoft security findings.**
-
-It rethinks traditional tools like Secure Score by introducing a **custom risk scoring model** based on:
-
-- consequence (impact)
-- probability (likelihood)
-- contextual risk factors
-
-Its core purpose is simple:
-
-> **Help security teams decide what to fix first — based on real risk, not just severity.**
-
-
-
-## 🚨 Problem it solves
-
-**SecurityInsight addresses the lack of meaningful prioritization in modern security tooling.**
-
-In typical environments:
-
-- Thousands of vulnerabilities and recommendations exist
-- Many are labeled "high" or "critical"
-- Prioritization is based mostly on technical severity
-
-**SecurityInsight solves this by:**
-
-- Incorporating **business impact (asset criticality)**
-- Considering **likelihood of exploitation**
-- Understanding **relationships and attack paths**
-
-👉 Instead of treating all findings equally, it highlights the ones that actually matter.
-
-
-
-## ⚙️ How it works
-
-### 🔢 Risk model
-
-**SecurityInsight uses a simple core formula:**
-
-Risk Score = Consequence × Probability
-
-- **Consequence** → impact if exploited
-- **Probability** → likelihood of exploitation
-
-The score is further refined with contextual factors such as:
-
-- Internet Exposure
-- Contains Verified Secret
-- Critical Resource
-- Lateral Movement
-- Sensitive Data
-- LegacyEndOfSupport
-- ExploitSignals → Vulnerability Exploitkit exist? Yes, choose before others
-
-
-
-### 🏷️ Critical asset tagging
-
-**SecurityInsight classifies assets by importance**, for example:
-
-- **Tier-0 (Critical):** Global Admins, Domain Admins, break-glass accounts
-- **Tier-1 / Tier-2 / Tier-3:** decreasing importance
-
-👉 The same vulnerability becomes higher priority when it affects critical assets.
-
-
-
-### 🕸️ Graph-based analysis
-
-SecurityInsight uses graph-based security data (Exposure Graph) to:
-
-- Map relationships between users, devices, identities, and resources
-- Identify attack paths and lateral movement
-- Correlate findings instead of treating them in isolation
-
-👉 This aligns defensive prioritization with how attackers actually operate.
-
-
-
-### 🧮 Risk analysis engine
-
-**SecurityInsight includes a PowerShell-based analysis engine that:**
-
-- Executes Kusto (KQL) queries against Microsoft security data
-- Processes graph data (nodes + edges)
-- Applies the risk model
-- Produces a prioritized **risk index**
-
-Core components:
-
-- `RunSecurityInsight.ps1` (entry point)
-- Risk analysis scripts
-- KQL query definitions (YAML)
-- Risk index configuration (CSV)
-
-
-
-### 📊 Reporting
-
-**SecurityInsight generates actionable outputs such as:**
-
-- Summary reports
-- Detailed findings
-- Prioritized remediation lists
-
-Optional:
-
-- AI-generated summaries via OpenAI integration
-
-
-
-## 💡 Key idea
-
-> **SecurityInsight transforms raw security findings into a prioritized, business-aware risk view.**
-
-------
-
-
-
-# The Challenge: Too Many Security Recommendations
-
-Modern security platforms such as Microsoft Defender generate a very large number of security recommendations, vulnerabilities, and configuration findings. Security teams are often faced with:
-
-- thousands of vulnerabilities
-- hundreds of security recommendations
-- many findings marked as High or Critical
-
-Traditional vulnerability management often focuses on CVSS scores or severity classifications. This approach creates several challenges:
-
-- the same vulnerability is evaluated equally regardless of the asset
-- business impact is not considered
-- attack chains and relationships are not identified
-
-Although these tools are effective at identifying problems, they rarely answer the most important question: **Which issues should be addressed first?**
-
-In practice, remediation work is often prioritized according to:
-
-- technical severity
-- number of affected systems
-- ease of remediation
-
-This often leads organizations to spend resources resolving issues with limited real risk while more critical exposures remain unaddressed.
-
-------
-
-
-
-# A Risk-Based Prioritization Model
-
-The **SecurityInsight** framework introduces a **risk-based prioritization model** that evaluates security findings based on both consequence and probability.
-
-```
-Risk Score = Consequence Score × Probability Score
-```
-
-**Consequence Score** represents the potential impact if a vulnerability is exploited.
-
-**Probability Score** represents the likelihood that the vulnerability will actually be exploited.
-
-The model can also be influenced by **contextual risk factors** such as:
-
-- Internet Exposure
-- Contains Verified Secret
-- Critical Resource
-- Lateral Movement
-- Sensitive Data
-- LegacyEndOfSupport
-- ExploitSignals → Vulnerability Exploitkit exist? Yes, choose before others
-- +more can be added along the way
-
-These factors will each increase the probability score with +1 — and therefore indirectly increase the overall risk score.
-
-------
-
-
-
-# Why We Use a Graph — Understanding Exposure Graph Architecture
-
-**Defenders typically think in lists.** Security tools often present data as separate inventories such as:
-
-- Devices
-- Users
-- Software
-- Vulnerabilities
-- Cloud resources
-
-These lists help with management and reporting, but they **do not show how systems interact with each other**.
-
-**Attackers, however, do not think in lists.** They think in **relationships between systems** and look for ways to move laterally through an environment. Instead of focusing on individual assets, they focus on **how one compromised system can lead to another**.
-
-This is why modern security platforms like **Microsoft Exposure Graph** represent security data as a **graph of connected entities** rather than isolated lists.
-
-A graph structure allows security tools such as **Microsoft Defender** and **Microsoft Security Copilot** to map relationships between users, devices, applications, and privileges.
-
-------
-
-
-
-## Example of an Attack Path
-
-A typical attack rarely targets the most critical system directly. Instead, attackers move through connected systems step by step.
-
-For example:
-
-```
-User device → Application server → Service account → Domain Controller
-```
-
-This path can represent the following scenario:
-
-1. An attacker compromises a **user device** through phishing or malware.
-2. That device has access to an **application server**.
-3. The application server runs using a **service account**.
-4. The service account has elevated privileges on the **domain controller**.
-
-By following this chain of relationships, the attacker can eventually gain control of the **domain controller**, even though the original compromise happened on a normal user machine.
-
-
-
-### Example of Attack Path
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-1.png)
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-2.png)
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-3.png)
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-4.png)
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-5.png)
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/AttackPath-Sample-EntraCookie-6.png)
-
-------
-
-
-
-## Why Graph Architecture Matters
-
-A **graph model** allows security platforms to:
-
-- **Map relationships between assets**
-- **Identify possible attack paths**
-- **Detect lateral movement opportunities**
-- **Prioritize exposures that could lead to high-impact compromise**
-
-Instead of asking *"What vulnerabilities exist?"*, a graph-based system asks:
-
-> *"Which vulnerabilities could actually lead to a critical system being compromised?"*
-
-This relationship-based view is what makes exposure graphs powerful for **modern threat detection and attack path analysis**.
-
-The **SecurityInsight model** therefore uses **Exposure Graph** analysis to identify relationships between assets, identities, vulnerabilities and configuration issues. Data is sourced from:
-
-- ExposureGraphNodes
-- ExposureGraphEdges
-- Defender Vulnerability Management findings
-- Configuration assessments
-
-These datasets allow analysis of relationships between systems and security findings.
-
-------
-
-
-
-# Risk Score Model
-
-**Risk Score** is calculated using two dimensions:
-
-**Consequence Score** – the potential impact if exploitation occurs.
-
-**Probability Score** – the likelihood of exploitation based on asset tier and exposure context.
-
-**Probability Score** may be adjusted using **contextual risk indicators (risk factors)** that increase the likelihood of exploitation, such as:
-
-- **Active exploitation:** If the vulnerability is currently being exploited in the wild, the likelihood of compromise is significantly higher.
-- **Public exploit code:** Proof-of-concept exploit code is publicly available, lowering the barrier for attackers to exploit the vulnerability.
-- **Internet exposure:** Systems accessible from the internet increase the likelihood of exploitation.
-- **Legacy systems:** Older or unsupported systems may lack security updates and increase vulnerability risk.
-- Contains Verified Secret
-- Critical Resource
-- Lateral Movement
-- Sensitive Data
-
-Each of these influences the score by increasing the probability score with +1 due to the risk factor.
-
-Future possible risk factors being considered are:
-
-- **Large attack surface** – The system exposes multiple services, APIs, or open ports that increase discovery and exploitation opportunities.
-- **Third-party exposure** – The system is accessible by external partners, vendors, or suppliers.
-- **Shared infrastructure** – The vulnerable system is shared across many users or business units, increasing attacker opportunity.
-- **Weak network segmentation** – The system is poorly isolated, allowing attackers easier lateral movement once access is gained.
-- **Credential exposure risk** – The environment has higher likelihood of credential compromise (e.g., shared accounts, weak MFA adoption).
-- **Remote access enabled** – Services such as VPN, RDP, SSH, or remote administration interfaces increase potential entry points.
-
-The **final risk score** is calculated as:
-
-**Risk Score = Consequence Score × Probability Score**
-
-This score is used to prioritize remediation activities.
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/Riskscore-Sample-Zoom.png)
-
-Line #1 with score of 20 is the most critical thing to fix, based on the calculation. Then the next lines with risk score 15, 12, 10, etc.
-
-Calculation sample (line #1):
-
-```
-Severity: 4
-Probability: 5 (4 + 1 due to risk factor 'internet exposed'). 4 is coming from risk index
-Risk Score: 20 (4 x 5)
-```
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/Riskscore-Sample.png)
-
-
-
-#### Another example with more risk factors impacting risk score
-
-![](https://github.com/KnudsenMorten/SecurityInsight/blob/main/docs/Images/RiskFactorsSamples.png)
-
-
-
-### Severity Prioritization | Risk Score Definitions
-
-**Disclaimer:** The severity scores and risk impact classifications presented here are based on my own professional judgment and experience working with attacker-centric security frameworks. Actual exploitation impact may vary depending on each organization's specific environment, existing detective and preventive controls, risk tolerance, regulatory requirements, and architectural decisions. Scores should be used as a prioritization guide, not as absolute measures of risk.
-
-| Defender Score | Risk Impact | Attack Impact |
-| ----------------------- | ------------------------------- | ------------------------------------------------------------ |
-| 10                      | Very High                       | **Absence of this control gives attackers an immediate and decisive advantage.** <br/><br/>Either a critical attack path is left fully exposed, or a single exploitation leads directly to full environment compromise with no further steps required. |
-| 9                       | High                            | This control addresses **weaknesses that are actively weaponized in the wild by ransomware operators, credential theft campaigns, and advanced persistent threat actors**. <br/><br/>Exploitation is well-documented, tooling is widely available, and remediation should be treated as urgent. |
-| 8                       | Medium-High                     | This control is a **foundational hardening measure that meaningfully shrinks the attack surface and disrupts common lateral movement techniques**. <br/><br/>While not immediately catastrophic if missing, its absence creates conditions that attackers routinely chain together to escalate privileges or move laterally. |
-| 5-7                     | Medium                          | This control reflects **established security best practice and reduces exposure to known attack patterns**. <br/>Exploitation is possible but less consistent, typically requiring specific environmental conditions or attacker patience. Prioritize after higher-severity items are addressed. |
-| 1-4                     | Low                             | This control contributes to **security hygiene and long-term posture improvement**. <br/><br/>Missing controls in this range are unlikely to be directly targeted but may marginally increase the cost or noise for an attacker operating in the environment. |
-
-
-
-### Criticality Prioritization | Risk Score Definitions
-
-**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk.
-
-| Criticality Level | Attack Impact | Defender terms |
-| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| **Critical<br />(Tier-0)**                    | **Immediate full environment compromise if taken**<br />Compromise of a Domain Controller, krbtgt account, or Global Administrator yields unrestricted control over every identity, credential, and resource in the environment.<br /><br />An attacker can forge Kerberos tickets, replicate the entire AD database, assign any Entra role, and persist indefinitely without detection. Recovery requires full forest rebuild. | **Portal:** Very High - tier 0 <br /><br />**API:** 0 |
-| **High<br />(Tier-1)**                        | **High impact, one or two pivots to full compromise**<br />Compromise of an Exchange server, Authentication Administrator, or jump server provides credential material, token abuse opportunities, or lateral movement paths that lead to tier 0 within one or two steps. <br /><br />An attacker can reset MFA, intercept authentication flows, abuse unconstrained delegation, or exploit ADCS misconfigurations to escalate without direct access to tier 0 assets. | **Portal:** High - tier 1<br />**API:** 1 |
-| **Medium<br />(Tier-2)**                      | **Significant workload impact, conditional path to escalation**<br />Compromise of a file server, developer workstation, or SharePoint environment enables mass data exfiltration, credential harvesting from application configs, and abuse of scoped service accounts.<br /><br />Escalation to tier 0 is possible but requires chaining multiple weaknesses such as finding reused credentials, misconfigured delegation, or an over-permissioned service principal. | **Portal:** Medium - tier 2 <br />**API:** 2 |
-| **Low<br />(Tier-3)**                         | **Low blast radius, limited lateral movement potential**<br />Compromise of a standard employee workstation, guest PC, or read-only service account yields limited immediate value.<br /><br />An attacker gains a foothold for phishing, internal reconnaissance, or credential capture via keylogging, but cannot directly access sensitive systems or escalate without exploiting additional misconfigurations elsewhere in the environment. | **Portal:** Low - tier 3 <br />**API:** 3 |
-
-
-
-### Identity Asset Criticality Classification
-
-**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
-
-| Criticality Level | Typical Assets |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| **Critical<br />(Tier-0)**<br /><br />Immediate Domain Takeover | **Entra ID Roles (built-in) – users/managed identities:** Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator, Partner / GDAP Delegated Admin, Directory Synchronization Accounts, Hybrid Identity Administrator (when Entra Connect is in password hash sync mode)<br /><br />**Application Permissions (Graph / API):** RoleManagement.ReadWrite.Directory, Directory.ReadWrite.All, AppRoleAssignment.ReadWrite.All, Policy.ReadWrite.AuthenticationMethod, PrivilegedAccess.ReadWrite.AzureAD, RoleManagement.ReadWrite.CloudPC, Organization.ReadWrite.All, Domain.ReadWrite.All, CrossTenantUserProfileSharing.ReadWrite.All, OnPremDirectorySynchronization.ReadWrite.All<br /><br />**Azure Built-in Roles:** Owner (root management group), User Access Administrator (root management group), Owner (tenant root subscription)<br /><br />**Azure Permissions:** Contributor + blueprint assign (root MG), Managed Identity Contributor (root scope), Entra ID joined device with Global Admin token cache, Subscription Owner with Az AD write federation<br/><br/>**AD Built-in Groups:** Domain Admins, Enterprise Admins, Schema Admins, Administrators (builtin), Group Policy Creator Owners, Cert Publishers, Domain Controllers group<br/><br/>**AD Permissions:** Replication rights (DCSync), DnsAdmins (with DC write), SYSTEM on any DC<br /><br />**Accounts (list not complete):** krbtgt account, SYSTEM on DC, Entra Connect sync account (MSOL_), ADConnect service account, Break-glass emergency access accounts, Service accounts with DCSync rights, Accounts with AdminSDHolder propagated ACLs |
-| **High<br />(Tier-1)**<br /><br />Fast-Track Takeover (Abusable Privileges) | **Entra ID Roles (built-in) – users/managed identities:** Authentication Administrator, Hybrid Identity Administrator, Exchange Administrator, Cloud App Administrator, Application Administrator, Security Administrator, Intune Administrator, Identity Governance Administrator, External Identity Provider Administrator, B2C IEF Policy Administrator, Domain Name Administrator, Password Administrator (when targeting admins), Helpdesk Administrator (when targeting admins), Billing Administrator, Azure DevOps Administrator, Windows 365 Administrator<br/><br/>**Application Permissions (Graph / API):** Application.ReadWrite.All, Mail.ReadWrite (app all users), User.ReadWrite.All, Group.ReadWrite.All, Sites.FullControl.All, DeviceManagementServiceConfig.ReadWrite.All, DeviceManagementApps.ReadWrite.All, DeviceManagementManagedDevices.ReadWrite.All, ServicePrincipalEndpoint.ReadWrite.All, Policy.ReadWrite.ConditionalAccess, Policy.ReadWrite.PermissionGrant, EntitlementManagement.ReadWrite.All, PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup, AuthenticationContext.ReadWrite.All, TrustFrameworkKeySet.ReadWrite.All, UserAuthenticationMethod.ReadWrite.All, IdentityProvider.ReadWrite.All, Organization.ReadWrite.All, Domain.ReadWrite.All, AccessReview.ReadWrite.All, Agreement.ReadWrite.All, RoleEligibilitySchedule.ReadWrite.Directory, RoleAssignmentSchedule.ReadWrite.Directory<br /><br />**Azure Built-in Roles (list not complete):** Owner (subscription or resource group), User Access Administrator (subscription scope), Key Vault Administrator, Azure Kubernetes Service Cluster Admin, Managed Identity Operator (on high-privilege MIs), Virtual Machine Contributor, Automation Account Contributor, Logic App Contributor<br/><br/>**Azure Permissions (list not complete):** Contributor on Key Vault (with access policy model), Azure Arc onboarding with connected machine agent, Storage Account Contributor (with Entra-integrated storage), Azure DevOps project admin (with service connection to high-priv MI), Defender for Cloud admin, IMDS token theft via VM access, Runbook execution as managed identity<br /><br />**AD Built-in Groups:** Account Operators, Backup Operators, Server Operators, Print Operators<br/><br/>**AD Permissions (list not complete):** GPO edit rights on tier 0 OUs, AdminSDHolder write access, msDS-KeyCredentialLink write, WriteOwner on domain root, WriteDACL on domain root, GenericAll on tier 0 groups, GenericWrite on Domain Controllers OU, AllExtendedRights on domain root, ForceChangePassword on admin accounts, Manage CA (AD CS), Certificate enrollment agents, ESC1–ESC8 vulnerable certificate templates, SeBackupPrivilege holders, SeRestorePrivilege holders, SeTakeOwnershipPrivilege holders, SeDebugPrivilege on DC, SeImpersonatePrivilege on DC, Unconstrained delegation computers, Unconstrained delegation service accounts, Shadow Credentials write on admin accounts, SID History injection rights, Trust account manipulation rights, GPO link rights on tier 0 OUs, OU owner on Domain Controllers OU<br /><br />**Accounts (list not complete):** Entra Connect service account, High-privilege service principals with T0 Graph permissions, Admin-consented OAuth apps with T1 permissions, AD CS enrollment agent accounts, Service accounts with unconstrained delegation, Accounts with GenericAll on tier 0 objects, Federated identity credentials on high-privilege app registrations, Managed identities with Owner or UAA at subscription scope, Workload identities bound to high-privilege Azure RBAC roles, Azure Automation Run As accounts, Service principals with client secrets stored in Key Vault accessible to lower-trust identities |
-| **Medium<br />(Tier-2)**<br /><br />Conditional Takeover (Needs Chaining / Misconfig) | **Entra ID Roles (built-in) – users/managed identities (list not complete):** User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator<br/><br/>**Application Permissions (Graph / API) (list not complete):** Mail.Read (app all users), Calendars.ReadWrite, Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All<br/><br/>**Azure Built-in Roles (list not complete):** Network Contributor, Log Analytics Contributor, Automation Operator, Azure DevOps stakeholder, Azure Kubernetes Service Cluster User<br /><br />**Azure Permissions (list not complete):** Contributor (single non-sensitive resource group), Storage Blob Data Reader (scoped to non-sensitive storage), Log Analytics Reader, Monitoring Reader, Security Reader (Defender for Cloud), Managed Identity on low-privilege workload, Service principal scoped to single resource group<br/><br />**AD Built-in Groups:** DNS Admins<br/><br />**AD Permissions (list not complete):** OU-scoped write ACLs, LAPS read rights, Constrained delegation (msDS-AllowedToDelegateTo), RBCD write rights, Kerberoastable high-priv SAs<br/><br />**Accounts (list not complete):** High-privilege service principals scoped to workload, Admin-consented OAuth apps with scoped permissions, Automation accounts with limited RBAC, Azure DevOps service connections scoped to single subscription |
-| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Entra ID Roles (built-in) – users/managed identities:** Global Reader, Security Reader, Reports Reader, Message Center Reader, Usage Summary Reports Reader, Directory Readers, Guest User (default)<br/><br/>**Application Permissions (Graph / API) (list not complete):** User.Read (delegated), Mail.Read (delegated self), Calendars.Read (delegated), Directory.Read.All, AuditLog.Read.All (delegated), IdentityRiskEvent.Read.All<br/><br/>**Azure Built-in Roles (list not complete):** Reader (subscription or resource group), Billing Reader, Cost Management Reader, Tag Contributor, Azure DevOps Basic user (no pipeline access)<br /><br />**Azure Permissions (list not complete):** Storage Blob Data Reader (scoped, non-sensitive), Managed Identity with Reader only, Service principal with Reader on isolated resource group<br/><br/>**AD Built-in Groups:** Domain Users (default), Read-only DC (RODC)<br/><br/>**AD Permissions (list not complete):** Scoped helpdesk OU read, GenericRead on non-priv objects<br /><br />**Accounts (list not complete):** Standard user accounts, Guest accounts, Read-only service accounts, Managed identities with no RBAC assignments, Expired or disabled service principals |
-
-
-
-### Endpoint / Device Asset Criticality Classification
-
-**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
-
-| Criticality Level | Typical Assets |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| **Critical<br />(Tier-0)**<br /><br />Immediate full environment compromise if taken | **Server Roles:** Domain Controllers (Primary/Additional), Read-Only Domain Controllers (RODC), AD CS servers (Certificate Authority — root and subordinate), Entra Connect / AD Connect servers, Federation servers (AD FS primary)<br/><br/>**Management:** Privileged Access Workstations (PAW) used by tier 0 admins, Backup servers with DC/CA backup data, Monitoring servers with domain-level agent credentials, Key Management Services (KMS) servers with domain-joined credential store<br/><br/>**Infrastructure:** HSM-attached servers (storing root CA private keys), SAN / storage controllers backing tier 0 VMs<br/><br/>**Hypervisor:** Hypervisor hosts running tier 0 guest VMs (VMware ESXi, Hyper-V, KVM), vCenter / SCVMM management servers (managing tier 0 hypervisors)<br/><br/>**Network Equipment:** Core routers (BGP, MPLS backbone), Core switches (spanning all VLANs), Firewall clusters (perimeter and internal segmentation), Out-of-band management network devices (iDRAC, iLO, IPMI), Network management servers (Cisco DNA, SolarWinds — full network write access), SD-WAN controllers, Load balancers (handling auth traffic)<br/><br/>**IoT / OT:** Building management systems (BMS) controllers with domain integration, Physical security controllers (badge access, CCTV management) with domain integration, OT / ICS controllers with direct network adjacency to tier 0 systems |
-| **High<br />(Tier-1)**<br /><br />High impact, one or two pivots to full compromise | **Server Roles:** Exchange servers, MFA / RADIUS servers, PKI subordinate CA servers, DNS servers (non-DC hosted), Active Directory Federation Services (AD FS) proxy servers<br/><br/>**Management:** Privileged Access Workstations (PAW) used by tier 1 admins, Jump servers / bastion hosts, SIEM servers, Endpoint Detection and Response (EDR) management servers, SCCM / MECM primary site servers, Privileged Identity Management (PIM) approval workflow servers, Secret management servers (HashiCorp Vault, Azure Key Vault private endpoints), Password managers with admin credential stores, Patch management servers (WSUS), Admin workstations used by tier 1 staff without PAW controls<br/><br/>**Infrastructure:** Network Access Control (NAC) servers, VPN concentrators / remote access servers, Azure Arc-connected servers with high-privilege managed identity, Privileged developer machines with production secrets or pipeline credentials<br/><br/>**Hypervisor:** Hypervisor hosts running tier 1 guest VMs, vCenter / SCVMM management servers (managing tier 1 hypervisors)<br/><br/>**Network Equipment:** Distribution switches, Wireless LAN controllers (WLC), Proxy servers (SSL inspection — credential visibility), RADIUS / TACACS+ network authentication servers, Network packet brokers / TAP aggregators, Remote access concentrators (Citrix ADC, F5 BIG-IP), DNS resolvers (internal recursive), DHCP servers (domain-integrated), Network time protocol (NTP) primary servers<br/><br/>**IoT / OT:** SCADA / ICS servers (non-tier 0 adjacent), Industrial IoT gateways with network bridging, UPS management controllers (power disruption potential), HVAC controllers (data center environment impact), Building automation system (BAS) servers, Medical device management servers, Surveillance / CCTV management servers (non-domain integrated)<br/><br/>**Client Devices:** IT staff personal workstations (helpdesk, sysadmin, network engineers — cached credentials, admin tools, RDP session history), IT management laptops (used for remote administration without formal PAW controls), Security operations workstations (SOC analyst machines with SIEM and EDR console access), Senior IT personal workstations (IT managers, architects — broad access scope) |
-| **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Server Roles:** File servers, SharePoint servers, SQL servers hosting sensitive databases, Citrix / RDS session hosts, Web application servers with Entra integrated auth, API gateway servers, Collaboration servers (Teams on-prem, Skype for Business), HR and identity lifecycle management servers, Internal certificate registration authority (RA) servers, IT service management servers (ServiceNow, Jira)<br/><br/>**Management:** Log aggregation servers, DevOps / CI-CD build agents, Container orchestration nodes (Kubernetes worker nodes)<br/><br />**Hypervisor:** Hypervisor hosts running tier 2 guest VMs<br/><br/>**Network Equipment:** Access layer switches (user-facing VLANs), Wireless access points (managed), Network monitoring appliances (read-only), Standalone DHCP servers (non-domain integrated), Content filtering / web proxy appliances, VoIP / SIP gateways<br/><br/>**IoT / OT:** Smart meeting room devices (displays, conferencing systems), Environmental sensors (temperature, humidity — data center), Badge readers (non-domain integrated, isolated), Laboratory equipment with network interfaces, IP cameras (isolated VLAN, no domain integration), Industrial sensors (read-only, no control plane access), Retail / POS terminals (isolated network segment)<br/><br/>**Client Devices:** Production workstations, Lab workstations, Shared devices, Developer workstations, Power user workstations (finance, legal, HR) |
-| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Server Roles:** Print servers, DHCP servers, Time servers (NTP), VoIP servers, Internal wiki / intranet servers, Archival / cold storage servers, Physical access control servers, Test / sandbox servers<br/><br/>**Management:** Network monitoring probes<br/><br/>**Network Equipment:** Unmanaged access switches, Consumer-grade wireless access points, Out-of-band console servers (isolated, read-only access), Standalone print servers (network-connected, no domain join)<br/><br/>**IoT / OT:** Smart lighting controllers (isolated network), Consumer IoT devices (isolated guest VLAN), Non-networked or air-gapped sensors, Vending machines / coffee machines with network connectivity, Digital signage players (isolated, read-only content), Wearables / smart badges (no domain integration), USB-only peripheral devices with firmware update capability<br/><br/>**Client Devices:** Standard employee workstations, Student workstations, Kiosk machines, Guest PCs, Shared classroom / library computers, Development workstations (non-privileged, isolated, no production access), Personally-owned BYOD devices, Retired / decommissioned machines |
-
-
-
-### Cloud (Azure) Asset Criticality Classification
-
-**Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
-
-| Criticality Level | Typical Assets |
-| ------------------------------------------------------------ | ------------------------------------------------------------ |
-| **Critical<br />(Tier-0)**<br /><br />Immediate full environment compromise if taken | **Compute:** Virtual Machines hosting tier 0 workloads (DC, ADCS, Entra Connect), Virtual Machines with privileged tokens or highly privileged managed identities assigned, VM Scale Sets running privileged workloads, Azure Bastion hosts (gateway to tier 0 VMs), Confidential compute instances handling key material<br/><br/>**Storage:** Storage accounts containing DC/CA backup data, Storage accounts containing Entra Connect configuration, Azure Blob Storage backing tier 0 audit and log pipelines, Storage accounts with Entra-integrated RBAC and tier 0 data, Immutable and locked Azure Storage holding identity bootstrap data<br/><br/>**Identity & Access:** Entra ID tenant root, Management group root (tenant root group), Subscriptions containing tier 0 workloads, Azure Key Vault storing root CA private keys, Azure Key Vault storing tenant-wide secrets and certificates, Azure Key Vaults storing tenant root keys or certificate authorities, Managed Identity with Owner or User Access Administrator at subscription or MG scope, App registrations with RoleManagement.ReadWrite.Directory or Directory.ReadWrite.All, Service principals with tenant-wide privileged Graph API permissions<br/><br/>**Networking:** Virtual Networks hosting tier 0 VMs, Network Security Groups governing tier 0 subnet traffic, Azure Firewall (central hub — controls all east-west and north-south traffic), ExpressRoute circuits (direct on-prem to cloud bridge), Azure Private DNS zones (name resolution for tier 0 services), VPN Gateways (site-to-site tunnels into on-prem tier 0 networks), Azure DDoS Protection plans, Azure Network and Security Policy control plane resources<br/><br/>**Management & Governance:** Azure Management Groups with root tenant-level access, Azure Subscription Owner roles over security-critical subscriptions, Azure Policy assignments at root MG scope, Azure Blueprints assigned at root MG scope, Microsoft Defender for Cloud, Azure Monitor (Log Analytics workspaces ingesting tier 0 signals), Microsoft Sentinel workspace, Azure Automation accounts running as high-privilege managed identity, Azure Automation / Runbook accounts with privileged role assignments, Azure DevOps organizations with service connections to tier 0 subscriptions, Azure Arc control plane (manages on-prem servers as Azure resources), Azure Arc / Hybrid management orchestrators<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 0 VMs, Azure VMware Solution (AVS) management clusters, Azure Stack HCI clusters running tier 0 guest VMs |
-| **High<br />(Tier-1)**<br /><br />High impact, one or two pivots to full compromise | **Compute:** Virtual Machines hosting Exchange, ADFS, MFA, or SIEM workloads, Virtual Machines with scoped privileged tokens or identities, Azure Kubernetes Service (AKS) clusters with privileged workloads, Azure Container Apps running privileged services, Azure Batch accounts with high-privilege managed identity<br/><br/>**Storage:** Storage accounts backing SIEM and log aggregation, Storage accounts containing application secrets or config, Azure File shares mounted by privileged VMs, Azure Data Lake storing sensitive identity or security telemetry, Highly active Azure Key Vaults with large number of operations<br/><br/>**Identity & Access:** App registrations with Application.ReadWrite.All or User.ReadWrite.All, Service principals with Exchange, Intune, or Security Administrator equivalent permissions, Managed Identities with Contributor or Key Vault Administrator at subscription scope, Azure AD B2C tenants federated to production tenant, Federated identity credentials on privileged app registrations<br/><br/>**Networking:** Hub Virtual Networks (peered to tier 0 VNets), Azure Application Gateway (WAF — handles auth traffic), Azure Front Door (global entry point — SSL termination), Azure Load Balancer (fronting tier 1 workloads), Network Virtual Appliances (NVA — routing and inspection), Azure Private Endpoints for tier 1 services, Azure DNS resolvers (recursive — name resolution for all workloads)<br/><br/>**Management & Governance:** Azure Automation accounts with scoped privileged runbooks, Azure Automation / Runbook accounts with scoped role assignments, Log Analytics workspaces ingesting tier 1 signals, Azure DevOps pipelines deploying to tier 1 environments, Azure Key Vault storing tier 1 application secrets, Microsoft Defender for Endpoint, Azure Update Manager, Azure Lighthouse delegations with privileged access, Azure Arc / Hybrid management orchestrators (scoped to tier 1 systems)<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 1 VMs, Azure Stack HCI clusters running tier 1 guest VMs, Azure VMware Solution (AVS) workload clusters |
-| **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Compute:** Virtual Machines hosting file, SharePoint, SQL, or collaboration workloads, Azure Kubernetes Service (AKS) worker nodes (non-privileged workloads), Azure App Service plans hosting internal applications, Azure Functions with scoped managed identity, Azure Logic Apps with limited connector scope, Azure Virtual Desktop (AVD) / Windows 365 for non-admin users, Dev/Test virtual machines without production data<br/><br/>**Storage:** Storage accounts hosting application data (non-sensitive), Azure SQL databases (non-sensitive schemas), Azure Cosmos DB instances (application data), Azure File shares mounted by standard workload VMs, Azure Blob Storage for application asset delivery<br/><br/>**Identity & Access:** App registrations with scoped delegated permissions, Service principals scoped to single resource group, Managed Identities with Contributor on isolated resource group, App registrations with Mail.Read or Files.ReadWrite.All<br/><br/>**Networking:** Spoke Virtual Networks (workload-specific, peered to hub), Azure Application Gateway (non-auth workloads), Network Security Groups on workload subnets, Azure Traffic Manager profiles, Azure Content Delivery Network (CDN) endpoints<br/><br/>**Management & Governance:** Dev/Test subscriptions and resource groups, Non-production workloads (dev, test, QA, staging) without production data, Azure DevOps pipelines deploying to tier 2 environments, Log Analytics workspaces (workload-scoped), Azure Key Vault storing tier 2 application secrets, Azure Monitor alert rules (workload-scoped), Azure Backup vaults (tier 2 workload data)<br/><br/>**Hypervisor / Fabric:** Azure Dedicated Hosts running tier 2 VMs, Azure Stack HCI clusters running tier 2 guest VMs |
-| **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Compute:** Virtual Machines hosting non-sensitive workloads (print, NTP, intranet), Azure App Service (public-facing, no internal integration), Azure Static Web Apps, Azure Container Instances (isolated, ephemeral), Sandbox subscriptions designed for experimentation, Proof-of-concept / pilot workloads with no sensitive data, Lab resource groups intended to be wiped/reset<br/><br/>**Storage:** Storage accounts hosting public or non-sensitive content, Azure Blob Storage for static asset delivery, Azure Archive storage (cold, no active credentials)<br/><br/>**Identity & Access:** App registrations with User.Read delegated only, Service principals with Reader on isolated resource group, Managed Identities with no RBAC assignments, Expired or disabled service principals, Guest user accounts with default permissions, Personal / sandbox resources with no privileged role assignments<br/><br/>**Networking:** Azure CDN endpoints (public content delivery), Azure DNS public zones (external name resolution only), Network Security Groups on isolated low-trust subnets, Azure Virtual WAN branches (read-only monitoring)<br/><br/>**Management & Governance:** Azure Cost Management (read-only), Azure Policy (read-only assignments), Azure Monitor (read-only, non-sensitive workloads), Azure Advisor (recommendations only), Azure Service Health alerts (read-only), Sandbox subscriptions for experimentation, Proof-of-concept and pilot resource groups with no sensitive data<br/><br/>**Hypervisor / Fabric:** Azure Sandbox / dev-test dedicated hosts, Non-production Azure Stack HCI clusters |
-
-
-
-### Risk Index - How we prioritize scoring (customizable)?
-
-**Disclaimer:** The risk scoring and prioritization model presented in this table is based on my personal assessment and general security best practices. The scoring methodology, severity levels, and criticality tiers are intended as a customizable reference framework. Actual risk prioritization may vary between organizations depending on their infrastructure, business impact, regulatory requirements, threat landscape, and risk tolerance.
-
-[Download as CSV-file](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/SecurityInsight_RiskIndex.csv)
-
-| Security<br />Domain | Category           | Sub<br />Category | ConfigurationId | Security<br />Severity | Risk<br />Consequence<br />Score_<br />Security<br />Severity | Criticality<br />TierLevel | Risk<br />Probability<br />Score_<br />Criticality<br />TierLevel | Comments                                                     |
-| -------------------- | ------------------ | ----------------- | --------------- | ---------------------- | ------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ |
-|                      |                    |                   |                 | Very High              | 4                                                            | Critical - tier  0         | 4                                                            |                                                              |
-|                      |                    |                   |                 | Very High              | 4                                                            | High - tier 1              | 3                                                            |                                                              |
-|                      |                    |                   |                 | Very High              | 4                                                            | Medium - tier 2            | 2                                                            |                                                              |
-|                      |                    |                   |                 | Very High              | 4                                                            | Low - tier 3               | 1                                                            |                                                              |
-|                      |                    |                   |                 | High                   | 3                                                            | Critical - tier  0         | 4                                                            |                                                              |
-|                      |                    |                   |                 | High                   | 3                                                            | High - tier 1              | 3                                                            |                                                              |
-|                      |                    |                   |                 | High                   | 3                                                            | Medium - tier 2            | 2                                                            |                                                              |
-|                      |                    |                   |                 | High                   | 3                                                            | Low - tier 3               | 1                                                            |                                                              |
-|                      |                    |                   |                 | Medium-High            | 2                                                            | Critical - tier  0         | 4                                                            |                                                              |
-|                      |                    |                   |                 | Medium-High            | 2                                                            | High - tier 1              | 3                                                            |                                                              |
-|                      |                    |                   |                 | Medium-High            | 2                                                            | Medium - tier 2            | 2                                                            |                                                              |
-|                      |                    |                   |                 | Medium-High            | 2                                                            | Low - tier 3               | 1                                                            |                                                              |
-|                      |                    |                   |                 | Medium                 | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
-|                      |                    |                   |                 | Medium                 | 1                                                            | High - tier 1              | 3                                                            |                                                              |
-|                      |                    |                   |                 | Medium                 | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
-|                      |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
-|                      |                    |                   |                 | Low                    | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
-|                      |                    |                   |                 | Low                    | 1                                                            | High - tier 1              | 3                                                            |                                                              |
-|                      |                    |                   |                 | Low                    | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
-|                      |                    |                   |                 | Low                    | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Very High              | 4                                                            | Critical - tier  0         | 4                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Very High              | 4                                                            | High - tier 1              | 3                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Very High              | 4                                                            | Medium - tier 2            | 2                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Very High              | 4                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | High                   | 3                                                            | Critical - tier  0         | 4                                                            |                                                              |
-| Endpoint             |                    |                   |                 | High                   | 3                                                            | High - tier 1              | 3                                                            |                                                              |
-| Endpoint             |                    |                   |                 | High                   | 3                                                            | Medium - tier 2            | 2                                                            |                                                              |
-| Endpoint             |                    |                   |                 | High                   | 3                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | Critical - tier  0         | 4                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | High - tier 1              | 3                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | Medium - tier 2            | 2                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium-High            | 2                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | High - tier 1              | 3                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Medium                 | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Low                    | 1                                                            | Critical - tier  0         | 4                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Low                    | 1                                                            | High - tier 1              | 3                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Low                    | 1                                                            | Medium - tier 2            | 2                                                            |                                                              |
-| Endpoint             |                    |                   |                 | Low                    | 1                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             | Security  controls |                   |                 | Very High              | 5                                                            | Critical - tier  0         | 4                                                            |                                                              |
-| Endpoint             | Security controls  |                   |                 | Very High              | 5                                                            | High - tier 1              | 3                                                            |                                                              |
-| Endpoint             | Security  controls |                   |                 | Very High              | 5                                                            | Medium - tier 2            | 2                                                            |                                                              |
-| Endpoint             | Security controls  | Antivirus         | scid-2014       |                        | 5                                                            | Critical - tier 0          | 4                                                            |                                                              |
-| Endpoint             | Security  controls | Antivirus         | scid-2014       |                        | 5                                                            | High - tier 1              | 3                                                            |                                                              |
-| Endpoint             | Security controls  | Antivirus         | scid-2014       |                        | 5                                                            | Medium - tier 2            | 2                                                            |                                                              |
-| Endpoint             | Security  controls | Antivirus         | scid-2014       |                        | 5                                                            | Low - tier 3               | 1                                                            |                                                              |
-| Endpoint             | Security controls  | EDR               | scid-2002       | Very High              | 4                                                            | Critical - tier 0          | 4                                                            | Fix Microsoft Defender for Endpoint  impaired communications |
-| Endpoint             | Security  controls | EDR               | scid-2002       | Very High              | 3                                                            | High - tier 1              | 3                                                            | Fix  Microsoft Defender for Endpoint impaired communications |
-| Endpoint             | Security controls  | EDR               | scid-2002       | Very High              | 2                                                            | Medium - tier 2            | 2                                                            | Fix Microsoft Defender for Endpoint  impaired communications |
-| Endpoint             | Security  controls | EDR               | scid-2002       | Very High              | 1                                                            | Low - tier 3               | 1                                                            | Fix  Microsoft Defender for Endpoint impaired communications |
-| Endpoint             | Security controls  | EDR               | scid-2001       | Very High              | 2                                                            | Critical - tier 0          | 1                                                            | Fix Microsoft Defender for Endpoint  sensor data collection  |
-| Endpoint             | Security  controls | EDR               | scid-2001       | Very High              | 2                                                            | High - tier 1              | 1                                                            | Fix  Microsoft Defender for Endpoint sensor data collection  |
-| Endpoint             | Security controls  | EDR               | scid-2001       | Very High              | 2                                                            | Medium - tier 2            | 1                                                            | Fix Microsoft Defender for Endpoint  sensor data collection  |
-| Endpoint             | Security  controls | EDR               | scid-2001       | Very High              | 2                                                            | Low - tier 3               | 1                                                            | Fix  Microsoft Defender for Endpoint sensor data collection  |
-| Endpoint             | Security controls  | EDR               | scid-2000       | Very High              | 2                                                            | Critical - tier 0          | 1                                                            | Turn on Microsoft Defender for Endpoint  sensor              |
-| Endpoint             | Security  controls | EDR               | scid-2000       | Very High              | 2                                                            | High - tier 1              | 1                                                            | Turn  on Microsoft Defender for Endpoint sensor              |
-| Endpoint             | Security controls  | EDR               | scid-2000       | Very High              | 2                                                            | Medium - tier 2            | 1                                                            | Turn on Microsoft Defender for Endpoint  sensor              |
-| Endpoint             | Security  controls | EDR               | scid-2000       | Very High              | 2                                                            | Low - tier 3               | 1                                                            | Turn  on Microsoft Defender for Endpoint sensor              |
-
-
-
-## Reporting
-
-The framework generates both summary and detailed reports.
-
-**Summary reports** include number of findings per tier, overall risk levels, and configuration status.
-
-**Detailed reports** include affected assets, vulnerability identifiers, and remediation guidance.
-
-| File Name | Purpose |
-| ------------------------------------------------------------ | ----------------------------------------------- |
-| [Sample - RiskAnalysis_Summary_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Sample%20-%20RiskAnalysis_Summary_Bucket.xlsx) | Sample summary output Excel file |
-| [Sample - RiskAnalysis_Detailed_Bucket.xlsx](https://github.com/KnudsenMorten/SecurityInsight/raw/refs/heads/main/Sample%20-%20RiskAnalysis_Detailed_Bucket.xlsx) | Sample detailed output Excel file |
-| [Sample mail - Summary report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/data/_samples/Sample%20mail%20-%20Summary%20report%20with%20AI%20summary.pdf) | Sample mail for Summary report with AI summary |
-| [Sample mail - Detailed report with AI summary.pdf](https://github.com/KnudsenMorten/SecurityInsight/blob/main/data/_samples/Sample%20mail%20-%20Detailed%20report%20with%20AI%20summary.pdf) | Sample mail for Detailed report with AI summary |
-
-------
-
-
-
-</details>
 
 <details>
 <summary><b>🏛️ Governance, Compliance, Operational Benefits, Collaboration (click to expand)</b></summary>
@@ -1262,12 +1258,37 @@ The goal of this collaboration is to explore how the principles behind SecurityI
 > `LauncherConfig.ps1` for credentials, or modify the `launcher.override.ps1` (sibling of the template,
 > also `.gitignore`'d) to swap any parameter at runtime without touching the template.
 
+## Setup Custom Security Attributes (optional, one-time)
+
+| File | Path in repo | Kind |
+| --- | --- | --- |
+| Engine | `scripts/Setup-SecurityInsight-CustomSecurityAttributes.ps1` | Platform |
+| Launcher | `launchers/Setup-SecurityInsight-CustomSecurityAttributes/launcher.*.template.ps1` | Platform |
+
+> **Optional one-time setup.** If you want the tagging pipeline (`CriticalAssetTagging`) to stamp its
+> results onto Entra objects as Custom Security Attributes, run this engine **once per tenant** before
+> running the pipeline. It provisions the `SecurityInsight` AttributeSet with the three attributes
+> (`AssetTagName`, `AssetTier`, `AssetTagType`) and optionally grants the pipeline identity the
+> *Attribute Assignment Administrator* role. Idempotent — safe to re-run.
+>
+> **Who can run it.** The caller needs the elevated Entra roles *Attribute Definition Administrator*
+> and *Privileged Role Administrator*. These are human-admin roles; a plain app-only SPN usually
+> won't be enough. The recommended path is `launcher.community-vm.template.ps1` (or
+> `launcher.internal-vm.template.ps1`) run **interactively** by an admin user — the launcher leaves
+> Graph auth to the engine, which prompts you in a browser.
+>
+> **Optional parameters** (set in `LauncherConfig.ps1`):
+> `SI_CSA_PipelinePrincipalId` — object id of the MI/SPN that runs the tagging pipeline; gets the
+> Attribute Assignment Administrator + Reader roles. `SI_CSA_TestObjectId` — non-prod object used
+> for a test write/read/cleanup. `SI_CSA_TenantId` — tenant where the schema lives.
+
 ## Support file
 
 | File Name | Purpose | Comment |
 | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------ |
 | [UpdateSecurityInsight.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/UpdateSecurityInsight.ps1) | Update Engine<br />Backup local files + Update files from [Github repo](https://github.com/KnudsenMorten/SecurityInsight) | Can be modified to your needs |
 | [Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1) | Deploy OpenAI PAYG instance (optional)<br />Used for AI summary based on context from risk analysis | Must be modified to your needs |
+| [Setup-SecurityInsight-CustomSecurityAttributes.ps1](https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/refs/heads/main/Setup-SecurityInsight-CustomSecurityAttributes.ps1) | **OPTIONAL** — One-time CSA schema setup in Entra ID. Run once per tenant by an Entra admin with *Attribute Definition Administrator* + *Privileged Role Administrator*. Idempotent. | Run once, then forget |
 
 ## Sample Output files
 
@@ -1288,13 +1309,13 @@ The end-to-end flow uses three repos in order. Each has its own detailed README 
 
 | # | Step | Repo | Purpose |
 | --- | --- | --- | --- |
-| **1** | Infrastructure onboarding | [**PlatformOnboarding**](https://github.com/KnudsenMorten/PlatformOnboarding#readme) | Create Entra App + SPN, certificate, VM Managed Identity, Key Vault, Azure Function host. One-time per tenant. |
+| **1** | Infrastructure onboarding | [**PlatformConfiguration**](https://github.com/KnudsenMorten/PlatformConfiguration#readme) | Create Entra App + SPN, certificate, VM Managed Identity, Key Vault, Azure Function host. One-time per tenant. |
 | **2** | Health checks (recommended) | [**PlatformMonitoring**](https://github.com/KnudsenMorten/PlatformMonitoring#readme) | Schedule the health-check engine so secret expiry / KV outage / Function problems land in your inbox instead of silently breaking reports. |
 | **3** | Asset Tagging (PROD + TEST) | SecurityInsight — this repo | Tag devices + Azure resources with SecurityInsight tier tags. See **Step 3** collapsible in the Detailed Implementation Guide below. |
 | **4** | Asset Criticality Classification | SecurityInsight | Validate the tagging rules match your estate. See **Step 4** collapsible below. |
 | **5** | Risk Analysis | SecurityInsight | Run `SecurityInsight_RiskAnalysis` for Summary / Detailed Excel output + optional AI summary email. See **Step 5** collapsible below. |
 
-> **Steps 1 and 2 are cross-solution** — the same PlatformOnboarding / PlatformMonitoring
+> **Steps 1 and 2 are cross-solution** — the same PlatformConfiguration / PlatformMonitoring
 > runs serve every solution from this author (SecurityInsight, EntraPolicySuite, PIM4EntraPS, ...).
 > You only onboard once per tenant; every solution reuses the resulting SPN / MI.
 >

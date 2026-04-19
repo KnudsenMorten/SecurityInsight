@@ -1,4 +1,17 @@
-﻿#########################################################################################################
+<#
+.SYNOPSIS
+    UpdateSecurityInsight - engine script in the SecurityInsight solution.
+
+.NOTES
+    Solution       : SecurityInsight
+    File           : UpdateSecurityInsight.ps1
+    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    GitHub         : https://github.com/KnudsenMorten
+    Support        : For public repos, open a GitHub Issue on that solution's repo.
+
+#>
+#########################################################################################################
 # Downloading latest version of SecurityInsight files (with local rotating backup: last 5 versions)
 #########################################################################################################
 

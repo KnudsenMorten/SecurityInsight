@@ -85,6 +85,15 @@
         -TenantId c806957b-41a4-496c-9bbb-6e4e5b00ec9b `
         -CustomerName 'Contoso' `
         -SmtpServer smtp.office365.com -SmtpPort 587 -SmtpFrom 'alerts@contoso.com' -SmtpUseSsl
+
+.NOTES
+    Solution       : PlatformMonitoring
+    File           : Invoke-PlatformHealthCheck.ps1
+    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    GitHub         : https://github.com/KnudsenMorten
+    Support        : For public repos, open a GitHub Issue on that solution's repo.
+
 #>
 [CmdletBinding()]
 param(

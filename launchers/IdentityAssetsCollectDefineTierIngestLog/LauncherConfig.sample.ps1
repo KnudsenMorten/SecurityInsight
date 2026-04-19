@@ -82,11 +82,23 @@
 #                               not set: DceIngestionUri, WorkspaceResourceId,
 #                               DcrResourceGroup.
 # ============================================================================
+#
+#   *** PRE-REQUISITE ***
+#   Before this engine can run, the Log Analytics infrastructure
+#   (Workspace + Data Collection Endpoint + Data Collection Rule + the
+#   SI_IdentityAssets_CL custom table) must already exist. Run the sibling
+#   onboarding launcher ONCE per customer tenant to provision everything:
+#
+#       LAUNCHERS\Onboarding_IdentityAssets_LogAnalytics\launcher.community-vm.template.ps1
+#
+#   Its output prints the exact DceIngestionUri / WorkspaceResourceId /
+#   DcrResourceGroup values to copy-paste into the three globals below.
+#
 # These point at the Data Collection Endpoint + Data Collection Rule + Log
-# Analytics workspace where the SI_IdentityAssets rows will land. Provision
-# them once via the SI setup script (Onboarding_IdentityAssets_LogAnalytics)
-# or via your existing AzLogDcrIngestPS pipeline; copy the resulting URIs/IDs
-# in here.
+# Analytics workspace where the SI_IdentityAssets rows will land. If you
+# already manage your own DCR pipeline (e.g. via AzLogDcrIngestPS), point the
+# values below at that infra instead -- the onboarding script is optional in
+# that case.
 
 # Ingestion URI on the DCE (full URL, e.g. 'https://si-dce-xxx.westeurope-1.ingest.monitor.azure.com')
 $global:DceIngestionUri      = '<https://your-dce-name.<region>-1.ingest.monitor.azure.com>'

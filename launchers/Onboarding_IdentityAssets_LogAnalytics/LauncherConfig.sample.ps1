@@ -112,10 +112,10 @@ $global:Location      = 'westeurope'                   # default: westeurope
 $global:WorkspaceName = 'log-platform-management-securityinsight'   # default
 
 # Data Collection Endpoint name
-$global:DceName       = 'dce-platform-management-securityinsight'   # default
+$global:DceName       = 'dce-si-identity'                           # default
 
 # Data Collection Rule name
-$global:DcrName       = 'dcr-platform-management-securityinsight'   # default
+$global:DcrName       = 'dcr-si-identity-assets'                    # default
 
 # Custom table base name (engine appends _CL when creating the table)
 $global:TableName     = 'SI_IdentityAssets'            # default: SI_IdentityAssets

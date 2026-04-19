@@ -130,25 +130,19 @@ Write-Step "Resolving repo root"
 Write-Ok "repo root: $InstallPath"
 
 try {
-    # Layer order: defaults.ps1 (ours, replaceable) -> LauncherConfig.ps1
-    # (customer, gitignored, only their overrides) -> CLI args (last word).
-    Write-Step "Loading LauncherConfig.defaults.ps1 (baseline)"
-    $defaultsPath = Join-Path $PSScriptRoot 'LauncherConfig.defaults.ps1'
-    if (-not (Test-Path -LiteralPath $defaultsPath)) {
-        throw "LauncherConfig.defaults.ps1 missing at $defaultsPath. This file ships with each release; reinstall the SecurityInsight package to restore it."
-    }
-    . $defaultsPath
-    Write-Ok "defaults loaded"
-
-    Write-Step "Loading LauncherConfig.ps1 (customer overrides)"
-    if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
-    if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {
-        throw "LauncherConfig.ps1 not found at $LauncherConfigPath. Copy LauncherConfig.sample.ps1 to LauncherConfig.ps1 and fill in your auth values + the DCR ingestion targets."
-    }
-    . $LauncherConfigPath
-    Write-Ok "customer overrides loaded"
+    # Layered config: defaults (ours) -> platform (internal only) ->
+    # solution-wide custom -> per-engine custom -> CLI args.
+    . (Join-Path $PSScriptRoot '..\_lib\Initialize-LauncherConfig.ps1')
+    Initialize-LauncherConfig `
+        -Solution    'SecurityInsight' `
+        -Engine      'IdentityAssetsCollectDefineTierIngestLog' `
+        -LauncherDir $PSScriptRoot `
+        -RepoRoot    $InstallPath `
+        -Mode        'community' `
+        -CustomConfigPath $LauncherConfigPath `
+        -RequireCustom
 } catch {
-    Write-Err2 "Failed to load LauncherConfig: $($_.Exception.Message)"
+    Write-Err2 "Failed to load layered config: $($_.Exception.Message)"
     throw
 }
 

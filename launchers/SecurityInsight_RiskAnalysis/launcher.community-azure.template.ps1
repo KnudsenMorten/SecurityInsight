@@ -71,16 +71,20 @@ $ShowConfig_Default      = $false
 
 # ============================================================================
 
+# Get-PublishedVersion: shared helper in _lib/. Dot-sourced before the banner.
+. (Join-Path $PSScriptRoot '..\_lib\Get-PublishedVersion.ps1')
+
 function Write-Banner {
     param(
         [Parameter(Mandatory)][string]$Solution,
         [Parameter(Mandatory)][string]$Engine,
         [Parameter(Mandatory)][string]$Flavour,
-        [string]$Description = ''
+        [string]$Description = '',
+        [string]$Version = '(dev)'
     )
     $line = '=' * 88
     Write-Host $line -ForegroundColor Cyan
-    Write-Host ("  {0} -- {1}    [{2}]" -f $Solution, $Engine, $Flavour) -ForegroundColor Cyan
+    Write-Host ("  {0} -- {1}    [{2}]   {3}" -f $Solution, $Engine, $Flavour, $Version) -ForegroundColor Cyan
     if ($Description) {
         foreach ($chunk in ($Description -split '(?<=.{1,86})\s+')) {
             Write-Host ("  {0}" -f $chunk) -ForegroundColor Gray
@@ -143,16 +147,22 @@ function Resolve-RepoRoot {
     throw ("Launcher: cannot locate solution repo root walking up from '{0}'. Expected FUNCTIONS\AutomateITPS\AutomateITPS.psd1 (monorepo) or a lowercase scripts/+launchers/ pair (community repo)." -f $Start)
 }
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'SecurityInsight_RiskAnalysis' -Flavour 'community-azure' -Description 'SecurityInsight_RiskAnalysis -- v2 ported engine under SecurityInsight.'
-
+# Resolve repo root + version BEFORE the banner so the banner can show the version.
 try {
-    Write-Step "Resolving repo root"
     if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
-    Write-Ok "repo root: $InstallPath"
 } catch {
-    Write-Err2 $_.Exception.Message
-    throw
+    $resolveError = $_
 }
+$versionStamp = Get-PublishedVersion -RepoRoot $InstallPath -Solution 'SecurityInsight'
+
+Write-Banner -Solution 'SecurityInsight' -Engine 'SecurityInsight_RiskAnalysis' -Flavour 'community-azure' -Version $versionStamp
+
+if ($resolveError) {
+    Write-Err2 $resolveError.Exception.Message
+    throw $resolveError
+}
+Write-Step "Resolving repo root"
+Write-Ok "repo root: $InstallPath"
 
 try {
     # Layered config (community-azure has no per-engine custom file; engine

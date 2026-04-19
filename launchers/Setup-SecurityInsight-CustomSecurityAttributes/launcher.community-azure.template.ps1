@@ -27,16 +27,20 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# Get-PublishedVersion: shared helper in _lib/. Dot-sourced before the banner.
+. (Join-Path $PSScriptRoot '..\_lib\Get-PublishedVersion.ps1')
+
 function Write-Banner {
     param(
         [Parameter(Mandatory)][string]$Solution,
         [Parameter(Mandatory)][string]$Engine,
         [Parameter(Mandatory)][string]$Flavour,
-        [string]$Description = ''
+        [string]$Description = '',
+        [string]$Version = '(dev)'
     )
     $line = '=' * 88
     Write-Host $line -ForegroundColor Cyan
-    Write-Host ('  {0} -- {1}    [{2}]' -f $Solution, $Engine, $Flavour) -ForegroundColor Cyan
+    Write-Host ("  {0} -- {1}    [{2}]   {3}" -f $Solution, $Engine, $Flavour, $Version) -ForegroundColor Cyan
     if ($Description) {
         foreach ($chunk in ($Description -split '(?<=.{1,86})\s+')) {
             Write-Host ('  {0}' -f $chunk) -ForegroundColor Gray
@@ -56,7 +60,20 @@ function Write-Ok     { param([string]$m) Write-Host "[OK]    $m" -ForegroundCol
 function Write-Warn2  { param([string]$m) Write-Host "[WARN]  $m" -ForegroundColor Yellow }
 function Write-Err2   { param([string]$m) Write-Host "[ERROR] $m" -ForegroundColor Red }
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Setup-SecurityInsight-CustomSecurityAttributes' -Flavour 'community-azure' -Description 'OPTIONAL one-time setup (serverless). Provisions the Entra Custom Security Attribute schema used by the SecurityInsight tagging pipeline. The Function App MI (or configured SPN) must hold Attribute Definition Administrator + Privileged Role Administrator -- otherwise STEP 1 will fail with a Graph 403. Preferred execution: community-vm flavour run by a human admin.'
+# Resolve repo root + version BEFORE the banner so the banner can show the version.
+try {
+    if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
+} catch {
+    $resolveError = $_
+}
+$versionStamp = Get-PublishedVersion -RepoRoot $InstallPath -Solution 'SecurityInsight'
+
+Write-Banner -Solution 'SecurityInsight' -Engine 'Setup-SecurityInsight-CustomSecurityAttributes' -Flavour 'community-azure' -Version $versionStamp
+
+if ($resolveError) {
+    Write-Err2 $resolveError.Exception.Message
+    throw $resolveError
+}
 
 # Resolve engine path portably
 $launcherDir = $PSScriptRoot

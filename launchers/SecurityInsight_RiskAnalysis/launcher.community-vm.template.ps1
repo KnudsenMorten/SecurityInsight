@@ -53,8 +53,10 @@ $ErrorActionPreference = 'Stop'
 $RunMode_Default = 'Auto'
 
 # Optional in-script overrides ($null = no override; $true = force).
-# Useful when you want a baseline behaviour without specifying it on every CLI call.
-$Summary_Override   = $null
+# Community-vm baseline = Summary mode (matches v1 RunSecurityInsight_Community_Sample.ps1).
+# Set Detailed_Override=$true and Summary_Override=$null if this host should always
+# produce the detailed report instead.
+$Summary_Override   = $true
 $Detailed_Override  = $null
 $ResetCache_Override = $null
 
@@ -282,18 +284,14 @@ $global:SuppressWarnings    = [bool]$SuppressWarnings
 # block at the top of this file is the single source of truth for baseline
 # behaviour; the script-scope Override sentinels are the per-host knob;
 # the CLI -Switch is the per-run knob.
+#
+# Inline (v1 pattern): $PSBoundParameters at script scope is the launcher's
+# own bound params. Don't wrap in a function -- inside a function it would
+# be the function's bound params instead.
 
-function Resolve-Switch {
-    param([string]$Name, $OverrideValue, $DefaultValue)
-    if ($PSBoundParameters['__caller_bound__'].ContainsKey($Name)) {
-        return [bool]$PSBoundParameters['__caller_bound__'][$Name]
-    }
-    if ($null -ne $OverrideValue) { return [bool]$OverrideValue }
-    return [bool]$DefaultValue
-}
-# Workaround: pass caller's $PSBoundParameters into the helper via a sentinel
-# (helper's own $PSBoundParameters is its own param map).
-$PSBoundParameters['__caller_bound__'] = $PSBoundParameters
+# Snapshot caller-bound CLI params for use by helpers below.
+$cliBound = @{}
+foreach ($k in $PSBoundParameters.Keys) { $cliBound[$k] = $PSBoundParameters[$k] }
 
 # Mode resolution (Summary / Detailed)
 function Resolve-RunMode {
@@ -320,7 +318,7 @@ $global:AutomationFramework = $AutomationFramework_Default
 $global:OverwriteXlsx       = [bool]$OverwriteXlsx_Default
 
 $mode = Resolve-RunMode `
-    -Bound $PSBoundParameters `
+    -Bound $cliBound `
     -DefaultMode $RunMode_Default `
     -SummaryOverride $Summary_Override `
     -DetailedOverride $Detailed_Override `
@@ -328,25 +326,41 @@ $mode = Resolve-RunMode `
 $global:Summary  = [bool]$mode.Summary
 $global:Detailed = [bool]$mode.Detailed
 
-# Each switch: CLI bound > Override > Default
-$global:BuildSummaryByAI = Resolve-Switch -Name 'BuildSummaryByAI' -OverrideValue $null                 -DefaultValue $BuildSummaryByAI_Default
-$global:AutoBucketCount  = Resolve-Switch -Name 'AutoBucketCount'  -OverrideValue $null                 -DefaultValue $AutoBucketCount_Default
-$global:AutoBucketCache  = Resolve-Switch -Name 'AutoBucketCache'  -OverrideValue $null                 -DefaultValue $AutoBucketCache_Default
-$global:ResetCache       = Resolve-Switch -Name 'ResetCacheSwitch' -OverrideValue $ResetCache_Override  -DefaultValue $ResetCache_Default
-$global:ShowConfig       = Resolve-Switch -Name 'ShowConfig'       -OverrideValue $null                 -DefaultValue $ShowConfig_Default
-$global:DebugQueryHash   = Resolve-Switch -Name 'DebugQueryHash'   -OverrideValue $null                 -DefaultValue $DebugQueryHash_Default
+# Each switch (inline v1 pattern): CLI bound > Override > Default
+$global:BuildSummaryByAI = $BuildSummaryByAI_Default
+if ($cliBound.ContainsKey('BuildSummaryByAI')) { $global:BuildSummaryByAI = [bool]$cliBound['BuildSummaryByAI'] }
+
+$global:AutoBucketCount = $AutoBucketCount_Default
+if ($cliBound.ContainsKey('AutoBucketCount')) { $global:AutoBucketCount = [bool]$cliBound['AutoBucketCount'] }
+
+$global:AutoBucketCache = $AutoBucketCache_Default
+if ($cliBound.ContainsKey('AutoBucketCache')) { $global:AutoBucketCache = [bool]$cliBound['AutoBucketCache'] }
+
+$global:ShowConfig = $ShowConfig_Default
+if ($cliBound.ContainsKey('ShowConfig')) { $global:ShowConfig = [bool]$cliBound['ShowConfig'] }
+
+$global:DebugQueryHash = $DebugQueryHash_Default
+if ($cliBound.ContainsKey('DebugQueryHash')) { $global:DebugQueryHash = [bool]$cliBound['DebugQueryHash'] }
+
+# ResetCache: CLI bound > Override > Default
+$global:ResetCache = $ResetCache_Default
+if ($cliBound.ContainsKey('ResetCacheSwitch')) {
+    $global:ResetCache = [bool]$cliBound['ResetCacheSwitch']
+} elseif ($null -ne $ResetCache_Override) {
+    $global:ResetCache = [bool]$ResetCache_Override
+}
 
 # Int (no Override slot exposed, just CLI > Default)
-if ($PSBoundParameters.ContainsKey('AutoBucketMax')) {
-    $global:AutoBucketMax = [int]$AutoBucketMax
+if ($cliBound.ContainsKey('AutoBucketMax')) {
+    $global:AutoBucketMax = [int]$cliBound['AutoBucketMax']
 } else {
     $global:AutoBucketMax = [int]$AutoBucketMax_Default
 }
 
 # ReportTemplate: -ReportTemplate wins, then $ReportTemplate_Default,
 # then per-mode default by Summary/Detailed.
-if ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
-    $global:ReportTemplate = $ReportTemplate
+if ($cliBound.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace([string]$cliBound['ReportTemplate'])) {
+    $global:ReportTemplate = [string]$cliBound['ReportTemplate']
 } elseif (-not [string]::IsNullOrWhiteSpace($ReportTemplate_Default)) {
     $global:ReportTemplate = $ReportTemplate_Default
 } elseif ($global:Detailed -and -not $global:Summary) {
@@ -355,9 +369,6 @@ if ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullO
     # Default to Summary template (covers Summary=$true and the "neither set" fall-through)
     $global:ReportTemplate = $ReportTemplate_Default_Summary
 }
-
-# Sentinel was just a one-shot prop on $PSBoundParameters; clean it up.
-$PSBoundParameters.Remove('__caller_bound__') | Out-Null
 
 Write-Info ("[LAUNCHER] AutomationFramework={0} Summary={1} Detailed={2} BuildSummaryByAI={3}" -f `
     $global:AutomationFramework, $global:Summary, $global:Detailed, $global:BuildSummaryByAI)

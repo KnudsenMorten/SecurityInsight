@@ -115,11 +115,27 @@ $global:DcrResourceGroup     = '<rg-holding-the-dcr>'
 # $global:DcrName           = '<dcr-name>'
 # $global:DceName           = '<dce-name>'
 
-# Optional cross-workspace setup -- set this if the IdentityInfo table lives in
-# a *different* Log Analytics workspace than $global:WorkspaceResourceId above
-# (e.g. you ingest to a per-tenant workspace but Defender/Sentinel writes to a
-# central security workspace). When set, queries use cross-workspace KQL.
+# Cross-workspace setup (Defender / Sentinel IdentityInfo lookups)
+# ----------------------------------------------------------------
+# The engine needs to read IdentityInfo (Entra ID daily snapshot) which lives
+# in whichever workspace Defender/Sentinel is writing to. Pick the scenario
+# that matches your environment:
+#
+#   A) SAME WORKSPACE -- you ingest SI_IdentityAssets INTO the same workspace
+#      Defender/Sentinel already uses. Leave $global:DefenderWorkspaceResourceId
+#      unset; the engine uses $global:WorkspaceResourceId for everything.
+#
+#   B) SEPARATE SI WORKSPACE, Defender/Sentinel elsewhere -- you ingest
+#      SI_IdentityAssets to the workspace above, but IdentityInfo lives in a
+#      different Defender/Sentinel workspace. Set the Defender workspace
+#      resource ID below; the engine issues cross-workspace KQL.
+#
+#   C) SAME WORKSPACE AS A SHARED PLATFORM WORKSPACE -- you already have a
+#      $global:MainLogAnalyticsWorkspaceResourceId on this host. Point
+#      DefenderWorkspaceResourceId at it (literally one line).
+#
 # $global:DefenderWorkspaceResourceId = '/subscriptions/<sub-guid>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<defender-workspace-name>'
+# $global:DefenderWorkspaceResourceId = $global:MainLogAnalyticsWorkspaceResourceId  # scenario C, if the platform global is set
 
 # Tenant domain (used in some output column values; falls back to the
 # authenticating SPN's tenant if not set)

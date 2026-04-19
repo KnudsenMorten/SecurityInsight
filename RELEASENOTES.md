@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.19
+## v2.1.20
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- docs(SI Onboarding launcher): expose all engine-tunable globals + version banner (bdc6107)
+- docs(SI): align DCR/DCE defaults + document Defender cross-workspace scenarios (c8dd277)
 
 ---
 

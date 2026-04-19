@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.27
+## v2.1.28
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(publish): preserve underscore-prefixed dirs (e.g. _lib/) under launchers/ (1987f33)
+- fix(SI IdentityAssetsCollect): Get-WorkspaceGuid handles cross-subscription workspaces (a223513)
 
 ---
 

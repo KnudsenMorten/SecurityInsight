@@ -56,12 +56,34 @@
 # 2.  COMMON OVERRIDES  (uncomment + edit ONLY what you want to change)
 # ============================================================================
 
-# ----- Mail delivery -----------------------------------------------------------
+# ----- Mail delivery (community mode) ------------------------------------------
+# Community mode reads the SHORT names below. Same recipients regardless of
+# Summary vs Detailed run.
 # $global:SendMail        = $true
 # $global:MailTo          = @('soc@yourdomain.com')
 # $global:SmtpServer      = 'smtp.yourdomain.com'
 # $global:SMTPUser        = 'no-reply@yourdomain.com'
 # $global:SMTPPassword    = '<smtp-password>'
+#
+# ----- Mail delivery (internal / AutomationFramework mode) ---------------------
+# When $global:AutomationFramework=$true the engine reads SEPARATE recipients
+# per Summary vs Detailed run (Detailed is the noisier per-row report; Summary
+# is the executive overview). Set these in your platform-defaults.ps1 (layer 2)
+# or here if you only run one engine:
+# $global:Mail_SecurityInsight_Detailed_SendMail = $true
+# $global:Mail_SecurityInsight_Detailed_To       = @('IT-Alerts-Identity@yourdomain.com')
+# $global:Mail_SecurityInsight_Summary_SendMail  = $true
+# $global:Mail_SecurityInsight_Summary_To        = @('exec-summary@yourdomain.com')
+#
+# ----- Per-template recipient override (YAML) ----------------------------------
+# In the *_Custom.yaml file you can override recipients PER template:
+#   Reports:
+#     - ReportName: RiskAnalysis_Detailed_Bucket
+#       Mail_To:
+#         - vuln-team@yourdomain.com
+#       Mail_SendMail: true
+# When set on a template, those values win over the globals above for that
+# template's run. Useful for routing a specific report to specific stakeholders.
 
 # ----- AI summary (Azure OpenAI) -----------------------------------------------
 # $global:BuildSummaryByAI  = $true

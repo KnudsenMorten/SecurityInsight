@@ -43,6 +43,45 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# ============================================================================
+#  DEFAULTS (single source of truth) -- edit here to change baseline behaviour
+#  for ALL invocations of this launcher. CLI switches override these per run.
+# ============================================================================
+
+# Run-mode default. Allowed: 'Auto', 'Summary', 'Detailed'
+# 'Auto' falls back to AutomationFramework rule (AF=>Summary, else neither).
+$RunMode_Default = 'Auto'
+
+# Optional in-script overrides ($null = no override; $true = force).
+# Useful when you want a baseline behaviour without specifying it on every CLI call.
+$Summary_Override   = $null
+$Detailed_Override  = $null
+$ResetCache_Override = $null
+
+# Hardcoded defaults. Single place to change baseline operational tuning.
+$AutomationFramework_Default = $false
+$OverwriteXlsx_Default       = $true
+$BuildSummaryByAI_Default    = $false
+
+# ReportTemplate defaults (per mode). Set $ReportTemplate_Default to force a
+# specific template regardless of Summary/Detailed; leave $null to let the
+# Summary/Detailed mode below pick.
+$ReportTemplate_Default          = $null
+$ReportTemplate_Default_Summary  = 'RiskAnalysis_Summary_Bucket'
+$ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_Bucket'
+
+# Adaptive bucketing baseline (engine reads these globals).
+$AutoBucketCount_Default = $true
+$AutoBucketCache_Default = $true
+$AutoBucketMax_Default   = 512
+
+# Cache + diagnostics
+$ResetCache_Default      = $false
+$DebugQueryHash_Default  = $false
+$ShowConfig_Default      = $false
+
+# ============================================================================
+
 function Write-Banner {
     param(
         [Parameter(Mandatory)][string]$Solution,
@@ -238,30 +277,94 @@ $global:WhatIfMode          = [bool]$WhatIfMode
 $global:SuppressErrors      = [bool]$SuppressErrors
 $global:SuppressWarnings    = [bool]$SuppressWarnings
 
-# ----- CLI switch overrides (CLI > LauncherConfig.ps1 > engine defaults) -----
-# A switch only counts as "set on the CLI" when explicitly bound. Switches
-# default to $false but we don't want to overwrite a config file's $true
-# unless the user actually typed -Switch on the command line.
-if ($PSBoundParameters.ContainsKey('Summary'))          { $global:Summary          = [bool]$Summary }
-if ($PSBoundParameters.ContainsKey('Detailed'))         { $global:Detailed         = [bool]$Detailed }
-if ($PSBoundParameters.ContainsKey('BuildSummaryByAI')) { $global:BuildSummaryByAI = [bool]$BuildSummaryByAI }
-if ($PSBoundParameters.ContainsKey('AutoBucketCount'))  { $global:AutoBucketCount  = [bool]$AutoBucketCount }
-if ($PSBoundParameters.ContainsKey('AutoBucketCache'))  { $global:AutoBucketCache  = [bool]$AutoBucketCache }
-if ($PSBoundParameters.ContainsKey('AutoBucketMax'))    { $global:AutoBucketMax    = [int]$AutoBucketMax }
-if ($PSBoundParameters.ContainsKey('ResetCacheSwitch')) { $global:ResetCache       = [bool]$ResetCacheSwitch }
-if ($PSBoundParameters.ContainsKey('ShowConfig'))       { $global:ShowConfig       = [bool]$ShowConfig }
-if ($PSBoundParameters.ContainsKey('DebugQueryHash'))   { $global:DebugQueryHash   = [bool]$DebugQueryHash }
+# ----- Resolve runtime values: CLI bound > in-script Override > Default -----
+# A switch only counts as "set on the CLI" when explicitly bound. The defaults
+# block at the top of this file is the single source of truth for baseline
+# behaviour; the script-scope Override sentinels are the per-host knob;
+# the CLI -Switch is the per-run knob.
 
-# ReportTemplate resolution: explicit -ReportTemplate wins. Otherwise if
-# -Summary or -Detailed is on, pick the matching default. Otherwise honour
-# whatever LauncherConfig.ps1 set (or fall through to the engine's own default).
+function Resolve-Switch {
+    param([string]$Name, $OverrideValue, $DefaultValue)
+    if ($PSBoundParameters['__caller_bound__'].ContainsKey($Name)) {
+        return [bool]$PSBoundParameters['__caller_bound__'][$Name]
+    }
+    if ($null -ne $OverrideValue) { return [bool]$OverrideValue }
+    return [bool]$DefaultValue
+}
+# Workaround: pass caller's $PSBoundParameters into the helper via a sentinel
+# (helper's own $PSBoundParameters is its own param map).
+$PSBoundParameters['__caller_bound__'] = $PSBoundParameters
+
+# Mode resolution (Summary / Detailed)
+function Resolve-RunMode {
+    param([hashtable]$Bound, [string]$DefaultMode, $SummaryOverride, $DetailedOverride, [bool]$AFFlag)
+    $cliS = $Bound.ContainsKey('Summary')  -and [bool]$Bound['Summary']
+    $cliD = $Bound.ContainsKey('Detailed') -and [bool]$Bound['Detailed']
+    if ($cliS -and $cliD) { throw '-Summary and -Detailed are mutually exclusive.' }
+    if ($cliS) { return @{ Summary=$true;  Detailed=$false } }
+    if ($cliD) { return @{ Summary=$false; Detailed=$true  } }
+    if ($SummaryOverride -eq $true -and $DetailedOverride -eq $true) {
+        throw 'Summary_Override and Detailed_Override cannot both be true.'
+    }
+    if ($DetailedOverride -eq $true) { return @{ Summary=$false; Detailed=$true  } }
+    if ($SummaryOverride  -eq $true) { return @{ Summary=$true;  Detailed=$false } }
+    switch (([string]$DefaultMode).Trim().ToLowerInvariant()) {
+        'detailed' { return @{ Summary=$false; Detailed=$true  } }
+        'summary'  { return @{ Summary=$true;  Detailed=$false } }
+    }
+    if ($AFFlag) { return @{ Summary=$true; Detailed=$false } }
+    return @{ Summary=$false; Detailed=$false }
+}
+
+$global:AutomationFramework = $AutomationFramework_Default
+$global:OverwriteXlsx       = [bool]$OverwriteXlsx_Default
+
+$mode = Resolve-RunMode `
+    -Bound $PSBoundParameters `
+    -DefaultMode $RunMode_Default `
+    -SummaryOverride $Summary_Override `
+    -DetailedOverride $Detailed_Override `
+    -AFFlag $global:AutomationFramework
+$global:Summary  = [bool]$mode.Summary
+$global:Detailed = [bool]$mode.Detailed
+
+# Each switch: CLI bound > Override > Default
+$global:BuildSummaryByAI = Resolve-Switch -Name 'BuildSummaryByAI' -OverrideValue $null                 -DefaultValue $BuildSummaryByAI_Default
+$global:AutoBucketCount  = Resolve-Switch -Name 'AutoBucketCount'  -OverrideValue $null                 -DefaultValue $AutoBucketCount_Default
+$global:AutoBucketCache  = Resolve-Switch -Name 'AutoBucketCache'  -OverrideValue $null                 -DefaultValue $AutoBucketCache_Default
+$global:ResetCache       = Resolve-Switch -Name 'ResetCacheSwitch' -OverrideValue $ResetCache_Override  -DefaultValue $ResetCache_Default
+$global:ShowConfig       = Resolve-Switch -Name 'ShowConfig'       -OverrideValue $null                 -DefaultValue $ShowConfig_Default
+$global:DebugQueryHash   = Resolve-Switch -Name 'DebugQueryHash'   -OverrideValue $null                 -DefaultValue $DebugQueryHash_Default
+
+# Int (no Override slot exposed, just CLI > Default)
+if ($PSBoundParameters.ContainsKey('AutoBucketMax')) {
+    $global:AutoBucketMax = [int]$AutoBucketMax
+} else {
+    $global:AutoBucketMax = [int]$AutoBucketMax_Default
+}
+
+# ReportTemplate: -ReportTemplate wins, then $ReportTemplate_Default,
+# then per-mode default by Summary/Detailed.
 if ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
     $global:ReportTemplate = $ReportTemplate
-} elseif ([bool]$global:Summary  -and -not [bool]$global:Detailed) {
-    $global:ReportTemplate = 'RiskAnalysis_Summary_Bucket'
-} elseif ([bool]$global:Detailed -and -not [bool]$global:Summary) {
-    $global:ReportTemplate = 'RiskAnalysis_Detailed_Bucket'
+} elseif (-not [string]::IsNullOrWhiteSpace($ReportTemplate_Default)) {
+    $global:ReportTemplate = $ReportTemplate_Default
+} elseif ($global:Detailed -and -not $global:Summary) {
+    $global:ReportTemplate = $ReportTemplate_Default_Detailed
+} else {
+    # Default to Summary template (covers Summary=$true and the "neither set" fall-through)
+    $global:ReportTemplate = $ReportTemplate_Default_Summary
 }
+
+# Sentinel was just a one-shot prop on $PSBoundParameters; clean it up.
+$PSBoundParameters.Remove('__caller_bound__') | Out-Null
+
+Write-Info ("[LAUNCHER] AutomationFramework={0} Summary={1} Detailed={2} BuildSummaryByAI={3}" -f `
+    $global:AutomationFramework, $global:Summary, $global:Detailed, $global:BuildSummaryByAI)
+Write-Info ("[LAUNCHER] AutoBucketCount={0} AutoBucketCache={1} AutoBucketMax={2} ResetCache={3}" -f `
+    $global:AutoBucketCount, $global:AutoBucketCache, $global:AutoBucketMax, $global:ResetCache)
+Write-Info ("[LAUNCHER] ReportTemplate={0}  ShowConfig={1}  DebugQueryHash={2}" -f `
+    $global:ReportTemplate, $global:ShowConfig, $global:DebugQueryHash)
 
 try {
     Write-Step "Invoking engine"

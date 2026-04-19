@@ -1,88 +1,79 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community-edition customer configuration for Build_Tier_Definitions_JSON_File.
+    Quickstart customer config for Build_Tier_Definitions_JSON_File.
+
 .DESCRIPTION
-    Copy this file to LauncherConfig.ps1 in the SAME folder and fill in the values
-    for whichever authentication method you want to use. LauncherConfig.ps1 is
-    .gitignore'd so the populated copy stays on your machine.
+    Copy this file to LauncherConfig.custom.ps1 in the SAME folder. Customer
+    file is gitignored, so the populated copy stays on your machine and is
+    never overwritten by a release upgrade.
 
-    AUTHENTICATION METHODS (pick ONE)
+    LAYERED CONFIG MODEL
 
-    The launcher resolves auth in this priority order (first match wins):
+      1. LauncherConfig.defaults.ps1   <- ships with each release; baseline.
+      2. LauncherConfig.custom.ps1     <- THIS FILE (your copy). Set ONLY the
+                                          values you actually need to override.
+      3. CLI args on the launcher      <- last word for that one invocation.
 
-      1.  Managed Identity  (production, most secure)
-      2.  SPN + Key Vault-stored secret  (production)
-      3.  SPN + certificate  (production; cert must be installed in user's cert store)
-      4.  SPN + plaintext secret  (TESTING ONLY - do NOT use in production)
-
-    In every production case the app still needs the Entra API permissions and
-    Azure RBAC described in the solution README, Step 2.
+    You need TWO sections at minimum: AUTH (1) and AZURE OPENAI (2).
+    Everything else has a default in LauncherConfig.defaults.ps1.
 
 .NOTES
-    Solution       : SecurityInsight
-    File           : LauncherConfig.sample.ps1
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
-    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
-    GitHub         : https://github.com/KnudsenMorten
-    Support        : For public repos, open a GitHub Issue on that solution's repo.
-
+    LauncherConfigVersion : 1
+    Solution              : SecurityInsight
+    Engine                : Build_Tier_Definitions_JSON_File
+    Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
 #>
 
-# ================================================================================
-#  METHOD 1 -- Managed Identity  (RECOMMENDED for Azure VMs / Arc-enabled servers
-#                                 / Function Apps / Hybrid Runbook Workers)
-# ================================================================================
-# System-assigned MI is assumed. For user-assigned MI, set $global:SpnClientId to
-# the MI's client ID.
-#
+# ============================================================================
+# 1.  AUTHENTICATION  -- REQUIRED. Uncomment ONE method block, fill in values.
+# ============================================================================
+
+# ----- METHOD 1: Managed Identity ---------------------------------------------
 # $global:UseManagedIdentity = $true
-# $global:SpnTenantId         = '<your-tenant-id-guid>'   # still required for Graph connect
+# $global:SpnTenantId        = '<your-tenant-id-guid>'
 
+# ----- METHOD 2: SPN + secret stored in Azure Key Vault -----------------------
+# $global:SpnTenantId     = '<your-tenant-id-guid>'
+# $global:SpnClientId     = '<your-app-client-id-guid>'
+# $global:SpnKeyVaultName = '<kv-name>'
+# $global:SpnSecretName   = 'SecurityInsight-Secret'
 
-# ================================================================================
-#  METHOD 2 -- Service Principal + secret stored in Azure Key Vault
-# ================================================================================
-# Requires the VM / caller to have a Managed Identity with 'Key Vault Secrets User'
-# on the target Key Vault. The launcher uses MI to fetch the SPN secret, then
-# authenticates as the SPN.
-#
-# $global:SpnTenantId         = '<your-tenant-id-guid>'
-# $global:SpnClientId         = '<your-app-client-id-guid>'
-# $global:SpnKeyVaultName     = '<kv-name>'               # short name, not full URI
-# $global:SpnSecretName       = 'SecurityInsight-Secret'  # name of the secret holding the client secret
-
-
-# ================================================================================
-#  METHOD 3 -- Service Principal + certificate (thumbprint in local cert store)
-# ================================================================================
-# Upload the public key of the cert to the Entra app under Certificates & secrets.
-# The private key must be installed on THIS machine (CurrentUser\My or
-# LocalMachine\My). Certificate auth is silent and does not expire as fast as
-# secrets.
-#
-# $global:SpnTenantId             = '<your-tenant-id-guid>'
-# $global:SpnClientId             = '<your-app-client-id-guid>'
+# ----- METHOD 3: SPN + certificate (thumbprint in local cert store) -----------
+# $global:SpnTenantId              = '<your-tenant-id-guid>'
+# $global:SpnClientId              = '<your-app-client-id-guid>'
 # $global:SpnCertificateThumbprint = '<cert thumbprint, hex, no spaces>'
 
-
-# ================================================================================
-#  METHOD 4 -- Service Principal + plaintext secret  *** TESTING ONLY ***
-# ================================================================================
-# WARNING: storing a plaintext client secret in a .ps1 file is acceptable for a
-# short-lived TEST / LAB environment ONLY. For production use Method 1, 2, or 3.
-# LauncherConfig.ps1 is .gitignore'd, so it won't accidentally land in a git
-# commit -- but the secret is still in cleartext on disk, and on backup media,
-# and in any filesystem snapshot, and in whatever process the script runs under.
-# Expect to rotate the secret frequently if you do leave it here.
-#
-$global:SpnTenantId     = '<your-tenant-id-guid>'
-$global:SpnClientId     = '<your-app-client-id-guid>'
-$global:SpnClientSecret = '<your-client-secret>'
+# ----- METHOD 4: SPN + plaintext secret  *** TESTING ONLY *** -----------------
+# $global:SpnTenantId     = '<your-tenant-id-guid>'
+# $global:SpnClientId     = '<your-app-client-id-guid>'
+# $global:SpnClientSecret = '<your-client-secret>'
 
 
-# ================================================================================
-#  Optional engine-level settings (apply regardless of auth method)
-# ================================================================================
-# $global:Scope            = @('PROD')            # or @('TEST')
-# $global:WhatIfMode        = $false               # $true = dry run, no changes
+# ============================================================================
+# 2.  AZURE OPENAI  -- REQUIRED. The engine uses AI to assign tier values.
+# ============================================================================
+$global:OpenAI_Endpoint   = 'https://<your-aoai-account>.openai.azure.com'
+$global:OpenAI_Deployment = 'gpt-4o-mini'
+$global:OpenAI_ApiKey     = '<your-azure-openai-key>'
+# $global:OpenAI_ApiVersion = '2024-08-01-preview'   # default in defaults.ps1
+
+
+# ============================================================================
+# 3.  AI TUNING  (uncomment only if you need to deviate from defaults)
+# ============================================================================
+# Items per AI request. Reduce if hitting token / context limits.
+# $global:AI_ChunkSize  = 50
+
+# Per-response token cap (OpenAI max_tokens).
+# $global:AI_MaxTokens  = 16384
+
+# Retry attempts per chunk on transient failures.
+# $global:AI_MaxRetries = 3
+
+
+# ============================================================================
+#  EVERYTHING ELSE
+# ============================================================================
+# For the full surface look at LauncherConfig.defaults.ps1 in this same folder.
+# Copy any line out of there into THIS file to override that single value.

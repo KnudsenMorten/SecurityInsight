@@ -441,7 +441,16 @@ Write-Sep
 Write-Sep
 
 Write-Host ""
-Write-Host "  [ADMIN] Remember to update the file \FUNCTIONS\Automation-DefaultVariables.psm1" -ForegroundColor Yellow
+if ([bool]$global:AutomationFramework) {
+    Write-Host "  [ADMIN] Paste the block below into your platform's Automation-DefaultVariables.psm1" -ForegroundColor Yellow
+    Write-Host "          (under the SecurityInsight section). The IdentityAssetsCollect engine"      -ForegroundColor Yellow
+    Write-Host "          reads these globals when running with `$global:AutomationFramework=`$true."   -ForegroundColor Yellow
+} else {
+    Write-Host "  [ADMIN] Paste the block below into LauncherConfig.ps1 of the IdentityAssetsCollect" -ForegroundColor Yellow
+    Write-Host "          launcher (gitignored, sits next to LauncherConfig.sample.ps1):"             -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "          LAUNCHERS\IdentityAssetsCollectDefineTierIngestLog\LauncherConfig.ps1"      -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Sep
 Write-Host ""
@@ -449,19 +458,37 @@ Write-Host ""
 Write-Host "    #############################################################################" -ForegroundColor DarkGray
 Write-Host "    # SecurityInsight | LogAnalytics Integration"                                  -ForegroundColor DarkGray
 Write-Host "    #############################################################################" -ForegroundColor DarkGray
-Write-Host ("    `$global:SecurityInsight_LOG_BatchSize                = 300")                                                      -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_LOG_TableName                = `"{0}`""   -f $TableName)                                  -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_LOG_WorkspaceResourceId      = `"{0}`""   -f $WorkspaceResourceId.ToLower())              -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_LOG_DcrResourceGroup         = `"{0}`""   -f $ResourceGroup.ToLower())                    -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_LOG_DcrName                  = `"{0}`""   -f $DcrName.ToLower())                          -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_LOG_DceName                  = `"{0}`""   -f $DceName.ToLower())                          -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_LOG_DceIngestionUri          = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))               -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_Identity_TroubleshootingMode = `$false")                                                  -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_Identity_CsaAttributeSet     = `"SecurityInsight`"")                                      -ForegroundColor White
-Write-Host ("    `$global:SecurityInsight_Defender_WorkspaceResourceId = `$global:MainLogAnalyticsWorkspaceResourceId`"")
-Write-Host ("    `$global:SecurityInsight_Identity_SubscriptionNameExcludePatterns = @( `"")
-Write-Host ("    `      '*Azure for Students*' `"")
-Write-Host ("    `    ) `"")
+if ([bool]$global:AutomationFramework) {
+    # AF mode: SecurityInsight_LOG_* / SecurityInsight_Identity_* / SecurityInsight_Defender_* prefixes
+    Write-Host ("    `$global:SecurityInsight_LOG_BatchSize                = 300")                                                      -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_LOG_TableName                = `"{0}`""   -f $TableName)                                  -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_LOG_WorkspaceResourceId      = `"{0}`""   -f $WorkspaceResourceId.ToLower())              -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_LOG_DcrResourceGroup         = `"{0}`""   -f $ResourceGroup.ToLower())                    -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_LOG_DcrName                  = `"{0}`""   -f $DcrName.ToLower())                          -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_LOG_DceName                  = `"{0}`""   -f $DceName.ToLower())                          -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_LOG_DceIngestionUri          = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))               -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_Identity_TroubleshootingMode = `$false")                                                  -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_Identity_CsaAttributeSet     = `"SecurityInsight`"")                                      -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_Defender_WorkspaceResourceId = `$global:MainLogAnalyticsWorkspaceResourceId")             -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_Identity_SubscriptionNameExcludePatterns = @(")                                           -ForegroundColor White
+    Write-Host ("        '*Azure for Students*'")                                                                                       -ForegroundColor White
+    Write-Host ("    )")                                                                                                                 -ForegroundColor White
+} else {
+    # Community mode: short global names that LauncherConfig.ps1 sets directly
+    Write-Host ("    `$global:BatchSize                       = 300")                                                                   -ForegroundColor White
+    Write-Host ("    `$global:TableName                       = `"{0}`""   -f $TableName)                                               -ForegroundColor White
+    Write-Host ("    `$global:WorkspaceResourceId             = `"{0}`""   -f $WorkspaceResourceId.ToLower())                           -ForegroundColor White
+    Write-Host ("    `$global:DcrResourceGroup                = `"{0}`""   -f $ResourceGroup.ToLower())                                 -ForegroundColor White
+    Write-Host ("    `$global:DcrName                         = `"{0}`""   -f $DcrName.ToLower())                                       -ForegroundColor White
+    Write-Host ("    `$global:DceName                         = `"{0}`""   -f $DceName.ToLower())                                       -ForegroundColor White
+    Write-Host ("    `$global:DceIngestionUri                 = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))                            -ForegroundColor White
+    Write-Host ("    `$global:TroubleshootingMode             = `$false")                                                               -ForegroundColor White
+    Write-Host ("    `$global:CsaAttributeSet                 = `"SecurityInsight`"")                                                   -ForegroundColor White
+    Write-Host ("    # Optional -- set if Defender/Sentinel IdentityInfo lives in a different workspace:")                              -ForegroundColor DarkGray
+    Write-Host ("    # `$global:DefenderWorkspaceResourceId    = `"<defender-workspace-resource-id>`"")                                  -ForegroundColor DarkGray
+    Write-Host ("    # Optional -- skip subscriptions whose NAME matches any of these wildcards:")                                      -ForegroundColor DarkGray
+    Write-Host ("    # `$global:SubscriptionNameExcludePatterns = @( '*Azure for Students*' )")                                          -ForegroundColor DarkGray
+}
 
 Write-Host ""
 Write-Sep

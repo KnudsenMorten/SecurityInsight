@@ -43,6 +43,31 @@ $global:WriteJsonOutput = $true
 
 
 # ============================================================================
+#  LOG ANALYTICS INGEST (Phase 2)
+# ============================================================================
+# Send the in-memory dataset to a Log Analytics custom table after the Excel
+# build. Routes to two tables based on Summary vs Detailed mode:
+#   SI_RiskAnalysis_Summary_CL   (when $global:Summary  = $true)
+#   SI_RiskAnalysis_Detailed_CL  (when $global:Detailed = $true)
+# AzLogDcrIngestPS module auto-creates the table + DCR on first ingest.
+$global:SendToLogAnalytics                    = $false
+
+# DCR is RiskAnalysis-specific (separate from IAC's dcr-si-identity-assets).
+# DCE + Workspace can be shared with IAC; the engine falls back to the IAC
+# short names ($global:DceIngestionUri / WorkspaceResourceId / DcrResourceGroup
+# / DceName) if the SI_RiskAnalysis_* per-engine globals below are not set.
+$global:SI_RiskAnalysis_DcrName               = $null     # required when SendToLogAnalytics=$true (e.g. 'dcr-si-risk-analysis')
+$global:SI_RiskAnalysis_DcrResourceGroup      = $null     # falls back to $global:DcrResourceGroup
+$global:SI_RiskAnalysis_DceName               = $null     # falls back to $global:DceName
+$global:SI_RiskAnalysis_DceIngestionUri       = $null     # falls back to $global:DceIngestionUri
+$global:SI_RiskAnalysis_WorkspaceResourceId   = $null     # falls back to $global:WorkspaceResourceId
+
+# Custom table base names (engine appends _CL when LA creates the table).
+$global:SI_RiskAnalysis_TableName_Summary     = 'SI_RiskAnalysis_Summary'
+$global:SI_RiskAnalysis_TableName_Detailed    = 'SI_RiskAnalysis_Detailed'
+
+
+# ============================================================================
 #  EMAIL DELIVERY
 # ============================================================================
 # Engine writes the .xlsx either way. SendMail attaches it to an HTML email

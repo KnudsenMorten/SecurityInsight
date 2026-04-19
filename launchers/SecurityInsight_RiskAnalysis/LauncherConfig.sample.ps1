@@ -99,6 +99,25 @@
 # Disable if you only want the Excel:
 # $global:WriteJsonOutput = $false
 
+# ----- Log Analytics ingest (Phase 2) ----------------------------------------
+# Send the in-memory dataset to a custom LA table after the Excel build.
+# Two tables, routed per Summary vs Detailed mode:
+#   SI_RiskAnalysis_Summary_CL   /  SI_RiskAnalysis_Detailed_CL
+# Requires the AzLogDcrIngestPS module installed (Install-Module AzLogDcrIngestPS).
+# Table + DCR are auto-created on first ingest by the module.
+#
+# $global:SendToLogAnalytics              = $true
+# $global:SI_RiskAnalysis_DcrName         = 'dcr-si-risk-analysis'
+#
+# Optional -- only set if RiskAnalysis uses a different DCE / workspace / RG
+# than the IAC engine. Otherwise the engine reuses the IAC short names
+# ($global:DceIngestionUri / WorkspaceResourceId / DcrResourceGroup / DceName)
+# already set for IAC.
+# $global:SI_RiskAnalysis_DcrResourceGroup    = '<rg-holding-the-dcr>'
+# $global:SI_RiskAnalysis_DceName             = '<dce-name>'
+# $global:SI_RiskAnalysis_DceIngestionUri     = 'https://...ingest.monitor.azure.com'
+# $global:SI_RiskAnalysis_WorkspaceResourceId = '/subscriptions/.../workspaces/<ws>'
+
 
 # ============================================================================
 #  EVERYTHING ELSE

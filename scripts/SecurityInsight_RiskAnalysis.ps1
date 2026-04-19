@@ -2990,6 +2990,111 @@ if ([bool]$global:WriteJsonOutput) {
 }
 
 #########################################################################################################
+# LOG ANALYTICS INGEST  (Phase 2)
+#
+# Send the in-memory $global:final dataset to a Log Analytics custom table via
+# the AzLogDcrIngestPS module (DCR + Log Ingestion API). Table is auto-created
+# on first ingest by the module (CheckCreateUpdate-TableDcr-Structure handles
+# table + DCR provisioning if missing).
+#
+# Routes to one of TWO tables based on the run mode:
+#   $global:Summary  = $true  ->  $global:SI_RiskAnalysis_TableName_Summary
+#   $global:Detailed = $true  ->  $global:SI_RiskAnalysis_TableName_Detailed
+# (defaults: SI_RiskAnalysis_Summary / SI_RiskAnalysis_Detailed -- _CL added by LA)
+#
+# Default OFF. Set $global:SendToLogAnalytics = $true to enable.
+#
+# DCR is per-RiskAnalysis (separate from the IAC DCR -- different schema, own
+# lifecycle). DCE + Workspace can be shared with IAC by setting only
+# $global:SI_RiskAnalysis_DcrName + DcrResourceGroup; the DCE / WorkspaceResourceId
+# globals fall back to the IAC short names if not explicitly set.
+#########################################################################################################
+
+if ($null -eq $global:SendToLogAnalytics) { $global:SendToLogAnalytics = $false }
+
+if ([bool]$global:SendToLogAnalytics) {
+    Write-Sep
+
+    # Resolve effective config (per-RiskAnalysis name wins; falls back to IAC short names)
+    $laDce       = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DceIngestionUri))     { [string]$global:SI_RiskAnalysis_DceIngestionUri }     else { [string]$global:DceIngestionUri }
+    $laWs        = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_WorkspaceResourceId)) { [string]$global:SI_RiskAnalysis_WorkspaceResourceId } else { [string]$global:WorkspaceResourceId }
+    $laDceName   = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DceName))             { [string]$global:SI_RiskAnalysis_DceName }             else { [string]$global:DceName }
+    $laDcrRg     = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DcrResourceGroup))    { [string]$global:SI_RiskAnalysis_DcrResourceGroup }    else { [string]$global:DcrResourceGroup }
+    $laDcrName   = [string]$global:SI_RiskAnalysis_DcrName
+    $tblSummary  = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_TableName_Summary))   { [string]$global:SI_RiskAnalysis_TableName_Summary }   else { 'SI_RiskAnalysis_Summary' }
+    $tblDetailed = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_TableName_Detailed))  { [string]$global:SI_RiskAnalysis_TableName_Detailed }  else { 'SI_RiskAnalysis_Detailed' }
+    $laTable     = if ([bool]$global:Detailed) { $tblDetailed } else { $tblSummary }   # Summary catches the "neither set" fall-through
+
+    # Validate required values
+    $missing = @()
+    if ([string]::IsNullOrWhiteSpace($laDce))     { $missing += 'DceIngestionUri (or SI_RiskAnalysis_DceIngestionUri)' }
+    if ([string]::IsNullOrWhiteSpace($laWs))      { $missing += 'WorkspaceResourceId (or SI_RiskAnalysis_WorkspaceResourceId)' }
+    if ([string]::IsNullOrWhiteSpace($laDcrRg))   { $missing += 'DcrResourceGroup (or SI_RiskAnalysis_DcrResourceGroup)' }
+    if ([string]::IsNullOrWhiteSpace($laDcrName)) { $missing += 'SI_RiskAnalysis_DcrName' }
+    if ([string]::IsNullOrWhiteSpace($laDceName)) { $missing += 'DceName (or SI_RiskAnalysis_DceName)' }
+
+    if ($missing.Count -gt 0) {
+        Write-Warn ("SendToLogAnalytics=true but required globals are missing: {0}. Skipping LA ingest (xlsx + json still on disk)." -f ($missing -join ', '))
+    } else {
+        $modName = 'AzLogDcrIngestPS'
+        try { Import-Module $modName -ErrorAction Stop -WarningAction SilentlyContinue } catch {
+            Write-Warn ("Module '{0}' not available: {1}. Install with: Install-Module {0} -Scope CurrentUser. Skipping LA ingest." -f $modName, $_.Exception.Message)
+            $modOk = $false
+        }
+        if ($null -eq $modOk) { $modOk = $true }
+
+        if ($modOk) {
+            Write-Step ("Ingesting to Log Analytics: {0}_CL" -f $laTable)
+            Write-Info ("  DCR : {0} (rg={1})" -f $laDcrName, $laDcrRg)
+            Write-Info ("  DCE : {0}" -f $laDceName)
+            Write-Info ("  rows: {0}" -f (@($global:final)).Count)
+
+            try {
+                # Schema sample (first 100 rows) -- used by CheckCreateUpdate to
+                # infer the target table schema. Same pattern as IAC.
+                $schemaSample = @($global:final | Select-Object -First 100)
+
+                $null = CheckCreateUpdate-TableDcr-Structure `
+                            -AzLogWorkspaceResourceId                   $laWs `
+                            -AzAppId                                    $global:SpnClientId `
+                            -AzAppSecret                                $global:SpnClientSecret `
+                            -TenantId                                   $global:SpnTenantId `
+                            -Verbose:$false `
+                            -DceName                                    $laDceName `
+                            -DcrName                                    $laDcrName `
+                            -DcrResourceGroup                           $laDcrRg `
+                            -TableName                                  $laTable `
+                            -Data                                       $schemaSample `
+                            -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
+                            -AzLogDcrTableCreateFromAnyMachine          $true `
+                            -AzLogDcrTableCreateFromReferenceMachine    @()
+
+                # Prepare + post the full dataset
+                $DataVariable = @($global:final)
+                $DataVariable = Add-CollectionTimeToAllEntriesInArray -Data $DataVariable -Verbose:$false
+                $DataVariable = ValidateFix-AzLogAnalyticsTableSchemaColumnNames -Data $DataVariable -Verbose:$false
+                $DataVariable = Build-DataArrayToAlignWithSchema -Data $DataVariable -Verbose:$false
+
+                $global:EnableCompressionDefault = $true
+                $null = Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output `
+                            -DceName     $laDceName `
+                            -DcrName     $laDcrName `
+                            -Data        $DataVariable `
+                            -TableName   $laTable `
+                            -AzAppId     $global:SpnClientId `
+                            -AzAppSecret $global:SpnClientSecret `
+                            -TenantId    $global:SpnTenantId `
+                            -Verbose:$false
+
+                Write-Ok ("ingested to {0}_CL" -f $laTable)
+            } catch {
+                Write-Warn ("Log Analytics ingest failed: {0} (continuing -- xlsx + json still on disk)" -f $_.Exception.Message)
+            }
+        }
+    }
+}
+
+#########################################################################################################
 # BUILD AI SUMMARY CONTEXT
 #########################################################################################################
 

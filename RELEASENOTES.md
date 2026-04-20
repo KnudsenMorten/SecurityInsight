@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.52
+## v2.1.53
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI RiskAnalysis): auto-assemble SMTP PSCredential; refuse to prompt interactively (aca8e99)
+- fix(SI RiskAnalysis): SMTP credential fallback chain for 9 naming conventions (fe36df6)
 
 ---
 

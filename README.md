@@ -89,7 +89,7 @@ The output is a ranked list — not 4,000 recommendations, but the small set of 
 | **Build_Tier_Definitions_JSON_File** | Uses Azure OpenAI to attacker-centrically classify Entra roles, Graph permissions, AD groups, and Azure built-in roles into Tier 0/1/2/3. Output is the catalog the rest of the engines consume. |
 | **Step1_OnboardValidate-SecurityInsight-Permissions** | Idempotent admin utility. Creates the Entra SPN, grants the API permissions and Azure RBAC the platform needs. Re-run = validation pass. |
 | **Setup-SecurityInsight-CustomSecurityAttributes** | One-time provisioning of the Custom Security Attribute schema used by the tagging pipeline. |
-| **Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights** | Optional helper to provision a PAYG Azure OpenAI account + model deployment for the AI summary feature. |
+| **Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure** | Optional helper to provision a PAYG Azure OpenAI account + model deployment for the AI summary feature. |
 
 ### Sample output
 
@@ -338,7 +338,7 @@ The solution ships three **Step** launchers that set a tenant up from zero, plus
 |---|---|---|---|
 | **Step 1** | `LAUNCHERS/Step1_OnboardValidate-SecurityInsight-Permissions/` | Create the SecurityInsight SPN + grant Graph / Defender / ATP API permissions + Azure `Reader` on every sub. Idempotent. | **No** (community-vm falls back to interactive auth). Optional if you want to skip the Graph sign-in prompt. |
 | **Step 2** | `LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/` | Create Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` + RBAC for the SPN. | **Yes** for community-vm (needs the SPN auth block). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`, fill in Section 1. |
-| **Step 3** | `LAUNCHERS/Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights/` | Provision a pay-as-you-go Azure OpenAI account + model deployment so the RiskAnalysis AI summary works. Optional — skip if you won't use `-BuildSummaryByAI`. | **Yes** for community-vm. Sample has the minimum block. |
+| **Step 3** | `LAUNCHERS/Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | Provision a pay-as-you-go Azure OpenAI account + model deployment so the RiskAnalysis AI summary works. Optional — skip if you won't use `-BuildSummaryByAI`. | **Yes** for community-vm. Sample has the minimum block. |
 | Engine | `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/` | Main identity-asset collection → `SI_IdentityAssets_CL`. Run on a schedule after Step 2. | **Yes** for community-vm. |
 | Engine | `LAUNCHERS/SecurityInsight_RiskAnalysis/` | Risk reports → xlsx + JSON + `SI_RiskAnalysis_*_CL`. Run after Step 2 + (optionally) Step 3. | **Yes** for community-vm. |
 | Engine | `LAUNCHERS/CriticalAssetTagging/` and its three siblings | Apply tier tags to Defender devices + Azure resources. Optional but recommended. | **Yes** for community-vm. |
@@ -350,6 +350,19 @@ The solution ships three **Step** launchers that set a tenant up from zero, plus
 > [!NOTE]
 > **Where does `LauncherConfig.custom.ps1` come from?** There's no template created for you. **Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`** in the same folder, then edit. The `.custom.ps1` name is gitignored so the populated copy stays local.
 > Some older solutions use the filename `LauncherConfig.ps1` (without `.custom.`) — both are recognized by the launcher; new work should prefer `.custom.ps1`.
+
+**Unattended (hands-off) operation** — Steps 1-3 and every engine launcher support the same four auth methods, so a pipeline / scheduled task can run the whole chain with one identity:
+
+| Auth method | Set in `LauncherConfig.custom.ps1` | Use when |
+|---|---|---|
+| Managed Identity | `$global:UseManagedIdentity = $true` + `$global:SpnTenantId` | Azure VM / Function / Logic App / Hybrid Runbook Worker |
+| SPN + secret in Key Vault | `$global:SpnKeyVaultName`, `$global:SpnSecretName`, `$global:SpnTenantId`, `$global:SpnClientId` | Production VM with MI that has Key Vault Secrets User |
+| SPN + certificate | `$global:SpnCertificateThumbprint`, `$global:SpnTenantId`, `$global:SpnClientId` | Production VM with cert in local store |
+| SPN + plaintext secret | `$global:SpnClientSecret`, `$global:SpnTenantId`, `$global:SpnClientId` | Lab / testing only |
+
+**Step 1** defaults to `Interactive` (browser sign-in by a human admin). To run it unattended, also set `$global:OnboardValidate_AuthMethod = 'SpnSecret'` (or `'SpnCertificate'` / `'ManagedIdentity'`). The SPN/MI needs **Privileged Role Administrator** (or **Global Administrator**) to create app registrations + grant admin consent.
+
+**Step 3** accepts `-ValidateOnly` — turns it into a hands-off health check. No resources are created, but the engine still reports `CREATED` / `REUSED` / `MISSING` status per resource + exits non-zero if anything is missing. Good for monitoring that your Azure OpenAI deployment hasn't drifted.
 
 <a id="341-connectivity-spn-or-managed-identity"></a>
 #### 3.4.1 Connectivity: SPN or Managed Identity
@@ -451,7 +464,7 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 The AI executive summary is a separate opt-in. Helper script provisions a PAYG Azure OpenAI account + model deployment:
 
 ```powershell
-.\LAUNCHERS\Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\launcher.community-vm.template.ps1
 ```
 
 Then enable in any engine's `LauncherConfig.custom.ps1`:

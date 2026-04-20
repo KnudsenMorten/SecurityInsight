@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.132
+## v2.1.133
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Build_Tier): drop dead 'AD_GroupMembership' key from tiering JSON (63cf116c)
 - docs(SI README): RSAT AD PowerShell prerequisite for Build_Tier_Definitions_JSON_File (4809b66d)
 - fix(SI Build_Tier): fail fast with RSAT install command when ActiveDirectory module is missing (6e7d1834)
 - refactor(SI): delete every duplicate module-check leftover from the v2.1.113 refactor (53343c56)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): cleaner override pattern in real-world sample (0c394553)
 - docs(SI README): add real-world RiskAnalysis .custom.ps1 sample (redacted) (d710a888)
 - feat(SI mail): add $global:SMTPFrom for verified-sender From header (v2.1.108) (8e770613)
-- fix(SI workbook): preselect '*' to dodge empty-list KQL parse error (v2.1.107) (b7658920)
 
 ---
 
@@ -44,6 +44,10 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
+
+- 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
 
 ### v2.1.131 — `Build_Tier_Definitions_JSON_File` fails fast when RSAT AD is missing
 

@@ -960,9 +960,6 @@ function Export-TieredJSON {
         AD_BuiltInPermissionGroups_Tier2 = Get-ByTier $TieredADGroups 2
         AD_BuiltInPermissionGroups_Tier3 = Get-ByTier $TieredADGroups 3
 
-        # Recursive group membership  special identity placeholder rows excluded
-        AD_GroupMembership               = @($RawADMembers | Where-Object { $_.MemberType -ne 'specialIdentity' -and $_.MemberName -notlike '*(empty*' })
-
         # ---- Entra ID Built-in Roles ----
         EntraID_BuiltInRoles_Tier0 = Get-ByTier $builtInEntra 0
         EntraID_BuiltInRoles_Tier1 = Get-ByTier $builtInEntra 1

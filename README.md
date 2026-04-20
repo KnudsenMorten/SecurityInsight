@@ -355,33 +355,74 @@ SecurityInsight engines authenticate to Entra (Microsoft Graph) and Azure (Resou
 
 # Dry-run preview first:
 .\LAUNCHERS\OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1 -WhatIfMode
+
+# Optional: also grant Log Analytics Reader on a Defender workspace + Monitoring Metrics Publisher on a DCR:
+.\LAUNCHERS\OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1 `
+    -DefenderWorkspaceResourceId '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<defender-ws>' `
+    -DcrResourceId               '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Insights/dataCollectionRules/<dcr>'
 ```
 
 The OnboardValidate engine is **idempotent** — re-run it any time as a validation pass. Adding permissions later? Edit the catalog at the top of `SCRIPTS/OnboardValidate-SecurityInsight-Permissions.ps1` and re-run; only the missing grants are applied.
 
+**End-of-run summary block (v2.1.64+)** prints the App display name, App (client) ID, SPN Object ID, tenant ID, per-category grant counts, a **ready-to-paste `$global:Spn*` block** for your `LauncherConfig.custom.ps1`, and verification KQL for after your first ingest. No scrolling through the log to find the AppId.
+
 > [!IMPORTANT]
-> **Required permissions** are listed in [§ 7.1](#71-permissions-catalog). The OnboardValidate script grants them automatically — you don't need to click through Entra portal blades.
+> **What OnboardValidate DOES cover (via RBAC grants):**
+> - Graph + Defender + ATP API permissions on the SPN
+> - Azure `Reader` at every enumerated subscription scope
+> - Optional: `Log Analytics Reader` on a Defender workspace (`-DefenderWorkspaceResourceId`)
+> - Optional: `Monitoring Metrics Publisher` on a specific DCR (`-DcrResourceId`)
+>
+> **What OnboardValidate does NOT cover:**
+> - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Onboarding_IdentityAssets_LogAnalytics` launcher (§3.4.2) OR auto-created by the engines themselves on first run (v2.1.54+).
+> - Granting the SPN `Owner` or `Contributor + User Access Administrator` — which is what the engines' auto-provisioning needs for **first-run** workspace/DCE creation + container RBAC grants. On `Reader`-only subs, auto-provision will fail cleanly with a `403 AuthorizationFailed` warning and you'll need to provision manually via §3.4.2 or grant higher perms.
+>
+> **Required permissions** are listed in [§ 7.1](#71-permissions-catalog).
 
 <a id="342-identity-infrastructure-workspace--dce--dcr"></a>
 #### 3.4.2 Identity infrastructure: Workspace + DCE + DCR
 
 [⤴ Back to top](#top)
 
-The `IdentityAssetsCollect` and `RiskAnalysis` engines ingest into Log Analytics via a Data Collection Rule (DCR) and Data Collection Endpoint (DCE). The included onboarding launcher provisions everything once:
+The `IdentityAssetsCollect` and `RiskAnalysis` engines ingest into Log Analytics via a Data Collection Rule (DCR) and Data Collection Endpoint (DCE).
+
+> [!TIP]
+> **You have two options** (v2.1.54+). Pick one:
+>
+> **Option A — let the ingestion engines auto-provision on first run** *(recommended for labs / single-tenant demos)*: the first time `IdentityAssetsCollect` or `RiskAnalysis` runs, they look for the workspace / DCE / DCE RG / DCR RG and **create anything missing** — then grant the SPN `Monitoring Metrics Publisher` on the RGs and `Storage Blob Data Contributor` on an export blob container if one is configured. **Requires `Owner` (or `Contributor + User Access Administrator`) on the target subscription for the first run.** After that, the engines can run with just `Reader` + `Monitoring Metrics Publisher`.
+>
+> **Option B — provision explicitly up-front** *(recommended for production / locked-down tenants where the ingestion SPN is `Reader`-only)*: run the dedicated onboarding launcher once as a privileged admin, then hand the SPN a read-only role. Details below.
+
+**Option A — zero-touch auto-provision (v2.1.54+)**
+
+Just run `IdentityAssetsCollect` or `RiskAnalysis` directly. You'll see lines like:
+```
+[OK]   Workspace exists: log-platform-management-securityinsight (rg=rg-securityinsight)
+[OK]   DCE exists: dce-securityinsight (rg=rg-dce-securityinsight, location=westeurope)
+[INFO] RG exists: rg-dcr-securityinsight (westeurope)
+```
+…or — if missing — `[STEP] DCE '...' not found -- auto-provisioning` followed by `[OK] Created DCE` and `[OK] Assigned 'Monitoring Metrics Publisher' at ...`. The canonical names live in **Layer 0** (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) — see [§ 3.6](#36-understand-the-launcherconfig-files). Override any of them in your `LauncherConfig.custom.ps1` if you deviate from the defaults.
+
+**Option B — explicit provisioning**
 
 ```powershell
 .\LAUNCHERS\Onboarding_IdentityAssets_LogAnalytics\launcher.community-vm.template.ps1
 ```
 
 This creates (or re-uses if they exist):
-- Resource Group `rg-securityinsight` (override with `$global:ResourceGroup`)
+- Resource Group `rg-securityinsight` (workspace RG — override with `$global:ResourceGroup`)
+- Resource Group `rg-dce-securityinsight` (DCE RG — override with `$global:DceResourceGroup`)
+- Resource Group `rg-dcr-securityinsight` (DCR RG — override with `$global:DcrResourceGroup`)
 - Log Analytics workspace `log-platform-management-securityinsight`
-- DCE `dce-si-identity`
+- DCE `dce-securityinsight`
 - DCR `dcr-si-identity-assets`
 - Custom table `SI_IdentityAssets_CL`
-- 'Monitoring Metrics Publisher' RBAC granted to the ingestion SPN on the DCR
+- `Monitoring Metrics Publisher` + `Contributor` RBAC on the DCE RG + DCR RG (granted to the ingestion SPN)
+- `Contributor` on the Log Analytics workspace (granted to the ingestion SPN)
 
 At the end of the run, the engine prints a **mode-aware cheat-sheet** with the exact globals to copy into your `LauncherConfig.custom.ps1`. You don't have to memorize the URIs.
+
+> **Which option do I need?** Run `OnboardValidate-SecurityInsight-Permissions` (§ 3.4.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
 <a id="343-azure-openai-optional"></a>
 #### 3.4.3 Azure OpenAI (optional)

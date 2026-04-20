@@ -726,6 +726,18 @@ param(
 Set-StrictMode -Off
 $ErrorActionPreference = "Stop"
 
+# ----------------------------------------------------------------------
+#  Module dependencies -- centralized helper under _shared/
+# ----------------------------------------------------------------------
+. (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
+Ensure-Module -Name @(
+    'Az.Accounts'
+    'Az.Resources'
+    'Microsoft.Graph.Authentication'
+    'Microsoft.Graph.Identity.Governance'
+    'AzLogDcrIngestPS'
+) -Import
+
 
 #########################################################################################################
 # HELPERS

@@ -27,6 +27,22 @@ try {
     Set-StrictMode -Off
 } catch {}
 
+# ----------------------------------------------------------------------
+#  Module dependencies -- centralized helper under _shared/
+# ----------------------------------------------------------------------
+. (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
+Ensure-Module -Name @(
+    'Az.Accounts'
+    'Az.Resources'
+    'Az.ResourceGraph'
+    'Microsoft.Graph.Authentication'
+    'Microsoft.Graph.Security'
+    'MicrosoftGraphPS'
+    'ImportExcel'
+    'powershell-yaml'
+    'AzLogDcrIngestPS'
+) -Import
+
 # ===============================================================================================
 # POWERSHELL 5.1 + STRICTMODE SAFE INITIALIZATION
 # ===============================================================================================
@@ -216,16 +232,6 @@ function Ensure-Directory {
   param([Parameter(Mandatory)][string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) {
     New-Item -ItemType Directory -Path $Path -Force | Out-Null
-  }
-}
-
-function Ensure-Module {
-  param([string]$Name)
-  if (-not (Get-Module -ListAvailable -Name $Name)) {
-    Write-Step ("Installing module $($Name)...")
-    Install-Module $Name -Scope AllUsers -Force -AllowClobber
-  } else {
-    Write-Step ("Validating module $($Name)...")
   }
 }
 
@@ -1695,14 +1701,6 @@ if (-not (Test-MicrosoftGraphInstalled)) {
     Write-Step "Installing Microsoft Graph modules ... Please Wait !"
     Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
 }
-
-Ensure-Module Az.Accounts
-Ensure-Module Az.Resources
-Ensure-Module Az.ResourceGraph
-Ensure-Module Microsoft.Graph.Security
-Ensure-Module MicrosoftGraphPS
-Ensure-Module ImportExcel
-Ensure-Module powershell-yaml
 
 #####################################################################################################
 # CONNECTION

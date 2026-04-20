@@ -151,6 +151,16 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# ----------------------------------------------------------------------
+#  Module dependencies -- centralized helper under _shared/
+# ----------------------------------------------------------------------
+. (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
+Ensure-Module -Name @(
+    'Az.Accounts'
+    'Az.Resources'
+    'Microsoft.Graph.Authentication'
+) -Import
+
 #region Logging helpers
 function Write-Step ([string]$m) { Write-Host "[STEP]    $m" -ForegroundColor Cyan }
 function Write-Info ([string]$m) { Write-Host "[INFO]    $m" -ForegroundColor Gray }

@@ -92,15 +92,27 @@
 # ----- Cross-workspace setup --------------------------------------------------
 # Set this if Defender/Sentinel IdentityInfo lives in a DIFFERENT workspace
 # than $global:WorkspaceResourceId above. Engine then issues cross-workspace KQL.
-# $global:DefenderWorkspaceResourceId = $global:MainLogAnalyticsWorkspaceResourceId
-# $global:DefenderWorkspaceResourceId = '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<defender-ws>'
+# Preferred name:  $global:Defender_WorkspaceNameResourceId
+# Also accepted:   $global:DefenderWorkspaceResourceId / $global:SecurityInsight_Defender_WorkspaceResourceId
+# $global:Defender_WorkspaceNameResourceId = $global:MainLogAnalyticsWorkspaceResourceId
+# $global:Defender_WorkspaceNameResourceId = '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<defender-ws>'
 
 # ----- Subscription scope -----------------------------------------------------
 # Skip subscriptions whose NAME matches any wildcard (e.g. sandbox / training)
 # $global:SubscriptionNameExcludePatterns = @( '*Azure for Students*', '*Visual Studio*' )
 
+# ----- Custom Security Attributes ---------------------------------------------
+# $global:CsaAttributeSet = 'SecurityInsight'
+
 # ----- Troubleshooting --------------------------------------------------------
 # $global:TroubleshootingMode = $true     # process only first 10 rows for fast iteration
+
+# ----- Export: JSON sibling + upload ------------------------------------------
+# Writes a .json array next to the .jsonl collection file, then (optionally)
+# uploads both to UNC or Azure Storage. Destination type is auto-detected.
+# $global:WriteJsonOutput    = $true
+# $global:ExportDestination  = 'https://<acct>.blob.core.windows.net/identityassets/'
+# $global:ExportDestination  = '\\server\share\identityassets\'
 
 
 # ============================================================================

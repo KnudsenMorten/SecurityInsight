@@ -51,7 +51,7 @@ function Ensure-Module {
         [string[]]$Name,
 
         [ValidateSet('CurrentUser','AllUsers','Auto')]
-        [string]$Scope = 'Auto',
+        [string]$Scope = 'AllUsers',
 
         [switch]$Required,
         [switch]$Import,
@@ -74,15 +74,19 @@ function Ensure-Module {
         Write-Host ("[MODULE] Checking {0} PowerShell module(s) -- this can take a moment on the first run (no output != hung)..." -f @($Name).Count) -ForegroundColor Cyan
     }
 
-    # Resolve scope once. 'Auto' uses AllUsers when elevated, else CurrentUser.
+    # Resolve scope once.
+    #   'AllUsers'    -- C:\Program Files\WindowsPowerShell\Modules (shared; needs admin).
+    #   'CurrentUser' -- %USERPROFILE%\Documents\WindowsPowerShell\Modules.
+    #   'Auto'        -- AllUsers when elevated, CurrentUser otherwise.
+    $isAdmin = $false
+    try {
+        $cur = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = [Security.Principal.WindowsPrincipal]::new($cur)
+        $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { }
+
     $effectiveScope = $Scope
     if ($Scope -eq 'Auto') {
-        $isAdmin = $false
-        try {
-            $cur = [Security.Principal.WindowsIdentity]::GetCurrent()
-            $principal = [Security.Principal.WindowsPrincipal]::new($cur)
-            $isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-        } catch { }
         $effectiveScope = if ($isAdmin) { 'AllUsers' } else { 'CurrentUser' }
     }
 
@@ -163,6 +167,20 @@ function Ensure-Module {
         if ($existing) {
             _SayOk ("{0} v{1} present" -f $mod, $existing.Version)
         } else {
+            # Fail fast with a clear message if we need to install to AllUsers
+            # but the session is not elevated. Without this the customer gets
+            # a cryptic PackageManagement / NuGet "access denied" trace.
+            if ($effectiveScope -eq 'AllUsers' -and -not $isAdmin) {
+                $errMsg = @"
+'$mod' is not installed and -Scope AllUsers requires an elevated PowerShell session.
+Options:
+  (a) Re-launch PowerShell as Administrator and run Step 0 again, OR
+  (b) Call Ensure-Module / Ensure-SecurityInsightModules with -Scope CurrentUser
+      if you accept a per-user install under %USERPROFILE%\Documents\WindowsPowerShell\Modules.
+"@
+                _SayErr $errMsg
+                throw $errMsg
+            }
             _SayWarn ("{0} missing -- installing to {1}..." -f $mod, $effectiveScope)
             try {
                 # NuGet PackageManagement provider is a dependency for Install-Module.
@@ -262,7 +280,7 @@ function Ensure-SecurityInsightModules {
     [CmdletBinding()]
     param(
         [ValidateSet('CurrentUser','AllUsers','Auto')]
-        [string]$Scope = 'Auto',
+        [string]$Scope = 'AllUsers',
         [switch]$Quiet,
         [switch]$Required
     )

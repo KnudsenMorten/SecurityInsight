@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.63
+## v2.1.64
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI RiskAnalysis): honor $global:SubscriptionId in LA infra self-heal (bb356cf)
+- feat(SI OnboardValidate): add final SPN provisioning summary (4c44668)
 
 ---
 

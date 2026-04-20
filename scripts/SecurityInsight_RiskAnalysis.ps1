@@ -2958,53 +2958,24 @@ if ($ResultAll.Count -eq 0) {
       -RiskScoreOutputName $RiskScoreOutputName
     Tick "risk scoring"
 
-    # Shape columns
-    $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName)
-    $DesiredColumns = @()
-    if ($OutputPropertyOrder) { $DesiredColumns += $OutputPropertyOrder }
-    foreach ($c in $ComputedCols) { if ($DesiredColumns -notcontains $c) { $DesiredColumns += $c } }
-
-    $firstObj = $RiskScoreArray | Select-Object -First 1
-    if ($firstObj) {
-      $allProps = ($firstObj | Get-Member -MemberType NoteProperty).Name
-      foreach ($p in $allProps) { if ($DesiredColumns -notcontains $p) { $DesiredColumns += $p } }
-    }
-
-    $Shaped = $RiskScoreArray | Select-Object -Property $DesiredColumns
-
-    # Ensure RiskScore is numeric
-    $Shaped = $Shaped | ForEach-Object {
-      if ($_.$RiskScoreOutputName -isnot [double]) {
-        $num = 0.0
-        [void][double]::TryParse([string]($_.$RiskScoreOutputName), [ref]$num)
-        $_.$RiskScoreOutputName = $num
-      }
-      $_
-    }
-
     # -------------------------------------------------------------------------
-    # TraceName + TraceID -- stable, deterministic identity columns applied
-    # to every RiskAnalysis row (both Summary and Detailed output modes).
-    #
-    # Purpose:
-    #   - Management reporting: "is observation X still open? how many assets?"
-    #     Group by TraceID across runs to see history.
-    #   - ServiceNow / ITSM integration: use TraceID as the external correlation
-    #     key so open/close/reopen events line up without fuzzy matching.
+    # TraceName + TraceID -- applied IMMEDIATELY after risk scoring, BEFORE the
+    # column-shaping / Select below, so the two columns are part of the base
+    # row shape for everything downstream: excel, json, and (crucially) the
+    # schema sample that CheckCreateUpdate-TableDcr-Structure uses to declare
+    # the Log Analytics custom table's columns. If this block runs after
+    # Select-Object, the LA schema never learns about the columns and the
+    # module's Build-DataArrayToAlignWithSchema silently drops them at ingest.
     #
     # TraceName = "<ConfigurationName>-<SecuritySeverity>-<CriticalityTierLevel>"
-    #   e.g. "Block rebooting machine in Safe Mode-High-Medium - tier 2"
-    #   Human-readable; safe to use as a ticket title.
-    #
-    # TraceID = first 16 hex chars of SHA256(TraceName_lowercased_utf8)
-    #   e.g. "a3f1c2d4e5f6a7b8"
-    #   Deterministic: same inputs always produce the same ID. Case-insensitive
-    #   by design (lowercased before hashing) so minor casing drift in source
-    #   data (Defender vs Exposure Graph) doesn't produce a "new" ID.
+    # TraceID   = first 16 hex chars of SHA256(TraceName_lowercased_utf8)
+    # Deterministic -- same inputs always produce the same ID across runs, so
+    # downstream consumers (management reports, ServiceNow, KQL history
+    # queries) can group by TraceID to track a finding over time.
     # -------------------------------------------------------------------------
     $__sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        foreach ($row in @($Shaped)) {
+        foreach ($row in @($RiskScoreArray)) {
             $cfgName = if ($row.PSObject.Properties['ConfigurationName'])    { [string]$row.ConfigurationName }    else { '' }
             $sev     = if ($row.PSObject.Properties['SecuritySeverity'])     { [string]$row.SecuritySeverity }     else { '' }
             $tier    = if ($row.PSObject.Properties['CriticalityTierLevel']) { [string]$row.CriticalityTierLevel } else { '' }
@@ -3020,10 +2991,42 @@ if ($ResultAll.Count -eq 0) {
         }
     } finally { if ($__sha) { $__sha.Dispose() } }
 
-    # Include TraceName + TraceID in the final column order.
-    if ($DesiredColumns -notcontains 'TraceName') { $DesiredColumns += 'TraceName' }
-    if ($DesiredColumns -notcontains 'TraceID')   { $DesiredColumns += 'TraceID' }
-    $Shaped = $Shaped | Select-Object -Property $DesiredColumns
+    # Shape columns
+    $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName)
+    $TraceCols    = @('TraceName', 'TraceID')    # always the LAST two columns -- not in any YAML OutputPropertyOrder on purpose
+
+    $DesiredColumns = @()
+    if ($OutputPropertyOrder) { $DesiredColumns += ($OutputPropertyOrder | Where-Object { $_ -notin $TraceCols }) }
+    foreach ($c in $ComputedCols) { if ($DesiredColumns -notcontains $c -and $c -notin $TraceCols) { $DesiredColumns += $c } }
+
+    $firstObj = $RiskScoreArray | Select-Object -First 1
+    if ($firstObj) {
+      $allProps = ($firstObj | Get-Member -MemberType NoteProperty).Name
+      foreach ($p in $allProps) {
+        if ($DesiredColumns -notcontains $p -and $p -notin $TraceCols) { $DesiredColumns += $p }
+      }
+    }
+
+    # Pin TraceName + TraceID as the last two columns -- stable identifier
+    # pair, expected at the end of every report in xlsx / json / LA.
+    foreach ($t in $TraceCols) { $DesiredColumns += $t }
+
+    $Shaped = $RiskScoreArray | Select-Object -Property $DesiredColumns
+
+    # Ensure RiskScore is numeric
+    $Shaped = $Shaped | ForEach-Object {
+      if ($_.$RiskScoreOutputName -isnot [double]) {
+        $num = 0.0
+        [void][double]::TryParse([string]($_.$RiskScoreOutputName), [ref]$num)
+        $_.$RiskScoreOutputName = $num
+      }
+      $_
+    }
+
+    # TraceName + TraceID were already stamped on every row immediately after
+    # Calculate-RiskScore (see the block above the "Shape columns" section).
+    # Their names are carried in $OutputPropertyOrder via the YAML, so they've
+    # landed in $DesiredColumns and survived the Select-Object above.
 
     if (-not $global:FinalRiskScoreColumnName -and -not [string]::IsNullOrWhiteSpace($RiskScoreOutputName)) {
         $global:FinalRiskScoreColumnName = $RiskScoreOutputName

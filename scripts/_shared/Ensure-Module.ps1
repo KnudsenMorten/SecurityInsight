@@ -260,12 +260,37 @@ function Ensure-SecurityInsightModules {
         [switch]$Required
     )
 
-    # Discard the returned hashtable so callers don't need `$null = ...` --
-    # otherwise PowerShell prints the per-module True/False table to stdout.
+    # Phase 1: install / verify every module is present on disk.
+    # No -Import here -- Import-Module on a meta-module (Az, Microsoft.Graph,
+    # Microsoft.Graph.Beta) force-loads all 70+ submodules and can stall for
+    # multiple minutes with noisy "unapproved verbs" warnings for Az.Cdn etc.
     $null = Ensure-Module `
         -Name $script:SecurityInsight_RequiredModules `
         -Scope $Scope `
-        -Import `
         -Quiet:$Quiet `
         -Required:$Required
+
+    # Phase 2: explicit Import-Module -Global ONLY for the submodules + helpers
+    # that need their exported commands visible in the parent scope NOW.
+    # Meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) are deliberately
+    # omitted -- PowerShell's auto-module-loading will pull the correct Az.*
+    # submodule on first use of each cmdlet (Connect-AzAccount -> Az.Accounts,
+    # Get-AzResourceGroup -> Az.Resources, etc.) without the massive upfront load.
+    $eagerImport = @(
+        'Az.ResourceGraph'   # Search-AzGraph (not in Az meta)
+        'AzLogDcrIngestPS'   # DCR ingest; needs -Global to be visible across dot-sources
+        'MicrosoftGraphPS'   # Graph helpers; same
+        'ImportExcel'        # XLSX output
+        'powershell-yaml'    # YAML parse
+    )
+    foreach ($mod in $eagerImport) {
+        try {
+            Import-Module -Name $mod -Global -Force -DisableNameChecking `
+                -WarningAction SilentlyContinue -ErrorAction Stop
+        } catch {
+            if (-not $Quiet) {
+                Write-Host ("[MODULE] import skipped: {0} -- {1}" -f $mod, $_.Exception.Message) -ForegroundColor Yellow
+            }
+        }
+    }
 }

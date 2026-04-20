@@ -196,24 +196,10 @@ function Get-AllPages {
 }
 
 # -----------------------------
-# STEP 0 - Modules and Graph connection
+# STEP 0 - Graph connection (modules already verified by Ensure-SecurityInsightModules)
 # -----------------------------
 
-Write-Section 'STEP 0 - Module installation and Graph connection'
-
-$requiredModules = @(
-    'Microsoft.Graph.Authentication',
-    'Microsoft.Graph.Identity.DirectoryManagement'
-)
-
-foreach ($mod in $requiredModules) {
-    if (-not (Get-Module -ListAvailable -Name $mod)) {
-        Write-Info "Installing module: $mod"
-        Install-Module $mod -Scope CurrentUser -Force -Repository PSGallery
-    }
-    Import-Module $mod -ErrorAction SilentlyContinue
-    Write-OK "Module ready: $mod"
-}
+Write-Section 'STEP 0 - Graph connection'
 
 $scopes = @(
     'CustomSecAttributeDefinition.ReadWrite.All',

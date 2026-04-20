@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights - engine script in the SecurityInsight solution.
+    Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure - engine script in the SecurityInsight solution.
 
 ================================================================================
-Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
 ================================================================================
 PURPOSE
   Deploy (or reuse) an Azure OpenAI account (PAYG) and a model deployment using
@@ -22,7 +22,7 @@ USAGE
 
 .NOTES
     Solution       : SecurityInsight
-    File           : Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+    File           : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
@@ -59,7 +59,13 @@ param(
     [string[]]$DeploymentSkuOrder,
 
     # If set, writes model dumps to disk when selection/deploy fails
-    [switch]$WriteModelDumps
+    [switch]$WriteModelDumps,
+
+    # When $true, no resources are created or modified -- the engine just
+    # verifies each resource exists and prints the same summary block you'd
+    # get after a real provisioning run. Useful for re-running Step3 as an
+    # ongoing "is my OpenAI still healthy?" check without making changes.
+    [switch]$ValidateOnly
 )
 
 Set-StrictMode -Version Latest
@@ -122,7 +128,7 @@ foreach ($req in 'SubscriptionId','ResourceGroupName','Location','AccountName','
     $fromParam = (Get-Variable -Name $req -Scope Local -ErrorAction SilentlyContinue).Value
     $fromDefaults = $ScriptDefaults[$req]
     if ([string]::IsNullOrWhiteSpace([string]$fromParam) -and [string]::IsNullOrWhiteSpace([string]$fromDefaults)) {
-        throw "Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
+        throw "Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
     }
 }
 
@@ -247,10 +253,17 @@ function Ensure-AzContext {
 function Ensure-ResourceGroup {
     $rg = Get-AzResourceGroup -Name $ResourceGroupName -ErrorAction SilentlyContinue
     if (-not $rg) {
+        if ($ValidateOnly) {
+            Write-Log WARN "[ValidateOnly] Resource group '$ResourceGroupName' NOT FOUND in '$Location'. Skipping create."
+            $script:Status_ResourceGroup = 'MISSING'
+            return
+        }
         Write-Log INFO "Resource group '$ResourceGroupName' not found. Creating in '$Location'..."
         New-AzResourceGroup -Name $ResourceGroupName -Location $Location | Out-Null
+        $script:Status_ResourceGroup = 'CREATED'
     } else {
         Write-Log INFO "Resource group '$ResourceGroupName' already exists (location: $($rg.Location))."
+        $script:Status_ResourceGroup = 'REUSED'
     }
 }
 
@@ -490,25 +503,32 @@ Write-Log INFO "Creating/reusing account: kind=OpenAI, sku=S0 (PAYG)"
 
 $account = Invoke-Get -ResourceId $AccountId -ApiVersion $ApiVersion
 if (-not $account) {
-    Write-Log INFO "Account does not exist -> creating..."
-    Invoke-Put -ResourceId $AccountId -ApiVersion $ApiVersion -Body @{
-        location = $Location
-        kind     = "OpenAI"
-        sku      = @{ name = "S0" }
-        properties = @{
-            customSubDomainName = $AccountName
-            publicNetworkAccess = $PublicNetworkAccess
-            networkAcls = @{
-                defaultAction       = "Allow"
-                ipRules             = @()
-                virtualNetworkRules = @()
+    if ($ValidateOnly) {
+        Write-Log WARN "[ValidateOnly] Azure OpenAI account '$AccountName' NOT FOUND. Skipping create."
+        $script:Status_Account = 'MISSING'
+    } else {
+        Write-Log INFO "Account does not exist -> creating..."
+        Invoke-Put -ResourceId $AccountId -ApiVersion $ApiVersion -Body @{
+            location = $Location
+            kind     = "OpenAI"
+            sku      = @{ name = "S0" }
+            properties = @{
+                customSubDomainName = $AccountName
+                publicNetworkAccess = $PublicNetworkAccess
+                networkAcls = @{
+                    defaultAction       = "Allow"
+                    ipRules             = @()
+                    virtualNetworkRules = @()
+                }
             }
-        }
-        tags = @{}
-    } | Out-Null
-    Write-Log INFO "Account create request sent."
+            tags = @{}
+        } | Out-Null
+        Write-Log INFO "Account create request sent."
+        $script:Status_Account = 'CREATED'
+    }
 } else {
     Write-Log INFO "Account already exists -> skipping create."
+    $script:Status_Account = 'REUSED'
 }
 
 if ($WaitForAccountReady) {
@@ -576,6 +596,19 @@ if ($UserForcedModel) {
 $DeploymentExists = Invoke-Get -ResourceId $DeploymentId -ApiVersion $ApiVersion
 if ($DeploymentExists) {
     Write-Log INFO "Deployment already exists -> skipping create."
+    $script:Status_Deployment = 'REUSED'
+    # Capture the existing model info so the summary reflects reality, not the
+    # user's -ModelName/-ModelVersion request (which may not match what was deployed).
+    try {
+        $existingModel = $DeploymentExists.properties.model
+        if ($existingModel) {
+            $ModelName    = [string]$existingModel.name
+            $ModelVersion = [string]$existingModel.version
+        }
+    } catch { }
+} elseif ($ValidateOnly) {
+    Write-Log WARN "[ValidateOnly] Deployment '$DeploymentName' NOT FOUND. Skipping create."
+    $script:Status_Deployment = 'MISSING'
 } else {
     Write-Log INFO "Deployment does not exist -> creating..."
     $result = New-DeploymentWithSkuAndModelFallback -DeploymentId $DeploymentId -ApiVersion $ApiVersion -Capacity $Capacity `
@@ -588,28 +621,42 @@ if ($DeploymentExists) {
     # Update output variables to reflect what actually worked
     $ModelName    = $result.Name
     $ModelVersion = $result.Version
+    $script:Status_Deployment = 'CREATED'
 }
 
 Write-Section "8) Output (Endpoint + Keys)"
 $account = Invoke-Get -ResourceId $AccountId -ApiVersion $ApiVersion
-$keys    = Get-AccountKeys -AccountId $AccountId -ApiVersion $ApiVersion
+# Keys require the account to exist. In ValidateOnly mode when the account is
+# missing, skip the listKeys call so the summary can still render gracefully.
+$keys = $null
+if ($account) {
+    try { $keys = Get-AccountKeys -AccountId $AccountId -ApiVersion $ApiVersion } catch {
+        Write-Log WARN "Could not fetch account keys: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log WARN "Account not present -- skipping listKeys."
+}
+
+$__endpoint = if ($account -and $account.properties -and $account.properties.endpoint) { $account.properties.endpoint } else { '(not found)' }
+$__key1     = if ($keys -and $keys.key1) { $keys.key1 } else { '(not available)' }
+$__key2     = if ($keys -and $keys.key2) { $keys.key2 } else { '(not available)' }
 
 Write-Host ""
 Write-Host "==================== RESULT ===================="
 Write-Host "AccountName : $AccountName"
 Write-Host "ResourceId  : $AccountId"
-Write-Host "Endpoint    : $($account.properties.endpoint)"
+Write-Host "Endpoint    : $__endpoint"
 Write-Host "Deployment  : $DeploymentName"
 Write-Host "Model       : $ModelName ($ModelVersion)"
 Write-Host "Account SKU : S0 (PAYG)"
 Write-Host "Deploy SKUs : Tried => $($DeploymentSkuOrder -join ', ')"
-Write-Host "Key1        : $($keys.key1)"
-Write-Host "Key2        : $($keys.key2)"
+Write-Host "Key1        : $__key1"
+Write-Host "Key2        : $__key2"
 Write-Host "================================================"
 Write-Host ""
 
 Write-Host "Example API call (Responses API style):"
-Write-Host "POST $($account.properties.endpoint)openai/responses?api-version=$InferenceApiVersion"
+Write-Host "POST ${__endpoint}openai/responses?api-version=$InferenceApiVersion"
 Write-Host "Header: api-key: <key>"
 Write-Host "Body: { `"model`": `"$DeploymentName`", `"input`": `"hello`" }"
 Write-Host ""
@@ -617,14 +664,52 @@ Write-Host ""
 
 Write-Section "9) PowerShell Variable Output (SecurityInsight - Copy/Paste Ready)"
 
-$AI_apiKey     = $keys.key1
-$AI_endpoint   = $account.properties.endpoint.TrimEnd('/')
+$AI_apiKey     = if ($keys) { $keys.key1 } else { $null }
+$AI_endpoint   = if ($account -and $account.properties -and $account.properties.endpoint) { $account.properties.endpoint.TrimEnd('/') } else { '' }
 $AI_deployment = $DeploymentName
 $AI_apiVersion = $InferenceApiVersion
 
-Write-Host "`$Global:OpenAI_apiKey              = `"$AI_apiKey`""
-Write-Host "`$Global:OpenAI_endpoint            = `"$AI_endpoint`""
-Write-Host "`$Global:OpenAI_deployment          = `"$AI_deployment`""
-Write-Host "`$Global:OpenAI_apiVersion          = `"$AI_apiVersion`""
-Write-Host "`$Global:OpenAI_MaxTokensPerRequest = 16384"
+# ----------------------------------------------------------------------------
+# Provisioning summary -- matches the Step1 OnboardValidate format so ops can
+# eyeball a re-run and see exactly what was CREATED vs. REUSED vs. MISSING.
+# ----------------------------------------------------------------------------
+if (-not $script:Status_ResourceGroup) { $script:Status_ResourceGroup = 'UNKNOWN' }
+if (-not $script:Status_Account)       { $script:Status_Account       = 'UNKNOWN' }
+if (-not $script:Status_Deployment)    { $script:Status_Deployment    = 'UNKNOWN' }
+
+$__modeLabel = if ($ValidateOnly) { 'VALIDATE-ONLY (no writes)' } else { 'PROVISION' }
+
+Write-Host ""
+Write-Host "  ========= SecurityInsight Step3 -- Azure OpenAI provisioning summary =========" -ForegroundColor Cyan
+Write-Host ""
+Write-Host ("  Mode                  : {0}" -f $__modeLabel)        -ForegroundColor White
+Write-Host ("  Subscription          : {0}" -f $SubscriptionId)     -ForegroundColor White
+Write-Host ("  Resource Group        : {0}  [{1}]" -f $ResourceGroupName, $script:Status_ResourceGroup) -ForegroundColor White
+Write-Host ("  Azure OpenAI account  : {0}  [{1}]" -f $AccountName,       $script:Status_Account)       -ForegroundColor White
+Write-Host ("  Deployment            : {0}  [{1}]" -f $DeploymentName,    $script:Status_Deployment)    -ForegroundColor White
+Write-Host ("  Model                 : {0} ({1})" -f $ModelName, $ModelVersion) -ForegroundColor White
+Write-Host ("  Location              : {0}" -f $Location)           -ForegroundColor White
+Write-Host ("  Endpoint              : {0}" -f $AI_endpoint)        -ForegroundColor White
+Write-Host ""
+Write-Host "  Copy into LauncherConfig.custom.ps1 (SecurityInsight_RiskAnalysis):" -ForegroundColor Yellow
+Write-Host ""
+Write-Host ("    `$Global:OpenAI_apiKey              = `"{0}`"" -f $AI_apiKey)     -ForegroundColor White
+Write-Host ("    `$Global:OpenAI_endpoint            = `"{0}`"" -f $AI_endpoint)   -ForegroundColor White
+Write-Host ("    `$Global:OpenAI_deployment          = `"{0}`"" -f $AI_deployment) -ForegroundColor White
+Write-Host ("    `$Global:OpenAI_apiVersion          = `"{0}`"" -f $AI_apiVersion) -ForegroundColor White
+Write-Host  "    `$Global:OpenAI_MaxTokensPerRequest = 16384"                      -ForegroundColor White
+Write-Host ""
+
+# ----------------------------------------------------------------------------
+# Exit code: non-zero if -ValidateOnly found any MISSING resource
+# ----------------------------------------------------------------------------
+if ($ValidateOnly) {
+    $missing = @('ResourceGroup','Account','Deployment') | Where-Object { (Get-Variable -Name ("Status_" + $_) -Scope Script -ValueOnly) -eq 'MISSING' }
+    if ($missing.Count -gt 0) {
+        Write-Host ("  [VALIDATE] {0} resource(s) missing: {1}" -f $missing.Count, ($missing -join ', ')) -ForegroundColor Red
+        Write-Host  "  Re-run Step3 without -ValidateOnly to provision the missing pieces."              -ForegroundColor Red
+        exit 2
+    }
+    Write-Host "  [VALIDATE] All 3 resources present -- tenant is ready for RiskAnalysis -BuildSummaryByAI." -ForegroundColor Green
+}
 

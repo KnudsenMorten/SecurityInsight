@@ -32,8 +32,17 @@ $global:OnboardValidate_SpnAppId = $null
 
 
 # ============================================================================
-#  AZURE SCOPE  (where to grant Reader at the subscription level)
+#  AZURE RBAC SCOPE  (where the SPN gets Reader + Tag Contributor)
 # ============================================================================
+# TenantRoot      = default. ONE grant at the tenant root management group,
+#                   cascades to every sub + RG + resource. Needs Owner / User
+#                   Access Admin at tenant root on the onboarding identity.
+# PerSubscription = legacy. Granted per sub in AzureSubscriptionIds (or every
+#                   enabled sub the caller can see).
+# If TenantRoot fails at runtime the engine auto-falls-back to PerSubscription.
+$global:OnboardValidate_AzureRbacScope = 'TenantRoot'
+
+# Only used when AzureRbacScope = 'PerSubscription'.
 # Empty array = enumerate every enabled subscription the operator can see.
 # Set to a specific list to limit blast radius.
 $global:OnboardValidate_AzureSubscriptionIds = @()

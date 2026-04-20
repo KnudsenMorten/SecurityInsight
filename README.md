@@ -324,7 +324,7 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 | # | Purpose | Config needed? |
 |---|---|---|
 | **Step 1** | Download / update SecurityInsight from GitHub. Preserves customer files. Supports `stable` (default) + `preview` channels.<br/>`SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` | **None** — it's a script, use `-DestinationPath` / `-Channel` args or edit the inline defaults at the top of the file. |
-| **Step 2** | Create the SecurityInsight SPN. Grants Graph / Defender / ATP API permissions + Azure `Reader` on every sub. Idempotent.<br/>`LAUNCHERS/Step2_OnboardValidate-SecurityInsight-Permissions/` | **None** — community-vm falls back to interactive Graph sign-in. Fill in `LauncherConfig.custom.ps1` only to run unattended. |
+| **Step 2** | Create the SecurityInsight SPN. Grants Graph / Defender / ATP API permissions + Azure `Reader` + `Tag Contributor` at tenant-root MG (default). Idempotent.<br/>`LAUNCHERS/Step2_OnboardValidate-SecurityInsight-Permissions/` | **None** — community-vm falls back to interactive Graph sign-in. Fill in `LauncherConfig.custom.ps1` only to run unattended. |
 | **Step 3** | Provision Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` table + RBAC for the SPN.<br/>`LAUNCHERS/Step3_OnboardValidate-SecurityInsight-LogAnalytics/` | **Yes** — 4 lines (auth + subscription). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`. |
 | **Step 4** *(opt.)* | Provision pay-as-you-go Azure OpenAI account + model deployment. Only needed for RiskAnalysis AI summaries (`-BuildSummaryByAI`).<br/>`LAUNCHERS/Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | **Yes** — 8 lines (auth + placement + account/deployment names). |
 
@@ -409,7 +409,7 @@ Just run the launcher:
 ```powershell
 .\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
 ```
-Browser sign-in as a Privileged Role Admin. The engine creates `sp-securityinsight`, grants all the API permissions, and assigns Azure `Reader` on every subscription you can see. Prints the AppId + secret-creation hint at the end — copy the AppId.
+Browser sign-in as a Privileged Role Admin **with Azure UAA at tenant root** (Entra admin center → Properties → *Access management for Azure resources* toggle ON). The engine creates `sp-securityinsight`, grants all the API permissions, and assigns Azure `Reader` + `Tag Contributor` at the tenant-root MG — one grant cascades to every sub. Prints the AppId + secret-creation hint at the end — copy the AppId. Falls back to per-subscription if tenant-root fails.
 
 ---
 
@@ -480,7 +480,7 @@ SecurityInsight engines authenticate to Entra (Microsoft Graph) and Azure (Resou
 
 ```powershell
 # Interactive (you sign in as a Privileged Role Admin), creates 'sp-securityinsight' if missing,
-# grants Graph + Defender + ATP API permissions + Azure Reader on every sub:
+# grants Graph + Defender + ATP API permissions + Azure Reader + Tag Contributor at tenant-root MG:
 .\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
 
 # Dry-run preview first:
@@ -499,7 +499,9 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > [!IMPORTANT]
 > **What OnboardValidate DOES cover (via RBAC grants):**
 > - Graph + Defender + ATP API permissions on the SPN
-> - Azure `Reader` at every enumerated subscription scope
+> - Azure `Reader` at tenant-root MG (default — for Azure Resource Graph enumeration across every sub)
+> - Azure `Tag Contributor` at tenant-root MG (needed by `CriticalAssetTagging` to write tier tags on subs / RGs / resources)
+> - Falls back to per-subscription if the onboarding identity lacks UAA at tenant root (or if you pick `-AzureRbacScope PerSubscription` explicitly)
 > - Optional: `Log Analytics Reader` on a Defender workspace (`-DefenderWorkspaceResourceId`)
 > - Optional: `Monitoring Metrics Publisher` on a specific DCR (`-DcrResourceId`)
 >

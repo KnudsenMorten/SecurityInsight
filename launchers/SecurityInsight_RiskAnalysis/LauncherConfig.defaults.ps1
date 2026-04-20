@@ -56,13 +56,18 @@ $global:SendToLogAnalytics                    = $false
 # + 'dcr-si-risk-analysis-detailed'); customer doesn't pick the names. The
 # customer-tunable bit is only the resource group that holds them.
 #
-# DCE + Workspace can be shared with IAC; the engine falls back to the IAC
-# short names ($global:DceIngestionUri / WorkspaceResourceId / DcrResourceGroup
-# / DceName) if the SI_RiskAnalysis_* per-engine globals below are not set.
-$global:SI_RiskAnalysis_DcrResourceGroup      = $null     # falls back to $global:DcrResourceGroup
-$global:SI_RiskAnalysis_DceName               = $null     # falls back to $global:DceName
-$global:SI_RiskAnalysis_DceIngestionUri       = $null     # falls back to $global:DceIngestionUri
-$global:SI_RiskAnalysis_WorkspaceResourceId   = $null     # falls back to $global:WorkspaceResourceId
+# EVERYTHING AUTO-RESOLVES. The engine:
+#   - looks up DceIngestionUri from DceName via $global:AzDceDetails (Get-AzDceListAll)
+#   - looks up WorkspaceResourceId from WorkspaceName (or creates it if missing)
+#   - auto-creates the DCE + DCE RG + DCR RG if any are missing (with RBAC for the SPN)
+# Per-engine names (SI_RiskAnalysis_*) win over the shared short names, which win over
+# the engine defaults below.
+$global:SI_RiskAnalysis_DcrResourceGroup      = $null                                      # default: 'rg-dcr-securityinsight'
+$global:SI_RiskAnalysis_DceName               = $null                                      # default: 'dce-securityinsight'
+$global:SI_RiskAnalysis_DceIngestionUri       = $null                                      # auto-resolved from DceName
+$global:SI_RiskAnalysis_WorkspaceName         = 'log-platform-management-securityinsight'  # auto-created if missing
+$global:SI_RiskAnalysis_WorkspaceResourceId   = $null                                      # overrides WorkspaceName when set
+$global:SI_RiskAnalysis_WorkspaceResourceGroup = $null                                     # default: 'rg-securityinsight'
 
 # Custom table base names (engine appends _CL when LA creates the table).
 $global:SI_RiskAnalysis_TableName_Summary     = 'SI_RiskAnalysis_Summary'

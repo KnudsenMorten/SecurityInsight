@@ -60,13 +60,29 @@
 
 
 # ============================================================================
-# 2.  DCR INGESTION TARGETS  -- REQUIRED. From the onboarding cheat-sheet.
+# 2.  DCR INGESTION TARGETS  -- optional. Everything auto-resolves to sensible
+#     defaults; override only what differs from the standard layout.
 # ============================================================================
-$global:DceIngestionUri      = '<https://your-dce-name.<region>-1.ingest.monitor.azure.com>'
-$global:WorkspaceResourceId  = '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<ws-name>'
-$global:DcrResourceGroup     = '<rg-holding-the-dcr>'
-$global:DcrName              = '<dcr-name>'   # default: dcr-si-identity-assets
-$global:DceName              = '<dce-name>'   # default: dce-si-identity
+# Defaults (if you leave this block empty):
+#   Workspace : log-platform-management-securityinsight  (in rg-securityinsight)
+#   DCE       : dce-securityinsight                      (in rg-dce-securityinsight)
+#   DCR       : dcr-si-identity-assets                   (in rg-dcr-securityinsight)
+#   Table     : SI_IdentityAssets                        (_CL suffix added by LA)
+# Missing workspace / DCE / RGs are auto-created and RBAC'd for the ingestion SPN.
+# DceIngestionUri is auto-resolved from $DceName via Get-AzDceListAll -- no longer required.
+#
+# Workspace: set ResourceId to pin a specific cross-sub workspace; otherwise the
+# engine resolves (and auto-creates) by name.
+# $global:WorkspaceResourceId     = '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<ws-name>'
+# $global:WorkspaceName           = 'log-platform-management-securityinsight'
+# $global:WorkspaceResourceGroup  = 'rg-securityinsight'
+#
+# DCE / DCR overrides (uncomment only if you deviate from the defaults):
+# $global:DceName                 = 'dce-securityinsight'
+# $global:DceResourceGroup        = 'rg-dce-securityinsight'
+# $global:DcrResourceGroup        = 'rg-dcr-securityinsight'
+# $global:DcrName                 = 'dcr-si-identity-assets'
+# $global:DceIngestionUri         = 'https://...ingest.monitor.azure.com'   # rarely needed
 
 
 # ============================================================================

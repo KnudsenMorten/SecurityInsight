@@ -73,10 +73,15 @@ if ([bool]$global:AutomationFramework) {
 
 $TenantId                = if ($global:AutomationFramework) { $Global:TenantID } else { $global:SpnTenantId }
 $SubscriptionId          = if ($global:SubscriptionId)       { $global:SubscriptionId }       elseif ($global:MainLogAnalyticsWorkspaceSubId) { $global:MainLogAnalyticsWorkspaceSubId } else { (Get-AzContext).Subscription.Id }
-$ResourceGroup           = if ($global:ResourceGroup)        { $global:ResourceGroup }        else { "rg-securityinsight" }
+
+# Separate RGs for workspace / DCE / DCR are the standard SecurityInsight layout.
+# Customers can override any of them via $global:* before invoking the launcher.
+$ResourceGroup           = if ($global:ResourceGroup)        { $global:ResourceGroup }        else { "rg-securityinsight" }              # Log Analytics workspace RG
+$DceResourceGroup        = if ($global:DceResourceGroup)     { $global:DceResourceGroup }     else { "rg-dce-securityinsight" }          # DCE RG
+$DcrResourceGroup        = if ($global:DcrResourceGroup)     { $global:DcrResourceGroup }     else { "rg-dcr-securityinsight" }          # DCR RG
 $Location                = if ($global:Location)             { $global:Location }             else { "westeurope" }
 $WorkspaceName           = if ($global:WorkspaceName)        { $global:WorkspaceName }        else { "log-platform-management-securityinsight" }
-$DceName                 = if ($global:DceName)              { $global:DceName }              else { "dce-si-identity" }
+$DceName                 = if ($global:DceName)              { $global:DceName }              else { "dce-securityinsight" }
 $DcrName                 = if ($global:DcrName)              { $global:DcrName }              else { "dcr-si-identity-assets" }
 $TableName               = if ($global:TableName)            { $global:TableName }            else { "SI_IdentityAssets" }
 $WorkspaceRetentionDays  = if ($global:WorkspaceRetentionDays){$global:WorkspaceRetentionDays}else { 90 }
@@ -219,25 +224,35 @@ $spnObjectId = $spn.Id
 Write-Ok "SPN ObjectId: $spnObjectId ($($spn.DisplayName))"
 
 #########################################################################################################
-# RESOURCE GROUP (idempotent)
+# RESOURCE GROUPS (idempotent) - one for Log Analytics workspace, one for DCE, one for DCR
 #########################################################################################################
 
 Write-Sep
-Write-Step "Ensuring resource group: $ResourceGroup"
+Write-Step "Ensuring resource groups (workspace / DCE / DCR)"
 
-$existingRg = Get-AzResourceGroup -Name $ResourceGroup -ErrorAction SilentlyContinue
-if (-not $existingRg) {
-    Invoke-WithRetry -OperationName "Create RG $ResourceGroup" -ScriptBlock {
-        New-AzResourceGroup -Name $ResourceGroup -Location $Location -ErrorAction Stop | Out-Null
+function Ensure-Rg {
+    param([string]$Name, [string]$DesiredLocation)
+    $rg = Get-AzResourceGroup -Name $Name -ErrorAction SilentlyContinue
+    if (-not $rg) {
+        Invoke-WithRetry -OperationName "Create RG $Name" -ScriptBlock {
+            New-AzResourceGroup -Name $Name -Location $DesiredLocation -ErrorAction Stop | Out-Null
+        }
+        Write-Ok "Created resource group: $Name ($DesiredLocation)"
+        return $DesiredLocation
+    } else {
+        if ($rg.Location -ne $DesiredLocation) {
+            Write-Warn "RG '$Name' exists in '$($rg.Location)' but requested '$DesiredLocation' - using existing location"
+            return $rg.Location
+        }
+        Write-Info "RG exists: $Name ($($rg.Location))"
+        return $rg.Location
     }
-    Write-Ok "Created resource group: $ResourceGroup"
-} else {
-    if ($existingRg.Location -ne $Location) {
-        Write-Warn "RG '$ResourceGroup' exists in '$($existingRg.Location)' but requested '$Location' - using existing location"
-        $Location = $existingRg.Location
-    }
-    Write-Info "RG exists: $ResourceGroup ($($existingRg.Location))"
 }
+
+# Workspace RG drives $Location for the workspace itself (kept authoritative)
+$Location = Ensure-Rg -Name $ResourceGroup    -DesiredLocation $Location
+$null     = Ensure-Rg -Name $DceResourceGroup -DesiredLocation $Location
+$null     = Ensure-Rg -Name $DcrResourceGroup -DesiredLocation $Location
 
 #########################################################################################################
 # LOG ANALYTICS WORKSPACE (idempotent)
@@ -297,13 +312,13 @@ Write-Ok "DCE cache: $(($global:AzDceDetails | Measure-Object).Count) | DCR cach
 #########################################################################################################
 
 Write-Sep
-Write-Step "Ensuring Data Collection Endpoint: $DceName"
+Write-Step "Ensuring Data Collection Endpoint: $DceName (rg=$DceResourceGroup)"
 
-$dce = Get-AzDataCollectionEndpoint -ResourceGroupName $ResourceGroup -Name $DceName -ErrorAction SilentlyContinue
+$dce = Get-AzDataCollectionEndpoint -ResourceGroupName $DceResourceGroup -Name $DceName -ErrorAction SilentlyContinue
 if (-not $dce) {
     $dce = Invoke-WithRetry -OperationName "Create DCE" -ScriptBlock {
         New-AzDataCollectionEndpoint `
-            -ResourceGroupName              $ResourceGroup `
+            -ResourceGroupName              $DceResourceGroup `
             -Name                           $DceName `
             -Location                       $Location `
             -NetworkAclsPublicNetworkAccess "Enabled" `
@@ -399,14 +414,14 @@ try {
         -TenantId                                   $TenantId `
         -DceName                                    $DceName `
         -DcrName                                    $DcrName `
-        -DcrResourceGroup                           $ResourceGroup `
+        -DcrResourceGroup                           $DcrResourceGroup `
         -TableName                                  $TableName `
         -Data                                       $dataArray `
         -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
         -AzLogDcrTableCreateFromAnyMachine          $true `
         -AzLogDcrTableCreateFromReferenceMachine    @() `
         -Verbose:$false | Out-Null
-    Write-Ok "Table + DCR provisioned: ${TableName}_CL"
+    Write-Ok "Table + DCR provisioned: ${TableName}_CL (rg=$DcrResourceGroup)"
 } catch {
     Write-Err "Table/DCR provisioning failed: $($_.Exception.Message)"
     throw
@@ -422,13 +437,27 @@ try {
 Write-Sep
 Write-Step "Assigning RBAC roles to ingestion SPN"
 
-$rgScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup"
+$rgWorkspaceScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup"
+$rgDceScope       = "/subscriptions/$SubscriptionId/resourceGroups/$DceResourceGroup"
+$rgDcrScope       = "/subscriptions/$SubscriptionId/resourceGroups/$DcrResourceGroup"
 
-$changed1 = Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Monitoring Metrics Publisher" -Scope $rgScope
-$changed2 = Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor"                  -Scope $rgScope
-$changed3 = Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor"                  -Scope $WorkspaceResourceId
+$roleChanges = @(
+    # Workspace: Contributor (so the SPN can create/update tables in the workspace)
+    (Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor"                  -Scope $WorkspaceResourceId)
+    # DCE RG: Monitoring Metrics Publisher (send data) + Contributor (manage DCE)
+    (Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Monitoring Metrics Publisher" -Scope $rgDceScope)
+    (Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor"                  -Scope $rgDceScope)
+    # DCR RG: Monitoring Metrics Publisher (send data via DCR) + Contributor (manage DCR)
+    (Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Monitoring Metrics Publisher" -Scope $rgDcrScope)
+    (Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor"                  -Scope $rgDcrScope)
+)
 
-if ($changed1 -or $changed2 -or $changed3) {
+# Also assign Contributor on workspace RG if it's different from the DCE/DCR RGs
+if ($ResourceGroup -ne $DceResourceGroup -and $ResourceGroup -ne $DcrResourceGroup) {
+    $roleChanges += (Ensure-RoleAssignment -ObjectId $spnObjectId -RoleDefinitionName "Contributor" -Scope $rgWorkspaceScope)
+}
+
+if ($roleChanges -contains $true) {
     Write-Ok "New role assignments made - waiting 60s for propagation..."
     Start-Sleep -Seconds 60
 }
@@ -463,10 +492,12 @@ if ([bool]$global:AutomationFramework) {
     Write-Host ("    `$global:SecurityInsight_LOG_BatchSize                = 300")                                                      -ForegroundColor White
     Write-Host ("    `$global:SecurityInsight_LOG_TableName                = `"{0}`""   -f $TableName)                                  -ForegroundColor White
     Write-Host ("    `$global:SecurityInsight_LOG_WorkspaceResourceId      = `"{0}`""   -f $WorkspaceResourceId.ToLower())              -ForegroundColor White
-    Write-Host ("    `$global:SecurityInsight_LOG_DcrResourceGroup         = `"{0}`""   -f $ResourceGroup.ToLower())                    -ForegroundColor White
+    Write-Host ("    `$global:SecurityInsight_LOG_DcrResourceGroup         = `"{0}`""   -f $DcrResourceGroup.ToLower())                 -ForegroundColor White
     Write-Host ("    `$global:SecurityInsight_LOG_DcrName                  = `"{0}`""   -f $DcrName.ToLower())                          -ForegroundColor White
     Write-Host ("    `$global:SecurityInsight_LOG_DceName                  = `"{0}`""   -f $DceName.ToLower())                          -ForegroundColor White
-    Write-Host ("    `$global:SecurityInsight_LOG_DceIngestionUri          = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))               -ForegroundColor White
+    # DCE ingestion URI is auto-resolved from the DCE name -- no longer required.
+    # Uncomment the line below only if you want to pin a specific URI:
+    # Write-Host ("    # `$global:SecurityInsight_LOG_DceIngestionUri        = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))             -ForegroundColor DarkGray
     Write-Host ("    `$global:SecurityInsight_Identity_TroubleshootingMode = `$false")                                                  -ForegroundColor White
     Write-Host ("    `$global:SecurityInsight_Identity_CsaAttributeSet     = `"SecurityInsight`"")                                      -ForegroundColor White
     Write-Host ("    `$global:SecurityInsight_Defender_WorkspaceResourceId = `$global:MainLogAnalyticsWorkspaceResourceId")             -ForegroundColor White
@@ -478,10 +509,13 @@ if ([bool]$global:AutomationFramework) {
     Write-Host ("    `$global:BatchSize                       = 300")                                                                   -ForegroundColor White
     Write-Host ("    `$global:TableName                       = `"{0}`""   -f $TableName)                                               -ForegroundColor White
     Write-Host ("    `$global:WorkspaceResourceId             = `"{0}`""   -f $WorkspaceResourceId.ToLower())                           -ForegroundColor White
-    Write-Host ("    `$global:DcrResourceGroup                = `"{0}`""   -f $ResourceGroup.ToLower())                                 -ForegroundColor White
+    Write-Host ("    `$global:DcrResourceGroup                = `"{0}`""   -f $DcrResourceGroup.ToLower())                              -ForegroundColor White
     Write-Host ("    `$global:DcrName                         = `"{0}`""   -f $DcrName.ToLower())                                       -ForegroundColor White
+    Write-Host ("    `$global:DceResourceGroup                = `"{0}`""   -f $DceResourceGroup.ToLower())                              -ForegroundColor White
     Write-Host ("    `$global:DceName                         = `"{0}`""   -f $DceName.ToLower())                                       -ForegroundColor White
-    Write-Host ("    `$global:DceIngestionUri                 = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))                            -ForegroundColor White
+    # DCE ingestion URI is auto-resolved from the DCE name -- no longer required.
+    # Uncomment the line below only if you want to pin a specific URI:
+    # Write-Host ("    # `$global:DceIngestionUri               = `"{0}`""   -f $DceIngestionUri.TrimEnd('/'))                          -ForegroundColor DarkGray
     Write-Host ("    `$global:TroubleshootingMode             = `$false")                                                               -ForegroundColor White
     Write-Host ("    `$global:CsaAttributeSet                 = `"SecurityInsight`"")                                                   -ForegroundColor White
     Write-Host ("    # Optional -- set if Defender/Sentinel IdentityInfo lives in a different workspace:")                              -ForegroundColor DarkGray

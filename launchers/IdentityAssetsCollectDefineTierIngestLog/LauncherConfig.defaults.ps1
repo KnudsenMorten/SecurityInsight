@@ -18,16 +18,30 @@
 #>
 
 # ============================================================================
-#  DCR INGESTION TARGETS  -- customer MUST set these in their LauncherConfig.ps1
+#  DCR INGESTION TARGETS
 # ============================================================================
-# These come from the Onboarding_IdentityAssets_LogAnalytics run; the engine
-# throws cleanly if any are missing. No sensible default exists.
-$global:DceIngestionUri      = $null
-$global:WorkspaceResourceId  = $null
-$global:DcrResourceGroup     = $null
-$global:DcrName              = $null
-$global:DceName              = $null
-$global:TableName            = 'SI_IdentityAssets'
+# EVERYTHING AUTO-RESOLVES. The engine auto-creates the workspace, DCE, DCE RG,
+# and DCR RG if any are missing -- and assigns the ingestion SPN the roles it
+# needs. The defaults below are the standard SecurityInsight layout; the
+# customer only has to override values that differ.
+#
+# Workspace lookup hierarchy:
+#   $global:WorkspaceResourceId  -- wins if set (cross-sub supported)
+#   $global:WorkspaceName        -- looked up in current context; created if missing
+$global:WorkspaceName             = 'log-platform-management-securityinsight'
+$global:WorkspaceResourceId       = $null
+$global:WorkspaceResourceGroup    = 'rg-securityinsight'       # used if workspace must be created
+
+# DCE -- name is the only thing customers normally touch. Ingestion URI is
+# auto-resolved from the name via Get-AzDceListAll.
+$global:DceName                   = 'dce-securityinsight'
+$global:DceResourceGroup          = 'rg-dce-securityinsight'   # auto-created if missing
+$global:DceIngestionUri           = $null                      # auto-resolved from DceName
+
+# DCR -- DCR name is engine-specific (SI_IdentityAssets schema)
+$global:DcrResourceGroup          = 'rg-dcr-securityinsight'   # auto-created if missing
+$global:DcrName                   = 'dcr-si-identity-assets'
+$global:TableName                 = 'SI_IdentityAssets'
 
 
 # ============================================================================

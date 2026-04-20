@@ -1180,9 +1180,12 @@ if ($AutomationFramework) {
     $BatchSize            = if ($null -ne $global:SecurityInsight_LOG_BatchSize -and $global:SecurityInsight_LOG_BatchSize -gt 0) { [int]$global:SecurityInsight_LOG_BatchSize               } else { 300 }
     $TableName            = if (-not [string]::IsNullOrWhiteSpace([string]$global:SecurityInsight_LOG_TableName))              { [string]$global:SecurityInsight_LOG_TableName                 } else { 'SI_IdentityAssets' }
     $WorkspaceResourceId  = [string]$global:SecurityInsight_LOG_WorkspaceResourceId
+    $WorkspaceName        = [string]$global:SecurityInsight_LOG_WorkspaceName
+    $WorkspaceResourceGroup = [string]$global:SecurityInsight_LOG_WorkspaceResourceGroup
     $DcrResourceGroup     = [string]$global:SecurityInsight_LOG_DcrResourceGroup
     $DcrName              = [string]$global:SecurityInsight_LOG_DcrName
     $DceName              = [string]$global:SecurityInsight_LOG_DceName
+    $DceResourceGroup     = [string]$global:SecurityInsight_LOG_DceResourceGroup
     $DceIngestionUri              = [string]$global:SecurityInsight_LOG_DceIngestionUri
     $TenantDomain                 = [string]$global:TenantDomain
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
@@ -1196,9 +1199,12 @@ if ($AutomationFramework) {
     $BatchSize            = if ($null -ne $global:BatchSize -and $global:BatchSize -gt 0)                                     { [int]$global:BatchSize                                       } else { 300 }
     $TableName            = if (-not [string]::IsNullOrWhiteSpace([string]$global:TableName))                                  { [string]$global:TableName                                    } else { 'SI_IdentityAssets' }
     $WorkspaceResourceId  = [string]$global:WorkspaceResourceId
+    $WorkspaceName        = [string]$global:WorkspaceName
+    $WorkspaceResourceGroup = [string]$global:WorkspaceResourceGroup
     $DcrResourceGroup     = [string]$global:DcrResourceGroup
     $DcrName              = [string]$global:DcrName
     $DceName              = [string]$global:DceName
+    $DceResourceGroup     = [string]$global:DceResourceGroup
     $DceIngestionUri              = [string]$global:DceIngestionUri
     $TenantDomain                 = [string]$global:TenantDomain
     # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
@@ -1209,13 +1215,30 @@ if ($AutomationFramework) {
 }
 
 #########################################################################################################
-# VALIDATE - infrastructure locals must be set regardless of auth mode
+# DEFAULTS + VALIDATE - infrastructure locals must be set regardless of auth mode
+#
+# Everything auto-resolves from sensible defaults unless the customer overrides.
+# Workspace: provide ResourceId OR Name (resource ID wins; name is looked up / auto-created).
+# DceIngestionUri: auto-resolved from DceName via $global:AzDceDetails.
+# DCE and DCR are auto-created if missing (see BUILD DCE/DCR CACHE section below).
 #########################################################################################################
 
+if ([string]::IsNullOrWhiteSpace($DceName))                { $DceName                = 'dce-securityinsight' }
+if ([string]::IsNullOrWhiteSpace($DcrResourceGroup))       { $DcrResourceGroup       = 'rg-dcr-securityinsight' }
+if ([string]::IsNullOrWhiteSpace($DceResourceGroup))       { $DceResourceGroup       = 'rg-dce-securityinsight' }
+if ([string]::IsNullOrWhiteSpace($DcrName))                { $DcrName                = 'dcr-si-identity-assets' }
+if ([string]::IsNullOrWhiteSpace($TableName))              { $TableName              = 'SI_IdentityAssets' }
+if ([string]::IsNullOrWhiteSpace($WorkspaceResourceGroup)) { $WorkspaceResourceGroup = 'rg-securityinsight' }
+if ([string]::IsNullOrWhiteSpace($WorkspaceResourceId) -and [string]::IsNullOrWhiteSpace($WorkspaceName)) {
+    $WorkspaceName = 'log-platform-management-securityinsight'
+}
+
 $missing = @()
-if ([string]::IsNullOrWhiteSpace($DceIngestionUri))      { $missing += "DceIngestionUri" }
-if ([string]::IsNullOrWhiteSpace($WorkspaceResourceId))  { $missing += "WorkspaceResourceId" }
+if ([string]::IsNullOrWhiteSpace($WorkspaceResourceId) -and [string]::IsNullOrWhiteSpace($WorkspaceName)) {
+    $missing += "WorkspaceResourceId or WorkspaceName"
+}
 if ([string]::IsNullOrWhiteSpace($DcrResourceGroup))     { $missing += "DcrResourceGroup" }
+if ([string]::IsNullOrWhiteSpace($DceName))              { $missing += "DceName" }
 
 if ($missing.Count -gt 0) {
     $src = if ($AutomationFramework) { "global:SecurityInsight_LOG_* / SecurityInsight_Identity_*" } else { "launcher globals" }
@@ -1492,24 +1515,77 @@ if ($TroubleshootingMode) {
 
 Write-Sep
 Write-Step "Setting Azure subscription context"
-# Extract subscription ID from workspace resource ID
-if ($WorkspaceResourceId -match '/subscriptions/([^/]+)/') {
+
+# Determine subscription: prefer workspace resource ID, else current Az context
+if (-not [string]::IsNullOrWhiteSpace($WorkspaceResourceId) -and $WorkspaceResourceId -match '/subscriptions/([^/]+)/') {
     $WorkspaceSubscriptionId = $Matches[1]
 } else {
-    throw "Cannot extract subscription ID from WorkspaceResourceId: $WorkspaceResourceId"
+    try { $WorkspaceSubscriptionId = (Get-AzContext -ErrorAction Stop).Subscription.Id } catch { $WorkspaceSubscriptionId = $null }
+    if (-not $WorkspaceSubscriptionId) { throw "Cannot determine subscription -- set Az context or provide WorkspaceResourceId" }
 }
 try {
     Set-AzContext -SubscriptionId $WorkspaceSubscriptionId -TenantId $TenantId -ErrorAction Stop | Out-Null
     Write-Ok "Context set - subscription: $WorkspaceSubscriptionId"
 } catch { Write-Err2 "Set-AzContext failed: $($_.Exception.Message)"; throw }
 
-# Build global DCE/DCR cache - module uses these internally to resolve endpoints
-Write-Step "Building DCE/DCR cache"
+# Build global DCE/DCR cache + self-heal: create Workspace + DCE + DCR RG if missing, assign RBAC.
+# Logic lives in the shared helper (same pattern as Onboarding_IdentityAssets_LogAnalytics.ps1).
+. (Join-Path $PSScriptRoot '_shared\Ensure-SecurityInsightInfra.ps1')
+Write-Step "Ensuring SecurityInsight Workspace/DCE/DCR infra (auto-provisions if missing)"
 try {
-    $global:AzDceDetails = Get-AzDceListAll -AzAppId $IngestionSpnClientId -AzAppSecret $IngestionSpnClientSecret -TenantId $TenantId -Verbose:$false
-    $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $IngestionSpnClientId -AzAppSecret $IngestionSpnClientSecret -TenantId $TenantId -Verbose:$false
-    Write-Ok "DCE entries: $($global:AzDceDetails.Count) | DCR entries: $($global:AzDcrDetails.Count)"
-} catch { Write-Err2 "DCE/DCR cache build failed: $($_.Exception.Message)"; throw }
+    # Resolve ingestion SPN ObjectId -- needed for RBAC assignments on auto-created resources
+    $spnObj = Get-AzADServicePrincipal -ApplicationId $IngestionSpnClientId -ErrorAction SilentlyContinue
+    $spnObjectId = if ($spnObj) { [string]$spnObj.Id } else { $null }
+    if (-not $spnObjectId) {
+        Write-Warn "Could not resolve ingestion SPN ObjectId -- RBAC assignments will be skipped on auto-create"
+    }
+
+    # Derive location: explicit global > workspace RG location > default
+    $Location = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_Location)) { [string]$global:SI_Location }
+                elseif (-not [string]::IsNullOrWhiteSpace([string]$global:Location)) { [string]$global:Location }
+                else {
+                    $__wsLoc = $null
+                    try { $__wsLoc = (Get-AzResourceGroup -Name $WorkspaceResourceGroup -ErrorAction Stop).Location } catch { }
+                    if ($__wsLoc) { $__wsLoc } else { 'westeurope' }
+                }
+
+    # Resolve workspace: prefer ResourceId; else look up by name; else auto-create
+    $WorkspaceResourceId = Ensure-SecurityInsightWorkspace `
+                              -WorkspaceResourceId     $WorkspaceResourceId `
+                              -WorkspaceName           $WorkspaceName `
+                              -WorkspaceResourceGroup  $WorkspaceResourceGroup `
+                              -Location                $Location `
+                              -SubscriptionId          $WorkspaceSubscriptionId `
+                              -IngestionSpnObjectId    $spnObjectId
+
+    # Re-extract subscription from the resolved workspace (may differ if name-lookup
+    # picked up a workspace in a different sub than the initial context).
+    if ($WorkspaceResourceId -match '/subscriptions/([^/]+)/') {
+        $WorkspaceSubscriptionId = $Matches[1]
+        Set-AzContext -SubscriptionId $WorkspaceSubscriptionId -TenantId $TenantId -ErrorAction Stop | Out-Null
+    }
+
+    # Ensure DCE exists (creates RG + DCE + assigns RBAC if missing)
+    $null = Ensure-SecurityInsightDce `
+                    -DceName              $DceName `
+                    -DceResourceGroup     $DceResourceGroup `
+                    -Location             $Location `
+                    -SubscriptionId       $WorkspaceSubscriptionId `
+                    -TenantId             $TenantId `
+                    -AzAppId              $IngestionSpnClientId `
+                    -AzAppSecret          $IngestionSpnClientSecret `
+                    -IngestionSpnObjectId $spnObjectId
+
+    # Ensure DCR RG exists + SPN has RBAC there (DCR itself is created by CheckCreateUpdate-TableDcr-Structure)
+    $null = Ensure-SecurityInsightRg `
+                    -ResourceGroup        $DcrResourceGroup `
+                    -Location             $Location `
+                    -SubscriptionId       $WorkspaceSubscriptionId `
+                    -IngestionSpnObjectId $spnObjectId
+
+    Write-Ok "WorkspaceResourceId: $WorkspaceResourceId"
+    Write-Ok "DCE entries: $(($global:AzDceDetails | Measure-Object).Count) | DCR entries: $(($global:AzDcrDetails | Measure-Object).Count)"
+} catch { Write-Err2 "Workspace/DCE/DCR infra build failed: $($_.Exception.Message)"; throw }
 
 Write-Step "Connecting to Microsoft Graph (token via REST)"
 # Obtain bearer token via REST - compatible with all versions of Microsoft.Graph module

@@ -1744,20 +1744,35 @@ if ([bool]$global:AutomationFramework) {
       throw "Invalid parameters: Use only one of -Detailed or -Summary."
     }
 
+    # Mail globals support both NEW ($global:RiskAnalysis_*_SendMail / _To) and LEGACY
+    # ($global:Mail_SecurityInsight_*_SendMail / _To) names. New name wins when both set.
+    $__detailedSend = if ($null -ne $global:RiskAnalysis_Detailed_SendMail)                 { [bool]$global:RiskAnalysis_Detailed_SendMail }
+                      elseif ($null -ne $global:Mail_SecurityInsight_Detailed_SendMail)     { [bool]$global:Mail_SecurityInsight_Detailed_SendMail }
+                      else                                                                  { $false }
+    $__detailedTo   = if ($global:RiskAnalysis_Detailed_To)                                 { @($global:RiskAnalysis_Detailed_To) }
+                      elseif ($global:Mail_SecurityInsight_Detailed_To)                     { @($global:Mail_SecurityInsight_Detailed_To) }
+                      else                                                                  { @() }
+    $__summarySend  = if ($null -ne $global:RiskAnalysis_Summary_SendMail)                  { [bool]$global:RiskAnalysis_Summary_SendMail }
+                      elseif ($null -ne $global:Mail_SecurityInsight_Summary_SendMail)      { [bool]$global:Mail_SecurityInsight_Summary_SendMail }
+                      else                                                                  { $false }
+    $__summaryTo    = if ($global:RiskAnalysis_Summary_To)                                  { @($global:RiskAnalysis_Summary_To) }
+                      elseif ($global:Mail_SecurityInsight_Summary_To)                      { @($global:Mail_SecurityInsight_Summary_To) }
+                      else                                                                  { @() }
+
     if ([bool]$global:Detailed) {
       Write-Info "Mail mode selected: Detailed"
-      $global:Report_SendMail = [bool]$global:Mail_SecurityInsight_Detailed_SendMail
-      $global:Report_To       = @($global:Mail_SecurityInsight_Detailed_To)
+      $global:Report_SendMail = $__detailedSend
+      $global:Report_To       = $__detailedTo
     }
     elseif ([bool]$global:Summary) {
       Write-Info "Mail mode selected: Summary"
-      $global:Report_SendMail = [bool]$global:Mail_SecurityInsight_Summary_SendMail
-      $global:Report_To       = @($global:Mail_SecurityInsight_Summary_To)
+      $global:Report_SendMail = $__summarySend
+      $global:Report_To       = $__summaryTo
     }
     else {
       Write-Info "Mail mode selected: Default (no -Detailed/-Summary provided)"
-      $global:Report_SendMail = [bool]$global:Mail_SecurityInsight_Detailed_SendMail
-      $global:Report_To       = @($global:Mail_SecurityInsight_Detailed_To)
+      $global:Report_SendMail = $__detailedSend
+      $global:Report_To       = $__detailedTo
     }
 
     Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))

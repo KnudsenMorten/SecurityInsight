@@ -3655,20 +3655,60 @@ Security Insight | Risk Analysis | support: Morten Knudsen | mok@mortenknudsen.n
     # Auto-assemble the SMTP PSCredential if the customer only provided
     # username + password strings. This avoids Send-MailMessage prompting
     # interactively for credentials when $global:SecureCredentialsSMTP is
-    # $null (the popup the user saw on the internal-vm run).
+    # $null.
+    #
+    # Fallback chain -- tries each (userVar, passwordVar) pair and uses the
+    # first one where both are populated. Covers the canonical SI naming plus
+    # common platform-defaults / AF-prefixed variants.
     if (-not [bool]$global:Mail_SendAnonymous -and -not $global:SecureCredentialsSMTP) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$global:SMTPUser) -and
-            -not [string]::IsNullOrWhiteSpace([string]$global:SMTPPassword)) {
-            $__secPwd = ConvertTo-SecureString ([string]$global:SMTPPassword) -AsPlainText -Force
-            $global:SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
-                [string]$global:SMTPUser, $__secPwd)
-            Write-Info "SMTP credential assembled from `$global:SMTPUser + `$global:SMTPPassword"
+        $credPairs = @(
+            @{ User = 'SMTPUser';                 Password = 'SMTPPassword' }                # canonical SI
+            @{ User = 'SmtpUser';                 Password = 'SmtpPassword' }                # camelCase variant
+            @{ User = 'SmtpUsername';             Password = 'SmtpPassword' }                # -Username suffix
+            @{ User = 'Mail_SmtpUser';            Password = 'Mail_SmtpPassword' }           # Mail_ prefix
+            @{ User = 'Mail_SMTPUser';            Password = 'Mail_SMTPPassword' }           # Mail_ prefix + SMTP upper
+            @{ User = 'Mail_Username';            Password = 'Mail_Password' }               # Mail_Username/Password
+            @{ User = 'MailUser';                 Password = 'MailPassword' }                # bare MailUser
+            @{ User = 'SMTP_User';                Password = 'SMTP_Password' }               # SMTP_User/SMTP_Password
+            @{ User = 'Mail_SecurityInsight_Username'; Password = 'Mail_SecurityInsight_Password' }  # AF-style SI-scoped
+        )
+        $resolvedUser   = $null
+        $resolvedPwd    = $null
+        $resolvedLabel  = $null
+        foreach ($pair in $credPairs) {
+            $uVal = (Get-Variable -Scope Global -Name $pair.User     -ValueOnly -ErrorAction SilentlyContinue)
+            $pVal = (Get-Variable -Scope Global -Name $pair.Password -ValueOnly -ErrorAction SilentlyContinue)
+            if (-not [string]::IsNullOrWhiteSpace([string]$uVal) -and
+                -not [string]::IsNullOrWhiteSpace([string]$pVal)) {
+                $resolvedUser  = [string]$uVal
+                $resolvedPwd   = [string]$pVal
+                $resolvedLabel = ("`$global:{0} + `$global:{1}" -f $pair.User, $pair.Password)
+                break
+            }
+        }
+
+        if ($resolvedUser) {
+            $__secPwd = ConvertTo-SecureString $resolvedPwd -AsPlainText -Force
+            $global:SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential ($resolvedUser, $__secPwd)
+            # Also fill the canonical $global:SMTPUser if it wasn't the pair that resolved,
+            # so downstream code that reads it (e.g. the From address) still works.
+            if ([string]::IsNullOrWhiteSpace([string]$global:SMTPUser)) { $global:SMTPUser = $resolvedUser }
+            Write-Info ("SMTP credential assembled from {0}" -f $resolvedLabel)
         } else {
             throw @"
 Mail is enabled but no SMTP credential is available.
-Set ONE of the following in your LauncherConfig.custom.ps1 / platform-defaults.ps1:
+Set ONE of the following in your LauncherConfig.custom.ps1 / platform-defaults.ps1 / <Solution>.custom.ps1:
   (a) `$global:Mail_SendAnonymous = `$true              (anonymous relay)
-  (b) `$global:SMTPUser + `$global:SMTPPassword         (engine builds the credential)
+  (b) A recognized user/password pair. The engine checks (in order):
+        `$global:SMTPUser + `$global:SMTPPassword                                  (canonical)
+        `$global:SmtpUser + `$global:SmtpPassword
+        `$global:SmtpUsername + `$global:SmtpPassword
+        `$global:Mail_SmtpUser + `$global:Mail_SmtpPassword
+        `$global:Mail_SMTPUser + `$global:Mail_SMTPPassword
+        `$global:Mail_Username + `$global:Mail_Password
+        `$global:MailUser + `$global:MailPassword
+        `$global:SMTP_User + `$global:SMTP_Password
+        `$global:Mail_SecurityInsight_Username + `$global:Mail_SecurityInsight_Password
   (c) `$global:SecureCredentialsSMTP = <PSCredential>   (pre-built credential object)
 Refusing to prompt interactively -- unattended runs would hang.
 "@

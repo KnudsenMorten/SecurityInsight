@@ -2601,6 +2601,33 @@ try {
     $global:RA_DnsName = $env:COMPUTERNAME
 }
 
+# SolutionVersion -- stamp which release of SecurityInsight produced this
+# run's data. Lets Workbook / Power BI tiles show "dashboard powered by
+# data ingested with v2.1.99" and lets ops answer "did my cron box update?"
+# with a KQL `| distinct SolutionVersion` across the table.
+$global:RA_SolutionVersion = '(dev)'
+try {
+    $_candidateRoots = @()
+    if ($global:RepoRoot)    { $_candidateRoots += [string]$global:RepoRoot }
+    if ($global:InstallPath) { $_candidateRoots += [string]$global:InstallPath }
+    # walk up from $PSScriptRoot looking for VERSION.txt (covers both monorepo
+    # and community install where engine lives in scripts/).
+    $_cur = $PSScriptRoot
+    while ($_cur) {
+        $_candidateRoots += $_cur
+        $_parent = Split-Path -Parent $_cur
+        if (-not $_parent -or $_parent -eq $_cur) { break }
+        $_cur = $_parent
+    }
+    foreach ($_r in $_candidateRoots) {
+        $_ver = Join-Path $_r 'VERSION.txt'
+        if (Test-Path -LiteralPath $_ver) {
+            $global:RA_SolutionVersion = (Get-Content -LiteralPath $_ver -Raw).Trim()
+            break
+        }
+    }
+} catch { }
+
 foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
 
     $inc = Resolve-ReportInclude -Item $includeItem
@@ -3001,15 +3028,16 @@ if ($ResultAll.Count -eq 0) {
                 $hash    = $__sha.ComputeHash($bytes)
                 $traceId = ([System.BitConverter]::ToString($hash) -replace '-','').Substring(0, 16).ToLowerInvariant()
             }
-            Add-Member -InputObject $row -NotePropertyName 'CollectionTime' -NotePropertyValue $global:RA_CollectionTime -Force
-            Add-Member -InputObject $row -NotePropertyName 'TraceName'      -NotePropertyValue $traceName                -Force
+            Add-Member -InputObject $row -NotePropertyName 'CollectionTime'  -NotePropertyValue $global:RA_CollectionTime  -Force
+            Add-Member -InputObject $row -NotePropertyName 'SolutionVersion' -NotePropertyValue $global:RA_SolutionVersion -Force
+            Add-Member -InputObject $row -NotePropertyName 'TraceName'       -NotePropertyValue $traceName                 -Force
             Add-Member -InputObject $row -NotePropertyName 'TraceID'        -NotePropertyValue $traceId                  -Force
         }
     } finally { if ($__sha) { $__sha.Dispose() } }
 
     # Shape columns
     $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName)
-    $TraceCols    = @('CollectionTime', 'TraceName', 'TraceID')    # always the LAST three columns -- not in any YAML OutputPropertyOrder on purpose
+    $TraceCols    = @('CollectionTime', 'SolutionVersion', 'TraceName', 'TraceID')    # always the LAST four columns -- not in any YAML OutputPropertyOrder on purpose
 
     $DesiredColumns = @()
     if ($OutputPropertyOrder) { $DesiredColumns += ($OutputPropertyOrder | Where-Object { $_ -notin $TraceCols }) }

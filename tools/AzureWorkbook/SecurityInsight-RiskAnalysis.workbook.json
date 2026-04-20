@@ -4,7 +4,7 @@
     {
       "type": 1,
       "content": {
-        "json": "# 🎯 SecurityInsight — Risk Analysis\n\nRanked risk findings from `SI_RiskAnalysis_Summary_CL` + `SI_RiskAnalysis_Detailed_CL` with live filters. All tiles respect the pills below.\n\n- **Workspace** pill binds every tile to the LA workspace you pick once — no per-query picker.\n- **TraceID** is a deterministic SHA-256 of `TraceName` — same finding = same ID every run. Group by TraceID to track history.\n- **CollectionTime** is uniform across every row of a single run. Filter to the latest run with the toggle below.\n- **All** in any multi-select means *no filter on this column* (implemented via a `*` sentinel)."
+        "json": "# 🎯 SecurityInsight — Risk Analysis   `workbook template v2.1.99`\n\nRanked risk findings from `SI_RiskAnalysis_Summary_CL` + `SI_RiskAnalysis_Detailed_CL` with live filters. All tiles respect the pills below.\n\n- **Workspace** pill binds every tile to the LA workspace you pick once — no per-query picker.\n- **TraceID** is a deterministic SHA-256 of `TraceName` — same finding = same ID every run. Group by TraceID to track history.\n- **CollectionTime** is uniform across every row of a single run. Filter to the latest run with the toggle below.\n- **All** in any multi-select means *no filter on this column* (implemented via a `*` sentinel).\n\n> 💡 **Workbook template v2.1.99** — bump matches the SecurityInsight release that shipped this JSON. Compare to the *Data powered by* footer at the bottom to see which engine version actually wrote the rows you're looking at."
       },
       "name": "header"
     },
@@ -332,6 +332,26 @@
         }
       },
       "name": "identity-latest"
+    },
+
+    {
+      "type": 1,
+      "content": { "json": "---\n### Data powered by\n_Every RiskAnalysis row is stamped with the engine version that produced it (`SolutionVersion` column). The tile below shows which version the latest ingest was written by — use it to confirm customer VMs are running the expected release._" },
+      "name": "h-version"
+    },
+    {
+      "type": 3,
+      "content": {
+        "version": "KqlItem/1.0",
+        "query": "SI_RiskAnalysis_Summary_CL\n| summarize\n    LastRun               = max(CollectionTime),\n    DistinctVersionsCount = count_distinct(SolutionVersion),\n    DistinctVersions      = make_set(SolutionVersion),\n    Rows                  = count()\n| extend\n    ['Latest CollectionTime']   = LastRun,\n    ['Solution versions seen']  = strcat_array(DistinctVersions, ', '),\n    ['Total rows (all runs)']   = Rows\n| project ['Latest CollectionTime'], ['Solution versions seen'], ['Total rows (all runs)']",
+        "size": 4,
+        "queryType": 0,
+        "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
+        "visualization": "table",
+        "gridSettings": { "rowLimit": 1 }
+      },
+      "name": "version-info"
     }
   ],
   "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"

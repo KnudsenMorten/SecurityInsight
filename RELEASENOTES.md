@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.47
+## v2.1.48
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI README): two Mermaid parser bugs (unrenderable diagrams) (d1d3a9f)
+- docs(SI): extract README diagrams to DOCS/diagrams/ for reuse in slides (2398a24)
 
 ---
 

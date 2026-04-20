@@ -1,0 +1,14 @@
+%% YAML Locked + Custom merge flow with override precedence.
+%% Used in README § 6.2 (The YAML Concept).
+flowchart LR
+    L[📘 <b>Locked.yaml</b><br/>curated content,<br/>replaced on every release] --> M{Engine<br/>merges<br/>by name}
+    C[📗 <b>Custom.yaml</b><br/>your content,<br/><u>never</u> overwritten] --> M
+    M -->|same ReportName<br/>or AssetTagName?| OVR[<i>Custom wins</i>]
+    M -->|new name<br/>only in Custom?| ADD[<i>Added to runtime</i>]
+    M -->|only in Locked?| KEEP[<i>Shipped default<br/>used as-is</i>]
+    OVR --> R[✅ Effective ruleset<br/>for this run]
+    ADD --> R
+    KEEP --> R
+    style L fill:#e8f4fd,stroke:#2a6592
+    style C fill:#e8ffe8,stroke:#1a7a1a
+    style R fill:#fff9c4,stroke:#b07a00,stroke-width:2px

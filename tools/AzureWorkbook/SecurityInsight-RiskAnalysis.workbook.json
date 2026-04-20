@@ -20,9 +20,14 @@
             "label": "Log Analytics workspace",
             "type": 5,
             "isRequired": true,
+            "multiSelect": false,
+            "quote": "'",
+            "delimiter": ",",
+            "query": "where type =~ 'microsoft.operationalinsights/workspaces'",
+            "crossComponentResources": [ "value::selected" ],
             "typeSettings": {
-              "resourceTypeFilter": { "microsoft.operationalinsights/workspaces": true },
-              "additionalResourceOptions": []
+              "additionalResourceOptions": [],
+              "showDefault": false
             },
             "queryType": 1,
             "resourceType": "microsoft.resourcegraph/resources"

@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community Azure launcher for SecurityInsight\Step1_OnboardValidate-SecurityInsight-Permissions.
+    Community VM launcher for SecurityInsight\Step2_OnboardValidate-SecurityInsight-Permissions.
 .DESCRIPTION
-    Thin wrapper around the Step1_OnboardValidate-SecurityInsight-Permissions.ps1
+    Thin wrapper around the Step2_OnboardValidate-SecurityInsight-Permissions.ps1
     admin utility. Loads the layered config (defaults + customer overrides),
     then invokes the script with each non-null global splatted as a parameter.
 
@@ -13,8 +13,8 @@
 
 .NOTES
     Solution       : SecurityInsight
-    Engine         : Step1_OnboardValidate-SecurityInsight-Permissions
-    File           : launcher.community-azure.template.ps1
+    Engine         : Step2_OnboardValidate-SecurityInsight-Permissions
+    File           : launcher.community-vm.template.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
 #>
 [CmdletBinding()]
@@ -77,7 +77,7 @@ try {
 }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath -Solution 'SecurityInsight'
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Step1_OnboardValidate-SecurityInsight-Permissions' -Flavour 'community-azure' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'Step2_OnboardValidate-SecurityInsight-Permissions' -Flavour 'community-vm' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message
@@ -92,7 +92,7 @@ try {
     . (Join-Path $PSScriptRoot '..\_lib\Initialize-LauncherConfig.ps1')
     Initialize-LauncherConfig `
         -Solution    'SecurityInsight' `
-        -Engine      'Step1_OnboardValidate-SecurityInsight-Permissions' `
+        -Engine      'Step2_OnboardValidate-SecurityInsight-Permissions' `
         -LauncherDir $PSScriptRoot `
         -RepoRoot    $InstallPath `
         -Mode        'community' `
@@ -107,15 +107,15 @@ $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'Step1_OnboardValidate-SecurityInsight-Permissions.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'Step2_OnboardValidate-SecurityInsight-Permissions.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
 if (-not $engine) {
-    throw "Launcher: engine 'Step1_OnboardValidate-SecurityInsight-Permissions.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts."
+    throw "Launcher: engine 'Step2_OnboardValidate-SecurityInsight-Permissions.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts."
 }
 
 # Flavor-specific AuthMethod default if customer didn't set one
-if (-not $global:OnboardValidate_AuthMethod) { $global:OnboardValidate_AuthMethod = 'ManagedIdentity' }
+if (-not $global:OnboardValidate_AuthMethod) { $global:OnboardValidate_AuthMethod = 'Interactive' }
 
 # Build splat from $global:OnboardValidate_* globals (skip nulls / empties)
 $splat = @{}

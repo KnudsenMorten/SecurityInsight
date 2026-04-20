@@ -3192,7 +3192,7 @@ if ([bool]$global:SendToLogAnalytics) {
 
         if ($modOk) {
             # Build DCE/DCR cache + self-heal infra (creates workspace + DCE + DCR RG + RBAC if missing).
-            # Shared logic mirrors Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1.
+            # Shared logic mirrors Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1.
             . (Join-Path $PSScriptRoot '_shared\Ensure-SecurityInsightInfra.ps1')
             try {
                 # Resolve SPN object ID for RBAC assignments

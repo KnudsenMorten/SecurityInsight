@@ -2,9 +2,9 @@
 #Requires -Modules @{ ModuleName='Az.Accounts'; ModuleVersion='2.0.0' }
 <#
 .SYNOPSIS
-    Community Azure (Function / Logic App / Hybrid Worker) launcher for SecurityInsight\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.
+    Community Azure (Function / Logic App / Hybrid Worker) launcher for SecurityInsight\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.
 .DESCRIPTION
-    Runs the Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure engine from an Azure host that has a system-assigned MI.
+    Runs the Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure engine from an Azure host that has a system-assigned MI.
     MI -> Key Vault -> SPN secret -> SPN login. Requires App Settings:
     PLATFORM_TENANT_ID, PLATFORM_SUBSCRIPTION_ID, PLATFORM_KEYVAULT.
 
@@ -109,7 +109,7 @@ try {
 }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath -Solution 'SecurityInsight'
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure' -Flavour 'community-azure' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure' -Flavour 'community-azure' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message
@@ -175,10 +175,10 @@ $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
-if (-not $engine) { throw "Launcher: engine 'Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
+if (-not $engine) { throw "Launcher: engine 'Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

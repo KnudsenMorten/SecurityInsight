@@ -85,11 +85,11 @@ The output is a ranked list — not 4,000 recommendations, but the small set of 
 | **SecurityInsight_RiskAnalysis** | The main analyzer. Pulls Defender vulnerabilities, exposure paths, configuration recommendations + Azure RBAC, scores them per the risk model, and produces ranked Excel + JSON + Log Analytics ingestion + email + AI executive summary. |
 | **CriticalAssetTagging** | Auto-tags every device / Azure resource with its **criticality tier** (0=critical, 1=high, 2=standard, 3=low). Drives the Criticality dimension of the risk score. |
 | **IdentityAssetsCollectDefineTierIngestLog** | Iterates every Entra user, SPN, MI; classifies their effective privilege tier; ingests into Log Analytics as `SI_IdentityAssets_CL`. |
-| **Step2_OnboardValidate-SecurityInsight-LogAnalytics** | One-shot setup. Provisions the Workspace + DCE + DCR + custom table the Identity engine ingests into. |
+| **Step3_OnboardValidate-SecurityInsight-LogAnalytics** | One-shot setup. Provisions the Workspace + DCE + DCR + custom table the Identity engine ingests into. |
 | **Build_Tier_Definitions_JSON_File** | Uses Azure OpenAI to attacker-centrically classify Entra roles, Graph permissions, AD groups, and Azure built-in roles into Tier 0/1/2/3. Output is the catalog the rest of the engines consume. |
-| **Step1_OnboardValidate-SecurityInsight-Permissions** | Idempotent admin utility. Creates the Entra SPN, grants the API permissions and Azure RBAC the platform needs. Re-run = validation pass. |
+| **Step2_OnboardValidate-SecurityInsight-Permissions** | Idempotent admin utility. Creates the Entra SPN, grants the API permissions and Azure RBAC the platform needs. Re-run = validation pass. |
 | **Setup-SecurityInsight-CustomSecurityAttributes** | One-time provisioning of the Custom Security Attribute schema used by the tagging pipeline. |
-| **Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure** | Optional helper to provision a PAYG Azure OpenAI account + model deployment for the AI summary feature. |
+| **Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure** | Optional helper to provision a PAYG Azure OpenAI account + model deployment for the AI summary feature. |
 
 ### Sample output
 
@@ -256,7 +256,7 @@ Every Risk Analysis run produces all of these from a single in-memory dataset (n
 ```mermaid
 flowchart TD
     S1[1 · Get / Update SecurityInsight from GitHub] --> S2[2 · Onboard Entra SPN or Managed Identity<br/>OnboardValidate-Permissions]
-    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step2_OnboardValidate-SecurityInsight-LogAnalytics]
+    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step3_OnboardValidate-SecurityInsight-LogAnalytics]
     S3 --> S4[4 · <i>optional</i> Deploy Azure OpenAI<br/>Deploy_OpenAI_PAYG_Instance]
     S4 --> S5[5 · Classify assets with tagging<br/>CriticalAssetTagging <b>-Scope TEST</b> then <b>PROD</b>]
     S5 --> S6[6 · Collect Identity tiers<br/>IdentityAssetsCollectDefineTierIngestLog]
@@ -336,11 +336,12 @@ The solution ships three **Step** launchers that set a tenant up from zero, plus
 
 | Order | Folder | Purpose | `LauncherConfig.custom.ps1` required? |
 |---|---|---|---|
-| **Step 1** | `LAUNCHERS/Step1_OnboardValidate-SecurityInsight-Permissions/` | Create the SecurityInsight SPN + grant Graph / Defender / ATP API permissions + Azure `Reader` on every sub. Idempotent. | **No** (community-vm falls back to interactive auth). Optional if you want to skip the Graph sign-in prompt. |
-| **Step 2** | `LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/` | Create Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` + RBAC for the SPN. | **Yes** for community-vm (needs the SPN auth block). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`, fill in Section 1. |
-| **Step 3** | `LAUNCHERS/Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | Provision a pay-as-you-go Azure OpenAI account + model deployment so the RiskAnalysis AI summary works. Optional — skip if you won't use `-BuildSummaryByAI`. | **Yes** for community-vm. Sample has the minimum block. |
-| Engine | `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/` | Main identity-asset collection → `SI_IdentityAssets_CL`. Run on a schedule after Step 2. | **Yes** for community-vm. |
-| Engine | `LAUNCHERS/SecurityInsight_RiskAnalysis/` | Risk reports → xlsx + JSON + `SI_RiskAnalysis_*_CL`. Run after Step 2 + (optionally) Step 3. | **Yes** for community-vm. |
+| **Step 1** | `SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` | Download / update SecurityInsight from GitHub. Preserves customer files. Supports `stable` (default) and `preview` channels. | **No** — it's a script, not a launcher. Run it directly. |
+| **Step 2** | `LAUNCHERS/Step2_OnboardValidate-SecurityInsight-Permissions/` | Create the SecurityInsight SPN + grant Graph / Defender / ATP API permissions + Azure `Reader` on every sub. Idempotent. | **No** (community-vm falls back to interactive auth). Optional if you want to skip the Graph sign-in prompt. |
+| **Step 3** | `LAUNCHERS/Step3_OnboardValidate-SecurityInsight-LogAnalytics/` | Create Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` + RBAC for the SPN. | **Yes** for community-vm (needs the SPN auth block). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`, fill in Section 1. |
+| **Step 4** | `LAUNCHERS/Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | Provision a pay-as-you-go Azure OpenAI account + model deployment so the RiskAnalysis AI summary works. Optional — skip if you won't use `-BuildSummaryByAI`. | **Yes** for community-vm. Sample has the minimum block. |
+| Engine | `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/` | Main identity-asset collection → `SI_IdentityAssets_CL`. Run on a schedule after Step 3. | **Yes** for community-vm. |
+| Engine | `LAUNCHERS/SecurityInsight_RiskAnalysis/` | Risk reports → xlsx + JSON + `SI_RiskAnalysis_*_CL`. Run after Step 3 + (optionally) Step 4. | **Yes** for community-vm. |
 | Engine | `LAUNCHERS/CriticalAssetTagging/` and its three siblings | Apply tier tags to Defender devices + Azure resources. Optional but recommended. | **Yes** for community-vm. |
 | Engine | `LAUNCHERS/Build_Tier_Definitions_JSON_File/` | Build the tier catalog JSON from YAML + MSAL metadata. Run before running `IdentityAssets…` if you customize tier rules. | **Yes** for community-vm. |
 
@@ -351,7 +352,7 @@ The solution ships three **Step** launchers that set a tenant up from zero, plus
 > **Where does `LauncherConfig.custom.ps1` come from?** There's no template created for you. **Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`** in the same folder, then edit. The `.custom.ps1` name is gitignored so the populated copy stays local.
 > Some older solutions use the filename `LauncherConfig.ps1` (without `.custom.`) — both are recognized by the launcher; new work should prefer `.custom.ps1`.
 
-**Unattended (hands-off) operation** — Steps 1-3 and every engine launcher support the same four auth methods, so a pipeline / scheduled task can run the whole chain with one identity:
+**Unattended (hands-off) operation** — Steps 2-4 and every engine launcher support the same four auth methods, so a pipeline / scheduled task can run the whole chain with one identity:
 
 | Auth method | Set in `LauncherConfig.custom.ps1` | Use when |
 |---|---|---|
@@ -360,39 +361,71 @@ The solution ships three **Step** launchers that set a tenant up from zero, plus
 | SPN + certificate | `$global:SpnCertificateThumbprint`, `$global:SpnTenantId`, `$global:SpnClientId` | Production VM with cert in local store |
 | SPN + plaintext secret | `$global:SpnClientSecret`, `$global:SpnTenantId`, `$global:SpnClientId` | Lab / testing only |
 
-**Step 1** defaults to `Interactive` (browser sign-in by a human admin). To run it unattended, also set `$global:OnboardValidate_AuthMethod = 'SpnSecret'` (or `'SpnCertificate'` / `'ManagedIdentity'`). The SPN/MI needs **Privileged Role Administrator** (or **Global Administrator**) to create app registrations + grant admin consent.
+**Step 2** defaults to `Interactive` (browser sign-in by a human admin). To run it unattended, also set `$global:OnboardValidate_AuthMethod = 'SpnSecret'` (or `'SpnCertificate'` / `'ManagedIdentity'`). The SPN/MI needs **Privileged Role Administrator** (or **Global Administrator**) to create app registrations + grant admin consent.
 
-**Step 3** accepts `-ValidateOnly` — turns it into a hands-off health check. No resources are created, but the engine still reports `CREATED` / `REUSED` / `MISSING` status per resource + exits non-zero if anything is missing. Good for monitoring that your Azure OpenAI deployment hasn't drifted.
+**Step 4** accepts `-ValidateOnly` — turns it into a hands-off health check. No resources are created, but the engine still reports `CREATED` / `REUSED` / `MISSING` status per resource + exits non-zero if anything is missing. Good for monitoring that your Azure OpenAI deployment hasn't drifted.
 
 ---
 
 ### 🚀 30-second onboarding (absolute minimum)
 
-**Step 1 — do nothing.** Just run the launcher:
+**Step 1 — install / update SecurityInsight from GitHub.** One-liner, self-downloading, merges customer files on update:
+
 ```powershell
-.\LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
+# Bootstrap (fresh machine, no local checkout yet):
+$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
+Invoke-RestMethod $u | Out-File $env:TEMP\Step0.ps1
+& $env:TEMP\Step0.ps1
+
+# Already installed? Same command -- it's idempotent and respects customer files.
+.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1
+
+# Optional: land inside a specific launcher folder immediately:
+.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -Engine Step2_OnboardValidate-SecurityInsight-Permissions
+
+# Preview channel (HEAD of 'preview' branch -- bleeding-edge features before they hit a stable release):
+.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -Channel preview
+```
+
+| Channel | Source | When to use |
+|---|---|---|
+| `stable` (default) | Latest tagged GitHub release | Production VMs, scheduled tasks |
+| `preview` | HEAD of the `preview` branch | Dev box, testing upcoming features, early feedback |
+
+Customer-owned files (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`) are **never overwritten** on update. Re-runs preserve them.
+
+> [!TIP]
+> **Prefer a GUI?** Open the included **Setup Configurator** in your browser:
+> ```powershell
+> Start-Process .\TOOLS\SetupConfigurator\index.html
+> ```
+> It's a single offline HTML file that generates the `LauncherConfig.custom.ps1` content for each Step with form fields + live preview + copy-to-clipboard. All processing stays in your browser — no data leaves your machine.
+
+**Step 2 — do nothing.** Just run the launcher:
+```powershell
+.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
 ```
 Browser sign-in as a Privileged Role Admin. The engine creates `sp-securityinsight`, grants all the API permissions, and assigns Azure `Reader` on every subscription you can see. Prints the AppId + secret-creation hint at the end — copy the AppId.
 
-**Step 2 — 4 lines in `LauncherConfig.custom.ps1`:**
+**Step 3 — 4 lines in `LauncherConfig.custom.ps1`:**
 ```powershell
-# LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/LauncherConfig.custom.ps1
+# LAUNCHERS/Step3_OnboardValidate-SecurityInsight-LogAnalytics/LauncherConfig.custom.ps1
 $global:SpnTenantId     = '<your-tenant-id-guid>'
-$global:SpnClientId     = '<appid-from-Step1>'
+$global:SpnClientId     = '<appid-from-Step2>'
 $global:SpnClientSecret = '<client-secret-you-created-for-that-app>'
 $global:SubscriptionId  = '<your-target-subscription-id-guid>'
 ```
 Run it:
 ```powershell
-.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step3_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
 ```
-Workspace / DCE / DCR all land in their standard RGs (`rg-securityinsight`, `rg-dce-securityinsight`, `rg-dcr-securityinsight` in West Europe) — override in the same file only if you deviate. Step 2's end-of-run cheat-sheet prints the exact globals to paste into the ingestion engines' config files.
+Workspace / DCE / DCR all land in their standard RGs (`rg-securityinsight`, `rg-dce-securityinsight`, `rg-dcr-securityinsight` in West Europe) — override in the same file only if you deviate. Step 3's end-of-run cheat-sheet prints the exact globals to paste into the ingestion engines' config files.
 
-**Step 3 — only if you want `-BuildSummaryByAI` on RiskAnalysis. 7 lines:**
+**Step 4 — only if you want `-BuildSummaryByAI` on RiskAnalysis. 7 lines:**
 ```powershell
-# LAUNCHERS/Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/LauncherConfig.custom.ps1
+# LAUNCHERS/Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/LauncherConfig.custom.ps1
 $global:SpnTenantId      = '<your-tenant-id-guid>'
-$global:SpnClientId      = '<appid-from-Step1>'
+$global:SpnClientId      = '<appid-from-Step2>'
 $global:SpnClientSecret  = '<client-secret>'
 $global:SubscriptionId   = '<your-target-subscription-id-guid>'
 $global:ResourceGroupName = 'rg-securityinsight-openai'
@@ -402,7 +435,7 @@ $global:DeploymentName    = 'gpt-4o-mini'
 ```
 Re-run `-ValidateOnly` any time to confirm the deployment is still healthy.
 
-That's it. The ingestion engines (`IdentityAssetsCollect`, `RiskAnalysis`) pick up the resources Step 2 created automatically — you only need to set `$global:SpnTenantId` + `$global:SpnClientId` + `$global:SpnClientSecret` + `$global:SubscriptionId` in *their* custom files to use the same SPN.
+That's it. The ingestion engines (`IdentityAssetsCollect`, `RiskAnalysis`) pick up the resources Step 3 created automatically — you only need to set `$global:SpnTenantId` + `$global:SpnClientId` + `$global:SpnClientSecret` + `$global:SubscriptionId` in *their* custom files to use the same SPN.
 
 > [!NOTE]
 > **Future roadmap — web-based config wizard.** A browser-based wizard that aggregates across all 5 config layers (Layer 0 shared-defaults → Layer 1 per-engine → Layer 2 platform-defaults → Layer 3 solution-custom → Layer 4 launcher-custom), shows the effective value at each layer, and generates a minimal `LauncherConfig.custom.ps1` containing only the overrides the user explicitly changes. Will ship alongside the Azure Monitor Workbooks (v2.2.x). Track on the [release page](https://github.com/KnudsenMorten/SecurityInsight/releases).
@@ -428,18 +461,18 @@ SecurityInsight engines authenticate to Entra (Microsoft Graph) and Azure (Resou
 ```powershell
 # Interactive (you sign in as a Privileged Role Admin), creates 'sp-securityinsight' if missing,
 # grants Graph + Defender + ATP API permissions + Azure Reader on every sub:
-.\LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
 
 # Dry-run preview first:
-.\LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1 -WhatIfMode
+.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1 -WhatIfMode
 
 # Optional: also grant Log Analytics Reader on a Defender workspace + Monitoring Metrics Publisher on a DCR:
-.\LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1 `
+.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1 `
     -DefenderWorkspaceResourceId '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<defender-ws>' `
     -DcrResourceId               '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Insights/dataCollectionRules/<dcr>'
 ```
 
-The OnboardValidate engine is **idempotent** — re-run it any time as a validation pass. Adding permissions later? Edit the catalog at the top of `SCRIPTS/Step1_OnboardValidate-SecurityInsight-Permissions.ps1` and re-run; only the missing grants are applied.
+The OnboardValidate engine is **idempotent** — re-run it any time as a validation pass. Adding permissions later? Edit the catalog at the top of `SCRIPTS/Step2_OnboardValidate-SecurityInsight-Permissions.ps1` and re-run; only the missing grants are applied.
 
 **End-of-run summary block (v2.1.64+)** prints the App display name, App (client) ID, SPN Object ID, tenant ID, per-category grant counts, a **ready-to-paste `$global:Spn*` block** for your `LauncherConfig.custom.ps1`, and verification KQL for after your first ingest. No scrolling through the log to find the AppId.
 
@@ -451,7 +484,7 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > - Optional: `Monitoring Metrics Publisher` on a specific DCR (`-DcrResourceId`)
 >
 > **What OnboardValidate does NOT cover:**
-> - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Step2_OnboardValidate-SecurityInsight-LogAnalytics` launcher (§3.4.2) OR auto-created by the engines themselves on first run (v2.1.54+).
+> - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Step3_OnboardValidate-SecurityInsight-LogAnalytics` launcher (§3.4.2) OR auto-created by the engines themselves on first run (v2.1.54+).
 > - Granting the SPN `Owner` or `Contributor + User Access Administrator` — which is what the engines' auto-provisioning needs for **first-run** workspace/DCE creation + container RBAC grants. On `Reader`-only subs, auto-provision will fail cleanly with a `403 AuthorizationFailed` warning and you'll need to provision manually via §3.4.2 or grant higher perms.
 >
 > **Required permissions** are listed in [§ 7.1](#71-permissions-catalog).
@@ -483,7 +516,7 @@ Just run `IdentityAssetsCollect` or `RiskAnalysis` directly. You'll see lines li
 **Option B — explicit provisioning**
 
 ```powershell
-.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step3_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
 ```
 
 This creates (or re-uses if they exist):
@@ -499,7 +532,7 @@ This creates (or re-uses if they exist):
 
 At the end of the run, the engine prints a **mode-aware cheat-sheet** with the exact globals to copy into your `LauncherConfig.custom.ps1`. You don't have to memorize the URIs.
 
-> **Which option do I need?** Run `Step1_OnboardValidate-SecurityInsight-Permissions` (§ 3.4.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
+> **Which option do I need?** Run `Step2_OnboardValidate-SecurityInsight-Permissions` (§ 3.4.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
 <a id="343-azure-openai-optional"></a>
 #### 3.4.3 Azure OpenAI (optional)
@@ -509,7 +542,7 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 The AI executive summary is a separate opt-in. Helper script provisions a PAYG Azure OpenAI account + model deployment:
 
 ```powershell
-.\LAUNCHERS\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\launcher.community-vm.template.ps1
 ```
 
 Then enable in any engine's `LauncherConfig.custom.ps1`:
@@ -1007,7 +1040,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | 📊 **Outputs** | Direct ingest to two Log Analytics tables (`SI_RiskAnalysis_Summary_CL` + `_Detailed_CL`) via auto-created DCRs (no manual table provisioning) | v2.1.41 |
 | ☁️ **Outputs** | Optional upload of `.xlsx` + `.json` to UNC share OR Azure Storage, type auto-detected, **backup-then-overwrite** semantics so re-runs never lose data | v2.1.42 / v2.1.44 |
 | 📧 **Mail routing** | Per-template recipient override in YAML (`Mail_To` / `Mail_SendMail` per `ReportName`) | v2.1.38 |
-| 🔐 **Permissions** | New `Step1_OnboardValidate-SecurityInsight-Permissions` admin utility — idempotent, data-driven catalog, supports interactive / SPN+secret / SPN+cert / MI auth | v2.1.32 / v2.1.33 |
+| 🔐 **Permissions** | New `Step2_OnboardValidate-SecurityInsight-Permissions` admin utility — idempotent, data-driven catalog, supports interactive / SPN+secret / SPN+cert / MI auth | v2.1.32 / v2.1.33 |
 | 🧱 **Layered config** | Defaults vs. customer overrides cleanly separated. Customer file is gitignored, never overwritten by an upgrade | v2.1.24 / v2.1.26 |
 | 🩹 **Resilience** | MSAL token cache auto-recovery in `Build_Tier_Definitions_JSON_File` — no more silently empty Section B/C tier files | v2.1.34 |
 | 🌍 **Multi-sub** | Cross-subscription Defender / Sentinel workspace queries (resource ID embeds the sub — no Set-AzContext required) | v2.1.28 |
@@ -1023,7 +1056,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | 📁 **Auto-create container** | When `$global:ExportDestination` points at an Azure Storage URL and the container doesn't exist, the upload helper creates it and (best-effort) grants the SPN `Storage Blob Data Contributor` at the container scope. | v2.1.60 |
 | 🎯 **Sub-scoped DCE/DCR cache** | `$global:AzDceDetails` / `$global:AzDcrDetails` now filtered to the target subscription, so duplicate-named DCRs in other tenant subs can't poison `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` (fixes spurious 403 "DCE FQDN not associated with DCR immutable Id"). | v2.1.61 / v2.1.62 |
 | 🔑 **SubscriptionId honored** | Both IAC and RiskAnalysis self-heal blocks now read `$global:SubscriptionId` first, parsed from `$WorkspaceResourceId` second, Az context last. Ends the silent "wrong subscription" behaviour when only `$global:WorkspaceName` + `$global:SubscriptionId` are set. | v2.1.59 / v2.1.63 |
-| 📋 **OnboardValidate summary** | `Step1_OnboardValidate-SecurityInsight-Permissions` now emits a final copy-paste-ready summary block (App (client) ID, SPN ObjectId, Tenant ID, counts, ready-to-paste `$global:Spn*` block, verification KQL). | v2.1.64 |
+| 📋 **OnboardValidate summary** | `Step2_OnboardValidate-SecurityInsight-Permissions` now emits a final copy-paste-ready summary block (App (client) ID, SPN ObjectId, Tenant ID, counts, ready-to-paste `$global:Spn*` block, verification KQL). | v2.1.64 |
 
 > [!IMPORTANT]
 > **Coming next** (v2.1.65+): polished **Azure Monitor Workbooks** for `SI_RiskAnalysis_*_CL` tables — drop-in dashboards for SOC, exec, compliance audiences. Track on the [release page](https://github.com/KnudsenMorten/SecurityInsight/releases).
@@ -1179,7 +1212,7 @@ flowchart TB
 
 [⤴ Back to top](#top)
 
-The exact set the `Step1_OnboardValidate-SecurityInsight-Permissions.ps1` utility grants (and validates on re-run):
+The exact set the `Step2_OnboardValidate-SecurityInsight-Permissions.ps1` utility grants (and validates on re-run):
 
 <details open>
 <summary><b>Microsoft Graph (Application permissions, admin consent required)</b></summary>
@@ -1251,8 +1284,8 @@ SecurityInsight/
 │   ├── IdentityAssetsCollectDefineTierIngestLog.ps1
 │   ├── CriticalAssetTagging.ps1
 │   ├── Build_Tier_Definitions_JSON_File.ps1
-│   ├── Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1
-│   ├── Step1_OnboardValidate-SecurityInsight-Permissions.ps1
+│   ├── Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1
+│   ├── Step2_OnboardValidate-SecurityInsight-Permissions.ps1
 │   └── ...
 ├── LAUNCHERS/                                 ← launcher templates (ours, replaced on update)
 │   ├── _lib/

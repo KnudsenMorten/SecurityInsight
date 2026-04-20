@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community VM launcher for SecurityInsight\Step2_OnboardValidate-SecurityInsight-LogAnalytics.
+    Community VM launcher for SecurityInsight\Step3_OnboardValidate-SecurityInsight-LogAnalytics.
 .DESCRIPTION
-    Runs the Step2_OnboardValidate-SecurityInsight-LogAnalytics engine on a Windows box in the customer's own tenant.
+    Runs the Step3_OnboardValidate-SecurityInsight-LogAnalytics engine on a Windows box in the customer's own tenant.
     Reads credentials from LauncherConfig.ps1 (.gitignore'd). Supports 4 auth
     methods (MI, SPN+KV, SPN+cert, SPN+plaintext). See LauncherConfig.sample.ps1.
 
@@ -111,7 +111,7 @@ try {
 }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Step2_OnboardValidate-SecurityInsight-LogAnalytics' -Flavour 'community-vm' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'Step3_OnboardValidate-SecurityInsight-LogAnalytics' -Flavour 'community-vm' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message
@@ -258,10 +258,10 @@ $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
-if (-not $engine) { throw "Launcher: engine 'Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
+if (-not $engine) { throw "Launcher: engine 'Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

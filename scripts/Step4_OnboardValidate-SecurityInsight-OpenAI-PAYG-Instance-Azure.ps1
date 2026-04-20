@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure - engine script in the SecurityInsight solution.
+    Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure - engine script in the SecurityInsight solution.
 
 ================================================================================
-Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
 ================================================================================
 PURPOSE
   Deploy (or reuse) an Azure OpenAI account (PAYG) and a model deployment using
@@ -22,7 +22,7 @@ USAGE
 
 .NOTES
     Solution       : SecurityInsight
-    File           : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+    File           : Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
@@ -128,7 +128,7 @@ foreach ($req in 'SubscriptionId','ResourceGroupName','Location','AccountName','
     $fromParam = (Get-Variable -Name $req -Scope Local -ErrorAction SilentlyContinue).Value
     $fromDefaults = $ScriptDefaults[$req]
     if ([string]::IsNullOrWhiteSpace([string]$fromParam) -and [string]::IsNullOrWhiteSpace([string]$fromDefaults)) {
-        throw "Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
+        throw "Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
     }
 }
 

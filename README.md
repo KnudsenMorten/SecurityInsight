@@ -480,11 +480,15 @@ Visual load order (each layer's `$global:*` overrides the previous — a diagram
 
 | # | File | Owner | Purpose |
 |---|---|---|---|
-| 1 | `LauncherConfig.defaults.ps1` | us | Engine baseline |
+| 0 | `LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1` | us | **Solution-wide canonical names** — `$global:WorkspaceName`, `$global:DceName`, `$global:DceResourceGroup`, `$global:DcrResourceGroup`, `$global:Location`, `$global:SubscriptionId` (v2.1.55). Shared by every SI engine so you don't have to repeat them. |
+| 1 | `LauncherConfig.defaults.ps1` | us | Engine baseline — table names, DCR name, mode flags |
 | 2 | `SOLUTIONS/PlatformConfiguration/CUSTOMDATA/platform-defaults.ps1` | you (internal mode only) | Shared across every solution on the platform (SMTP, tenant, KV) |
 | 3 | `SOLUTIONS/SecurityInsight/CUSTOMDATA/SecurityInsight.custom.ps1` | you | Solution-wide overrides (DCR / workspace / exclude patterns) |
 | 4 | `LAUNCHERS/<engine>/LauncherConfig.custom.ps1` | you | Per-engine overrides (auth, per-engine mail) |
 | 5 | CLI args | per-invocation | Last word |
+
+> [!TIP]
+> **Auto-provision, auto-resolve (v2.1.54+)**: missing Workspace / DCE / DCE RG / DCR RG are auto-created on first run, and `DceIngestionUri` is resolved from `DceName` at runtime — you don't have to hardcode endpoint URIs any more. See [§ 5](#5-whats-new-v21x-highlights) for the full v2.1.53–v2.1.64 feature matrix.
 
 **Quickstart**:
 
@@ -555,7 +559,123 @@ $global:ExportDestination = '\\fileserver\reports\SecurityInsight\'
 $global:ExportDestination = 'https://mystg.blob.core.windows.net/securityinsight/'
 ```
 
-Type is auto-detected from the prefix. Existing files are renamed to `<name>.<yyyy-MM-dd_HHmmss>.<ext>.bak` before the new file is written, so the canonical path always holds the latest run with backups next to it.
+Type is auto-detected from the prefix. Existing files are renamed to `<name>.<yyyy-MM-dd_HHmmss>.<ext>.bak` before the new file is written, so the canonical path always holds the latest run with backups next to it. For Azure Storage the container is auto-created if missing and the SPN is granted `Storage Blob Data Contributor` at container scope (best-effort — requires caller Owner / UAA on the storage account for the grant).
+</details>
+
+<details>
+<summary>🧪 <b>Example: launcher-level Summary/Detailed flip (v2.1.57+)</b></summary>
+
+Leave `$global:ReportTemplate` unset and let the override switches pick the template + mode. Lets testers toggle modes with a single line.
+
+```powershell
+# Flip to Detailed for this run (no other changes):
+$global:RiskAnalysis_Detailed_Override = $true
+
+# Default template names used when ReportTemplate is not explicit:
+$global:RiskAnalysis_ReportTemplate_Default_Summary  = 'RiskAnalysis_Summary_Bucket'
+$global:RiskAnalysis_ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_Bucket'
+
+# Per-template mail (wins over the flat MailTo below):
+$global:RiskAnalysis_Detailed_SendMail = $true
+$global:RiskAnalysis_Detailed_To       = @('soc@yourdomain.com')
+$global:RiskAnalysis_Summary_SendMail  = $true
+$global:RiskAnalysis_Summary_To        = @('exec-summary@yourdomain.com')
+```
+</details>
+
+<details>
+<summary>📄 <b>Full RiskAnalysis LauncherConfig.custom.ps1 (community mode, copy-paste)</b></summary>
+
+Minimal ceremony; all placeholders in `<...>`. Everything past section 1 is optional — defaults come from Layer 0 (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`).
+
+```powershell
+# --- Auth: SPN + plaintext secret (TESTING ONLY) ---
+$global:SpnTenantId     = '<your-tenant-id-guid>'
+$global:SpnClientId     = '<your-app-client-id-guid>'
+$global:SpnClientSecret = '<your-client-secret>'
+
+# --- Infrastructure (overrides Layer 0 shared defaults) ---
+$global:DcrResourceGroup = 'rg-dcr-securityinsight-community'
+$global:DceResourceGroup = 'rg-dce-securityinsight-community'
+$global:DceName          = 'dce-securityinsight-community'
+$global:WorkspaceName    = 'log-platform-management-si-community'
+$global:SubscriptionId   = '<your-target-subscription-id-guid>'
+
+# --- Ingest + reporting mode ---
+$global:SendToLogAnalytics = $true
+$global:ReportTemplate     = 'RiskAnalysis_Summary_Bucket'
+
+# --- Mail: flat (fallback) + per-template (preferred) ---
+$global:SendMail        = $true
+$global:MailTo          = @('fallback@yourdomain.com')
+$global:SmtpServer      = 'smtp-relay.brevo.com'
+$global:SmtpPort        = 587
+$global:SMTPUser        = '<your-smtp-username>'
+$global:SMTPPassword    = '<your-smtp-password>'
+
+$global:RiskAnalysis_Detailed_SendMail = $true
+$global:RiskAnalysis_Detailed_To       = @('soc@yourdomain.com')
+$global:RiskAnalysis_Summary_SendMail  = $true
+$global:RiskAnalysis_Summary_To        = @('exec-summary@yourdomain.com')
+
+# --- Output: JSON sibling + upload to blob (container auto-created) ---
+$global:WriteJsonOutput    = $true
+$global:ExportDestination  = 'https://<your-storacct>.blob.core.windows.net/riskanalysis-summary/'
+
+# --- Launcher mode overrides (flip Summary/Detailed without editing ReportTemplate) ---
+$global:RiskAnalysis_Summary_Override                = $null
+$global:RiskAnalysis_Detailed_Override               = $true
+$global:RiskAnalysis_ReportTemplate_Default_Summary  = 'RiskAnalysis_Summary_Bucket'
+$global:RiskAnalysis_ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_Bucket'
+
+# --- Behaviour tuning ---
+$global:TroubleshootingMode              = $true
+$global:CsaAttributeSet                  = 'SecurityInsight'
+$global:SubscriptionNameExcludePatterns  = @('*Azure for Students*')
+
+# --- AI executive summary (Azure OpenAI) ---
+$global:OpenAI_apiKey              = '<your-azure-openai-key>'
+$global:OpenAI_endpoint            = 'https://<your-aoai-account>.openai.azure.com'
+$global:OpenAI_deployment          = '<your-deployment-name>'
+$global:OpenAI_apiVersion          = '2025-01-01-preview'
+$global:OpenAI_MaxTokensPerRequest = 16384
+```
+</details>
+
+<details>
+<summary>📄 <b>Full Identity-collection LauncherConfig.custom.ps1 (community mode)</b></summary>
+
+For `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/LauncherConfig.custom.ps1`:
+
+```powershell
+# --- Auth: SPN + plaintext secret (TESTING ONLY) ---
+$global:SpnTenantId     = '<your-tenant-id-guid>'
+$global:SpnClientId     = '<your-app-client-id-guid>'
+$global:SpnClientSecret = '<your-client-secret>'
+
+# --- Infrastructure (overrides Layer 0 shared defaults) ---
+$global:DcrResourceGroup = 'rg-dcr-securityinsight-community'
+$global:DceResourceGroup = 'rg-dce-securityinsight-community'
+$global:DceName          = 'dce-securityinsight-community'
+$global:WorkspaceName    = 'log-platform-management-si-community'
+$global:SubscriptionId   = '<your-target-subscription-id-guid>'
+
+# --- Behaviour tuning ---
+$global:BatchSize                        = 200
+$global:TroubleshootingMode              = $true
+$global:CsaAttributeSet                  = 'SecurityInsight'
+$global:SubscriptionNameExcludePatterns  = @('*Azure for Students*')
+
+# --- Cross-workspace Defender/Sentinel IdentityInfo reads ---
+# Set when IdentityInfo lives in a DIFFERENT workspace than the identity-assets
+# ingestion workspace. Accepts three names: $global:Defender_WorkspaceNameResourceId
+# (canonical), $global:DefenderWorkspaceResourceId, $global:SecurityInsight_Defender_WorkspaceResourceId.
+$global:DefenderWorkspaceResourceId = '/subscriptions/<defender-sub-guid>/resourcegroups/<rg>/providers/microsoft.operationalinsights/workspaces/<defender-ws>'
+
+# --- Output: JSON sibling (.jsonl -> .json array) + upload ---
+$global:WriteJsonOutput    = $true
+$global:ExportDestination  = 'https://<your-storacct>.blob.core.windows.net/identityassets/'
+```
 </details>
 
 <a id="37-endpoint-asset-tagging"></a>
@@ -776,9 +896,19 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | 🚫 **Scope filter** | `$global:SubscriptionNameExcludePatterns` wildcard filter for Azure-side enumeration | v2.1.21 |
 | 🏷️ **Banner** | Version-stamped banner across all 40 launcher templates — easy to confirm what's running | v2.1.31 / v2.1.36 |
 | 🤖 **Auth log** | `[INFO] Auth method (Graph) : SPN + Secret (clientId=..., tenant=...)` printed on every connect | v2.1.34 |
+| 📧 **SMTP fallback** | `$global:SecureCredentialsSMTP` can now be assembled from 9 global-name variants (`SMTPUser/SMTPPassword`, `Mail_SmtpUser/Password`, legacy `Mail_SecurityInsight_Username/Password`, …). Refuses interactive prompt under unattended runs. | v2.1.53 / v2.1.56 |
+| 🏗️ **Auto-provision infra** | Ingestion engines self-heal: if Log Analytics workspace / DCE / DCE RG / DCR RG is missing, create it and assign the SecurityInsight SPN the roles it needs. `DceIngestionUri` is auto-resolved from the DCE name (no longer required in the custom file). | v2.1.54 / v2.1.62 |
+| 🔀 **Layered defaults** | New **Layer 0** shared-defaults file (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) holds the canonical `$global:WorkspaceName`, `$global:DceName`, `$global:DceResourceGroup`, `$global:DcrResourceGroup`, `$global:Location`, and `$global:SubscriptionId`. Shared by every SI engine; customer overrides on top. | v2.1.55 |
+| 🧪 **Launcher mode override** | `$global:RiskAnalysis_Detailed_Override` / `_Summary_Override` lets a launcher flip Summary vs Detailed runs without touching `$global:ReportTemplate`. | v2.1.57 |
+| 📬 **Per-template mail (community)** | Community-mode mail now supports the same `RiskAnalysis_Detailed_To` / `_Summary_To` splits as AF mode — falls back to flat `$global:MailTo` when per-template vars aren't set. | v2.1.57 |
+| 📦 **IAC JSON + upload** | Identity collection engine now writes a `.json` array sibling of its `.jsonl` stream and optionally uploads both to UNC / Azure Storage (same pattern RiskAnalysis uses). Four unified behaviour globals (`TroubleshootingMode`, `CsaAttributeSet`, `Defender_WorkspaceNameResourceId`, `SubscriptionNameExcludePatterns`) work in both AF and community mode. | v2.1.58 |
+| 📁 **Auto-create container** | When `$global:ExportDestination` points at an Azure Storage URL and the container doesn't exist, the upload helper creates it and (best-effort) grants the SPN `Storage Blob Data Contributor` at the container scope. | v2.1.60 |
+| 🎯 **Sub-scoped DCE/DCR cache** | `$global:AzDceDetails` / `$global:AzDcrDetails` now filtered to the target subscription, so duplicate-named DCRs in other tenant subs can't poison `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` (fixes spurious 403 "DCE FQDN not associated with DCR immutable Id"). | v2.1.61 / v2.1.62 |
+| 🔑 **SubscriptionId honored** | Both IAC and RiskAnalysis self-heal blocks now read `$global:SubscriptionId` first, parsed from `$WorkspaceResourceId` second, Az context last. Ends the silent "wrong subscription" behaviour when only `$global:WorkspaceName` + `$global:SubscriptionId` are set. | v2.1.59 / v2.1.63 |
+| 📋 **OnboardValidate summary** | `OnboardValidate-SecurityInsight-Permissions` now emits a final copy-paste-ready summary block (App (client) ID, SPN ObjectId, Tenant ID, counts, ready-to-paste `$global:Spn*` block, verification KQL). | v2.1.64 |
 
 > [!IMPORTANT]
-> **Coming next** (v2.1.45+): polished **Azure Monitor Workbooks** for `SI_RiskAnalysis_*_CL` tables — drop-in dashboards for SOC, exec, compliance audiences. Track on the [release page](https://github.com/KnudsenMorten/SecurityInsight/releases).
+> **Coming next** (v2.1.65+): polished **Azure Monitor Workbooks** for `SI_RiskAnalysis_*_CL` tables — drop-in dashboards for SOC, exec, compliance audiences. Track on the [release page](https://github.com/KnudsenMorten/SecurityInsight/releases).
 
 ---
 

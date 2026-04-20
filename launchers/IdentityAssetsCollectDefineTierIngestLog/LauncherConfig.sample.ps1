@@ -110,9 +110,46 @@
 # ----- Export: JSON sibling + upload ------------------------------------------
 # Writes a .json array next to the .jsonl collection file, then (optionally)
 # uploads both to UNC or Azure Storage. Destination type is auto-detected.
+# For Azure Storage the container is auto-created + the SPN is granted
+# 'Storage Blob Data Contributor' on the container (best-effort).
 # $global:WriteJsonOutput    = $true
 # $global:ExportDestination  = 'https://<acct>.blob.core.windows.net/identityassets/'
 # $global:ExportDestination  = '\\server\share\identityassets\'
+
+
+# ============================================================================
+# 4.  COMPLETE EXAMPLE  (community mode, copy/paste starting point)
+# ============================================================================
+# This is the full shape of a populated LauncherConfig.custom.ps1 for the
+# Identity collection engine. Replace '<your-*>' placeholders with your values.
+# Everything except section 1 (auth) is optional -- the engine auto-creates /
+# auto-resolves anything that's missing.
+
+<#
+# --- Auth: SPN + plaintext secret (TESTING ONLY) ---
+$global:SpnTenantId     = '<your-tenant-id-guid>'
+$global:SpnClientId     = '<your-app-client-id-guid>'
+$global:SpnClientSecret = '<your-client-secret>'
+
+# --- Infrastructure (overrides Layer 0 shared defaults for this test tenant) ---
+$global:DcrResourceGroup = 'rg-dcr-securityinsight-community'
+$global:DceResourceGroup = 'rg-dce-securityinsight-community'
+$global:DceName          = 'dce-securityinsight-community'
+$global:WorkspaceName    = 'log-platform-management-si-community'
+$global:SubscriptionId   = '<your-target-subscription-id-guid>'
+
+# --- Behaviour tuning ---
+$global:BatchSize                        = 200
+$global:TroubleshootingMode              = $true
+$global:CsaAttributeSet                  = 'SecurityInsight'
+$global:SubscriptionNameExcludePatterns  = @('*Azure for Students*')
+
+# --- Cross-workspace Defender/Sentinel IdentityInfo reads ---
+# Set when Defender / Sentinel IdentityInfo lives in a DIFFERENT workspace
+# than the identity-assets ingestion workspace. Engine then issues cross-
+# workspace KQL. Accepts the canonical new name + the two legacy names.
+$global:DefenderWorkspaceResourceId = '/subscriptions/<defender-sub-guid>/resourcegroups/<rg>/providers/microsoft.operationalinsights/workspaces/<defender-ws>'
+#>
 
 
 # ============================================================================

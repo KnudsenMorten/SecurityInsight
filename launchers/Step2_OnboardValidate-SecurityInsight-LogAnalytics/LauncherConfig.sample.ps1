@@ -132,3 +132,24 @@ $global:WorkspaceRetentionDays = 90                    # default: 90
 # ============================================================================
 # $global:Scope      = @('PROD')      # or @('TEST')
 # $global:WhatIfMode = $false         # $true = dry run, no Azure writes
+
+
+# ============================================================================
+# 6.  MINIMUM COPY-PASTE EXAMPLE -- the absolute minimum to run Step2
+# ============================================================================
+# Uncomment this block, replace the three '<your-*>' placeholders, save as
+# LauncherConfig.custom.ps1, and run:
+#   .\launcher.community-vm.template.ps1
+#
+# Everything else (workspace name, DCE name, RG names, location) auto-resolves
+# to the standard SecurityInsight layout from Layer 0 shared defaults.
+
+<#
+# --- Auth: SPN + plaintext secret (TESTING ONLY; use MI / KV / Cert in production) ---
+$global:SpnTenantId     = '<your-tenant-id-guid>'
+$global:SpnClientId     = '<your-app-client-id-guid>'
+$global:SpnClientSecret = '<your-client-secret>'
+
+# --- Target subscription (optional if Az context is already on the right sub) ---
+$global:SubscriptionId  = '<your-target-subscription-id-guid>'
+#>

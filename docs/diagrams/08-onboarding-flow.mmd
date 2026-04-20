@@ -1,0 +1,58 @@
+%% Onboarding detail: Step1 -> Step2 -> Step3 decision flow with the minimum
+%% LauncherConfig.custom.ps1 each step needs. Shows inputs, outputs, and how
+%% the downstream ingestion engines pick up the resources that each Step
+%% provisions. Used in README § 3.4.
+flowchart TD
+    START([Start: empty tenant])
+    START --> S1
+
+    subgraph STEP1 [" "]
+        direction TB
+        S1["<b>Step 1</b> &middot; OnboardValidate Permissions<br/><br/>Creates SPN 'sp-securityinsight'<br/>Grants API perms (Graph / Defender / ATP)<br/>Grants Azure Reader on every sub"]
+        S1_OUT[AppId + TenantId + ObjectId]
+        S1 --> S1_OUT
+    end
+
+    S1_OUT --> S2
+
+    subgraph STEP2 [" "]
+        direction TB
+        S2["<b>Step 2</b> &middot; OnboardValidate LogAnalytics<br/><br/>Creates workspace + DCE + DCR RG<br/>Creates custom table SI_IdentityAssets_CL<br/>Grants Monitoring Metrics Publisher"]
+        S2_OUT[WorkspaceResourceId + DceName + DcrRG]
+        S2 --> S2_OUT
+    end
+
+    S2_OUT --> Q3{Use AI summaries?}
+    Q3 -- "no" --> ENG
+    Q3 -- "yes" --> S3
+
+    subgraph STEP3 [" "]
+        direction TB
+        S3["<b>Step 3</b> &middot; OnboardValidate OpenAI PAYG<br/><br/>Creates Azure OpenAI account + deployment<br/>Idempotent: skips if exists<br/>-ValidateOnly for drift check"]
+        S3_OUT[OpenAI endpoint + api key + deployment name]
+        S3 --> S3_OUT
+    end
+
+    S3_OUT --> ENG
+
+    subgraph ENGINES ["Run ingestion engines (on a schedule)"]
+        direction LR
+        ENG[Launch]
+        E1[IdentityAssetsCollect]
+        E2[CriticalAssetTagging]
+        E3[SecurityInsight_RiskAnalysis<br/>-Summary / -Detailed]
+        ENG --> E1
+        ENG --> E2
+        ENG --> E3
+    end
+
+    ENG --> DONE([Logs in SI_IdentityAssets_CL +<br/>SI_RiskAnalysis_*_CL + xlsx + json])
+
+    style S1 fill:#e8f4fd,stroke:#2a6592
+    style S2 fill:#e8f4fd,stroke:#2a6592
+    style S3 fill:#fff4e1,stroke:#b07a00
+    style E1 fill:#e8ffe8,stroke:#1a7a1a
+    style E2 fill:#e8ffe8,stroke:#1a7a1a
+    style E3 fill:#e8ffe8,stroke:#1a7a1a,stroke-width:2px
+    style DONE fill:#fff9c4,stroke:#b07a00,stroke-width:2px
+    style Q3 fill:#fce4ec,stroke:#a83275

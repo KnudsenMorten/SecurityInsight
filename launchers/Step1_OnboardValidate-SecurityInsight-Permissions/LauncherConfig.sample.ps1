@@ -80,3 +80,31 @@
 # 4.  WHATIF
 # ============================================================================
 # $global:OnboardValidate_WhatIfMode = $true
+
+
+# ============================================================================
+# 5.  MINIMUM COPY-PASTE EXAMPLES
+# ============================================================================
+# The absolute simplest way to get Step1 done is to NOT even create this file
+# and just run the launcher. You'll get an interactive browser sign-in, and
+# the engine creates 'sp-securityinsight' + grants all the right API perms +
+# Azure Reader on every sub you can see. For 90% of labs this is enough.
+#
+#     .\launcher.community-vm.template.ps1
+#
+# If you want to run Step1 UNATTENDED (CI/CD or a scheduled task), uncomment
+# and fill this block. The onboarding SPN needs 'Privileged Role Administrator'
+# (or Global Admin) to create app registrations + grant admin consent.
+
+<#
+$global:OnboardValidate_AuthMethod       = 'SpnSecret'
+$global:OnboardValidate_AuthTenantId     = '<tenant-id-guid>'
+$global:OnboardValidate_AuthClientId     = '<onboarding-spn-clientid>'
+$global:OnboardValidate_AuthClientSecret = '<onboarding-spn-secret>'
+#>
+
+# If your Defender/Sentinel IdentityInfo lives in a separate LA workspace, or
+# you want to pre-grant the DCR RBAC for Step2's DCR, add these:
+#
+# $global:OnboardValidate_DefenderWorkspaceResourceId = '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<ws>'
+# $global:OnboardValidate_DcrResourceId               = '/subscriptions/<sub>/resourceGroups/rg-dcr-securityinsight/providers/Microsoft.Insights/dataCollectionRules/dcr-si-identity-assets'

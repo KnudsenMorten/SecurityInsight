@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.70
+## v2.1.71
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI Step3): idempotent validation + ValidateOnly + rename to OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure + unattended auth guidance (1a80535)
+- docs(SI): 30-second onboarding quickstart + rebuild Step1-3 diagrams (087df72)
 
 ---
 

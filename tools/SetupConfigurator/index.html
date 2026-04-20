@@ -155,16 +155,14 @@
         <div class="hint">Naming standards vary by org. Leave blank to install as <code>sp-securityinsight</code>, or set a custom name like <code>sp-mysecurityinsight</code>.</div>
       </div>
 
-      <h3 style="font-size:14px;margin-top:18px;">Optional — extra grants</h3>
+      <h3 style="font-size:14px;margin-top:18px;">Optional — cross-workspace Defender grant</h3>
       <div class="field">
         <label for="s1_defender">Defender / Sentinel workspace resource ID</label>
         <input type="text" id="s1_defender" placeholder="/subscriptions/.../workspaces/..." />
-        <div class="hint">Grants the SPN <code>Log Analytics Reader</code> on this workspace (for cross-workspace IdentityInfo).</div>
+        <div class="hint">Only set if your Defender/Sentinel <code>IdentityInfo</code> lives in a DIFFERENT workspace than the one Step 3 creates. Grants the SPN <code>Log Analytics Reader</code> on this external workspace for cross-workspace queries.</div>
       </div>
-      <div class="field">
-        <label for="s1_dcr">DCR resource ID</label>
-        <input type="text" id="s1_dcr" placeholder="/subscriptions/.../dataCollectionRules/..." />
-        <div class="hint">Grants the SPN <code>Monitoring Metrics Publisher</code> on this DCR.</div>
+      <div class="panel-block">
+        <strong>Note:</strong> <code>Monitoring Metrics Publisher</code> on the DCR is granted automatically by Step 3 when it provisions the DCR RG — no need to pre-set a DCR resource ID here.
       </div>
     </section>
 
@@ -538,7 +536,6 @@ function buildStep1() {
   ]);
   const optional = fmtLines([
     ['OnboardValidate_DefenderWorkspaceResourceId', val('s1_defender')],
-    ['OnboardValidate_DcrResourceId',               val('s1_dcr')],
   ]);
 
   if (method === 'Interactive') {

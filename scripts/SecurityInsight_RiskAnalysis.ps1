@@ -3337,10 +3337,12 @@ if ([bool]$global:SendToLogAnalytics) {
                 # 'westeurope' location) causing a 404 at the Log Ingestion API.
                 Start-Sleep -Seconds 15
                 Ensure-SecurityInsightAzDceDcrCache `
-                    -AzAppId        $global:SpnClientId `
-                    -AzAppSecret    $global:SpnClientSecret `
-                    -TenantId       $global:SpnTenantId `
-                    -SubscriptionId $laSubId `
+                    -AzAppId           $global:SpnClientId `
+                    -AzAppSecret       $global:SpnClientSecret `
+                    -TenantId          $global:SpnTenantId `
+                    -SubscriptionId    $laSubId `
+                    -DceResourceGroup  $laDceRg `
+                    -DcrResourceGroup  $laDcrRg `
                     -Force
 
                 # Prepare + post the full dataset. Pipeline mirrors the

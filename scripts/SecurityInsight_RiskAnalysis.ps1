@@ -1729,9 +1729,11 @@ if ([bool]$global:AutomationFramework) {
     Tick "graph connect"
 
     #------------------------------------------------------------------------------------------------------------
-    # Output File
+    # Output File -- write into the solution's DATA\OUTPUT\ folder (same as
+    # community mode), NOT the monorepo root. $global:SettingsPath is set to
+    # the engine's DATA folder by the launcher.
     #------------------------------------------------------------------------------------------------------------
-    $global:OutputDir  = Join-Path $global:PathScripts 'OUTPUT'
+    $global:OutputDir  = Join-Path $global:SettingsPath 'OUTPUT'
     Ensure-Directory -Path $global:OutputDir
     $global:OutputXlsx = Join-Path $global:OutputDir ("{0}.xlsx" -f $global:ReportTemplate)
 

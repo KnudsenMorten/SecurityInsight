@@ -2,9 +2,9 @@
 #Requires -Modules @{ ModuleName='Az.Accounts'; ModuleVersion='2.0.0' }
 <#
 .SYNOPSIS
-    Community Azure (Function / Logic App / Hybrid Worker) launcher for SecurityInsight\Step2_OnboardValidate_LogAnalytics.
+    Community Azure (Function / Logic App / Hybrid Worker) launcher for SecurityInsight\Step2_OnboardValidate-SecurityInsight-LogAnalytics.
 .DESCRIPTION
-    Runs the Step2_OnboardValidate_LogAnalytics engine from an Azure host that has a system-assigned MI.
+    Runs the Step2_OnboardValidate-SecurityInsight-LogAnalytics engine from an Azure host that has a system-assigned MI.
     MI -> Key Vault -> SPN secret -> SPN login. Requires App Settings:
     PLATFORM_TENANT_ID, PLATFORM_SUBSCRIPTION_ID, PLATFORM_KEYVAULT.
 
@@ -109,7 +109,7 @@ try {
 }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath -Solution 'SecurityInsight'
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Step2_OnboardValidate_LogAnalytics' -Flavour 'community-azure' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'Step2_OnboardValidate-SecurityInsight-LogAnalytics' -Flavour 'community-azure' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message
@@ -156,6 +156,7 @@ try {
 # Layer 0: solution-wide shared defaults (DCE/DCR/Workspace names + RGs).
 $sharedDefaults = Join-Path $PSScriptRoot '..\_lib\SecurityInsight.shared-defaults.ps1'
 if (Test-Path -LiteralPath $sharedDefaults) { Write-Info "dot-sourcing SecurityInsight.shared-defaults.ps1 (Layer 0)"; . $sharedDefaults }
+$engineDefaults = Join-Path $PSScriptRoot 'LauncherConfig.defaults.ps1' ; if (Test-Path -LiteralPath $engineDefaults) { Write-Info "dot-sourcing LauncherConfig.defaults.ps1 (Layer 1)"; . $engineDefaults }
 
 Write-Step "Setting engine globals"
 $global:AutomationFramework = $false
@@ -179,10 +180,10 @@ $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'Step2_OnboardValidate_LogAnalytics.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
-if (-not $engine) { throw "Launcher: engine 'Step2_OnboardValidate_LogAnalytics.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
+if (-not $engine) { throw "Launcher: engine 'Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

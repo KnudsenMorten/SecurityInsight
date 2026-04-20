@@ -29,7 +29,7 @@
    - 2.5 [Outputs at a glance](#25-outputs-at-a-glance)
 3. [How to Implement (Quick Start)](#3-how-to-implement-quick-start)
    - 3.1 [High-level overview](#31-high-level-overview)
-   - 3.2 [Get the latest from GitHub](#32-get-the-latest-from-github)
+   - 3.2 [Install + update](#32-install--update)
    - 3.3 [Update an existing install](#33-update-an-existing-install)
    - 3.4 [Pre-requisite configuration](#34-pre-requisite-configuration)
      - 3.4.1 [Connectivity: SPN or Managed Identity](#341-connectivity-spn-or-managed-identity)
@@ -267,39 +267,41 @@ flowchart TD
 
 Steps 1–4 are once-per-tenant. Step 5 runs daily/hourly. Step 6 runs daily. Step 7 runs daily/weekly/on-demand.
 
-<a id="32-get-the-latest-from-github"></a>
-### 3.2 Get the latest from GitHub
+<a id="32-install--update"></a>
+### 3.2 Install + update
 
 [⤴ Back to top](#top)
 
+Both fresh install and ongoing updates use the same **Step 1** script — see [§ 3.4](#34-pre-requisite-configuration) for the full 30-second onboarding runbook including the bootstrap one-liner, `-DestinationPath` / `-Channel` / `-Engine` parameters, and the customer-file preservation rules on re-run.
+
+Quick reference:
+
+```powershell
+# Pick your install path ONCE, re-use for every re-run -- default is C:\SCRIPTS\SecurityInsight.
+$SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'   # <-- change to 'D:\Tools\SecurityInsight' etc. if you want
+
+# Fresh bootstrap (no local checkout yet):
+$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
+irm $u | Out-File $env:TEMP\Step1.ps1
+& $env:TEMP\Step1.ps1 -DestinationPath $SI_InstallPath
+
+# Update in place (same command, idempotent, customer files preserved):
+& (Join-Path $SI_InstallPath 'SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath
+
+# Channel 'preview' for bleeding-edge features before they hit a stable release:
+& (Join-Path $SI_InstallPath 'SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath -Channel preview
+```
+
 > [!TIP]
-> **Recommended path** — download the release zip. Stable, reproducible, signed by the publish workflow.
+> Prefer to pin the path inside the script itself so re-runs never need `-DestinationPath`? Open `SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` and edit the first line of its param block — the `EDIT-ME DEFAULTS` header marks the spot. CLI `-DestinationPath` still overrides per-run.
 
-**Option A: Release zip (recommended)**
+What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-files-deep-dive).
 
-```powershell
-# 1. Download from https://github.com/KnudsenMorten/SecurityInsight/releases/latest
-#    OR via PowerShell:
-$url  = 'https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip'
-$dest = 'C:\SecurityInsight'
-Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\si.zip"
-Expand-Archive    -Path "$env:TEMP\si.zip" -DestinationPath $dest -Force
-```
-
-**Option B: Git clone (if you want to follow the preview/main branches yourself)**
-
-```powershell
-git clone https://github.com/KnudsenMorten/SecurityInsight.git C:\SecurityInsight
-cd C:\SecurityInsight
-git checkout main          # stable
-# git checkout preview     # bleeding edge
-```
-
-After download, the running version is stamped on every banner:
+After update, the running version is stamped on every launcher banner:
 
 ```
 ========================================================================================
-  SecurityInsight -- SecurityInsight_RiskAnalysis    [community-vm]   SecurityInsight-v2.1.44
+  SecurityInsight -- SecurityInsight_RiskAnalysis    [community-vm]   SecurityInsight-v2.1.72
 ========================================================================================
 ```
 
@@ -308,42 +310,32 @@ After download, the running version is stamped on every banner:
 
 [⤴ Back to top](#top)
 
-The release shape is intentionally **safe-to-overwrite**: only the engine code (`SCRIPTS/`), launcher templates (`LAUNCHERS/<engine>/launcher.*.template.ps1` + `LauncherConfig.defaults.ps1` + `LauncherConfig.sample.ps1`), shipped data (`DATA/*_Locked.yaml`), and docs are touched on update. Your customer-edited files (`LauncherConfig.custom.ps1`, `*_Custom.yaml`, anything under `CUSTOMDATA/`) are **never overwritten** — they are gitignored on our side and untouched on yours.
-
-**Option A — re-run the same install method**
-
-```powershell
-# Re-download the release zip; extract over the top.
-Invoke-WebRequest -Uri 'https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip' -OutFile "$env:TEMP\si.zip"
-Expand-Archive    -Path "$env:TEMP\si.zip" -DestinationPath 'C:\SecurityInsight' -Force
-```
-
-**Option B — git pull (if you cloned)**
-
-```powershell
-cd C:\SecurityInsight
-git pull
-```
-
-What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-files-deep-dive).
+Same script as §3.2 — re-running Step 1 is idempotent and preserves every customer-owned file (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`). See [§ 3.2](#32-install--update) for the command + [§ 7.2 Files deep-dive](#72-files-deep-dive) for the full preservation list.
 
 <a id="34-pre-requisite-configuration"></a>
 ### 3.4 Pre-requisite configuration
 
 [⤴ Back to top](#top)
 
-The solution ships three **Step** launchers that set a tenant up from zero, plus several **engines** that produce the actual reports / ingests. Run the Steps once per tenant (in order), then run the engines as often as you like.
+The solution ships four **Step** launchers that set a tenant up from zero, plus several **engines** that produce the actual reports / ingests. Run the Steps once per tenant (in order), then run the engines as often as you like.
 
-| Order | Folder | Purpose | `LauncherConfig.custom.ps1` required? |
-|---|---|---|---|
-| **Step 1** | `SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` | Download / update SecurityInsight from GitHub. Preserves customer files. Supports `stable` (default) and `preview` channels. | **No** — it's a script, not a launcher. Run it directly. |
-| **Step 2** | `LAUNCHERS/Step2_OnboardValidate-SecurityInsight-Permissions/` | Create the SecurityInsight SPN + grant Graph / Defender / ATP API permissions + Azure `Reader` on every sub. Idempotent. | **No** (community-vm falls back to interactive auth). Optional if you want to skip the Graph sign-in prompt. |
-| **Step 3** | `LAUNCHERS/Step3_OnboardValidate-SecurityInsight-LogAnalytics/` | Create Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` + RBAC for the SPN. | **Yes** for community-vm (needs the SPN auth block). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`, fill in Section 1. |
-| **Step 4** | `LAUNCHERS/Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | Provision a pay-as-you-go Azure OpenAI account + model deployment so the RiskAnalysis AI summary works. Optional — skip if you won't use `-BuildSummaryByAI`. | **Yes** for community-vm. Sample has the minimum block. |
-| Engine | `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/` | Main identity-asset collection → `SI_IdentityAssets_CL`. Run on a schedule after Step 3. | **Yes** for community-vm. |
-| Engine | `LAUNCHERS/SecurityInsight_RiskAnalysis/` | Risk reports → xlsx + JSON + `SI_RiskAnalysis_*_CL`. Run after Step 3 + (optionally) Step 4. | **Yes** for community-vm. |
-| Engine | `LAUNCHERS/CriticalAssetTagging/` and its three siblings | Apply tier tags to Defender devices + Azure resources. Optional but recommended. | **Yes** for community-vm. |
-| Engine | `LAUNCHERS/Build_Tier_Definitions_JSON_File/` | Build the tier catalog JSON from YAML + MSAL metadata. Run before running `IdentityAssets…` if you customize tier rules. | **Yes** for community-vm. |
+**Onboarding Steps** (run once per tenant, in order):
+
+| # | Purpose | Config needed? |
+|---|---|---|
+| **Step 1** | Download / update SecurityInsight from GitHub. Preserves customer files. Supports `stable` (default) + `preview` channels.<br/>`SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` | **None** — it's a script, use `-DestinationPath` / `-Channel` args or edit the inline defaults at the top of the file. |
+| **Step 2** | Create the SecurityInsight SPN. Grants Graph / Defender / ATP API permissions + Azure `Reader` on every sub. Idempotent.<br/>`LAUNCHERS/Step2_OnboardValidate-SecurityInsight-Permissions/` | **None** — community-vm falls back to interactive Graph sign-in. Fill in `LauncherConfig.custom.ps1` only to run unattended. |
+| **Step 3** | Provision Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` table + RBAC for the SPN.<br/>`LAUNCHERS/Step3_OnboardValidate-SecurityInsight-LogAnalytics/` | **Yes** — 4 lines (auth + subscription). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`. |
+| **Step 4** *(opt.)* | Provision pay-as-you-go Azure OpenAI account + model deployment. Only needed for RiskAnalysis AI summaries (`-BuildSummaryByAI`).<br/>`LAUNCHERS/Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | **Yes** — 8 lines (auth + placement + account/deployment names). |
+
+**Ingestion engines** (run on a schedule after the Steps):
+
+| Engine | What it does | Config needed? |
+|---|---|---|
+| `IdentityAssetsCollectDefineTierIngestLog` | Collect identities + tier them → `SI_IdentityAssets_CL` | **Yes** — re-uses Step 3's 4 auth lines |
+| `SecurityInsight_RiskAnalysis` | Risk reports → `.xlsx` + `.json` + `SI_RiskAnalysis_*_CL` | **Yes** — re-uses Step 3's 4 auth lines, plus report options |
+| `CriticalAssetTagging` (+ 3 siblings) | Apply tier tags to Defender devices + Azure resources | **Yes** — re-uses Step 3's 4 auth lines |
+| `Build_Tier_Definitions_JSON_File` | Rebuild tier catalog JSON (run before `IdentityAssets…` if you customize tier rules) | **Yes** — re-uses Step 3's 4 auth lines |
 
 > [!TIP]
 > **Internal (AF) / community-azure flavours don't need `LauncherConfig.custom.ps1`** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from the customer file.
@@ -372,20 +364,35 @@ The solution ships three **Step** launchers that set a tenant up from zero, plus
 **Step 1 — install / update SecurityInsight from GitHub.** One-liner, self-downloading, merges customer files on update:
 
 ```powershell
-# Bootstrap (fresh machine, no local checkout yet):
+# Bootstrap (fresh machine, no local checkout yet) -- default target is C:\SCRIPTS\SecurityInsight:
 $u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
-Invoke-RestMethod $u | Out-File $env:TEMP\Step0.ps1
-& $env:TEMP\Step0.ps1
+Invoke-RestMethod $u | Out-File $env:TEMP\Step1.ps1
+& $env:TEMP\Step1.ps1
+
+# Bootstrap with a CUSTOM install path (recommended if the default conflicts with something else):
+& $env:TEMP\Step1.ps1 -DestinationPath 'D:\Tools\SecurityInsight'
 
 # Already installed? Same command -- it's idempotent and respects customer files.
-.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1
+.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -DestinationPath 'D:\Tools\SecurityInsight'
 
 # Optional: land inside a specific launcher folder immediately:
-.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -Engine Step2_OnboardValidate-SecurityInsight-Permissions
+.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 `
+    -DestinationPath 'D:\Tools\SecurityInsight' `
+    -Engine Step2_OnboardValidate-SecurityInsight-Permissions
 
 # Preview channel (HEAD of 'preview' branch -- bleeding-edge features before they hit a stable release):
-.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -Channel preview
+.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -DestinationPath 'D:\Tools\SecurityInsight' -Channel preview
 ```
+
+**Step 1 parameters** (all optional):
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `-DestinationPath` | `C:\SCRIPTS\SecurityInsight` | Where the code lands on this machine. Change this if you want to install under another drive / folder. Same path on re-run upgrades in place. |
+| `-Channel` | `stable` | `stable` = latest tagged GitHub release (production). `preview` = HEAD of the `preview` branch (bleeding edge). |
+| `-Engine` | *(unset)* | Launcher folder to `cd` into after install, e.g. `Step2_OnboardValidate-SecurityInsight-Permissions`. Great for scheduled-run scripts that always run the same engine. |
+| `-Repo` | `KnudsenMorten/SecurityInsight` | Change if you fork the solution. |
+| `-PreservePatterns` | (see script) | Glob patterns that are never overwritten on update. Default covers customer configs + custom YAML. |
 
 | Channel | Source | When to use |
 |---|---|---|

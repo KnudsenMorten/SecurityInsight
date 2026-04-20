@@ -31,6 +31,18 @@
 
 #>
 
+# ----------------------------------------------------------------------
+#  Module dependencies -- centralized helper under _shared/
+# ----------------------------------------------------------------------
+. (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
+Ensure-Module -Name @(
+    'Az.Accounts'
+    'Az.Resources'
+    'Microsoft.Graph.Authentication'
+    'Microsoft.Graph.Identity.Governance'
+    'Microsoft.Graph.Applications'
+) -Import
+
 # ============================================================
 # CONFIGURATION (v2: launcher is source of truth)
 # ============================================================

@@ -85,6 +85,15 @@ $ScriptRoot = if ($PSScriptRoot -and -not [string]::IsNullOrWhiteSpace($PSScript
 }
 #endregion =======================================================
 
+# ----------------------------------------------------------------------
+#  Module dependencies -- centralized helper under _shared/
+# ----------------------------------------------------------------------
+. (Join-Path $ScriptRoot '_shared\Ensure-Module.ps1')
+Ensure-Module -Name @(
+    'Az.Accounts'
+    'Az.Resources'
+) -Import
+
 #region ================= API VERSIONING ==========================
 # Management-plane API version (ARM) used for:
 # - accounts

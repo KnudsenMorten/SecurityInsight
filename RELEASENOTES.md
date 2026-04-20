@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.135
+## v2.1.136
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): real-world .custom.ps1 samples for Identity + Build_Tier engines (7dabefd0)
 - fix(SI Build_Tier): restore visible SECTION A header so AD tiering isn't invisible (9f3c41aa)
 - refactor(SI Build_Tier): drop on-prem AD enumeration entirely (ff5a7cf7)
 - fix(SI Build_Tier): drop dead 'AD_GroupMembership' key from tiering JSON (63cf116c)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Step0): per-file [UPDATE]/[PRESERVE] log so policy is visible (508bb2ce)
 - docs(SI README): add v2.1.88..v2.1.108 highlights to changelog (f26470df)
 - fix(SI Step0): use Invoke-WebRequest -OutFile in bootstrap, not irm | Out-File (160bffa1)
-- docs(SI README): cleaner override pattern in real-world sample (0c394553)
 
 ---
 
@@ -48,6 +48,10 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.136 — Real-world `LauncherConfig.custom.ps1` samples for Identity + Build_Tier engines
+
+- 📚 **Two new "Real-world LauncherConfig.custom.ps1 (redacted)" collapsible blocks in the README** under § 3.5, covering `IdentityAssetsCollectDefineTierIngestLog` and `Build_Tier_Definitions_JSON_File`. Mirrors the pattern of the existing RiskAnalysis real-world block (v2.1.119): working community-mode configs as actually deployed on a test VM, with GUIDs/secrets/keys replaced by `xxxxx` placeholders. Identity sample shows the cross-workspace Defender `IdentityInfo` pattern (ingest to one LA workspace, read `IdentityInfo` from another via `$DefenderWorkspaceResourceId`). Build_Tier sample shows the minimal shape: SPN + Azure OpenAI only, no LA / DCR / workspace plumbing.
 
 ### v2.1.135 — Restore visible `SECTION A` marker in Build_Tier output
 

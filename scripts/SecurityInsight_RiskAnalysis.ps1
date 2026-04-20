@@ -3374,6 +3374,85 @@ if ([bool]$global:SendToLogAnalytics) {
 }
 
 #########################################################################################################
+# POWER BI DATASET REFRESH  (Phase 2b -- after LA ingest)
+#
+# Optional per-run trigger. When $global:SendToPowerBI = $true, after LA ingest
+# completes, authenticate to the Power BI REST API using the same SPN creds
+# already in globals and queue a refresh of the dashboard dataset. The
+# dashboard reads live from LA so the data is already current -- this just
+# forces the cached summary tiles / aggregations on the Power BI service to
+# re-materialise from fresh KQL.
+#
+# The dashboard itself is deployed by Step5_Deploy-SecurityInsight-PowerBI-Dashboard
+# (run once per customer + when the dashboard design changes).
+#
+# Required globals when SendToPowerBI = $true:
+#   $global:PowerBI_WorkspaceName   (default: 'SecurityInsight-Reports')
+#   $global:PowerBI_DatasetName     (default: 'SecurityInsight - Risk Analysis')
+#   $global:PowerBI_AuthTenantId    (default: $global:SpnTenantId)
+#   $global:PowerBI_AuthClientId    (default: $global:SpnClientId)
+#   $global:PowerBI_AuthClientSecret (default: $global:SpnClientSecret)
+# Any of the above can be overridden per-engine in LauncherConfig.custom.ps1.
+#########################################################################################################
+
+if ($null -eq $global:SendToPowerBI) { $global:SendToPowerBI = $false }
+
+if ([bool]$global:SendToPowerBI) {
+    Write-Section "Power BI -- dataset refresh"
+
+    $pbiWorkspace = if ($global:PowerBI_WorkspaceName) { [string]$global:PowerBI_WorkspaceName } else { 'SecurityInsight-Reports' }
+    $pbiDataset   = if ($global:PowerBI_DatasetName)   { [string]$global:PowerBI_DatasetName }   else { 'SecurityInsight - Risk Analysis' }
+    $pbiTenantId  = if ($global:PowerBI_AuthTenantId)  { [string]$global:PowerBI_AuthTenantId }  else { [string]$global:SpnTenantId }
+    $pbiClientId  = if ($global:PowerBI_AuthClientId)  { [string]$global:PowerBI_AuthClientId }  else { [string]$global:SpnClientId }
+    $pbiSecret    = if ($global:PowerBI_AuthClientSecret) { [string]$global:PowerBI_AuthClientSecret } else { [string]$global:SpnClientSecret }
+
+    $pbiMissing = @()
+    if (-not $pbiTenantId) { $pbiMissing += 'PowerBI_AuthTenantId (or SpnTenantId)' }
+    if (-not $pbiClientId) { $pbiMissing += 'PowerBI_AuthClientId (or SpnClientId)' }
+    if (-not $pbiSecret)   { $pbiMissing += 'PowerBI_AuthClientSecret (or SpnClientSecret)' }
+
+    if ($pbiMissing.Count -gt 0) {
+        Write-Warn ("SendToPowerBI=true but auth globals missing: {0}. Skipping refresh (LA + xlsx + json unaffected)." -f ($pbiMissing -join ', '))
+    } else {
+        try {
+            Write-Step "Acquiring Power BI access token (SPN client credentials)"
+            $tokResp = Invoke-RestMethod -Method POST `
+                -Uri "https://login.microsoftonline.com/$pbiTenantId/oauth2/v2.0/token" `
+                -ContentType 'application/x-www-form-urlencoded' `
+                -Body @{
+                    grant_type    = 'client_credentials'
+                    client_id     = $pbiClientId
+                    client_secret = $pbiSecret
+                    scope         = 'https://analysis.windows.net/powerbi/api/.default'
+                }
+            $pbiToken   = $tokResp.access_token
+            $pbiHeaders = @{ Authorization = "Bearer $pbiToken"; 'Content-Type' = 'application/json' }
+            $pbiBase    = 'https://api.powerbi.com/v1.0/myorg'
+
+            # Resolve workspace -> dataset
+            Write-Step ("Resolving workspace '{0}' + dataset '{1}'" -f $pbiWorkspace, $pbiDataset)
+            $groups = Invoke-RestMethod -Method GET `
+                -Uri "$pbiBase/groups?`$filter=name eq '$pbiWorkspace'" -Headers $pbiHeaders
+            $group = $groups.value | Select-Object -First 1
+            if (-not $group) { throw "Power BI workspace '$pbiWorkspace' not found. Run Step 5 first to deploy the dashboard." }
+
+            $datasets = Invoke-RestMethod -Method GET `
+                -Uri "$pbiBase/groups/$($group.id)/datasets" -Headers $pbiHeaders
+            $ds = $datasets.value | Where-Object { $_.name -eq $pbiDataset } | Select-Object -First 1
+            if (-not $ds) { throw "Power BI dataset '$pbiDataset' not found in workspace '$pbiWorkspace'. Run Step 5 to (re-)deploy the dashboard." }
+
+            Write-Step "Triggering dataset refresh"
+            $null = Invoke-RestMethod -Method POST `
+                -Uri "$pbiBase/groups/$($group.id)/datasets/$($ds.id)/refreshes" `
+                -Headers $pbiHeaders -Body '{"notifyOption":"NoNotification"}'
+            Write-Ok ("refresh queued  workspace={0}  dataset={1}" -f $pbiWorkspace, $pbiDataset)
+        } catch {
+            Write-Warn ("Power BI refresh failed: {0} (continuing -- LA + xlsx + json unaffected)" -f $_.Exception.Message)
+        }
+    }
+}
+
+#########################################################################################################
 # UPLOAD EXPORT FILES  (Phase 3)
 #
 # Optional. Sends the generated .xlsx + .json to either a UNC file share or an

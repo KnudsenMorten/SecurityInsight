@@ -2979,7 +2979,10 @@ if ($ResultAll.Count -eq 0) {
     # Select-Object, the LA schema never learns about the columns and the
     # module's Build-DataArrayToAlignWithSchema silently drops them at ingest.
     #
-    # TraceName = "<ConfigurationName>-<SecuritySeverity>-<CriticalityTierLevel>"
+    # TraceName = "<ConfigurationName>--<SecuritySeverity>--<CriticalityTierLevel>"
+    #   Separator is '--' (double dash) so values that already contain a single
+    #   dash (e.g. "Critical - tier 0", "Medium - tier 2") stay unambiguously
+    #   readable when the three parts are joined.
     # TraceID   = first 16 hex chars of SHA256(TraceName_lowercased_utf8)
     # Deterministic -- same inputs always produce the same ID across runs, so
     # downstream consumers (management reports, ServiceNow, KQL history
@@ -2991,7 +2994,7 @@ if ($ResultAll.Count -eq 0) {
             $cfgName = if ($row.PSObject.Properties['ConfigurationName'])    { [string]$row.ConfigurationName }    else { '' }
             $sev     = if ($row.PSObject.Properties['SecuritySeverity'])     { [string]$row.SecuritySeverity }     else { '' }
             $tier    = if ($row.PSObject.Properties['CriticalityTierLevel']) { [string]$row.CriticalityTierLevel } else { '' }
-            $traceName = ('{0}-{1}-{2}' -f $cfgName, $sev, $tier)
+            $traceName = ('{0}--{1}--{2}' -f $cfgName, $sev, $tier)
             $traceId = ''
             if (-not [string]::IsNullOrWhiteSpace($traceName)) {
                 $bytes   = [System.Text.Encoding]::UTF8.GetBytes($traceName.ToLowerInvariant())

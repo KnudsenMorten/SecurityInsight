@@ -1,0 +1,13 @@
+// =============================================================================
+// Query : Total risk score across the tenant, aggregated per run
+// Purpose: Single-number trend line for the exec summary. "Is our risk going
+//          up or down?" — one answer, one chart.
+// =============================================================================
+SI_RiskAnalysis_Summary_CL
+| summarize
+    TotalRiskScore      = sum(todouble(RiskScoreTotal)),
+    FindingsCount       = count(),
+    DistinctTraceIDs    = count_distinct(TraceID),
+    TotalAssetsImpacted = sum(toint(AssetCount))
+    by CollectionTime
+| order by CollectionTime asc

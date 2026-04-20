@@ -1,0 +1,12 @@
+// =============================================================================
+// Query : Risk score broken down by SecurityDomain over time
+// Purpose: Drives the stacked-area chart "where is the risk concentrated?"
+//          Endpoint / Identity / Azure / etc. -- one line per domain.
+// =============================================================================
+SI_RiskAnalysis_Summary_CL
+| summarize
+    DomainRiskScore = sum(todouble(RiskScoreTotal)),
+    FindingsCount   = count(),
+    AssetsImpacted  = sum(toint(AssetCount))
+    by CollectionTime, SecurityDomain
+| order by CollectionTime asc, SecurityDomain asc

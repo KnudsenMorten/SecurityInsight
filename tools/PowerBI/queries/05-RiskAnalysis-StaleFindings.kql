@@ -1,0 +1,42 @@
+// =============================================================================
+// Query : Stale (long-open) findings
+// Purpose: Name and shame the TraceIDs that have been present in every run
+//          going back N days without being resolved. These are the ones SOC
+//          keeps acknowledging but not fixing.
+// =============================================================================
+let StalenessDays = 30;    // configurable per customer via the Power BI parameter
+let EarliestRun =
+    SI_RiskAnalysis_Summary_CL
+    | where CollectionTime > ago(StalenessDays * 1d)
+    | summarize min(CollectionTime);
+let OpenOnLatestRun =
+    SI_RiskAnalysis_Summary_CL
+    | where CollectionTime == toscalar(
+        SI_RiskAnalysis_Summary_CL | summarize max(CollectionTime)
+      )
+    | distinct TraceID;
+SI_RiskAnalysis_Summary_CL
+| where CollectionTime >= toscalar(EarliestRun)
+| where TraceID in (OpenOnLatestRun)
+| summarize
+    FirstSeen        = min(CollectionTime),
+    LastSeen         = max(CollectionTime),
+    AppearancesCount = count_distinct(CollectionTime),
+    MaxRiskScore     = max(todouble(RiskScoreTotal)),
+    AnyTraceName     = any(TraceName),
+    AnyConfiguration = any(ConfigurationName),
+    AnySeverity      = any(SecuritySeverity)
+    by TraceID
+| extend DaysOpen = datetime_diff('day', LastSeen, FirstSeen)
+| where DaysOpen >= (StalenessDays / 2)
+| order by DaysOpen desc, MaxRiskScore desc
+| project
+    TraceID,
+    TraceName       = AnyTraceName,
+    ConfigurationName = AnyConfiguration,
+    SecuritySeverity  = AnySeverity,
+    FirstSeen,
+    LastSeen,
+    DaysOpen,
+    AppearancesCount,
+    MaxRiskScore

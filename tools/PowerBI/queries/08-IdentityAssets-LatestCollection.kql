@@ -1,0 +1,27 @@
+// =============================================================================
+// Query : IdentityAssetsCollect - latest collection only
+// Purpose: Supplement the RiskAnalysis dashboard with an "identity inventory"
+//          tile. Shows privileged-vs-eligible, tiered accounts, stale counts.
+// =============================================================================
+SI_IdentityAssets_CL
+| where CollectionTime == toscalar(
+    SI_IdentityAssets_CL
+    | summarize max(CollectionTime)
+  )
+| project
+    CollectionTime,
+    ObjectType,
+    DisplayName,
+    UserPrincipalName,
+    EffectiveTier,
+    IsPrivileged,
+    IsPrivilegedEligible,
+    IsStale,
+    MFARegistered,
+    AccountEnabled,
+    IsExternal,
+    IsShadowAdmin,
+    IsBreakGlass,
+    EntraID_Roles,
+    EntraID_AppPermissions,
+    Azure_Delegations

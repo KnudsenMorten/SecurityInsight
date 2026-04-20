@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     OPTIONAL one-time setup: provisions the 'SecurityInsight' Entra ID Custom
@@ -88,11 +88,7 @@ $ErrorActionPreference = 'Stop'
 #  Module dependencies -- centralized helper under _shared/
 # ----------------------------------------------------------------------
 . (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
-Ensure-Module -Name @(
-    'Microsoft.Graph.Authentication'
-    'Microsoft.Graph.Identity.DirectoryManagement'
-) -Import
-
+Ensure-SecurityInsightModules
 # Allow launchers to pass values via globals when direct -param was not used.
 if (-not $PipelinePrincipalId -and $global:SI_CSA_PipelinePrincipalId) { $PipelinePrincipalId = [string]$global:SI_CSA_PipelinePrincipalId }
 if (-not $TestObjectId        -and $global:SI_CSA_TestObjectId)        { $TestObjectId        = [string]$global:SI_CSA_TestObjectId }

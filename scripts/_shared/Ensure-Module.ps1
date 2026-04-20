@@ -51,7 +51,7 @@ function Ensure-Module {
         [string[]]$Name,
 
         [ValidateSet('CurrentUser','AllUsers','Auto')]
-        [string]$Scope = 'CurrentUser',
+        [string]$Scope = 'Auto',
 
         [switch]$Required,
         [switch]$Import,
@@ -94,11 +94,50 @@ function Ensure-Module {
         }
     } catch { }
 
+    # Well-known module roots -- probe these directly as a belt-and-suspenders
+    # fallback if Get-Module -ListAvailable misses something (e.g. a corrupted
+    # module manifest, a meta-module with no exported commands, a PSModulePath
+    # that doesn't include the scope where the customer installed the module).
+    $pf = [Environment]::GetFolderPath('ProgramFiles')
+    $moduleRoots = @(
+        (Join-Path $pf 'WindowsPowerShell\Modules'),   # PS 5.1 AllUsers
+        (Join-Path $pf 'PowerShell\Modules'),           # PS 7+ AllUsers
+        (Join-Path $env:USERPROFILE 'Documents\WindowsPowerShell\Modules'),
+        (Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules')
+    )
+
     foreach ($mod in $Name) {
         if ([string]::IsNullOrWhiteSpace($mod)) { continue }
 
         $existing = Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue |
                     Sort-Object Version -Descending | Select-Object -First 1
+
+        # Fallback: scan well-known module roots for a <mod>\<version>\ layout.
+        # Catches the "installed but not on PSModulePath" + "meta-module
+        # without discoverable exports" edge cases. We treat the presence of
+        # a directory-with-a-.psd1 inside as "module present".
+        if (-not $existing) {
+            foreach ($root in $moduleRoots) {
+                $modDir = Join-Path $root $mod
+                if (Test-Path -LiteralPath $modDir) {
+                    $psd = Get-ChildItem -LiteralPath $modDir -Recurse -Filter "$mod.psd1" -ErrorAction SilentlyContinue -Depth 2 |
+                           Select-Object -First 1
+                    if ($psd) {
+                        # Build a shim object so downstream code sees the same shape as Get-Module.
+                        $ver = try {
+                            $man = Import-PowerShellDataFile -LiteralPath $psd.FullName -ErrorAction Stop
+                            $man.ModuleVersion
+                        } catch { 'unknown' }
+                        $existing = [pscustomobject]@{
+                            Name    = $mod
+                            Version = $ver
+                            Path    = $psd.FullName
+                        }
+                        break
+                    }
+                }
+            }
+        }
 
         if ($existing) {
             _SayOk ("{0} v{1} present" -f $mod, $existing.Version)
@@ -195,7 +234,7 @@ function Ensure-SecurityInsightModules {
     [CmdletBinding()]
     param(
         [ValidateSet('CurrentUser','AllUsers','Auto')]
-        [string]$Scope = 'CurrentUser',
+        [string]$Scope = 'Auto',
         [switch]$Quiet,
         [switch]$Required
     )

@@ -1,6 +1,6 @@
-{
-  "scriptName": "Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure",
-  "engineScript": "Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure",
+﻿{
+  "scriptName": "Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure",
+  "engineScript": "Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure",
   "version": "2.0.0",
   "scriptType": "Engine",
   "community": true,

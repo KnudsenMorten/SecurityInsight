@@ -1,8 +1,8 @@
-<#
+﻿<#
 .SYNOPSIS
     Ensure the SecurityInsight DCE / DCR RG exist and the SecurityInsight SPN has the RBAC
     roles required to send data. Mirrors the provisioning logic from
-    Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1 so ingestion engines (RiskAnalysis,
+    Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1 so ingestion engines (RiskAnalysis,
     IdentityAssetsCollectDefineTierIngestLog) can self-heal when infra is missing.
 
     Caller responsibilities:

@@ -1,6 +1,6 @@
-# Power BI prerequisites (one-time per tenant)
+﻿# Power BI prerequisites (one-time per tenant)
 
-Step 5 (`Step5_Deploy-SecurityInsight-PowerBI-Dashboard`) and the per-run
+Step 4 (`Step4_Deploy-SecurityInsight-PowerBI-Dashboard`) and the per-run
 `$global:SendToPowerBI` refresh hook in RiskAnalysis both authenticate to
 the Power BI REST API using a **service principal**. This doc is the
 single place to follow to make that work.
@@ -72,7 +72,7 @@ are eventually-consistent).
 
 ## 4. Add the SPN as Admin on the target workspace (optional)
 
-Step 5 can **create** the target Power BI workspace if it doesn't exist,
+Step 4 can **create** the target Power BI workspace if it doesn't exist,
 in which case the SPN that created it is automatically the Admin. No
 further action needed.
 
@@ -88,7 +88,7 @@ the SPN as **Admin** or at least **Member** on that workspace:
 
 ## 5. Collect the customer's LA Workspace ID
 
-Step 5 writes the **Log Analytics Workspace ID** into the dashboard's
+Step 4 writes the **Log Analytics Workspace ID** into the dashboard's
 `LA_WorkspaceId` parameter so the KQL queries know where to read from.
 
 This is the **GUID**, not the Resource ID.
@@ -102,28 +102,28 @@ tenant as the SPN, but not always — e.g. Lighthouse-managed customers).
 
 ## 6. Fill in LauncherConfig.custom.ps1
 
-In the SecurityInsight install (`C:\SCRIPTS\SecurityInsight\LAUNCHERS\Step5_Deploy-SecurityInsight-PowerBI-Dashboard\`), copy `LauncherConfig.sample.ps1` to `LauncherConfig.custom.ps1` and populate:
+In the SecurityInsight install (`C:\SCRIPTS\SecurityInsight\LAUNCHERS\Step4_Deploy-SecurityInsight-PowerBI-Dashboard\`), copy `LauncherConfig.sample.ps1` to `LauncherConfig.custom.ps1` and populate:
 
 ```powershell
 # Power BI SPN (from step 1)
-$global:Step5_AuthMethod       = 'SpnSecret'
-$global:Step5_AuthTenantId     = '<tenant-id-guid>'
-$global:Step5_AuthClientId     = '<powerbi-spn-client-id>'
-$global:Step5_AuthClientSecret = '<powerbi-spn-secret>'
+$global:Step4_AuthMethod       = 'SpnSecret'
+$global:Step4_AuthTenantId     = '<tenant-id-guid>'
+$global:Step4_AuthClientId     = '<powerbi-spn-client-id>'
+$global:Step4_AuthClientSecret = '<powerbi-spn-secret>'
 
 # LA binding (from step 5)
-$global:Step5_LAWorkspaceId    = '<la-workspace-guid>'
-$global:Step5_LATenantId       = '<tenant-id-guid>'
+$global:Step4_LAWorkspaceId    = '<la-workspace-guid>'
+$global:Step4_LATenantId       = '<tenant-id-guid>'
 ```
 
-Or generate this file using the **Setup Configurator → Step 5 — Power BI** tab.
+Or generate this file using the **Setup Configurator → Step 4 — Power BI** tab.
 
 ---
 
-## 7. Run Step 5
+## 7. Run Step 4
 
 ```powershell
-.\LAUNCHERS\Step5_Deploy-SecurityInsight-PowerBI-Dashboard\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step4_Deploy-SecurityInsight-PowerBI-Dashboard\launcher.community-vm.template.ps1
 ```
 
 Expected success:
@@ -146,13 +146,13 @@ Expected success:
 (for the Azure Monitor Logs data source) on an imported dataset.**
 Customers must do this one step manually in the Power BI portal:
 
-1. Open `https://app.powerbi.com/groups/<groupId>/settings/datasets/<datasetId>` — the exact URL is printed in the Step 5 summary.
+1. Open `https://app.powerbi.com/groups/<groupId>/settings/datasets/<datasetId>` — the exact URL is printed in the Step 4 summary.
 2. **Dataset settings** → if there's a banner about ownership, click **Take over**.
 3. **Data source credentials** → next to *Azure Monitor Logs*, click **Edit credentials** → **OAuth2** → **Sign in** → pick an identity that has `Log Analytics Reader` on the target LA workspace.
 4. (optional) **Scheduled refresh** → set to match your RiskAnalysis cadence (typically 4x/day or match your cron).
 
 Only needs to be done **once per customer**. After that, every re-run of
-Step 5 (dashboard design refresh) preserves the credentials.
+Step 4 (dashboard design refresh) preserves the credentials.
 
 ---
 
@@ -181,5 +181,5 @@ so managers always see the latest data when they open the report.
 | `API calls to create groups are not allowed` | Admin tenant setting in step 3 not enabled, or SPN not in the allowed security group. |
 | `Unauthorized` on POST /groups | Admin consent not granted in step 2. Re-check **API permissions → Grant admin consent**. |
 | `403 Forbidden` on dataset refresh | SPN isn't a workspace Admin / Member. Step 4. |
-| `Dataset parameters not found` | The `.pbix` doesn't declare the 4 parameters expected by Step 5 (`LA_WorkspaceId`, `LA_TenantId`, `StalenessDays`, `TopNFindings`). Re-author the `.pbix` per `TOOLS/PowerBI/dashboard-spec.md`. |
+| `Dataset parameters not found` | The `.pbix` doesn't declare the 4 parameters expected by Step 4 (`LA_WorkspaceId`, `LA_TenantId`, `StalenessDays`, `TopNFindings`). Re-author the `.pbix` per `TOOLS/PowerBI/dashboard-spec.md`. |
 | Report opens but charts are blank | OAuth2 credentials not bound — do step 8. |

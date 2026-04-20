@@ -1,9 +1,9 @@
-{
+﻿{
   "community": true,
   "version": "1.0.0",
   "description": "Onboards or validates the SecurityInsight SPN's API permissions and Azure RBAC. Idempotent -- re-run as a validation pass.",
-  "scriptName": "Step2_OnboardValidate-SecurityInsight-Permissions",
-  "engineScript": "Step2_OnboardValidate-SecurityInsight-Permissions",
+  "scriptName": "Step1_OnboardValidate-SecurityInsight-Permissions",
+  "engineScript": "Step1_OnboardValidate-SecurityInsight-Permissions",
   "author": "Morten Knudsen <mok@mortenknudsen.net>",
   "scriptType": "OnboardingUtility",
   "communityRepo": "SecurityInsight",

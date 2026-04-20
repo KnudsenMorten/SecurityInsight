@@ -1,7 +1,7 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Step 5 -- deploy (or refresh the deployment of) the SecurityInsight
+    Step 4 -- deploy (or refresh the deployment of) the SecurityInsight
     management dashboard into the customer's Power BI tenant via REST API.
 
 .DESCRIPTION
@@ -98,7 +98,7 @@
 
 .NOTES
     Solution     : SecurityInsight
-    File         : Step5_Deploy-SecurityInsight-PowerBI-Dashboard.ps1
+    File         : Step4_Deploy-SecurityInsight-PowerBI-Dashboard.ps1
     Developed by : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Prereqs      : See DOCS/PowerBI-Prerequisites.md for the one-time
                    tenant setup (Power BI SPN, API permissions, admin
@@ -194,7 +194,7 @@ if (-not $LATenantId) {
 
 Write-Host ""
 Write-Host "========================================================================================" -ForegroundColor Cyan
-Write-Host "  SecurityInsight -- Step 5: Deploy management dashboard to Power BI"                   -ForegroundColor Cyan
+Write-Host "  SecurityInsight -- Step 4: Deploy management dashboard to Power BI"                   -ForegroundColor Cyan
 Write-Host "  pbix           : $pbixFileName ($pbixSizeMB MB)"                                        -ForegroundColor Gray
 Write-Host "  Workspace      : $PowerBIWorkspaceName"                                                 -ForegroundColor Gray
 Write-Host "  Report         : $ReportName"                                                           -ForegroundColor Gray
@@ -491,9 +491,9 @@ if ($TriggerInitialRefresh -and -not $WhatIfMode) {
 Write-Sep
 Write-Host ""
 if ($WhatIfMode) {
-    Write-Host "  ========= Step 5 dry-run summary (no changes made) =========" -ForegroundColor Cyan
+    Write-Host "  ========= Step 4 dry-run summary (no changes made) =========" -ForegroundColor Cyan
 } else {
-    Write-Host "  ========= Step 5 deployment summary =========" -ForegroundColor Cyan
+    Write-Host "  ========= Step 4 deployment summary =========" -ForegroundColor Cyan
     Write-Host ("  Workspace  : {0}  (id={1})"  -f $PowerBIWorkspaceName, $groupId)   -ForegroundColor White
     if ($reportId)  { Write-Host ("  Report     : {0}  (id={1})"  -f $ReportName, $reportId)  -ForegroundColor White }
     if ($datasetId) { Write-Host ("  Dataset    : id={0}"         -f $datasetId)              -ForegroundColor White }

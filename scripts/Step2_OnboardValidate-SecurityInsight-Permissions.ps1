@@ -249,19 +249,45 @@ function Add-Result {
 }
 
 # ----------------------------------------------------------------------------
-# Pre-load Az.Accounts BEFORE Microsoft.Graph.Authentication
+# Connect to Azure FIRST (before Microsoft.Graph.Authentication loads)
 # ----------------------------------------------------------------------------
-# Both module families ship their own Azure.Identity.dll. Whichever loads first
-# wins in the PowerShell AppDomain; the other module then hits MissingMethod
-# errors (e.g. "InteractiveBrowserCredential.AuthenticateAsync" not found on
-# Connect-AzAccount when Graph already loaded an older Azure.Identity).
-# Pre-loading Az.Accounts here locks Azure.Identity.dll to Az's version, which
-# is the more reliable one for the cmdlets we use. Graph loads next and plays
-# nicely with the already-loaded DLL.
+# Az.Accounts and Microsoft.Graph.Authentication both ship Azure.Identity.dll.
+# Whichever loads first wins in the PowerShell AppDomain; the late loader then
+# hits MissingMethod errors like "InteractiveBrowserCredential.AuthenticateAsync".
+# Pre-loading the module isn't enough -- Graph's DLLs can still be pulled in
+# by cached modules or auto-loading. The only reliable fix is to actually make
+# the Connect-AzAccount call BEFORE anything Graph-related runs.
+Write-Sep
+Write-Step ("Connecting to Azure  (AuthMethod={0})" -f $AuthMethod)
 try {
-    Import-Module Az.Accounts -ErrorAction Stop -WarningAction SilentlyContinue
+    Import-Module Az.Accounts  -ErrorAction Stop -WarningAction SilentlyContinue
+    Import-Module Az.Resources -ErrorAction Stop -WarningAction SilentlyContinue
+    switch ($AuthMethod) {
+        'Interactive' {
+            Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+        }
+        'ManagedIdentity' {
+            if ($AuthClientId) {
+                Connect-AzAccount -Identity -AccountId $AuthClientId -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            } else {
+                Connect-AzAccount -Identity -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            }
+        }
+        'SpnSecret' {
+            $sec  = ConvertTo-SecureString $AuthClientSecret -AsPlainText -Force
+            $cred = [pscredential]::new($AuthClientId, $sec)
+            Connect-AzAccount -ServicePrincipal -Tenant $AuthTenantId -Credential $cred -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+        }
+        'SpnCertificate' {
+            Connect-AzAccount -ServicePrincipal -Tenant $AuthTenantId -ApplicationId $AuthClientId -CertificateThumbprint $AuthCertificateThumbprint -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+        }
+    }
+    $azCtx = Get-AzContext
+    Write-Ok ("Az connected as '{0}' (tenant {1})" -f $azCtx.Account, $azCtx.Tenant.Id)
 } catch {
-    Write-Host ("[WARN]    Az.Accounts pre-load failed -- Azure RBAC step may hit a DLL conflict later: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+    Write-Err2 ("Connect-AzAccount failed: {0}" -f $_.Exception.Message)
+    Add-Result -Category 'Azure RBAC' -Item 'Connect-AzAccount' -Status 'FAIL' -Detail $_.Exception.Message
+    throw
 }
 
 # ----------------------------------------------------------------------------
@@ -422,39 +448,10 @@ foreach ($apiBlock in $RequiredApiPermissions) {
 }
 
 # ----------------------------------------------------------------------------
-# AZURE RBAC
+# AZURE RBAC  (Az session was already opened at the top of the script)
 # ----------------------------------------------------------------------------
 Write-Sep
-Write-Step ("Connecting to Azure  (AuthMethod={0})" -f $AuthMethod)
-try {
-    Import-Module Az.Accounts  -ErrorAction Stop -WarningAction SilentlyContinue
-    Import-Module Az.Resources -ErrorAction Stop -WarningAction SilentlyContinue
-    switch ($AuthMethod) {
-        'Interactive' {
-            Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-        }
-        'ManagedIdentity' {
-            if ($AuthClientId) {
-                Connect-AzAccount -Identity -AccountId $AuthClientId -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            } else {
-                Connect-AzAccount -Identity -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            }
-        }
-        'SpnSecret' {
-            $sec  = ConvertTo-SecureString $AuthClientSecret -AsPlainText -Force
-            $cred = [pscredential]::new($AuthClientId, $sec)
-            Connect-AzAccount -ServicePrincipal -Tenant $AuthTenantId -Credential $cred -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-        }
-        'SpnCertificate' {
-            Connect-AzAccount -ServicePrincipal -Tenant $AuthTenantId -ApplicationId $AuthClientId -CertificateThumbprint $AuthCertificateThumbprint -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-        }
-    }
-    Write-Ok "Az connected"
-} catch {
-    Write-Err2 ("Connect-AzAccount failed: {0}" -f $_.Exception.Message)
-    Add-Result -Category 'Azure RBAC' -Item 'Connect-AzAccount' -Status 'FAIL' -Detail $_.Exception.Message
-    throw
-}
+Write-Step "Reconciling Azure RBAC grants"
 
 # Subscription scopes
 if (-not $AzureSubscriptionIds -or $AzureSubscriptionIds.Count -eq 0) {

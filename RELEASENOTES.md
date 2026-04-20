@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.86
+## v2.1.87
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- chore(SI): remove legacy UpdateSecurityInsight + fix Step2 Az/Graph DLL conflict (a6e93d4)
+- fix(SI Step2): Connect-AzAccount BEFORE Connect-MgGraph to resolve DLL conflict (fa28a7f)
 
 ---
 

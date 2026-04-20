@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.136
+## v2.1.137
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI CUSTOMDATA sample): use canonical 'dce-securityinsight' naming (was 'dce-si-identity') (4f535db4)
 - docs(SI README): real-world .custom.ps1 samples for Identity + Build_Tier engines (7dabefd0)
 - fix(SI Build_Tier): restore visible SECTION A header so AD tiering isn't invisible (9f3c41aa)
 - refactor(SI Build_Tier): drop on-prem AD enumeration entirely (ff5a7cf7)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Step0): banner reads 'Step 0' not 'Step 1' (post-renumber leftover) (eb655c70)
 - fix(SI Step0): per-file [UPDATE]/[PRESERVE] log so policy is visible (508bb2ce)
 - docs(SI README): add v2.1.88..v2.1.108 highlights to changelog (f26470df)
-- fix(SI Step0): use Invoke-WebRequest -OutFile in bootstrap, not irm | Out-File (160bffa1)
 
 ---
 

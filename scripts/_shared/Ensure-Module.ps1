@@ -109,6 +109,15 @@ function Ensure-Module {
     foreach ($mod in $Name) {
         if ([string]::IsNullOrWhiteSpace($mod)) { continue }
 
+        # Progress ping BEFORE the probe. Get-Module -ListAvailable has to
+        # scan every entry on $env:PSModulePath, and for meta-modules like
+        # Microsoft.Graph / Microsoft.Graph.Beta the scan can stall for
+        # 10-30 seconds while PowerShell enumerates their 30+ submodules.
+        # Without this line it looked like a hang between probes.
+        if (-not $Quiet) {
+            Write-Host ("[MODULE] probing {0} ..." -f $mod) -ForegroundColor DarkGray
+        }
+
         $existing = Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue |
                     Sort-Object Version -Descending | Select-Object -First 1
 

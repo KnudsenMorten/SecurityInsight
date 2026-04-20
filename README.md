@@ -281,7 +281,7 @@ Quick reference:
 $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'   # <-- change to 'D:\Tools\SecurityInsight' etc. if you want
 
 # Fresh bootstrap (no local checkout yet):
-$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
+$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
 irm $u | Out-File $env:TEMP\Step1.ps1
 & $env:TEMP\Step1.ps1 -DestinationPath $SI_InstallPath
 
@@ -365,7 +365,7 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 
 ```powershell
 # Bootstrap (fresh machine, no local checkout yet) -- default target is C:\SCRIPTS\SecurityInsight:
-$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
+$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
 Invoke-RestMethod $u | Out-File $env:TEMP\Step1.ps1
 & $env:TEMP\Step1.ps1
 

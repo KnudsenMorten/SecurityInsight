@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.62
+## v2.1.63
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI): refresh filtered DCE/DCR cache after CheckCreateUpdate-TableDcr-Structure (81ba881)
+- fix(SI RiskAnalysis): honor $global:SubscriptionId in LA infra self-heal (bb356cf)
 
 ---
 

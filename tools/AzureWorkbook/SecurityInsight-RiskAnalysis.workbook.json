@@ -311,7 +311,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let _Latest = toscalar(SI_IdentityAssets_CL | summarize max(CollectionTime));\nSI_IdentityAssets_CL\n| where CollectionTime == _Latest\n| project\n    CollectionTime,\n    ObjectType,\n    DisplayName,\n    UserPrincipalName,\n    EffectiveTier,\n    IsPrivileged,\n    IsPrivilegedEligible,\n    IsStale,\n    MFARegistered,\n    AccountEnabled,\n    IsExternal,\n    IsShadowAdmin,\n    IsBreakGlass,\n    EntraID_Roles,\n    EntraID_AppPermissions,\n    Azure_Delegations",
+        "query": "let _Latest = toscalar(SI_IdentityAssets_CL | summarize max(CollectionTime));\nSI_IdentityAssets_CL\n| where CollectionTime == _Latest\n| project\n    CollectionTime,\n    SolutionVersion,\n    ObjectType,\n    DisplayName,\n    UserPrincipalName,\n    EffectiveTier,\n    IsPrivileged,\n    IsPrivilegedEligible,\n    IsStale,\n    MFARegistered,\n    AccountEnabled,\n    IsExternal,\n    IsShadowAdmin,\n    IsBreakGlass,\n    EntraID_Roles,\n    EntraID_AppPermissions,\n    Azure_Delegations",
         "size": 0,
         "title": "Latest identity collection",
         "queryType": 0,
@@ -343,13 +343,13 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "SI_RiskAnalysis_Summary_CL\n| summarize\n    LastRun               = max(CollectionTime),\n    DistinctVersionsCount = count_distinct(SolutionVersion),\n    DistinctVersions      = make_set(SolutionVersion),\n    Rows                  = count()\n| extend\n    ['Latest CollectionTime']   = LastRun,\n    ['Solution versions seen']  = strcat_array(DistinctVersions, ', '),\n    ['Total rows (all runs)']   = Rows\n| project ['Latest CollectionTime'], ['Solution versions seen'], ['Total rows (all runs)']",
+        "query": "let _RA =\n    SI_RiskAnalysis_Summary_CL\n    | summarize LastRun = max(CollectionTime), Versions = make_set(SolutionVersion), Rows = count()\n    | extend Engine = 'RiskAnalysis (Summary)'\n    | project Engine, ['Latest CollectionTime'] = LastRun, ['Solution versions seen'] = strcat_array(Versions, ', '), ['Total rows (all runs)'] = Rows;\nlet _IAC =\n    SI_IdentityAssets_CL\n    | summarize LastRun = max(CollectionTime), Versions = make_set(SolutionVersion), Rows = count()\n    | extend Engine = 'IdentityAssetsCollect'\n    | project Engine, ['Latest CollectionTime'] = LastRun, ['Solution versions seen'] = strcat_array(Versions, ', '), ['Total rows (all runs)'] = Rows;\nunion _RA, _IAC\n| order by Engine asc",
         "size": 4,
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
         "crossComponentResources": [ "{Workspace}" ],
         "visualization": "table",
-        "gridSettings": { "rowLimit": 1 }
+        "gridSettings": { "rowLimit": 10 }
       },
       "name": "version-info"
     }

@@ -17,11 +17,16 @@
 
     Layer order (each layer's $global:* override the previous):
 
-      1. <LauncherDir>/LauncherConfig.defaults.ps1                                  (us, ships)
+      0. <RepoRoot>/SOLUTIONS/<Solution>/LAUNCHERS/_lib/<Solution>.shared-defaults.ps1  (us, ships, solution-wide)
+      1. <LauncherDir>/LauncherConfig.defaults.ps1                                  (us, ships, per-engine)
       2. <RepoRoot>/SOLUTIONS/PlatformConfiguration/CUSTOMDATA/platform-defaults.ps1 (customer, internal only)
       3. <RepoRoot>/SOLUTIONS/<Solution>/CUSTOMDATA/<Solution>.custom.ps1            (customer, solution-wide)
       4. <LauncherDir>/LauncherConfig.custom.ps1  OR  LauncherConfig.ps1 (legacy)    (customer, per-engine)
       5. CLI args                                                                    (applied later in the launcher)
+
+    Layer 0 (new): ships solution-wide shared defaults that apply to every
+    engine in the solution (e.g. canonical DCE / Workspace / DCR names).
+    Optional -- launcher still works if the file is absent.
 
     Layer 1 must always exist (shipped). Layers 2-4 are optional unless
     -RequireCustom is passed -- which community-vm launchers do, because the
@@ -50,6 +55,19 @@ function Initialize-LauncherConfig {
     function _CfgStep ([string]$m) { Write-Host "[STEP]  $m" -ForegroundColor Cyan }
     function _CfgOk   ([string]$m) { Write-Host "[OK]    $m" -ForegroundColor Green }
     function _CfgInfo ([string]$m) { Write-Host "[INFO]  $m" -ForegroundColor Gray }
+
+    # ---- Layer 0: <Solution>.shared-defaults.ps1 (solution-wide shared baseline, ours) ----
+    # Optional. By convention sits in LAUNCHERS/_lib/ next to this file so all
+    # engines in a solution share the same canonical defaults (e.g. DCE / DCR /
+    # Workspace names). Any later layer can override.
+    $sharedPath = Join-Path $RepoRoot ("SOLUTIONS\{0}\LAUNCHERS\_lib\{0}.shared-defaults.ps1" -f $Solution)
+    _CfgStep "Layer 0/4: $Solution.shared-defaults.ps1 (solution-wide shared baseline)"
+    if (Test-Path -LiteralPath $sharedPath) {
+        . $sharedPath
+        _CfgOk "loaded"
+    } else {
+        _CfgInfo "absent ($sharedPath) -- skipping"
+    }
 
     # ---- Layer 1: defaults.ps1 (engine baseline, ours, must exist) -----------
     $defaultsPath = Join-Path $LauncherDir 'LauncherConfig.defaults.ps1'
@@ -113,5 +131,15 @@ Copy $(Join-Path $LauncherDir 'LauncherConfig.sample.ps1') to LauncherConfig.cus
 "@
     } else {
         _CfgInfo "absent ($customPath) -- skipping (auth comes from elsewhere on this flavour)"
+    }
+
+    # ---- Derived defaults: run AFTER all 4 layers so late-bound vars resolve ----
+    # Platform-defaults (Layer 2, internal only) sets $global:MainLogAnalyticsWorkspaceSubId
+    # but doesn't set $global:SubscriptionId. Derive it here so engines that read
+    # $global:SubscriptionId don't have to duplicate the fallback logic.
+    if ([string]::IsNullOrWhiteSpace([string]$global:SubscriptionId) -and
+        -not [string]::IsNullOrWhiteSpace([string]$global:MainLogAnalyticsWorkspaceSubId)) {
+        $global:SubscriptionId = [string]$global:MainLogAnalyticsWorkspaceSubId
+        _CfgInfo "derived `$global:SubscriptionId from `$global:MainLogAnalyticsWorkspaceSubId"
     }
 }

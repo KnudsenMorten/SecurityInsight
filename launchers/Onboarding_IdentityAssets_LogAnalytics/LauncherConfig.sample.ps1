@@ -90,40 +90,34 @@
 # ============================================================================
 # 2.  AZURE PLACEMENT  --  where the new resources should land
 # ============================================================================
-# All values are OPTIONAL; the engine ships sensible defaults (shown after the
-# '#' default-of comment on each line). Override only what you want renamed.
+# All values are OPTIONAL. The solution-wide shared defaults come from
+#   SOLUTIONS/SecurityInsight/LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1
+# (Layer 0 -- dot-sourced automatically by every SI launcher). Override here only
+# what differs from the standard SecurityInsight layout:
+#   WorkspaceName          = log-platform-management-securityinsight
+#   WorkspaceResourceGroup = rg-securityinsight
+#   DceName                = dce-securityinsight
+#   DceResourceGroup       = rg-dce-securityinsight
+#   DcrResourceGroup       = rg-dcr-securityinsight
+#   Location               = westeurope
 
 # Subscription (defaults to the Az context's current subscription, or
 # $global:MainLogAnalyticsWorkspaceSubId if your platform sets it)
 # $global:SubscriptionId = '<sub-guid>'
 
-# Resource Group (created if missing)
-$global:ResourceGroup    = 'rg-securityinsight'           # workspace RG (default)
+# Uncomment any of these only to DEVIATE from the shared defaults:
+# $global:WorkspaceResourceGroup = 'rg-securityinsight'
+# $global:DceResourceGroup       = 'rg-dce-securityinsight'
+# $global:DcrResourceGroup       = 'rg-dcr-securityinsight'
+# $global:Location               = 'westeurope'
+# $global:WorkspaceName          = 'log-platform-management-securityinsight'
+# $global:DceName                = 'dce-securityinsight'
 
-# Separate RGs for DCE + DCR (standard SecurityInsight layout)
-$global:DceResourceGroup = 'rg-dce-securityinsight'       # default
-$global:DcrResourceGroup = 'rg-dcr-securityinsight'       # default
+# Data Collection Rule name (engine-specific -- Identity schema, not a shared default)
+# $global:DcrName       = 'dcr-si-identity-assets'
 
-# Azure region for the workspace + DCE + DCR
-$global:Location         = 'westeurope'                   # default: westeurope
-
-
-# ============================================================================
-# 3.  RESOURCE NAMING  --  names of the workspace + DCE + DCR + table
-# ============================================================================
-# All optional. Defaults align with the platform-management naming convention.
-
-# Log Analytics workspace name (shared by RiskAnalysis + Identity engines)
-$global:WorkspaceName = 'log-platform-management-securityinsight'   # default
-
-# Data Collection Endpoint name (shared across all SI engines)
-$global:DceName       = 'dce-securityinsight'                       # default
-
-# Data Collection Rule name (engine-specific -- Identity schema)
-$global:DcrName       = 'dcr-si-identity-assets'                    # default
-
-# Custom table base name (engine appends _CL when creating the table)
-$global:TableName     = 'SI_IdentityAssets'            # default: SI_IdentityAssets
+# Custom table base name (engine-specific)
+# $global:TableName     = 'SI_IdentityAssets'
 
 
 # ============================================================================

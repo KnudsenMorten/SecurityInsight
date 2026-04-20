@@ -74,9 +74,13 @@ if ([bool]$global:AutomationFramework) {
 $TenantId                = if ($global:AutomationFramework) { $Global:TenantID } else { $global:SpnTenantId }
 $SubscriptionId          = if ($global:SubscriptionId)       { $global:SubscriptionId }       elseif ($global:MainLogAnalyticsWorkspaceSubId) { $global:MainLogAnalyticsWorkspaceSubId } else { (Get-AzContext).Subscription.Id }
 
-# Separate RGs for workspace / DCE / DCR are the standard SecurityInsight layout.
-# Customers can override any of them via $global:* before invoking the launcher.
-$ResourceGroup           = if ($global:ResourceGroup)        { $global:ResourceGroup }        else { "rg-securityinsight" }              # Log Analytics workspace RG
+# The four shared infra values ($global:WorkspaceName, $global:DceName, $global:DceResourceGroup,
+# $global:DcrResourceGroup, $global:WorkspaceResourceGroup, $global:Location) are set by
+# SecurityInsight.shared-defaults.ps1 (Layer 0). Customer overrides anywhere on top.
+# $global:ResourceGroup kept as a backwards-compat alias for $global:WorkspaceResourceGroup.
+$ResourceGroup           = if ($global:WorkspaceResourceGroup) { $global:WorkspaceResourceGroup }
+                           elseif ($global:ResourceGroup)      { $global:ResourceGroup }
+                           else { "rg-securityinsight" }              # Log Analytics workspace RG
 $DceResourceGroup        = if ($global:DceResourceGroup)     { $global:DceResourceGroup }     else { "rg-dce-securityinsight" }          # DCE RG
 $DcrResourceGroup        = if ($global:DcrResourceGroup)     { $global:DcrResourceGroup }     else { "rg-dcr-securityinsight" }          # DCR RG
 $Location                = if ($global:Location)             { $global:Location }             else { "westeurope" }

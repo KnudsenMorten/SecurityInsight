@@ -20,26 +20,19 @@
 # ============================================================================
 #  DCR INGESTION TARGETS
 # ============================================================================
-# EVERYTHING AUTO-RESOLVES. The engine auto-creates the workspace, DCE, DCE RG,
-# and DCR RG if any are missing -- and assigns the ingestion SPN the roles it
-# needs. The defaults below are the standard SecurityInsight layout; the
-# customer only has to override values that differ.
+# The four shared infrastructure values ($global:WorkspaceName,
+# $global:WorkspaceResourceGroup, $global:DceName, $global:DceResourceGroup,
+# $global:DcrResourceGroup, $global:Location) are set by LAYER 0 --
+# SecurityInsight.shared-defaults.ps1 in _lib -- so every SI engine uses the
+# same canonical layout by default. To override: edit
+# SOLUTIONS/SecurityInsight/CUSTOMDATA/SecurityInsight.custom.ps1
+# (solution-wide) or LauncherConfig.custom.ps1 (this launcher only).
 #
-# Workspace lookup hierarchy:
-#   $global:WorkspaceResourceId  -- wins if set (cross-sub supported)
-#   $global:WorkspaceName        -- looked up in current context; created if missing
-$global:WorkspaceName             = 'log-platform-management-securityinsight'
-$global:WorkspaceResourceId       = $null
-$global:WorkspaceResourceGroup    = 'rg-securityinsight'       # used if workspace must be created
+# Only engine-specific values belong in this file.
+$global:WorkspaceResourceId       = $null                       # overrides WorkspaceName when set (cross-sub supported)
+$global:DceIngestionUri           = $null                       # auto-resolved from DceName via Get-AzDceListAll
 
-# DCE -- name is the only thing customers normally touch. Ingestion URI is
-# auto-resolved from the name via Get-AzDceListAll.
-$global:DceName                   = 'dce-securityinsight'
-$global:DceResourceGroup          = 'rg-dce-securityinsight'   # auto-created if missing
-$global:DceIngestionUri           = $null                      # auto-resolved from DceName
-
-# DCR -- DCR name is engine-specific (SI_IdentityAssets schema)
-$global:DcrResourceGroup          = 'rg-dcr-securityinsight'   # auto-created if missing
+# DCR name + table name are engine-specific (SI_IdentityAssets schema)
 $global:DcrName                   = 'dcr-si-identity-assets'
 $global:TableName                 = 'SI_IdentityAssets'
 

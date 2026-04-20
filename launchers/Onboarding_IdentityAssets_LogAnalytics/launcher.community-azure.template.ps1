@@ -153,6 +153,10 @@ try {
     throw
 }
 
+# Layer 0: solution-wide shared defaults (DCE/DCR/Workspace names + RGs).
+$sharedDefaults = Join-Path $PSScriptRoot '..\_lib\SecurityInsight.shared-defaults.ps1'
+if (Test-Path -LiteralPath $sharedDefaults) { Write-Info "dot-sourcing SecurityInsight.shared-defaults.ps1 (Layer 0)"; . $sharedDefaults }
+
 Write-Step "Setting engine globals"
 $global:AutomationFramework = $false
 $engineOwner  = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)

@@ -375,6 +375,20 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 
 ---
 
+##### ⭐ Right after Step 1 — open the Setup Configurator
+
+> [!TIP]
+> **⭐ Recommended: Setup Configurator (GUI).**
+> Open the included **Setup Configurator** in your browser *before* you run Step 2 — it writes every `LauncherConfig.custom.ps1` for Steps 2 / 3 / 4 + the ingestion engines in one sitting, with form fields + live preview + copy-to-clipboard:
+> ```powershell
+> Start-Process .\TOOLS\SetupConfigurator\index.html
+> ```
+> Single offline HTML file, zero dependencies. Tabs for Step 2 / Step 3 / Step 4 / ingestion engines. All processing stays in your browser — no data leaves your machine. Re-use the 4 auth values (Tenant / ClientId / Secret / Subscription) across every tab and you're done.
+
+Or — **configure manually** if you prefer editing `.ps1` files directly (expand the block at the end of § 3.4).
+
+---
+
 ##### Step 2 — do nothing
 
 Just run the launcher:
@@ -385,17 +399,9 @@ Browser sign-in as a Privileged Role Admin **with Azure UAA at tenant root** (En
 
 ---
 
-##### Steps 3 + 4 + ingestion engines — pick ONE path
+##### Steps 3 + 4 + ingestion engines
 
-> [!TIP]
-> **⭐ Recommended: Setup Configurator (GUI).**
-> Open the included **Setup Configurator** in your browser — it writes every `LauncherConfig.custom.ps1` for you with form fields + live preview + copy-to-clipboard:
-> ```powershell
-> Start-Process .\TOOLS\SetupConfigurator\index.html
-> ```
-> Single offline HTML file, zero dependencies. Tabs for Step 2 / Step 3 / Step 4 / ingestion engines. All processing stays in your browser — no data leaves your machine. Re-use the 4 auth values (Tenant / ClientId / Secret / Subscription) across every tab and you're done.
-
-Or — **configure manually** if you prefer editing `.ps1` files directly:
+Use the Setup Configurator tabs (one per Step / engine) to generate each `LauncherConfig.custom.ps1`, then run the launcher. Prefer hand-editing? Expand the block below for minimum copy-paste examples.
 
 <details>
 <summary><b>Manual configuration (click to expand)</b></summary>

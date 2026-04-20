@@ -3166,14 +3166,20 @@ if ([bool]$global:SendToLogAnalytics) {
                           elseif (-not [string]::IsNullOrWhiteSpace([string]$global:WorkspaceResourceGroup))            { [string]$global:WorkspaceResourceGroup }
                           else { 'rg-securityinsight' }
 
-                # Need a subscription for workspace creation fallback. Prefer the one embedded
-                # in $laWs, else current Az context.
+                # Subscription priority:
+                #   1. Explicit $global:SubscriptionId (community customer sets it; AF derives it
+                #      from $global:MainLogAnalyticsWorkspaceSubId in Initialize-LauncherConfig)
+                #   2. Parsed from $laWs if it's a full ARM resource ID
+                #   3. Current Az context (last resort)
                 $laSubId = $null
-                if ($laWs -match '/subscriptions/([^/]+)/') { $laSubId = $Matches[1] }
-                if (-not $laSubId) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$global:SubscriptionId)) {
+                    $laSubId = [string]$global:SubscriptionId
+                } elseif ($laWs -match '/subscriptions/([^/]+)/') {
+                    $laSubId = $Matches[1]
+                } else {
                     try { $laSubId = (Get-AzContext -ErrorAction Stop).Subscription.Id } catch { }
                 }
-                if (-not $laSubId) { throw "Cannot determine subscription ID for workspace resolution" }
+                if (-not $laSubId) { throw "Cannot determine subscription ID for workspace resolution -- set `$global:SubscriptionId or provide a full WorkspaceResourceId" }
 
                 try { Set-AzContext -SubscriptionId $laSubId -TenantId $global:SpnTenantId -ErrorAction Stop | Out-Null } catch { }
 

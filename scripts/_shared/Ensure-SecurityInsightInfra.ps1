@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Ensure the SecurityInsight DCE / DCR RG exist and the ingestion SPN has the RBAC
+    Ensure the SecurityInsight DCE / DCR RG exist and the SecurityInsight SPN has the RBAC
     roles required to send data. Mirrors the provisioning logic from
     Onboarding_IdentityAssets_LogAnalytics.ps1 so ingestion engines (RiskAnalysis,
     IdentityAssetsCollectDefineTierIngestLog) can self-heal when infra is missing.
@@ -38,7 +38,7 @@ function Ensure-SecurityInsightAzDceDcrCache {
 function Ensure-SecurityInsightRg {
     <#
     Creates a resource group if missing and assigns Monitoring Metrics Publisher +
-    Contributor to the ingestion SPN at the RG scope. Returns $true when either the
+    Contributor to the SecurityInsight SPN at the RG scope. Returns $true when either the
     RG was created or new RBAC was assigned (so the caller can decide to sleep for
     RBAC propagation).
     #>
@@ -82,7 +82,7 @@ function Ensure-SecurityInsightRg {
 function Ensure-SecurityInsightDce {
     <#
     Ensures a DCE exists with the given name. If missing, creates the RG + DCE and
-    assigns RBAC to the ingestion SPN. Refreshes $global:AzDceDetails at the end.
+    assigns RBAC to the SecurityInsight SPN. Refreshes $global:AzDceDetails at the end.
     Returns the DCE object from the cache.
     #>
     [CmdletBinding()]
@@ -183,7 +183,7 @@ function Ensure-SecurityInsightWorkspace {
     Ensures a Log Analytics workspace exists. Returns its full resource ID.
     Hierarchy: explicit resource ID > name lookup in current subscription > create.
     When creating, uses $WorkspaceResourceGroup (default 'rg-securityinsight') and
-    $Location. Also assigns Contributor to the ingestion SPN on the workspace scope
+    $Location. Also assigns Contributor to the SecurityInsight SPN on the workspace scope
     so it can create/update custom tables.
     #>
     [CmdletBinding()]
@@ -254,7 +254,7 @@ function Ensure-SecurityInsightWorkspace {
         throw "Workspace was created but did not become queryable within 50s"
     }
 
-    # Assign Contributor on workspace so the ingestion SPN can manage tables/DCRs
+    # Assign Contributor on workspace so the SecurityInsight SPN can manage tables/DCRs
     if ($IngestionSpnObjectId) {
         try {
             $existing = Get-AzRoleAssignment -ObjectId $IngestionSpnObjectId -Scope $ws.ResourceId -RoleDefinitionName 'Contributor' -ErrorAction SilentlyContinue |

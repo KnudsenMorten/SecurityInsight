@@ -57,14 +57,16 @@ function Initialize-LauncherConfig {
     function _CfgInfo ([string]$m) { Write-Host "[INFO]  $m" -ForegroundColor Gray }
 
     # ---- Layer 0: <Solution>.shared-defaults.ps1 (solution-wide shared baseline, ours) ----
-    # Optional. By convention sits in LAUNCHERS/_lib/ next to this file so all
-    # engines in a solution share the same canonical defaults (e.g. DCE / DCR /
-    # Workspace names). Any later layer can override.
-    $sharedPath = Join-Path $RepoRoot ("SOLUTIONS\{0}\LAUNCHERS\_lib\{0}.shared-defaults.ps1" -f $Solution)
+    # Optional. The file sits in _lib/, which is always a SIBLING of the launcher
+    # folder in both layouts:
+    #   monorepo:  SOLUTIONS/<Solution>/LAUNCHERS/_lib/<Solution>.shared-defaults.ps1
+    #   community: launchers/_lib/<Solution>.shared-defaults.ps1
+    # Resolve it relative to $LauncherDir so both layouts work.
+    $sharedPath = Join-Path (Split-Path -Parent $LauncherDir) ("_lib\{0}.shared-defaults.ps1" -f $Solution)
     _CfgStep "Layer 0/4: $Solution.shared-defaults.ps1 (solution-wide shared baseline)"
     if (Test-Path -LiteralPath $sharedPath) {
         . $sharedPath
-        _CfgOk "loaded"
+        _CfgOk "loaded ($sharedPath)"
     } else {
         _CfgInfo "absent ($sharedPath) -- skipping"
     }

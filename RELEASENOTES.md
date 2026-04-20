@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.128
+## v2.1.129
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI ingest): filter DCE/DCR cache by RG as well as sub (kills 'westeurope' 404) (8d59f0a1)
 - docs(SI): backfill curated RELEASENOTES for v2.1.120 -> v2.1.127 (d4b27a9c)
 - docs(SI README): section 6.6 -- CriticalAssetTagging Mode/Scope workflow (124fc81e)
 - docs(SI README): require admin PowerShell for Step 0 bootstrap (a92b428e)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Workbook): filters use "empty = no filter" semantics -- no default value needed (9e12fea6)
 - docs(SI SetupConfigurator): add "Built by Morten Knudsen" branding (c0a1e0d2)
 - feat(SI SetupConfigurator): copy-to-clipboard "run-command" button (855d0923)
-- refactor(SI): renumber Steps -- install=Step0, Permissions=Step1, LA=Step2, OpenAI=Step3, PowerBI=Step4 (636efc49)
 
 ---
 
@@ -44,6 +44,10 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.129 — DCE/DCR cache filters by resource group too (fixes "immutable Id 'westeurope'")
+
+- 🔧 **`Ensure-SecurityInsightAzDceDcrCache` now filters by `-DceResourceGroup` and `-DcrResourceGroup` as well as `-SubscriptionId`.** On busy platform subscriptions with 70+ DCRs, same-name collisions inside a single sub (different RGs) were bypassing the v2.1.61/62 sub-filter and causing `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` to pick the wrong DCR. Symptom: `Log Ingestion API request failed. HTTP Status: 404 Response: "Data collection rule with immutable Id 'westeurope' not found."` — the Azure region name was being substituted where the immutable GUID belonged. Both IdentityAssetsCollect and RiskAnalysis engines updated to pass the DCE/DCR resource groups through to the filter.
 
 ### v2.1.127 — `Mode:` + `$global:Scope` documented for asset tagging
 

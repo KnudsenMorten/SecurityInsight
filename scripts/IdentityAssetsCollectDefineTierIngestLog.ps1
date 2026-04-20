@@ -3372,16 +3372,19 @@ try {
     Set-AzContext -SubscriptionId $WorkspaceSubscriptionId -TenantId $TenantId -ErrorAction Stop | Out-Null
 
     # Refresh DCE/DCR cache (uses ARM tokens). Filter to the target subscription
-    # so duplicate-named DCEs/DCRs in other subs don't poison the module's
+    # AND the target DCE/DCR resource groups so duplicate-named DCEs/DCRs
+    # elsewhere in the same tenant / same sub don't poison the module's
     # internal name lookup inside Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output.
     Ensure-SecurityInsightAzDceDcrCache `
-        -AzAppId        $IngestionSpnClientId `
-        -AzAppSecret    $IngestionSpnClientSecret `
-        -TenantId       $TenantId `
-        -SubscriptionId $WorkspaceSubscriptionId `
+        -AzAppId           $IngestionSpnClientId `
+        -AzAppSecret       $IngestionSpnClientSecret `
+        -TenantId          $TenantId `
+        -SubscriptionId    $WorkspaceSubscriptionId `
+        -DceResourceGroup  $DceResourceGroup `
+        -DcrResourceGroup  $DcrResourceGroup `
         -Force
 
-    Write-Ok "Auth tokens and DCE/DCR cache refreshed (filtered to sub: $WorkspaceSubscriptionId)"
+    Write-Ok "Auth tokens and DCE/DCR cache refreshed (filtered to sub: $WorkspaceSubscriptionId, DceRG: $DceResourceGroup, DcrRG: $DcrResourceGroup)"
 } catch {
     Write-Warn "Token refresh failed: $($_.Exception.Message) - continuing with existing tokens"
 }
@@ -3418,10 +3421,12 @@ $ResultMgmt = CheckCreateUpdate-TableDcr-Structure `
 # A brief sleep lets ARM's eventual consistency catch up before re-listing.
 Start-Sleep -Seconds 15
 Ensure-SecurityInsightAzDceDcrCache `
-    -AzAppId        $IngestionSpnClientId `
-    -AzAppSecret    $IngestionSpnClientSecret `
-    -TenantId       $TenantId `
-    -SubscriptionId $WorkspaceSubscriptionId `
+    -AzAppId           $IngestionSpnClientId `
+    -AzAppSecret       $IngestionSpnClientSecret `
+    -TenantId          $TenantId `
+    -SubscriptionId    $WorkspaceSubscriptionId `
+    -DceResourceGroup  $DceResourceGroup `
+    -DcrResourceGroup  $DcrResourceGroup `
     -Force
 Write-Ok "DCE/DCR cache re-sync after DCR provisioning (DCE: $(@($global:AzDceDetails).Count) | DCR: $(@($global:AzDcrDetails).Count))"
 

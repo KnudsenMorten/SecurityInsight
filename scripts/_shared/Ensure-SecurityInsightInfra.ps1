@@ -38,6 +38,8 @@ function Ensure-SecurityInsightAzDceDcrCache {
         [Parameter(Mandatory)] [string] $AzAppSecret,
         [Parameter(Mandatory)] [string] $TenantId,
         [string] $SubscriptionId,
+        [string] $DceResourceGroup,
+        [string] $DcrResourceGroup,
         [switch] $Force
     )
     if ($Force -or -not $global:AzDceDetails) {
@@ -47,9 +49,8 @@ function Ensure-SecurityInsightAzDceDcrCache {
         $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -Verbose:$false
     }
 
-    # Filter to target subscription so duplicate-name lookups across subs don't
-    # pick the wrong resource. Both DCE and DCR objects carry a subscriptionId
-    # property; fall back to parsing it from the ARM .id string when absent.
+    # Filter 1: target subscription. Both DCE and DCR objects carry a
+    # subscriptionId property; fall back to parsing it from the ARM id.
     if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
         $__filterToSub = {
             param($item, [string]$sub)
@@ -63,6 +64,29 @@ function Ensure-SecurityInsightAzDceDcrCache {
         if ($global:AzDcrDetails) {
             $global:AzDcrDetails = @($global:AzDcrDetails | Where-Object { & $__filterToSub $_ $SubscriptionId })
         }
+    }
+
+    # Filter 2: target resource group per cache.
+    # A single subscription can contain multiple DCRs with the same Name in
+    # different RGs (common on busy platform subs with 70+ DCRs). Without
+    # this filter, the module's internal name-based lookup inside
+    # Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output picks whichever
+    # match it encounters first -- often a neighbour DCR that doesn't match
+    # the engine's DCE/endpoint. That's the "Data collection rule with
+    # immutable Id 'westeurope' not found" 404: the module found a DCR with
+    # a different DCE region and substituted its 'location' where the
+    # immutableId should have gone.
+    $__filterToRg = {
+        param($item, [string]$rg)
+        $r = [string]$item.resourceGroup
+        if ([string]::IsNullOrWhiteSpace($r) -and $item.id -match '/resourceGroups/([^/]+)/') { $r = $Matches[1] }
+        return ($r -eq $rg)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DceResourceGroup) -and $global:AzDceDetails) {
+        $global:AzDceDetails = @($global:AzDceDetails | Where-Object { & $__filterToRg $_ $DceResourceGroup })
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DcrResourceGroup) -and $global:AzDcrDetails) {
+        $global:AzDcrDetails = @($global:AzDcrDetails | Where-Object { & $__filterToRg $_ $DcrResourceGroup })
     }
 }
 

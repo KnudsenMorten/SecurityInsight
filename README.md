@@ -1039,6 +1039,61 @@ $global:ExportDestination  = 'https://<your-storacct>.blob.core.windows.net/iden
 ```
 </details>
 
+<details>
+<summary>📄 <b>Real-world Identity-collection LauncherConfig.custom.ps1 (annotated, sensitive values redacted)</b></summary>
+
+Minimal real-world `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/LauncherConfig.custom.ps1` as actually deployed on a community box. Ingests identities into the local platform workspace (`$WorkspaceName`) but reads `IdentityInfo` rows from a **different** workspace via `$DefenderWorkspaceResourceId` — common split between a customer-managed SecurityInsight workspace and a platform-owned Defender-for-Identity workspace.
+
+```powershell
+# --- Auth: SPN + plaintext secret ---
+$global:SpnTenantId     = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+$global:SpnClientId     = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+$global:SpnClientSecret = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+
+# --- Infrastructure (auto-provisioned on first run if missing) ---
+$global:DcrResourceGroup = 'rg-dcr-securityinsight-community'
+$global:DceResourceGroup = 'rg-dce-securityinsight-community'
+$global:DceName          = 'dce-securityinsight-community'
+$global:WorkspaceName    = 'log-platform-management-si-community'
+$global:SubscriptionId   = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+
+# --- Behaviour tuning ---
+$global:BatchSize                       = 200
+$global:TroubleshootingMode             = $false
+$global:SubscriptionNameExcludePatterns = @( '*Azure for Students*' )
+
+# --- Cross-workspace Defender IdentityInfo reads ---
+# When the 'IdentityInfo' table lives in a SEPARATE Log Analytics workspace
+# from the ingestion workspace above -- e.g. a platform-owned Defender-for-
+# Identity workspace -- point the engine at it with a full resource ID.
+# The SPN needs Log Analytics Reader on that workspace too.
+$global:DefenderWorkspaceResourceId = '/subscriptions/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx/resourcegroups/rg-log-platform-management-security-p/providers/microsoft.operationalinsights/workspaces/log-platform-management-security-p'
+```
+</details>
+
+<details>
+<summary>📄 <b>Real-world Build_Tier_Definitions_JSON_File LauncherConfig.custom.ps1 (annotated, sensitive values redacted)</b></summary>
+
+For `LAUNCHERS/Build_Tier_Definitions_JSON_File/LauncherConfig.custom.ps1` — only auth + Azure OpenAI are required; nothing else needs to be set. The engine tiers the hardcoded `$BuiltInADGroups` list via AI and writes `data/SecurityInsight_IdentityTiering.json`. Run this once per tenant (or whenever you want a fresh AI verdict); the shipped release already contains a curated catalog so most customers don't need to run it at all.
+
+```powershell
+# --- Auth: SPN + plaintext secret ---
+$global:SpnTenantId     = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+$global:SpnClientId     = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+$global:SpnClientSecret = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+
+# --- Azure OpenAI (required; engine tiers every role/permission/group via AI) ---
+$global:OpenAI_apiKey              = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+$global:OpenAI_endpoint            = 'https://<your-aoai-account>.openai.azure.com'
+$global:OpenAI_deployment          = '<your-deployment-name>'
+$global:OpenAI_apiVersion          = '2025-01-01-preview'
+$global:OpenAI_MaxTokensPerRequest = 16384
+```
+
+> [!NOTE]
+> No `$SubscriptionId` / `$WorkspaceName` / `$DcrResourceGroup` needed — this engine doesn't ingest to Log Analytics or touch Azure resources beyond reading Entra role definitions + Azure built-in roles. Graph reads use the SPN above; Azure role reads use `Get-AzRoleDefinition` which is read-only and works against any subscription the SPN has `Reader`.
+</details>
+
 <a id="38-endpoint-asset-tagging"></a>
 ### 3.8 Endpoint asset tagging
 

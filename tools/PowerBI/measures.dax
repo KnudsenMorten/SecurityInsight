@@ -1,0 +1,113 @@
+// =============================================================================
+// DAX measures for the SecurityInsight RiskAnalysis Power BI dashboard.
+// Paste each one into Power BI Desktop via Modeling -> New measure.
+// All measures assume two tables imported from Log Analytics:
+//   - RiskSummary      (query 01 - Summary, latest run only)
+//   - RiskSummaryTrend (query 02 - Summary, every run)
+// Optionally:
+//   - NewVsResolved    (query 03)
+//   - TopN             (query 04)
+//   - Stale            (query 05)
+//   - TenantTrend      (query 06)
+//   - DomainTrend      (query 07)
+//   - IdentityLatest   (query 08)
+// =============================================================================
+
+// -----------------------------------------------------------------------------
+// Core totals (tile values)
+// -----------------------------------------------------------------------------
+
+Total Risk Score (Latest) =
+    SUM('RiskSummary'[RiskScoreTotal])
+
+Open Findings (Latest) =
+    DISTINCTCOUNT('RiskSummary'[TraceID])
+
+Total Assets Impacted (Latest) =
+    SUM('RiskSummary'[AssetCount])
+
+Critical Findings (Latest) =
+    CALCULATE(
+        DISTINCTCOUNT('RiskSummary'[TraceID]),
+        'RiskSummary'[SecuritySeverity] IN { "Critical", "Very High", "High" }
+    )
+
+// -----------------------------------------------------------------------------
+// Trending deltas -- compare the latest run to the run before it
+// -----------------------------------------------------------------------------
+
+Previous Run CollectionTime =
+    VAR _latest = MAX('RiskSummaryTrend'[CollectionTime])
+    VAR _prev =
+        CALCULATE(
+            MAX('RiskSummaryTrend'[CollectionTime]),
+            'RiskSummaryTrend'[CollectionTime] < _latest
+        )
+    RETURN _prev
+
+Previous Total Risk Score =
+    VAR _prev = [Previous Run CollectionTime]
+    RETURN
+        CALCULATE(
+            SUM('RiskSummaryTrend'[RiskScoreTotal]),
+            'RiskSummaryTrend'[CollectionTime] = _prev
+        )
+
+Risk Score Delta vs Prev Run =
+    [Total Risk Score (Latest)] - [Previous Total Risk Score]
+
+Risk Score Delta % vs Prev Run =
+    DIVIDE(
+        [Risk Score Delta vs Prev Run],
+        [Previous Total Risk Score]
+    )
+
+// -----------------------------------------------------------------------------
+// Per-TraceID tracking -- "how long has this finding been open"
+// -----------------------------------------------------------------------------
+
+Days Open (per TraceID) =
+    VAR _first = CALCULATE(MIN('RiskSummaryTrend'[CollectionTime]))
+    VAR _last  = CALCULATE(MAX('RiskSummaryTrend'[CollectionTime]))
+    RETURN
+        IF(
+            ISBLANK(_first) || ISBLANK(_last),
+            BLANK(),
+            DATEDIFF(_first, _last, DAY)
+        )
+
+Appearances Count =
+    CALCULATE(
+        DISTINCTCOUNT('RiskSummaryTrend'[CollectionTime])
+    )
+
+// -----------------------------------------------------------------------------
+// Operational velocity (uses NewVsResolved table)
+// -----------------------------------------------------------------------------
+
+New Findings (Latest Run) =
+    VAR _latestRun =
+        CALCULATE(
+            MAX('NewVsResolved'[CollectionTime]),
+            ALL('NewVsResolved')
+        )
+    RETURN
+        CALCULATE(
+            SUM('NewVsResolved'[NewFindingsCount]),
+            'NewVsResolved'[CollectionTime] = _latestRun
+        )
+
+Resolved Findings (Latest Run) =
+    VAR _latestRun =
+        CALCULATE(
+            MAX('NewVsResolved'[CollectionTime]),
+            ALL('NewVsResolved')
+        )
+    RETURN
+        CALCULATE(
+            SUM('NewVsResolved'[ResolvedFindingsCount]),
+            'NewVsResolved'[CollectionTime] = _latestRun
+        )
+
+Net Finding Movement =
+    [New Findings (Latest Run)] - [Resolved Findings (Latest Run)]

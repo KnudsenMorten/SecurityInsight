@@ -1,0 +1,28 @@
+// =============================================================================
+// Query : RiskAnalysis Summary - trend across every run
+// Purpose: Drives every "over time" chart. One row per (CollectionTime, TraceID).
+// =============================================================================
+// TraceID is deterministic across runs -- same observation always hashes to
+// the same ID -- so charts that track a single finding over time (risk score
+// trend, asset count drift, open/closed) can group by TraceID and x-axis by
+// CollectionTime without fuzzy matching.
+// =============================================================================
+SI_RiskAnalysis_Summary_CL
+| project
+    CollectionTime,
+    RunDate          = format_datetime(CollectionTime, 'yyyy-MM-dd'),
+    TraceID,
+    TraceName,
+    SecurityDomain,
+    Category,
+    Subcategory,
+    ConfigurationName,
+    SecuritySeverity,
+    CriticalityTier,
+    CriticalityTierLevel,
+    RiskScoreTotal    = todouble(RiskScoreTotal),
+    RiskFactor_Consequence,
+    RiskFactor_Probability,
+    AssetCount        = toint(AssetCount),
+    TotalIssues       = toint(TotalIssues)
+| order by CollectionTime asc, RiskScoreTotal desc

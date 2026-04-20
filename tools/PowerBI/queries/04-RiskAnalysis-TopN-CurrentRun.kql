@@ -1,0 +1,27 @@
+// =============================================================================
+// Query : Top-N highest risk-score findings (current run)
+// Purpose: The "what do I look at right now" tile on the dashboard.
+// =============================================================================
+// Parameterise N via Power BI slicer (default 10). Sorted descending by
+// RiskScoreTotal so the worst floats to the top.
+// =============================================================================
+let TopN = 25;   // visual can override via Power BI slicer
+SI_RiskAnalysis_Summary_CL
+| where CollectionTime == toscalar(
+    SI_RiskAnalysis_Summary_CL
+    | summarize max(CollectionTime)
+  )
+| extend RiskScoreTotal = todouble(RiskScoreTotal)
+| top TopN by RiskScoreTotal desc
+| project
+    TraceID,
+    TraceName,
+    SecurityDomain,
+    Category,
+    ConfigurationName,
+    SecuritySeverity,
+    CriticalityTierLevel,
+    RiskScoreTotal,
+    AssetCount       = toint(AssetCount),
+    TotalIssues      = toint(TotalIssues),
+    ImpactedAssets

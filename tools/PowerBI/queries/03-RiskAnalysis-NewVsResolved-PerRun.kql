@@ -1,0 +1,34 @@
+// =============================================================================
+// Query : New / resolved findings between each consecutive run
+// Purpose: Drives the "delta" tile -- how many findings were new on this run,
+//          how many disappeared (fixed / out-of-scope). Gives a velocity signal
+//          for the security team.
+// =============================================================================
+// A "new" finding on run R = TraceID present at R but absent at R-1.
+// A "resolved" finding on run R = TraceID present at R-1 but absent at R.
+// The very first run has no R-1, so it's excluded (or counted as all-new
+// depending on taste; here we filter it out for cleaner trending).
+// =============================================================================
+let PerRun =
+    SI_RiskAnalysis_Summary_CL
+    | summarize TraceIDs = make_set(TraceID) by CollectionTime
+    | order by CollectionTime asc
+    | serialize RunIdx = row_number();
+let WithPrev =
+    PerRun
+    | extend PrevTraceIDs = prev(TraceIDs), PrevCollectionTime = prev(CollectionTime)
+    | where isnotempty(PrevCollectionTime);
+WithPrev
+| mv-apply Cur = TraceIDs to typeof(string) on (summarize CurSet = make_set(Cur))
+| mv-apply Prev = PrevTraceIDs to typeof(string) on (summarize PrevSet = make_set(Prev))
+| extend
+    NewFindingsCount      = array_length(set_difference(CurSet, PrevSet)),
+    ResolvedFindingsCount = array_length(set_difference(PrevSet, CurSet)),
+    UnchangedCount        = array_length(set_intersect(CurSet, PrevSet))
+| project
+    CollectionTime,
+    PrevCollectionTime,
+    NewFindingsCount,
+    ResolvedFindingsCount,
+    UnchangedCount
+| order by CollectionTime asc

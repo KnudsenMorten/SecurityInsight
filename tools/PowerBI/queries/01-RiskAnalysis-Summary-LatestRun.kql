@@ -1,0 +1,31 @@
+// =============================================================================
+// Query : RiskAnalysis Summary - latest run only
+// Purpose: Baseline table for the dashboard's "current state" tiles.
+//          Every other tile filters on this.
+// =============================================================================
+// The Summary bucket ingests at the ConfigurationName grain (one row per
+// observation type). CollectionTime is uniform across a single RiskAnalysis
+// run, so picking max(CollectionTime) = "whatever the most recent run was".
+// =============================================================================
+SI_RiskAnalysis_Summary_CL
+| where CollectionTime == toscalar(
+    SI_RiskAnalysis_Summary_CL
+    | summarize max(CollectionTime)
+  )
+| project
+    CollectionTime,
+    TraceID,
+    TraceName,
+    SecurityDomain,
+    Category,
+    Subcategory,
+    ConfigurationName,
+    SecuritySeverity,
+    CriticalityTier,
+    CriticalityTierLevel,
+    RiskScoreTotal    = todouble(RiskScoreTotal),
+    RiskFactor_Consequence,
+    RiskFactor_Probability,
+    AssetCount        = toint(AssetCount),
+    TotalIssues       = toint(TotalIssues),
+    ImpactedAssets

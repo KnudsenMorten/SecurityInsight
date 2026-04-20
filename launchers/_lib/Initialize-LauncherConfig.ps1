@@ -56,6 +56,18 @@ function Initialize-LauncherConfig {
     function _CfgOk   ([string]$m) { Write-Host "[OK]    $m" -ForegroundColor Green }
     function _CfgInfo ([string]$m) { Write-Host "[INFO]  $m" -ForegroundColor Gray }
 
+    # Customer-owned config files (layers 3 + 4) are commonly created by
+    # downloading from the Setup Configurator -> Windows stamps them with
+    # Mark-of-the-Web. Dot-sourcing a MOTW-flagged script pops a blocking
+    # "Security warning" dialog. Unblock-File strips the Zone.Identifier
+    # ADS silently and is a no-op on files that were never flagged, so it's
+    # safe to call unconditionally on files WE would otherwise dot-source.
+    function _CfgUnblock ([string]$p) {
+        if (-not $p) { return }
+        if (-not (Test-Path -LiteralPath $p)) { return }
+        try { Unblock-File -LiteralPath $p -ErrorAction SilentlyContinue } catch { }
+    }
+
     # ---- Layer 0: <Solution>.shared-defaults.ps1 (solution-wide shared baseline, ours) ----
     # Optional. The file sits in _lib/, which is always a SIBLING of the launcher
     # folder in both layouts:
@@ -96,6 +108,7 @@ function Initialize-LauncherConfig {
     $solutionCustomPath = Join-Path $RepoRoot ("SOLUTIONS\{0}\CUSTOMDATA\{0}.custom.ps1" -f $Solution)
     _CfgStep "Layer 3/4: $Solution.custom.ps1 (solution-wide overrides)"
     if (Test-Path -LiteralPath $solutionCustomPath) {
+        _CfgUnblock $solutionCustomPath
         . $solutionCustomPath
         _CfgOk "loaded"
     } else {
@@ -120,6 +133,7 @@ function Initialize-LauncherConfig {
 
     _CfgStep "Layer 4/4: per-engine customer overrides"
     if (Test-Path -LiteralPath $customPath) {
+        _CfgUnblock $customPath
         . $customPath
         _CfgOk "loaded ($customPath)"
     } elseif ($RequireCustom) {

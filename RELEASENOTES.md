@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.84
+## v2.1.85
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI SetupConfigurator): add "Next step -- run the launcher" block per tab (fb5263f)
+- fix(SI launchers): auto-unblock customer-owned config files before dot-source (173c915)
 
 ---
 

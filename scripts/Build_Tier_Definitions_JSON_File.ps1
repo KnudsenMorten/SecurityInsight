@@ -483,135 +483,19 @@ function Invoke-AIBatchTiering {
 }
 
 # ============================================================
-# SECTION A  AD BUILT-IN GROUP ENUMERATION (recursive)
+# SECTION A  AD BUILT-IN GROUPS -- tier classification only
 # ============================================================
-
-function Get-ADGroupMembersRecursive {
-    param(
-        [string]$GroupName,
-        [System.Collections.Generic.HashSet[string]]$Visited = $null
-    )
-
-    if ($null -eq $Visited) {
-        $Visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
-    }
-    if ($Visited.Contains($GroupName)) { return @() }
-    [void]$Visited.Add($GroupName)
-
-    $results = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-    try {
-        $group = Get-ADGroup -Filter "Name -eq '$GroupName'" -Properties Members -ErrorAction Stop
-        if ($null -eq $group) { return @() }
-
-        foreach ($memberDN in $group.Members) {
-            try {
-                $obj = Get-ADObject -Identity $memberDN -Properties objectClass, SamAccountName, Name, DistinguishedName -ErrorAction Stop
-                $entry = [PSCustomObject]@{
-                    GroupName       = $GroupName
-                    MemberName      = $obj.Name
-                    MemberSAM       = $obj.SamAccountName
-                    MemberDN        = $obj.DistinguishedName
-                    MemberType      = $obj.objectClass
-                    IsNestedGroup   = ($obj.objectClass -eq "group")
-                    NestedFromGroup = ""
-                }
-                $results.Add($entry)
-
-                if ($obj.objectClass -eq "group" -and -not $Visited.Contains($obj.Name)) {
-                    $nested = Get-ADGroupMembersRecursive -GroupName $obj.Name -Visited $Visited
-                    foreach ($n in $nested) {
-                        $n.NestedFromGroup = if ($n.NestedFromGroup) { "$GroupName > $($n.NestedFromGroup)" } else { $GroupName }
-                        $results.Add($n)
-                    }
-                }
-            }
-            catch { Write-Log "Could not resolve member '$memberDN' in '$GroupName': $_" "WARN" }
-        }
-    }
-    catch { Write-Log "Could not query group '$GroupName': $_" "WARN" }
-
-    # Comma prevents PowerShell from enumerating the List on return, so the
-    # caller receives the List object itself (and .Count always works).
-    return ,$results
-}
-
-function Get-ADBuiltInGroupData {
-    Write-Log "=== SECTION A: AD Built-in Group Enumeration ===" "INFO"
-
-    $allGroupData   = [System.Collections.Generic.List[PSCustomObject]]::new()
-
-    # The ActiveDirectory PowerShell module ships with RSAT (a Windows OS
-    # feature, NOT a PSGallery module) so Ensure-SecurityInsightModules
-    # can't install it. Fail FAST and LOUD here instead of emitting a
-    # Get-ADGroup-not-recognized WARN for every built-in group we probe.
-    if (-not (Get-Command Get-ADGroup -ErrorAction SilentlyContinue)) {
-        $isServer = $false
-        try { $isServer = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).ProductType -ne 1 } catch {}
-        $installCmd = if ($isServer) {
-            "Install-WindowsFeature RSAT-AD-PowerShell"
-        } else {
-            "Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0"
-        }
-        throw @"
-The ActiveDirectory PowerShell module is not available on this VM.
-Get-ADGroup / Get-ADUser / Get-ADDomain all come from RSAT (a Windows
-OS feature) -- not from PSGallery -- so Ensure-SecurityInsightModules
-cannot install them automatically.
-
-Install RSAT AD tools on this VM (admin PowerShell), then re-run:
-
-    $installCmd
-
-Once RSAT is installed, Get-Command Get-ADGroup should resolve and
-this engine will enumerate the built-in AD groups listed in
-`$BuiltInADGroups`.
-"@
-    }
-
-    $specialIds     = @(
-        "Everyone", "Authenticated Users", "Creator Owner", "Network", "Interactive",
-        "Service", "Dialup", "Anonymous Logon", "Batch", "Proxy", "SELF",
-        "Creator Group", "Local Service", "Network Service", "Remote Interactive Logon",
-        "This Organization", "Other Organization", "IUSR", "SYSTEM", "Terminal Server User"
-    )
-
-    foreach ($groupName in $BuiltInADGroups) {
-        if ($specialIds -contains $groupName) {
-            $allGroupData.Add([PSCustomObject]@{
-                GroupName       = $groupName
-                MemberName      = "(Special Identity - implicit membership, not enumerable)"
-                MemberSAM       = ""
-                MemberDN        = ""
-                MemberType      = "specialIdentity"
-                IsNestedGroup   = $false
-                NestedFromGroup = ""
-            })
-            continue
-        }
-
-        Write-Log "Enumerating: $groupName" "INFO"
-        $members = Get-ADGroupMembersRecursive -GroupName $groupName
-
-        if ($null -eq $members -or @($members).Count -eq 0) {
-            $allGroupData.Add([PSCustomObject]@{
-                GroupName       = $groupName
-                MemberName      = "(empty or not found)"
-                MemberSAM       = ""
-                MemberDN        = ""
-                MemberType      = ""
-                IsNestedGroup   = $false
-                NestedFromGroup = ""
-            })
-        }
-        else {
-            foreach ($m in $members) { $allGroupData.Add($m) }
-        }
-    }
-
-    Write-Log "AD enumeration complete. Total entries: $($allGroupData.Count)" "SUCCESS"
-    return $allGroupData
-}
+# AD group *membership* is resolved at runtime via the Exposure Graph
+# inside IdentityAssetsCollectDefineTierIngestLog (the identity engine
+# checks whether a user has access to Domain Admins etc. directly from
+# EG -- no need to mirror the on-prem directory into local JSON).
+#
+# What this engine still produces: the AI-tiered classification of the
+# hardcoded $BuiltInADGroups list into AD_BuiltInPermissionGroups_Tier0..3,
+# which IdentityAssetsCollect reads via $tierDefs.AD_BuiltInPermissionGroups_TierN.
+#
+# No RSAT / ActiveDirectory module dependency. No members enumerated.
+# Classification runs on group NAMES alone.
 
 # ============================================================
 # SECTION B  ENTRA ID ROLE DEFINITIONS (no assignments)
@@ -756,7 +640,6 @@ function Get-AzureRoleDefinitions {
 
 function Invoke-AllAITiering {
     param(
-        [array]$ADGroupMembership,
         [array]$EntraRoles,
         [array]$APIPermissions,
         [array]$AzureRoles
@@ -765,14 +648,12 @@ function Invoke-AllAITiering {
     Write-Log "=== AI TIERING: Preparing batch inputs ===" "INFO"
 
     # ---- 1. AD Groups ----
-    # Build compact input: name + member count summary as context
+    # Input is just the group name -- the AI has enough signal in Windows
+    # built-in group names (Domain Admins, Enterprise Admins, DnsAdmins,
+    # Account Operators, etc.) to classify tier without a member snapshot.
+    # Membership analysis happens at query time via the Exposure Graph.
     $adGroupSummary = $BuiltInADGroups | Select-Object -Unique | ForEach-Object {
-        $gName   = $_
-        $members = $ADGroupMembership | Where-Object { $_.GroupName -eq $gName }
-        $summary = if ($members) {
-            ($members | Group-Object MemberType | ForEach-Object { "$($_.Count) $($_.Name)" }) -join ", "
-        } else { "empty or special identity" }
-        [PSCustomObject]@{ Name = $gName; MemberSummary = $summary }
+        [PSCustomObject]@{ Name = $_ }
     }
 
     # ---- 2. Entra Roles ----
@@ -917,7 +798,6 @@ function Export-TieredJSON {
         [array]$TieredEntraRoles,
         [array]$TieredAPIPerms,
         [array]$TieredAzureRoles,
-        [array]$RawADMembers,
         [array]$RawAPIPermissions,
         [array]$RawAzureRoles
     )
@@ -1006,7 +886,6 @@ function Export-TieredJSON {
                 Tier3 = (Get-ByTier $TieredADGroups 3).Count
                 Untiered = (Get-ByTier $TieredADGroups 99).Count
                 TotalGroups = $TieredADGroups.Count
-                TotalMembers = $RawADMembers.Count
             }
             EntraRoles = [ordered]@{
                 Tier0 = (Get-ByTier $TieredEntraRoles 0).Count
@@ -1055,15 +934,12 @@ function Main {
     Write-Log "Output: $OutputFile" "INFO"
 
     # ---- Collect all data first ----
-    $rawADMembers   = Get-ADBuiltInGroupData
-
     $entraRoles     = Get-EntraRoleDefinitions
     $apiPermissions = Get-EntraAPIPermissionCatalog
     $azureRoles     = Get-AzureRoleDefinitions
 
-    # ---- Single AI pass  5 batch calls ----
+    # ---- Single AI pass  4 batch calls (AD group names tiered from hardcoded list) ----
     $tiered = Invoke-AllAITiering `
-        -ADGroupMembership $rawADMembers `
         -EntraRoles        $entraRoles `
         -APIPermissions    $apiPermissions `
         -AzureRoles        $azureRoles `

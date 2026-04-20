@@ -71,9 +71,9 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "*" ],
-            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
-            "query": "union\n    (print SecurityDomain='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct SecurityDomain)\n| order by SecurityDomain asc",
+            "value": [ "value::all" ],
+            "typeSettings": { "additionalResourceOptions": [ "value::all" ], "showDefault": false, "includeAll": true },
+            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct SecurityDomain\n| order by SecurityDomain asc",
             "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
@@ -87,9 +87,9 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "*" ],
-            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
-            "query": "union\n    (print SecuritySeverity='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct SecuritySeverity)\n| order by SecuritySeverity asc",
+            "value": [ "value::all" ],
+            "typeSettings": { "additionalResourceOptions": [ "value::all" ], "showDefault": false, "includeAll": true },
+            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct SecuritySeverity\n| order by SecuritySeverity asc",
             "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
@@ -103,9 +103,9 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "*" ],
-            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
-            "query": "union\n    (print CriticalityTier='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct CriticalityTier = tostring(CriticalityTier))\n| order by CriticalityTier asc",
+            "value": [ "value::all" ],
+            "typeSettings": { "additionalResourceOptions": [ "value::all" ], "showDefault": false, "includeAll": true },
+            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct CriticalityTier = tostring(CriticalityTier)\n| order by CriticalityTier asc",
             "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
@@ -119,9 +119,9 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "*" ],
-            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
-            "query": "union\n    (print Subcategory='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct Subcategory)\n| order by Subcategory asc",
+            "value": [ "value::all" ],
+            "typeSettings": { "additionalResourceOptions": [ "value::all" ], "showDefault": false, "includeAll": true },
+            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct Subcategory\n| order by Subcategory asc",
             "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
@@ -142,7 +142,7 @@
             "label": "Top-N",
             "type": 1,
             "value": "25",
-            "typeSettings": { "paramValidationRules": [ { "regExp": "^\\d+$", "errorMessage": "digits only" } ] }
+            "typeSettings": { "paramValidationRules": [ { "regExp": "\\D", "errorMessage": "digits only" } ] }
           }
         ],
         "style": "pills",
@@ -161,7 +161,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// KPI tiles -- honour all filters. '*' in pill = no filter on that column.\nlet _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _Prev   = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime < _Latest | summarize max(CollectionTime));\nlet _Base =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n    | where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n    | where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n    | where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n    | where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}';\nlet _Now  = _Base | where CollectionTime == _Latest | summarize TotalRisk = sum(todouble(RiskScoreTotal)), Open = count_distinct(TraceID), Critical = count_distinctif(TraceID, SecuritySeverity in ('Critical','Very High','High'));\nlet _Then = SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime == _Prev | summarize PrevTotal = sum(todouble(RiskScoreTotal));\n_Now | extend PrevTotal = toscalar(_Then | project PrevTotal)\n     | extend DeltaPct = iff(isnotnull(PrevTotal) and PrevTotal != 0, round(100.0 * (TotalRisk - PrevTotal) / PrevTotal, 1), todouble(0))\n     | project\n         ['Total risk score']      = TotalRisk,\n         ['Open findings']         = Open,\n         ['Critical findings']     = Critical,\n         ['Δ vs previous run (%)'] = DeltaPct",
+        "query": "// KPI tiles -- honour all filters. 'All' in pill = every distinct value selected (value::all sentinel handled by the workbook runtime).\nlet _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _Prev   = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime < _Latest | summarize max(CollectionTime));\nlet _Base =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n    | where SecurityDomain   in ({SecurityDomain})\n    | where SecuritySeverity in ({SecuritySeverity})\n    | where tostring(CriticalityTier) in ({CriticalityTier})\n    | where Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}';\nlet _Now  = _Base | where CollectionTime == _Latest | summarize TotalRisk = sum(todouble(RiskScoreTotal)), Open = count_distinct(TraceID), Critical = count_distinctif(TraceID, SecuritySeverity in ('Critical','Very High','High'));\nlet _Then = SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime == _Prev | summarize PrevTotal = sum(todouble(RiskScoreTotal));\n_Now | extend PrevTotal = toscalar(_Then | project PrevTotal)\n     | extend DeltaPct = iff(isnotnull(PrevTotal) and PrevTotal != 0, round(100.0 * (TotalRisk - PrevTotal) / PrevTotal, 1), todouble(0))\n     | project\n         ['Total risk score']      = TotalRisk,\n         ['Open findings']         = Open,\n         ['Critical findings']     = Critical,\n         ['Δ vs previous run (%)'] = DeltaPct",
         "size": 3,
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
@@ -185,7 +185,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRiskScore = sum(todouble(RiskScoreTotal)), OpenFindings = count_distinct(TraceID) by CollectionTime\n| order by CollectionTime asc",
+        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRiskScore = sum(todouble(RiskScoreTotal)), OpenFindings = count_distinct(TraceID) by CollectionTime\n| order by CollectionTime asc",
         "size": 0,
         "title": "Total risk score + open findings over time",
         "queryType": 0,
@@ -200,7 +200,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, SecurityDomain\n| order by CollectionTime asc",
+        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, SecurityDomain\n| order by CollectionTime asc",
         "size": 0,
         "title": "Risk by SecurityDomain over time",
         "queryType": 0,
@@ -216,7 +216,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, CriticalityTier_s = tostring(CriticalityTier)\n| order by CollectionTime asc",
+        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, CriticalityTier_s = tostring(CriticalityTier)\n| order by CollectionTime asc",
         "size": 0,
         "title": "Risk by CriticalityTier over time",
         "queryType": 0,
@@ -232,7 +232,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let _runs =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n    | where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n    | where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n    | where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | summarize TraceIDs = make_set(TraceID) by CollectionTime\n    | order by CollectionTime asc\n    | extend PrevIDs = prev(TraceIDs), PrevRun = prev(CollectionTime)\n    | where isnotempty(PrevRun);\n_runs\n| extend New      = toint(array_length(set_difference(TraceIDs, PrevIDs)))\n| extend Resolved = toint(array_length(set_difference(PrevIDs, TraceIDs)))\n| extend Net      = New - Resolved\n| project CollectionTime, New, Resolved, Net\n| order by CollectionTime asc",
+        "query": "let _runs =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where SecurityDomain   in ({SecurityDomain})\n    | where SecuritySeverity in ({SecuritySeverity})\n    | where tostring(CriticalityTier) in ({CriticalityTier})\n    | where Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | summarize TraceIDs = make_set(TraceID) by CollectionTime\n    | order by CollectionTime asc\n    | extend PrevIDs = prev(TraceIDs), PrevRun = prev(CollectionTime)\n    | where isnotempty(PrevRun);\n_runs\n| extend New      = toint(array_length(set_difference(TraceIDs, PrevIDs)))\n| extend Resolved = toint(array_length(set_difference(PrevIDs, TraceIDs)))\n| extend Net      = New - Resolved\n| project CollectionTime, New, Resolved, Net\n| order by CollectionTime asc",
         "size": 0,
         "title": "New vs resolved findings per run",
         "queryType": 0,
@@ -254,7 +254,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| extend RiskScoreTotal = todouble(RiskScoreTotal)\n| top toint('{TopN}') by RiskScoreTotal desc\n| project TraceID, TraceName, SecurityDomain, Category, Subcategory, ConfigurationName, SecuritySeverity, CriticalityTierLevel, RiskScoreTotal, AssetCount = toint(AssetCount), TotalIssues = toint(TotalIssues), ImpactedAssets",
+        "query": "let _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| extend RiskScoreTotal = todouble(RiskScoreTotal)\n| top toint('{TopN}') by RiskScoreTotal desc\n| project TraceID, TraceName, SecurityDomain, Category, Subcategory, ConfigurationName, SecuritySeverity, CriticalityTierLevel, RiskScoreTotal, AssetCount = toint(AssetCount), TotalIssues = toint(TotalIssues), ImpactedAssets",
         "size": 0,
         "title": "Top {TopN} findings by risk score",
         "queryType": 0,
@@ -283,7 +283,7 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _OpenNow =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange} and CollectionTime == _Latest\n    | where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n    | where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n    | where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n    | where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | distinct TraceID;\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where TraceID in (_OpenNow)\n| summarize\n    FirstSeen   = min(CollectionTime),\n    LastSeen    = max(CollectionTime),\n    Appearances = count_distinct(CollectionTime),\n    MaxRisk     = max(todouble(RiskScoreTotal)),\n    AnyTrace    = any(TraceName),\n    AnyConfig   = any(ConfigurationName),\n    AnySeverity = any(SecuritySeverity)\n    by TraceID\n| extend DaysOpen = datetime_diff('day', LastSeen, FirstSeen)\n| where Appearances > 1\n| project TraceID, TraceName = AnyTrace, ConfigurationName = AnyConfig, SecuritySeverity = AnySeverity, FirstSeen, LastSeen, DaysOpen, Appearances, MaxRisk\n| order by DaysOpen desc, MaxRisk desc",
+        "query": "let _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _OpenNow =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange} and CollectionTime == _Latest\n    | where SecurityDomain   in ({SecurityDomain})\n    | where SecuritySeverity in ({SecuritySeverity})\n    | where tostring(CriticalityTier) in ({CriticalityTier})\n    | where Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | distinct TraceID;\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where TraceID in (_OpenNow)\n| summarize\n    FirstSeen   = min(CollectionTime),\n    LastSeen    = max(CollectionTime),\n    Appearances = count_distinct(CollectionTime),\n    MaxRisk     = max(todouble(RiskScoreTotal)),\n    AnyTrace    = any(TraceName),\n    AnyConfig   = any(ConfigurationName),\n    AnySeverity = any(SecuritySeverity)\n    by TraceID\n| extend DaysOpen = datetime_diff('day', LastSeen, FirstSeen)\n| where Appearances > 1\n| project TraceID, TraceName = AnyTrace, ConfigurationName = AnyConfig, SecuritySeverity = AnySeverity, FirstSeen, LastSeen, DaysOpen, Appearances, MaxRisk\n| order by DaysOpen desc, MaxRisk desc",
         "size": 0,
         "title": "Stale findings (multi-run persistence in the time range)",
         "queryType": 0,

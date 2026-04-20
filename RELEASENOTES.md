@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.101
+## v2.1.102
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI IdentityAssets + Workbook): stamp SolutionVersion on identity rows too (39ec5e3)
+- fix(SI Workbook): use built-in value::all sentinel so "All" pre-selects reliably (da634d5)
 
 ---
 

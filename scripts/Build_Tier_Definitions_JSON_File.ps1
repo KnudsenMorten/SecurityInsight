@@ -540,6 +540,35 @@ function Get-ADBuiltInGroupData {
     Write-Log "=== SECTION A: AD Built-in Group Enumeration ===" "INFO"
 
     $allGroupData   = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    # The ActiveDirectory PowerShell module ships with RSAT (a Windows OS
+    # feature, NOT a PSGallery module) so Ensure-SecurityInsightModules
+    # can't install it. Fail FAST and LOUD here instead of emitting a
+    # Get-ADGroup-not-recognized WARN for every built-in group we probe.
+    if (-not (Get-Command Get-ADGroup -ErrorAction SilentlyContinue)) {
+        $isServer = $false
+        try { $isServer = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).ProductType -ne 1 } catch {}
+        $installCmd = if ($isServer) {
+            "Install-WindowsFeature RSAT-AD-PowerShell"
+        } else {
+            "Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0"
+        }
+        throw @"
+The ActiveDirectory PowerShell module is not available on this VM.
+Get-ADGroup / Get-ADUser / Get-ADDomain all come from RSAT (a Windows
+OS feature) -- not from PSGallery -- so Ensure-SecurityInsightModules
+cannot install them automatically.
+
+Install RSAT AD tools on this VM (admin PowerShell), then re-run:
+
+    $installCmd
+
+Once RSAT is installed, Get-Command Get-ADGroup should resolve and
+this engine will enumerate the built-in AD groups listed in
+`$BuiltInADGroups`.
+"@
+    }
+
     $specialIds     = @(
         "Everyone", "Authenticated Users", "Creator Owner", "Network", "Interactive",
         "Service", "Dialup", "Anonymous Logon", "Batch", "Proxy", "SELF",

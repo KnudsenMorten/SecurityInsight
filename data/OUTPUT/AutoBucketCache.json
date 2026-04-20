@@ -1,0 +1,14 @@
+﻿{
+    "Attack_Paths_Summary_BucketFilter_Data_Sensitivity_to_Exposed_Credentials|3588996592":  1,
+    "Attack_Paths_Summary_BucketFilter_Identity_Group_Membership_to_Privileged_Resources|629222305":  1,
+    "Attack_Paths_Summary_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure|2813465413":  1,
+    "Device_Recommendations_Summary_BucketFilter|2252541774":  1,
+    "Attack_Paths_Summary_BucketFilter_Credential_Based_Lateral_Movement|2932272880":  1,
+    "Device_Missing_CVEs_Summary_BucketFilter|1114660122":  1,
+    "Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources|3270482412":  1,
+    "Azure_Recommendations_Summary_BucketFilter|1433090249":  1,
+    "Attack_Paths_Summary_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation|4256663877":  1,
+    "Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources|3396150479":  1,
+    "Attack_Paths_Summary_BucketFilter_Credential_Based_Lateral_Movement|1218385679":  1,
+    "Attack_Paths_Summary_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure|4086931015":  1
+}

@@ -1,9 +1,9 @@
-<#
+﻿<#
 .SYNOPSIS
-    Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure - engine script in the SecurityInsight solution.
+    Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure - engine script in the SecurityInsight solution.
 
 ================================================================================
-Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
 ================================================================================
 PURPOSE
   Deploy (or reuse) an Azure OpenAI account (PAYG) and a model deployment using
@@ -12,21 +12,21 @@ PURPOSE
 USAGE
   Preferred: run via the Step 4 launcher (no CLI args needed, reads auth + config
   from LauncherConfig.custom.ps1 in the same folder):
-    .\LAUNCHERS\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\launcher.community-vm.template.ps1
+    .\LAUNCHERS\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\launcher.community-vm.template.ps1
 
   Direct invocation (rare -- engine defaults in $ScriptDefaults):
-    .\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+    .\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
 
   Override params at invocation:
-    .\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -AccountName "security-insight-02" -DeploymentName "chat" -Verbose
+    .\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -AccountName "security-insight-02" -DeploymentName "chat" -Verbose
 
   Force a model (still tries SKUs if needed):
-    .\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -ModelName "gpt-4" -ModelVersion "latest" -Verbose
+    .\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -ModelName "gpt-4" -ModelVersion "latest" -Verbose
 ================================================================================
 
 .NOTES
     Solution       : SecurityInsight
-    File           : Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+    File           : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
@@ -132,7 +132,7 @@ foreach ($req in 'SubscriptionId','ResourceGroupName','Location','AccountName','
     $fromParam = (Get-Variable -Name $req -Scope Local -ErrorAction SilentlyContinue).Value
     $fromDefaults = $ScriptDefaults[$req]
     if ([string]::IsNullOrWhiteSpace([string]$fromParam) -and [string]::IsNullOrWhiteSpace([string]$fromDefaults)) {
-        throw "Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
+        throw "Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
     }
 }
 

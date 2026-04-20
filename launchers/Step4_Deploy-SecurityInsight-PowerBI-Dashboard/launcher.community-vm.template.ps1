@@ -1,18 +1,17 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community Azure launcher (Function / Runbook / Azure VM with MI) for
-    SecurityInsight\Step5_Deploy-SecurityInsight-PowerBI-Dashboard.
+    Community VM launcher for SecurityInsight\Step4_Deploy-SecurityInsight-PowerBI-Dashboard.
 .DESCRIPTION
-    Same engine as the community-vm flavour. Default AuthMethod is
-    ManagedIdentity -- flip in LauncherConfig.custom.ps1 if the host MI
-    doesn't have Power BI API permissions (typical for Power BI -- you'll
-    usually fall back to SpnSecret with creds from Key Vault).
+    Deploys the Risk Analysis management dashboard into the customer's
+    Power BI tenant. Reads settings from LauncherConfig.custom.ps1 and
+    forwards them to the engine. The engine itself handles OAuth2 against
+    the Power BI REST API -- no Az.Accounts prep needed in the launcher.
 
 .NOTES
     Solution : SecurityInsight
-    Flavour  : community-azure
-    File     : launcher.community-azure.template.ps1
+    Flavour  : community-vm
+    File     : launcher.community-vm.template.ps1
 #>
 [CmdletBinding()]
 param(
@@ -62,7 +61,7 @@ function Resolve-RepoRoot {
 try { if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot } } catch { $resolveError = $_ }
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath -Solution 'SecurityInsight'
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Step5_Deploy-SecurityInsight-PowerBI-Dashboard' -Flavour 'community-azure' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'Step4_Deploy-SecurityInsight-PowerBI-Dashboard' -Flavour 'community-vm' -Version $versionStamp
 
 if ($resolveError) { Write-Err2 $resolveError.Exception.Message; throw $resolveError }
 Write-Step "Resolving repo root"
@@ -70,38 +69,36 @@ Write-Ok   "repo root: $InstallPath"
 
 Initialize-LauncherConfig -LauncherDir $PSScriptRoot -Solution 'SecurityInsight' -RepoRoot $InstallPath -Mode 'community'
 
-# Flavour default: ManagedIdentity (Azure host). MI needs Power BI API perms
-# AND needs to be allowed by the "Allow SPNs to use Power BI APIs" tenant setting.
-# If that can't be arranged, override to 'SpnSecret' + load creds from Key Vault.
-if (-not $global:Step5_AuthMethod) { $global:Step5_AuthMethod = 'ManagedIdentity' }
+# Flavour default: SpnSecret (customer paste creds into LauncherConfig.custom.ps1)
+if (-not $global:Step4_AuthMethod) { $global:Step4_AuthMethod = 'SpnSecret' }
 
 # Engine path (monorepo or community layout)
 $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'Step5_Deploy-SecurityInsight-PowerBI-Dashboard.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'Step4_Deploy-SecurityInsight-PowerBI-Dashboard.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
-if (-not $engine) { throw "Launcher: engine 'Step5_Deploy-SecurityInsight-PowerBI-Dashboard.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts." }
+if (-not $engine) { throw "Launcher: engine 'Step4_Deploy-SecurityInsight-PowerBI-Dashboard.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts." }
 
-# Splat Step5_* globals to engine params (skip nulls / empties)
+# Splat Step4_* globals to engine params (skip nulls / empties)
 $splat = @{}
 $paramMap = @{
-    PbixPath                    = $global:Step5_PbixPath
-    PowerBIWorkspaceName        = $global:Step5_PowerBIWorkspaceName
-    ReportName                  = $global:Step5_ReportName
-    LAWorkspaceId               = $global:Step5_LAWorkspaceId
-    LATenantId                  = $global:Step5_LATenantId
-    StalenessDays               = $global:Step5_StalenessDays
-    TopNFindings                = $global:Step5_TopNFindings
-    AccessGroupObjectId         = $global:Step5_AccessGroupObjectId
-    AccessGroupRole             = $global:Step5_AccessGroupRole
-    AuthMethod                  = $global:Step5_AuthMethod
-    AuthTenantId                = $global:Step5_AuthTenantId
-    AuthClientId                = $global:Step5_AuthClientId
-    AuthClientSecret            = $global:Step5_AuthClientSecret
-    AuthCertificateThumbprint   = $global:Step5_AuthCertificateThumbprint
+    PbixPath                    = $global:Step4_PbixPath
+    PowerBIWorkspaceName        = $global:Step4_PowerBIWorkspaceName
+    ReportName                  = $global:Step4_ReportName
+    LAWorkspaceId               = $global:Step4_LAWorkspaceId
+    LATenantId                  = $global:Step4_LATenantId
+    StalenessDays               = $global:Step4_StalenessDays
+    TopNFindings                = $global:Step4_TopNFindings
+    AccessGroupObjectId         = $global:Step4_AccessGroupObjectId
+    AccessGroupRole             = $global:Step4_AccessGroupRole
+    AuthMethod                  = $global:Step4_AuthMethod
+    AuthTenantId                = $global:Step4_AuthTenantId
+    AuthClientId                = $global:Step4_AuthClientId
+    AuthClientSecret            = $global:Step4_AuthClientSecret
+    AuthCertificateThumbprint   = $global:Step4_AuthCertificateThumbprint
 }
 foreach ($k in $paramMap.Keys) {
     $v = $paramMap[$k]
@@ -113,14 +110,14 @@ foreach ($k in $paramMap.Keys) {
 # Switches: per-run -WhatIfMode wins; else global; TriggerInitialRefresh default $true
 if ($PSBoundParameters.ContainsKey('WhatIfMode')) {
     $splat['WhatIfMode'] = [bool]$WhatIfMode
-} elseif ([bool]$global:Step5_WhatIfMode) {
+} elseif ([bool]$global:Step4_WhatIfMode) {
     $splat['WhatIfMode'] = $true
 }
-if ($null -eq $global:Step5_TriggerInitialRefresh -or [bool]$global:Step5_TriggerInitialRefresh) {
+if ($null -eq $global:Step4_TriggerInitialRefresh -or [bool]$global:Step4_TriggerInitialRefresh) {
     $splat['TriggerInitialRefresh'] = $true
 }
 
-Write-Step "Invoking Step 5 engine"
+Write-Step "Invoking Step 4 engine"
 Write-Info ("forwarding: {0}" -f (($splat.GetEnumerator() | Sort-Object Key | Where-Object { $_.Key -ne 'AuthClientSecret' } | ForEach-Object { "{0}={1}" -f $_.Key, $_.Value }) -join '  '))
 & $engine @splat
 Write-Ok "Engine completed"

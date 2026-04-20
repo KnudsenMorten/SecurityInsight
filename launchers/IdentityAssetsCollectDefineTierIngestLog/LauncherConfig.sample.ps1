@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Quickstart customer config for IdentityAssetsCollectDefineTierIngestLog.
@@ -23,7 +23,7 @@
     table must exist. Provision them by running the sibling onboarding launcher
     once per customer tenant:
 
-        LAUNCHERS\Step3_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
+        LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
 
     Its end-of-run cheat-sheet prints the exact 6 globals to copy into section 2.
 

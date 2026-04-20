@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Provisions Log Analytics workspace, DCE, DCR, and custom table for SI_IdentityAssets ingestion.
 .DESCRIPTION
@@ -7,7 +7,7 @@
 
 .NOTES
     Solution       : SecurityInsight
-    File           : Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1
+    File           : Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten

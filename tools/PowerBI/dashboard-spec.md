@@ -1,14 +1,14 @@
-# SecurityInsight — Power BI dashboard blueprint
+﻿# SecurityInsight — Power BI dashboard blueprint
 
 This document describes the `.pbix` you build **once** in Power BI Desktop.
-Follow it step-by-step; once saved, the Step 5 launcher deploys the same
+Follow it step-by-step; once saved, the Step 4 launcher deploys the same
 `.pbix` to every customer's Power BI tenant fully automatically.
 
 ---
 
 ## Parameters (set at `.pbix` open time)
 
-Customers get prompted for these on first open. The Step 5 launcher patches
+Customers get prompted for these on first open. The Step 4 launcher patches
 them via the REST API on upload.
 
 | Parameter name        | Type        | Example                                          |
@@ -143,8 +143,8 @@ Three pages. Design for a 16:9 exec deck (1920x1080) so screenshots look good.
 1. **File → Save as → `SecurityInsight-RiskAnalysis.pbix`** in
    `SOLUTIONS\SecurityInsight\TOOLS\PowerBI\`.
 2. **File → Export → Power BI template (`.pbit`)** to the same folder.
-3. Commit both to the monorepo. The Step 5 launcher uploads the `.pbix`; the `.pbit` is the "customer-edits-a-copy" artefact for offline tinkering.
+3. Commit both to the monorepo. The Step 4 launcher uploads the `.pbix`; the `.pbit` is the "customer-edits-a-copy" artefact for offline tinkering.
 
 That's the one-time Desktop work. Once the `.pbix` is in the monorepo, every
-new customer onboarding just runs Step 5 and the dashboard lands in their
+new customer onboarding just runs Step 4 and the dashboard lands in their
 Power BI tenant automatically.

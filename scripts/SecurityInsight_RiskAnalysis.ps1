@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     SecurityInsight_RiskAnalysis - engine script in the SecurityInsight solution.
 
@@ -3239,7 +3239,7 @@ if ([bool]$global:SendToLogAnalytics) {
 
         if ($modOk) {
             # Build DCE/DCR cache + self-heal infra (creates workspace + DCE + DCR RG + RBAC if missing).
-            # Shared logic mirrors Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1.
+            # Shared logic mirrors Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1.
             . (Join-Path $PSScriptRoot '_shared\Ensure-SecurityInsightInfra.ps1')
             try {
                 # Resolve SPN object ID for RBAC assignments
@@ -3411,7 +3411,7 @@ if ([bool]$global:SendToLogAnalytics) {
 # forces the cached summary tiles / aggregations on the Power BI service to
 # re-materialise from fresh KQL.
 #
-# The dashboard itself is deployed by Step5_Deploy-SecurityInsight-PowerBI-Dashboard
+# The dashboard itself is deployed by Step4_Deploy-SecurityInsight-PowerBI-Dashboard
 # (run once per customer + when the dashboard design changes).
 #
 # Required globals when SendToPowerBI = $true:
@@ -3462,12 +3462,12 @@ if ([bool]$global:SendToPowerBI) {
             $groups = Invoke-RestMethod -Method GET `
                 -Uri "$pbiBase/groups?`$filter=name eq '$pbiWorkspace'" -Headers $pbiHeaders
             $group = $groups.value | Select-Object -First 1
-            if (-not $group) { throw "Power BI workspace '$pbiWorkspace' not found. Run Step 5 first to deploy the dashboard." }
+            if (-not $group) { throw "Power BI workspace '$pbiWorkspace' not found. Run Step 4 first to deploy the dashboard." }
 
             $datasets = Invoke-RestMethod -Method GET `
                 -Uri "$pbiBase/groups/$($group.id)/datasets" -Headers $pbiHeaders
             $ds = $datasets.value | Where-Object { $_.name -eq $pbiDataset } | Select-Object -First 1
-            if (-not $ds) { throw "Power BI dataset '$pbiDataset' not found in workspace '$pbiWorkspace'. Run Step 5 to (re-)deploy the dashboard." }
+            if (-not $ds) { throw "Power BI dataset '$pbiDataset' not found in workspace '$pbiWorkspace'. Run Step 4 to (re-)deploy the dashboard." }
 
             Write-Step "Triggering dataset refresh"
             $null = Invoke-RestMethod -Method POST `

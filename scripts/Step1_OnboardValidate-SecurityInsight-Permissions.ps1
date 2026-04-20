@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 #Requires -Modules @{ ModuleName='Microsoft.Graph.Authentication'; ModuleVersion='2.0.0' }
 <#
 .SYNOPSIS
@@ -110,7 +110,7 @@
 
 .NOTES
     Solution     : SecurityInsight
-    File         : Step2_OnboardValidate-SecurityInsight-Permissions.ps1
+    File         : Step1_OnboardValidate-SecurityInsight-Permissions.ps1
 
     Adding a new permission later:
       - For an API permission: add a line under the matching $RequiredApiPermissions

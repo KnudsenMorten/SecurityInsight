@@ -1,7 +1,7 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community-edition customer configuration for Step3_OnboardValidate-SecurityInsight-LogAnalytics.
+    Community-edition customer configuration for Step2_OnboardValidate-SecurityInsight-LogAnalytics.
 
 .DESCRIPTION
     Copy this file to LauncherConfig.ps1 in the SAME folder and edit the values.

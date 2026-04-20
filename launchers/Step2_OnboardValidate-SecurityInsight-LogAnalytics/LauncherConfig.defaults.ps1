@@ -1,7 +1,7 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    Baseline defaults for Step3_OnboardValidate-SecurityInsight-LogAnalytics.
+    Baseline defaults for Step2_OnboardValidate-SecurityInsight-LogAnalytics.
 
 .DESCRIPTION
     Shipped with each release. The launcher dot-sources this file BEFORE
@@ -26,7 +26,7 @@
 .NOTES
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
-    Engine                : Step3_OnboardValidate-SecurityInsight-LogAnalytics
+    Engine                : Step2_OnboardValidate-SecurityInsight-LogAnalytics
     Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
 #>
 

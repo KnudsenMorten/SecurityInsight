@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     SecurityInsight - Identity Assets: Collect, Define Tier, Ingest, Log
 
@@ -1257,7 +1257,7 @@ if ($missing.Count -gt 0) {
     $hint = if ($AutomationFramework) {
         ""
     } else {
-        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Step3_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.ps1."
+        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.ps1."
     }
     throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  ") + $hint)
 }
@@ -1595,7 +1595,7 @@ try {
 } catch { Write-Err2 "Set-AzContext failed: $($_.Exception.Message)"; throw }
 
 # Build global DCE/DCR cache + self-heal: create Workspace + DCE + DCR RG if missing, assign RBAC.
-# Logic lives in the shared helper (same pattern as Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1).
+# Logic lives in the shared helper (same pattern as Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1).
 . (Join-Path $PSScriptRoot '_shared\Ensure-SecurityInsightInfra.ps1')
 Write-Step "Ensuring SecurityInsight Workspace/DCE/DCR infra (auto-provisions if missing)"
 try {

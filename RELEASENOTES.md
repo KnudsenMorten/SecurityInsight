@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.73
+## v2.1.74
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- docs(SI README): surface -DestinationPath in §3.2 Quick Reference via $SI_InstallPath variable (b918140)
+- feat(SI SetupConfigurator): SMTP fields + (No default) ReportTemplate option (6d64a9e)
 
 ---
 

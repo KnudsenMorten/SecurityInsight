@@ -85,11 +85,11 @@ The output is a ranked list — not 4,000 recommendations, but the small set of 
 | **SecurityInsight_RiskAnalysis** | The main analyzer. Pulls Defender vulnerabilities, exposure paths, configuration recommendations + Azure RBAC, scores them per the risk model, and produces ranked Excel + JSON + Log Analytics ingestion + email + AI executive summary. |
 | **CriticalAssetTagging** | Auto-tags every device / Azure resource with its **criticality tier** (0=critical, 1=high, 2=standard, 3=low). Drives the Criticality dimension of the risk score. |
 | **IdentityAssetsCollectDefineTierIngestLog** | Iterates every Entra user, SPN, MI; classifies their effective privilege tier; ingests into Log Analytics as `SI_IdentityAssets_CL`. |
-| **Step2_OnboardValidate_LogAnalytics** | One-shot setup. Provisions the Workspace + DCE + DCR + custom table the Identity engine ingests into. |
+| **Step2_OnboardValidate-SecurityInsight-LogAnalytics** | One-shot setup. Provisions the Workspace + DCE + DCR + custom table the Identity engine ingests into. |
 | **Build_Tier_Definitions_JSON_File** | Uses Azure OpenAI to attacker-centrically classify Entra roles, Graph permissions, AD groups, and Azure built-in roles into Tier 0/1/2/3. Output is the catalog the rest of the engines consume. |
 | **Step1_OnboardValidate-SecurityInsight-Permissions** | Idempotent admin utility. Creates the Entra SPN, grants the API permissions and Azure RBAC the platform needs. Re-run = validation pass. |
 | **Setup-SecurityInsight-CustomSecurityAttributes** | One-time provisioning of the Custom Security Attribute schema used by the tagging pipeline. |
-| **Deploy_OpenAI_PAYG_Instance_SecurityInsights** | Optional helper to provision a PAYG Azure OpenAI account + model deployment for the AI summary feature. |
+| **Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights** | Optional helper to provision a PAYG Azure OpenAI account + model deployment for the AI summary feature. |
 
 ### Sample output
 
@@ -256,7 +256,7 @@ Every Risk Analysis run produces all of these from a single in-memory dataset (n
 ```mermaid
 flowchart TD
     S1[1 · Get / Update SecurityInsight from GitHub] --> S2[2 · Onboard Entra SPN or Managed Identity<br/>OnboardValidate-Permissions]
-    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step2_OnboardValidate_LogAnalytics]
+    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step2_OnboardValidate-SecurityInsight-LogAnalytics]
     S3 --> S4[4 · <i>optional</i> Deploy Azure OpenAI<br/>Deploy_OpenAI_PAYG_Instance]
     S4 --> S5[5 · Classify assets with tagging<br/>CriticalAssetTagging <b>-Scope TEST</b> then <b>PROD</b>]
     S5 --> S6[6 · Collect Identity tiers<br/>IdentityAssetsCollectDefineTierIngestLog]
@@ -332,6 +332,25 @@ What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-fil
 
 [⤴ Back to top](#top)
 
+The solution ships three **Step** launchers that set a tenant up from zero, plus several **engines** that produce the actual reports / ingests. Run the Steps once per tenant (in order), then run the engines as often as you like.
+
+| Order | Folder | Purpose | `LauncherConfig.custom.ps1` required? |
+|---|---|---|---|
+| **Step 1** | `LAUNCHERS/Step1_OnboardValidate-SecurityInsight-Permissions/` | Create the SecurityInsight SPN + grant Graph / Defender / ATP API permissions + Azure `Reader` on every sub. Idempotent. | **No** (community-vm falls back to interactive auth). Optional if you want to skip the Graph sign-in prompt. |
+| **Step 2** | `LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/` | Create Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` + RBAC for the SPN. | **Yes** for community-vm (needs the SPN auth block). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`, fill in Section 1. |
+| **Step 3** | `LAUNCHERS/Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights/` | Provision a pay-as-you-go Azure OpenAI account + model deployment so the RiskAnalysis AI summary works. Optional — skip if you won't use `-BuildSummaryByAI`. | **Yes** for community-vm. Sample has the minimum block. |
+| Engine | `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/` | Main identity-asset collection → `SI_IdentityAssets_CL`. Run on a schedule after Step 2. | **Yes** for community-vm. |
+| Engine | `LAUNCHERS/SecurityInsight_RiskAnalysis/` | Risk reports → xlsx + JSON + `SI_RiskAnalysis_*_CL`. Run after Step 2 + (optionally) Step 3. | **Yes** for community-vm. |
+| Engine | `LAUNCHERS/CriticalAssetTagging/` and its three siblings | Apply tier tags to Defender devices + Azure resources. Optional but recommended. | **Yes** for community-vm. |
+| Engine | `LAUNCHERS/Build_Tier_Definitions_JSON_File/` | Build the tier catalog JSON from YAML + MSAL metadata. Run before running `IdentityAssets…` if you customize tier rules. | **Yes** for community-vm. |
+
+> [!TIP]
+> **Internal (AF) / community-azure flavours don't need `LauncherConfig.custom.ps1`** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from the customer file.
+
+> [!NOTE]
+> **Where does `LauncherConfig.custom.ps1` come from?** There's no template created for you. **Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`** in the same folder, then edit. The `.custom.ps1` name is gitignored so the populated copy stays local.
+> Some older solutions use the filename `LauncherConfig.ps1` (without `.custom.`) — both are recognized by the launcher; new work should prefer `.custom.ps1`.
+
 <a id="341-connectivity-spn-or-managed-identity"></a>
 #### 3.4.1 Connectivity: SPN or Managed Identity
 
@@ -374,7 +393,7 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > - Optional: `Monitoring Metrics Publisher` on a specific DCR (`-DcrResourceId`)
 >
 > **What OnboardValidate does NOT cover:**
-> - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Step2_OnboardValidate_LogAnalytics` launcher (§3.4.2) OR auto-created by the engines themselves on first run (v2.1.54+).
+> - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Step2_OnboardValidate-SecurityInsight-LogAnalytics` launcher (§3.4.2) OR auto-created by the engines themselves on first run (v2.1.54+).
 > - Granting the SPN `Owner` or `Contributor + User Access Administrator` — which is what the engines' auto-provisioning needs for **first-run** workspace/DCE creation + container RBAC grants. On `Reader`-only subs, auto-provision will fail cleanly with a `403 AuthorizationFailed` warning and you'll need to provision manually via §3.4.2 or grant higher perms.
 >
 > **Required permissions** are listed in [§ 7.1](#71-permissions-catalog).
@@ -406,7 +425,7 @@ Just run `IdentityAssetsCollect` or `RiskAnalysis` directly. You'll see lines li
 **Option B — explicit provisioning**
 
 ```powershell
-.\LAUNCHERS\Step2_OnboardValidate_LogAnalytics\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
 ```
 
 This creates (or re-uses if they exist):
@@ -432,7 +451,7 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 The AI executive summary is a separate opt-in. Helper script provisions a PAYG Azure OpenAI account + model deployment:
 
 ```powershell
-.\LAUNCHERS\Deploy_OpenAI_PAYG_Instance_SecurityInsights\launcher.community-vm.template.ps1
+.\LAUNCHERS\Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights\launcher.community-vm.template.ps1
 ```
 
 Then enable in any engine's `LauncherConfig.custom.ps1`:
@@ -1174,7 +1193,7 @@ SecurityInsight/
 │   ├── IdentityAssetsCollectDefineTierIngestLog.ps1
 │   ├── CriticalAssetTagging.ps1
 │   ├── Build_Tier_Definitions_JSON_File.ps1
-│   ├── Step2_OnboardValidate_LogAnalytics.ps1
+│   ├── Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1
 │   ├── Step1_OnboardValidate-SecurityInsight-Permissions.ps1
 │   └── ...
 ├── LAUNCHERS/                                 ← launcher templates (ours, replaced on update)

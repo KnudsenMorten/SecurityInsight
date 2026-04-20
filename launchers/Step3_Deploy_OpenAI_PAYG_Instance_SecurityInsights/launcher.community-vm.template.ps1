@@ -1,9 +1,9 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community VM launcher for SecurityInsight\Step2_OnboardValidate_LogAnalytics.
+    Community VM launcher for SecurityInsight\Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.
 .DESCRIPTION
-    Runs the Step2_OnboardValidate_LogAnalytics engine on a Windows box in the customer's own tenant.
+    Runs the Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights engine on a Windows box in the customer's own tenant.
     Reads credentials from LauncherConfig.ps1 (.gitignore'd). Supports 4 auth
     methods (MI, SPN+KV, SPN+cert, SPN+plaintext). See LauncherConfig.sample.ps1.
 
@@ -26,9 +26,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# Get-PublishedVersion: shared helper in _lib/. Dot-sourced before the banner
-# so the version shows on the very first line. Falls back from VERSION.txt
-# (community installs) to `git describe` (monorepo) to '(dev)' (neither).
+# Get-PublishedVersion: shared helper in _lib/. Dot-sourced before the banner.
 . (Join-Path $PSScriptRoot '..\_lib\Get-PublishedVersion.ps1')
 
 function Write-Banner {
@@ -109,9 +107,9 @@ try {
 } catch {
     $resolveError = $_
 }
-$versionStamp = Get-PublishedVersion -RepoRoot $InstallPath
+$versionStamp = Get-PublishedVersion -RepoRoot $InstallPath -Solution 'SecurityInsight'
 
-Write-Banner -Solution 'SecurityInsight' -Engine 'Step2_OnboardValidate_LogAnalytics' -Flavour 'community-vm' -Version $versionStamp
+Write-Banner -Solution 'SecurityInsight' -Engine 'Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights' -Flavour 'community-vm' -Version $versionStamp
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message
@@ -121,15 +119,6 @@ Write-Step "Resolving repo root"
 Write-Ok "repo root: $InstallPath"
 
 try {
-    # Layer 0: solution-wide shared defaults (DCE/DCR/Workspace names + RGs).
-    # Customer overrides in LauncherConfig.ps1 below win over these.
-    $sharedDefaults = Join-Path $PSScriptRoot '..\_lib\SecurityInsight.shared-defaults.ps1'
-    if (Test-Path -LiteralPath $sharedDefaults) {
-        Write-Step "Loading SecurityInsight shared defaults (Layer 0)"
-        . $sharedDefaults
-        Write-Ok "shared defaults loaded"
-    }
-
     Write-Step "Loading LauncherConfig.ps1"
     if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
     if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {
@@ -250,10 +239,10 @@ $launcherDir = $PSScriptRoot
 $engineOwner = Split-Path -Parent (Split-Path -Parent $launcherDir)
 $engine = $null
 foreach ($case in 'SCRIPTS','scripts') {
-    $candidate = Join-Path $engineOwner (Join-Path $case 'Step2_OnboardValidate_LogAnalytics.ps1')
+    $candidate = Join-Path $engineOwner (Join-Path $case 'Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1')
     if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }
 }
-if (-not $engine) { throw "Launcher: engine 'Step2_OnboardValidate_LogAnalytics.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
+if (-not $engine) { throw "Launcher: engine 'Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts. Expected the launcher to live at <solroot>\LAUNCHERS\<engine>\ with a sibling SCRIPTS\ or scripts\ folder." }
     if (-not (Test-Path -LiteralPath $engine)) { throw "engine script not found at $engine" }
     Write-Info "engine: $engine"
     & $engine

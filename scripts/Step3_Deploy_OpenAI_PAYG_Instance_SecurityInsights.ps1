@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-    Deploy_OpenAI_PAYG_Instance_SecurityInsights - engine script in the SecurityInsight solution.
+    Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights - engine script in the SecurityInsight solution.
 
 ================================================================================
-Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
 ================================================================================
 PURPOSE
   Deploy (or reuse) an Azure OpenAI account (PAYG) and a model deployment using
@@ -22,7 +22,7 @@ USAGE
 
 .NOTES
     Solution       : SecurityInsight
-    File           : Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
+    File           : Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
@@ -122,7 +122,7 @@ foreach ($req in 'SubscriptionId','ResourceGroupName','Location','AccountName','
     $fromParam = (Get-Variable -Name $req -Scope Local -ErrorAction SilentlyContinue).Value
     $fromDefaults = $ScriptDefaults[$req]
     if ([string]::IsNullOrWhiteSpace([string]$fromParam) -and [string]::IsNullOrWhiteSpace([string]$fromDefaults)) {
-        throw "Deploy_OpenAI_PAYG_Instance_SecurityInsights: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
+        throw "Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
     }
 }
 

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community-edition customer configuration for Deploy_OpenAI_PAYG_Instance_SecurityInsights.
+    Community-edition customer configuration for Step3_Deploy_OpenAI_PAYG_Instance_SecurityInsights.
 .DESCRIPTION
     Copy this file to LauncherConfig.ps1 in the SAME folder and fill in the values
     for whichever authentication method you want to use. LauncherConfig.ps1 is

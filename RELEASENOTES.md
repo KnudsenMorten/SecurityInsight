@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.45
+## v2.1.46
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- docs(SI): full README rewrite for Paris presentation (98a702a)
+- fix(SI README): wrap new README in <!-- public:start --> ... <!-- public:end --> markers (da1a94c)
 
 ---
 

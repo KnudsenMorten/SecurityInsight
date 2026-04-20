@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.50
+## v2.1.51
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI RiskAnalysis): AF mode writes OUTPUT under DATA, not monorepo root (fe25fc3)
+- docs(SI diagrams): pre-render all 7 Mermaid sources to PNG for slide reuse (fc4f29b)
 
 ---
 

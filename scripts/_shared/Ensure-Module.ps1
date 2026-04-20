@@ -191,7 +191,9 @@ function Ensure-SecurityInsightModules {
         [switch]$Required
     )
 
-    Ensure-Module `
+    # Discard the returned hashtable so callers don't need `$null = ...` --
+    # otherwise PowerShell prints the per-module True/False table to stdout.
+    $null = Ensure-Module `
         -Name $script:SecurityInsight_RequiredModules `
         -Scope $Scope `
         -Import `

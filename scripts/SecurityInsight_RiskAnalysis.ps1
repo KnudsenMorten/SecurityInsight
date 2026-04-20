@@ -3652,6 +3652,29 @@ Security Insight | Risk Analysis | support: Morten Knudsen | mok@mortenknudsen.n
 "@
     }
 
+    # Auto-assemble the SMTP PSCredential if the customer only provided
+    # username + password strings. This avoids Send-MailMessage prompting
+    # interactively for credentials when $global:SecureCredentialsSMTP is
+    # $null (the popup the user saw on the internal-vm run).
+    if (-not [bool]$global:Mail_SendAnonymous -and -not $global:SecureCredentialsSMTP) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$global:SMTPUser) -and
+            -not [string]::IsNullOrWhiteSpace([string]$global:SMTPPassword)) {
+            $__secPwd = ConvertTo-SecureString ([string]$global:SMTPPassword) -AsPlainText -Force
+            $global:SecureCredentialsSMTP = New-Object System.Management.Automation.PSCredential (
+                [string]$global:SMTPUser, $__secPwd)
+            Write-Info "SMTP credential assembled from `$global:SMTPUser + `$global:SMTPPassword"
+        } else {
+            throw @"
+Mail is enabled but no SMTP credential is available.
+Set ONE of the following in your LauncherConfig.custom.ps1 / platform-defaults.ps1:
+  (a) `$global:Mail_SendAnonymous = `$true              (anonymous relay)
+  (b) `$global:SMTPUser + `$global:SMTPPassword         (engine builds the credential)
+  (c) `$global:SecureCredentialsSMTP = <PSCredential>   (pre-built credential object)
+Refusing to prompt interactively -- unattended runs would hang.
+"@
+        }
+    }
+
     try {
         if ([bool]$global:Mail_SendAnonymous) {
             Write-Step ("sending mail anonymously to: {0}" -f ($to -join ', '))

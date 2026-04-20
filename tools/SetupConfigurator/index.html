@@ -500,7 +500,11 @@
         <strong>✅ Next step — run the launcher.</strong>
         Once the file is saved at the path above, kick off the Step / engine from an elevated PowerShell in your SecurityInsight install folder:
         <pre style="background:var(--code-bg);color:var(--code-text);padding:8px 10px;border-radius:4px;margin:6px 0 2px;font-family:'Consolas',monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;" id="next-launcher-cmd">.\LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1</pre>
-        <span id="next-launcher-note" style="font-size:12px;color:var(--muted);">Interactive browser sign-in by a Privileged Role Admin with tenant-root UAA.</span>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap;">
+          <button class="btn primary" id="btn-copy-launcher" type="button">📋 Copy run-command to clipboard</button>
+          <span id="next-launcher-copied" style="display:none;color:var(--ok);font-size:12px;font-weight:600;">Copied — paste into an elevated PowerShell and press Enter.</span>
+        </div>
+        <span id="next-launcher-note" style="display:block;margin-top:6px;font-size:12px;color:var(--muted);">Interactive browser sign-in by a Privileged Role Admin with tenant-root UAA.</span>
       </div>
     </div>
   </div>
@@ -977,6 +981,24 @@ document.getElementById('btn-copy').addEventListener('click', async () => {
     ta.value = text; document.body.appendChild(ta); ta.select();
     document.execCommand('copy'); document.body.removeChild(ta);
     showOk();
+  }
+});
+document.getElementById('btn-copy-launcher').addEventListener('click', async () => {
+  const cmdEl    = document.getElementById('next-launcher-cmd');
+  const copiedEl = document.getElementById('next-launcher-copied');
+  if (!cmdEl) return;
+  const text = (cmdEl.textContent || '').trim();
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  }
+  if (copiedEl) {
+    copiedEl.style.display = 'inline';
+    clearTimeout(window.__siCopyTimeout);
+    window.__siCopyTimeout = setTimeout(() => { copiedEl.style.display = 'none'; }, 3500);
   }
 });
 document.getElementById('btn-download').addEventListener('click', () => {

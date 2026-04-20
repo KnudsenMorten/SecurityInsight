@@ -2589,6 +2589,18 @@ $global:AllShapedRows = New-Object System.Collections.Generic.List[object]
 $global:FinalRiskScoreColumnName = $null
 $global:FinalDesiredColumns = $null
 
+# Collection timestamp + host identity -- same across every row in this run
+# (every report, both Summary and Detailed) so the KQL filter
+#   SI_RiskAnalysis_Summary_CL | where CollectionTime == toscalar(SI_RiskAnalysis_Summary_CL | summarize max(CollectionTime))
+# returns exactly the most recent run's rows and nothing else.
+# Mirrors IdentityAssetsCollectDefineTierIngestLog.ps1 line 1281.
+[datetime]$global:RA_CollectionTime = ( Get-Date ([datetime]::Now.ToUniversalTime()) -Format "yyyy-MM-ddTHH:mm:ssK" )
+try {
+    $global:RA_DnsName = [System.Net.Dns]::GetHostEntry('').HostName
+} catch {
+    $global:RA_DnsName = $env:COMPUTERNAME
+}
+
 foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
 
     $inc = Resolve-ReportInclude -Item $includeItem
@@ -2986,14 +2998,15 @@ if ($ResultAll.Count -eq 0) {
                 $hash    = $__sha.ComputeHash($bytes)
                 $traceId = ([System.BitConverter]::ToString($hash) -replace '-','').Substring(0, 16).ToLowerInvariant()
             }
-            Add-Member -InputObject $row -NotePropertyName 'TraceName' -NotePropertyValue $traceName -Force
-            Add-Member -InputObject $row -NotePropertyName 'TraceID'   -NotePropertyValue $traceId   -Force
+            Add-Member -InputObject $row -NotePropertyName 'CollectionTime' -NotePropertyValue $global:RA_CollectionTime -Force
+            Add-Member -InputObject $row -NotePropertyName 'TraceName'      -NotePropertyValue $traceName                -Force
+            Add-Member -InputObject $row -NotePropertyName 'TraceID'        -NotePropertyValue $traceId                  -Force
         }
     } finally { if ($__sha) { $__sha.Dispose() } }
 
     # Shape columns
     $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName)
-    $TraceCols    = @('TraceName', 'TraceID')    # always the LAST two columns -- not in any YAML OutputPropertyOrder on purpose
+    $TraceCols    = @('CollectionTime', 'TraceName', 'TraceID')    # always the LAST three columns -- not in any YAML OutputPropertyOrder on purpose
 
     $DesiredColumns = @()
     if ($OutputPropertyOrder) { $DesiredColumns += ($OutputPropertyOrder | Where-Object { $_ -notin $TraceCols }) }
@@ -3312,10 +3325,30 @@ if ([bool]$global:SendToLogAnalytics) {
                     -SubscriptionId $laSubId `
                     -Force
 
-                # Prepare + post the full dataset
+                # Prepare + post the full dataset. Pipeline mirrors the
+                # IdentityAssetsCollectDefineTierIngestLog ingest sequence so
+                # both engines produce the same set of standard columns
+                # (CollectionTime, Computer, ComputerFqdn, UserLoggedOn) and
+                # behave identically under Build-DataArrayToAlignWithSchema.
                 $DataVariable = @($global:final)
+
+                # 1. CollectionTime  -- already stamped on every row upstream using
+                #    the single $global:RA_CollectionTime so all rows share the same
+                #    timestamp. Module call is kept as a safety net in case any
+                #    row slipped through without it.
                 $DataVariable = Add-CollectionTimeToAllEntriesInArray -Data $DataVariable -Verbose:$false
+
+                # 2. Host identity (Computer / ComputerFqdn / UserLoggedOn)
+                $DataVariable = Add-ColumnDataToAllEntriesInArray -Data $DataVariable `
+                                    -Column1Name Computer     -Column1Data $env:ComputerName `
+                                    -Column2Name ComputerFqdn -Column2Data $global:RA_DnsName `
+                                    -Column3Name UserLoggedOn -Column3Data $env:USERNAME `
+                                    -Verbose:$false
+
+                # 3. Validate + normalise column names (DCR schema requirements)
                 $DataVariable = ValidateFix-AzLogAnalyticsTableSchemaColumnNames -Data $DataVariable -Verbose:$false
+
+                # 4. Align data structure with the declared DCR schema
                 $DataVariable = Build-DataArrayToAlignWithSchema -Data $DataVariable -Verbose:$false
 
                 $global:EnableCompressionDefault = $true

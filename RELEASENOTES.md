@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.83
+## v2.1.84
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI SetupConfigurator): drop Step 2 DCR field -- Step 3 already grants it (6470ffc)
+- feat(SI SetupConfigurator): add "Next step -- run the launcher" block per tab (fb5263f)
 
 ---
 

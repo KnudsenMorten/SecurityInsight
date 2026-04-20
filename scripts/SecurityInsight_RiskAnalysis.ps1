@@ -3247,6 +3247,19 @@ if ([bool]$global:SendToLogAnalytics) {
                             -AzLogDcrTableCreateFromAnyMachine          $true `
                             -AzLogDcrTableCreateFromReferenceMachine    @()
 
+                # Re-sync the filtered DCE/DCR cache after DCR provisioning.
+                # Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output resolves DcrName ->
+                # immutableId via $global:AzDcrDetails; a newly created DCR isn't there
+                # yet, and the module's fallback can send a bogus id (e.g. the DCE's
+                # 'westeurope' location) causing a 404 at the Log Ingestion API.
+                Start-Sleep -Seconds 15
+                Ensure-SecurityInsightAzDceDcrCache `
+                    -AzAppId        $global:SpnClientId `
+                    -AzAppSecret    $global:SpnClientSecret `
+                    -TenantId       $global:SpnTenantId `
+                    -SubscriptionId $laSubId `
+                    -Force
+
                 # Prepare + post the full dataset
                 $DataVariable = @($global:final)
                 $DataVariable = Add-CollectionTimeToAllEntriesInArray -Data $DataVariable -Verbose:$false

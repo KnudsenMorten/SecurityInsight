@@ -3384,6 +3384,21 @@ $ResultMgmt = CheckCreateUpdate-TableDcr-Structure `
                   -AzLogDcrTableCreateFromAnyMachine          $true `
                   -AzLogDcrTableCreateFromReferenceMachine    @()
 
+# Refresh the filtered DCE/DCR cache -- CheckCreateUpdate-TableDcr-Structure may
+# have just created a new DCR, and Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output
+# reads $global:AzDcrDetails to resolve the DCR name -> immutableId. If the new
+# DCR isn't in the cache, the module falls back to a bogus value (e.g. DCE's
+# location 'westeurope' gets sent as an immutableId and the API returns 404).
+# A brief sleep lets ARM's eventual consistency catch up before re-listing.
+Start-Sleep -Seconds 15
+Ensure-SecurityInsightAzDceDcrCache `
+    -AzAppId        $IngestionSpnClientId `
+    -AzAppSecret    $IngestionSpnClientSecret `
+    -TenantId       $TenantId `
+    -SubscriptionId $WorkspaceSubscriptionId `
+    -Force
+Write-Ok "DCE/DCR cache re-sync after DCR provisioning (DCE: $(@($global:AzDceDetails).Count) | DCR: $(@($global:AzDcrDetails).Count))"
+
 # Free schema sample - no longer needed
 # [TROUBLESHOOTING] $schemaSampleArr = $null
 # [TROUBLESHOOTING] [System.GC]::Collect()

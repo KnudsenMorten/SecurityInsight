@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.100
+## v2.1.101
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI RiskAnalysis + Workbook): version stamping end-to-end (929b643)
+- feat(SI IdentityAssets + Workbook): stamp SolutionVersion on identity rows too (39ec5e3)
 
 ---
 

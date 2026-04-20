@@ -1280,6 +1280,26 @@ $SpnSignInLookbackDays = 7
 # Collection timestamp - consistent across all records in this run
 [datetime]$CollectionTime = ( Get-Date ([datetime]::Now.ToUniversalTime()) -Format "yyyy-MM-ddTHH:mm:ssK" )
 
+# SolutionVersion - which release of SecurityInsight produced these rows.
+# Stamped alongside CollectionTime on every ingested row so KQL can answer
+# "which version wrote this?" with `SI_IdentityAssets_CL | distinct SolutionVersion`.
+# Walks up from $PSScriptRoot until a VERSION.txt is found (covers monorepo
+# runs AND community installs where the engine lives at scripts/).
+$SolutionVersion = '(dev)'
+try {
+    $_cur = $PSScriptRoot
+    while ($_cur) {
+        $_ver = Join-Path $_cur 'VERSION.txt'
+        if (Test-Path -LiteralPath $_ver) {
+            $SolutionVersion = (Get-Content -LiteralPath $_ver -Raw).Trim()
+            break
+        }
+        $_parent = Split-Path -Parent $_cur
+        if (-not $_parent -or $_parent -eq $_cur) { break }
+        $_cur = $_parent
+    }
+} catch { }
+
 #########################################################################################################
 # CONSTANTS
 #########################################################################################################
@@ -2997,6 +3017,7 @@ foreach ($user in $allUsers) {
         TierSources                   = $tierSourcesJson
         EffectiveTier                 = [int]$effectiveTier
         CollectionTime                = $CollectionTime
+        SolutionVersion               = $SolutionVersion
     }
 
     # Stream record immediately - frees memory as soon as the loop iteration completes
@@ -3279,6 +3300,7 @@ foreach ($sp in $allSPs) {
         TierSources                   = $tierSourcesJson
         EffectiveTier                 = [int]$effectiveTier
         CollectionTime                = $CollectionTime
+        SolutionVersion               = $SolutionVersion
     }
 
     # Stream record immediately

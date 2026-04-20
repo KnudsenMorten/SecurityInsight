@@ -4,7 +4,7 @@
     {
       "type": 1,
       "content": {
-        "json": "# 🎯 SecurityInsight — Risk Analysis\n\nRanked risk findings from `SI_RiskAnalysis_Summary_CL` + `SI_RiskAnalysis_Detailed_CL` with live filters. All tiles respect the filter block below.\n\n- **TraceID** is a deterministic SHA-256 of `TraceName` — same finding = same ID every run. Group by TraceID to track history.\n- **CollectionTime** is uniform across every row of a single run. Filter to the latest run with the toggle below.\n- Data sources: RiskAnalysis engine → Log Analytics (via DCR) → this workbook.\n\nFor the deploy steps + management dashboard equivalent, see `DOCS/PowerBI-Prerequisites.md` and `DOCS/AzureWorkbook-Import.md`."
+        "json": "# 🎯 SecurityInsight — Risk Analysis\n\nRanked risk findings from `SI_RiskAnalysis_Summary_CL` + `SI_RiskAnalysis_Detailed_CL` with live filters. All tiles respect the pills below.\n\n- **Workspace** pill binds every tile to the LA workspace you pick once — no per-query picker.\n- **TraceID** is a deterministic SHA-256 of `TraceName` — same finding = same ID every run. Group by TraceID to track history.\n- **CollectionTime** is uniform across every row of a single run. Filter to the latest run with the toggle below.\n- **All** in any multi-select means *no filter on this column* (implemented via a `*` sentinel)."
       },
       "name": "header"
     },
@@ -13,6 +13,25 @@
       "content": {
         "version": "KqlParameterItem/1.0",
         "parameters": [
+          {
+            "id": "p-workspace",
+            "version": "KqlParameterItem/1.0",
+            "name": "Workspace",
+            "label": "Log Analytics workspace",
+            "type": 5,
+            "isRequired": true,
+            "multiSelect": false,
+            "quote": "'",
+            "delimiter": ",",
+            "typeSettings": {
+              "additionalResourceOptions": [],
+              "showDefault": false,
+              "resourceTypeFilter": { "microsoft.operationalinsights/workspaces": true },
+              "includeAll": false
+            },
+            "value": null,
+            "resourceType": "microsoft.operationalinsights/workspaces"
+          },
           {
             "id": "p-time",
             "version": "KqlParameterItem/1.0",
@@ -40,10 +59,7 @@
             "type": 10,
             "isRequired": true,
             "value": "true",
-            "typeSettings": {
-              "additionalResourceOptions": [],
-              "showDefault": false
-            },
+            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
             "jsonData": "[\n    {\"value\": \"true\",  \"label\": \"Yes — show only the most recent CollectionTime\"},\n    {\"value\": \"false\", \"label\": \"No — include every run in the time range\"}\n]"
           },
           {
@@ -55,12 +71,10 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "value::all" ],
-            "typeSettings": {
-              "additionalResourceOptions": [ "value::all" ],
-              "showDefault": false
-            },
-            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct SecurityDomain\n| order by SecurityDomain asc",
+            "value": [ "*" ],
+            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
+            "query": "union\n    (print SecurityDomain='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct SecurityDomain)\n| order by SecurityDomain asc",
+            "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
           },
@@ -73,12 +87,10 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "value::all" ],
-            "typeSettings": {
-              "additionalResourceOptions": [ "value::all" ],
-              "showDefault": false
-            },
-            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct SecuritySeverity\n| order by SecuritySeverity asc",
+            "value": [ "*" ],
+            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
+            "query": "union\n    (print SecuritySeverity='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct SecuritySeverity)\n| order by SecuritySeverity asc",
+            "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
           },
@@ -91,12 +103,10 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "value::all" ],
-            "typeSettings": {
-              "additionalResourceOptions": [ "value::all" ],
-              "showDefault": false
-            },
-            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct CriticalityTier = tostring(CriticalityTier)\n| order by CriticalityTier asc",
+            "value": [ "*" ],
+            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
+            "query": "union\n    (print CriticalityTier='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct CriticalityTier = tostring(CriticalityTier))\n| order by CriticalityTier asc",
+            "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
           },
@@ -109,12 +119,10 @@
             "multiSelect": true,
             "quote": "'",
             "delimiter": ",",
-            "value": [ "value::all" ],
-            "typeSettings": {
-              "additionalResourceOptions": [ "value::all" ],
-              "showDefault": false
-            },
-            "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| distinct Subcategory\n| order by Subcategory asc",
+            "value": [ "*" ],
+            "typeSettings": { "additionalResourceOptions": [], "showDefault": false },
+            "query": "union\n    (print Subcategory='*'),\n    (SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | distinct Subcategory)\n| order by Subcategory asc",
+            "crossComponentResources": [ "{Workspace}" ],
             "queryType": 0,
             "resourceType": "microsoft.operationalinsights/workspaces"
           },
@@ -146,19 +154,18 @@
 
     {
       "type": 1,
-      "content": {
-        "json": "## Executive summary — filtered dataset"
-      },
+      "content": { "json": "## Executive summary — filtered dataset" },
       "name": "h-summary"
     },
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// KPI tiles -- filtered by the parameters above.\n// A base query + a second query comparing to the previous run drive the 4 tiles.\nlet _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _Prev   = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime < _Latest | summarize max(CollectionTime));\nlet _Base =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n    | where SecurityDomain   in ({SecurityDomain})\n    | where SecuritySeverity in ({SecuritySeverity})\n    | where tostring(CriticalityTier) in ({CriticalityTier})\n    | where Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}';\nlet _Now  = _Base | where CollectionTime == _Latest | summarize TotalRisk = sum(todouble(RiskScoreTotal)), Open = count_distinct(TraceID), Critical = count_distinctif(TraceID, SecuritySeverity in ('Critical','Very High','High'));\nlet _Then = SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime == _Prev | summarize PrevTotal = sum(todouble(RiskScoreTotal));\n_Now | extend PrevTotal = toscalar(_Then | project PrevTotal)\n     | extend DeltaPct = iff(isnotnull(PrevTotal) and PrevTotal != 0, round(100.0 * (TotalRisk - PrevTotal) / PrevTotal, 1), todouble(0))\n     | project\n         ['Total risk score']      = TotalRisk,\n         ['Open findings']         = Open,\n         ['Critical findings']     = Critical,\n         ['Δ vs previous run (%)'] = DeltaPct",
+        "query": "// KPI tiles -- honour all filters. '*' in pill = no filter on that column.\nlet _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _Prev   = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime < _Latest | summarize max(CollectionTime));\nlet _Base =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n    | where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n    | where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n    | where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n    | where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}';\nlet _Now  = _Base | where CollectionTime == _Latest | summarize TotalRisk = sum(todouble(RiskScoreTotal)), Open = count_distinct(TraceID), Critical = count_distinctif(TraceID, SecuritySeverity in ('Critical','Very High','High'));\nlet _Then = SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | where CollectionTime == _Prev | summarize PrevTotal = sum(todouble(RiskScoreTotal));\n_Now | extend PrevTotal = toscalar(_Then | project PrevTotal)\n     | extend DeltaPct = iff(isnotnull(PrevTotal) and PrevTotal != 0, round(100.0 * (TotalRisk - PrevTotal) / PrevTotal, 1), todouble(0))\n     | project\n         ['Total risk score']      = TotalRisk,\n         ['Open findings']         = Open,\n         ['Critical findings']     = Critical,\n         ['Δ vs previous run (%)'] = DeltaPct",
         "size": 3,
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "tiles",
         "tileSettings": {
           "titleContent": { "columnMatch": "Column", "formatter": 1 },
@@ -171,20 +178,19 @@
 
     {
       "type": 1,
-      "content": {
-        "json": "## Trends"
-      },
+      "content": { "json": "## Trends" },
       "name": "h-trends"
     },
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Total risk score per CollectionTime -- filtered dataset, honours all pills above.\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRiskScore = sum(todouble(RiskScoreTotal)), OpenFindings = count_distinct(TraceID) by CollectionTime\n| order by CollectionTime asc",
+        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRiskScore = sum(todouble(RiskScoreTotal)), OpenFindings = count_distinct(TraceID) by CollectionTime\n| order by CollectionTime asc",
         "size": 0,
         "title": "Total risk score + open findings over time",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "linechart"
       },
       "customWidth": "50",
@@ -194,11 +200,12 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Stacked area by SecurityDomain over time.\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, SecurityDomain\n| order by CollectionTime asc",
+        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, SecurityDomain\n| order by CollectionTime asc",
         "size": 0,
         "title": "Risk by SecurityDomain over time",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "areachart",
         "chartSettings": { "group": "SecurityDomain", "createOtherGroup": 0, "showLegend": true }
       },
@@ -209,11 +216,12 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Stacked area by CriticalityTier over time.\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, CriticalityTier_s = tostring(CriticalityTier)\n| order by CollectionTime asc",
+        "query": "SI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| summarize TotalRisk = sum(todouble(RiskScoreTotal)) by CollectionTime, CriticalityTier_s = tostring(CriticalityTier)\n| order by CollectionTime asc",
         "size": 0,
         "title": "Risk by CriticalityTier over time",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "areachart",
         "chartSettings": { "group": "CriticalityTier_s", "createOtherGroup": 0, "showLegend": true }
       },
@@ -224,11 +232,12 @@
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Velocity: new vs resolved TraceIDs between consecutive CollectionTimes.\nlet _runs =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where SecurityDomain   in ({SecurityDomain})\n    | where SecuritySeverity in ({SecuritySeverity})\n    | where tostring(CriticalityTier) in ({CriticalityTier})\n    | where Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | summarize TraceIDs = make_set(TraceID) by CollectionTime\n    | order by CollectionTime asc\n    | extend PrevIDs = prev(TraceIDs), PrevRun = prev(CollectionTime)\n    | where isnotempty(PrevRun);\n_runs\n| extend New      = toint(array_length(set_difference(TraceIDs, PrevIDs)))\n| extend Resolved = toint(array_length(set_difference(PrevIDs, TraceIDs)))\n| extend Net      = New - Resolved\n| project CollectionTime, New, Resolved, Net\n| order by CollectionTime asc",
+        "query": "let _runs =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange}\n    | where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n    | where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n    | where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n    | where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | summarize TraceIDs = make_set(TraceID) by CollectionTime\n    | order by CollectionTime asc\n    | extend PrevIDs = prev(TraceIDs), PrevRun = prev(CollectionTime)\n    | where isnotempty(PrevRun);\n_runs\n| extend New      = toint(array_length(set_difference(TraceIDs, PrevIDs)))\n| extend Resolved = toint(array_length(set_difference(PrevIDs, TraceIDs)))\n| extend Net      = New - Resolved\n| project CollectionTime, New, Resolved, Net\n| order by CollectionTime asc",
         "size": 0,
         "title": "New vs resolved findings per run",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "barchart",
         "chartSettings": { "xAxis": "CollectionTime", "showLegend": true, "ySettings": { "numberFormatSettings": { "unit": 17, "options": { "style": "decimal", "maximumFractionDigits": 0 } } } }
       },
@@ -238,26 +247,25 @@
 
     {
       "type": 1,
-      "content": {
-        "json": "## Top findings (filtered)"
-      },
+      "content": { "json": "## Top findings (filtered)" },
       "name": "h-topn"
     },
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "// Top-N ranked findings on the latest CollectionTime, respecting all filters.\nlet _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n| where SecurityDomain   in ({SecurityDomain})\n| where SecuritySeverity in ({SecuritySeverity})\n| where tostring(CriticalityTier) in ({CriticalityTier})\n| where Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| extend RiskScoreTotal = todouble(RiskScoreTotal)\n| top toint('{TopN}') by RiskScoreTotal desc\n| project TraceID, TraceName, SecurityDomain, Category, Subcategory, ConfigurationName, SecuritySeverity, CriticalityTierLevel, RiskScoreTotal, AssetCount = toint(AssetCount), TotalIssues = toint(TotalIssues), ImpactedAssets",
+        "query": "let _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where (tobool('{LatestRunOnly}') == false) or CollectionTime == _Latest\n| where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n| where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n| where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n| where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n| where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n| extend RiskScoreTotal = todouble(RiskScoreTotal)\n| top toint('{TopN}') by RiskScoreTotal desc\n| project TraceID, TraceName, SecurityDomain, Category, Subcategory, ConfigurationName, SecuritySeverity, CriticalityTierLevel, RiskScoreTotal, AssetCount = toint(AssetCount), TotalIssues = toint(TotalIssues), ImpactedAssets",
         "size": 0,
         "title": "Top {TopN} findings by risk score",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "table",
         "gridSettings": {
           "formatters": [
-            { "columnMatch": "RiskScoreTotal",     "formatter": 8, "formatOptions": { "palette": "redGreen" } },
-            { "columnMatch": "AssetCount",         "formatter": 8, "formatOptions": { "palette": "blue" } },
-            { "columnMatch": "SecuritySeverity",   "formatter": 11 },
+            { "columnMatch": "RiskScoreTotal",      "formatter": 8,  "formatOptions": { "palette": "redGreen" } },
+            { "columnMatch": "AssetCount",          "formatter": 8,  "formatOptions": { "palette": "blue" } },
+            { "columnMatch": "SecuritySeverity",    "formatter": 11 },
             { "columnMatch": "CriticalityTierLevel","formatter": 11 }
           ],
           "rowLimit": 200
@@ -268,20 +276,19 @@
 
     {
       "type": 1,
-      "content": {
-        "json": "## Stale findings — open for a while\nFindings present on the latest run AND at least one earlier run in the time range. `DaysOpen` = span between first + last appearance. Sort descending to find the ones SOC keeps re-acknowledging without fixing."
-      },
+      "content": { "json": "## Stale findings — open for a while\nFindings present on the latest run AND at least one earlier run in the time range. `DaysOpen` = span between first + last appearance." },
       "name": "h-stale"
     },
     {
       "type": 3,
       "content": {
         "version": "KqlItem/1.0",
-        "query": "let _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _OpenNow =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange} and CollectionTime == _Latest\n    | where SecurityDomain   in ({SecurityDomain})\n    | where SecuritySeverity in ({SecuritySeverity})\n    | where tostring(CriticalityTier) in ({CriticalityTier})\n    | where Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | distinct TraceID;\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where TraceID in (_OpenNow)\n| summarize\n    FirstSeen    = min(CollectionTime),\n    LastSeen     = max(CollectionTime),\n    Appearances  = count_distinct(CollectionTime),\n    MaxRisk      = max(todouble(RiskScoreTotal)),\n    AnyTrace     = any(TraceName),\n    AnyConfig    = any(ConfigurationName),\n    AnySeverity  = any(SecuritySeverity)\n    by TraceID\n| extend DaysOpen = datetime_diff('day', LastSeen, FirstSeen)\n| where Appearances > 1\n| project TraceID, TraceName = AnyTrace, ConfigurationName = AnyConfig, SecuritySeverity = AnySeverity, FirstSeen, LastSeen, DaysOpen, Appearances, MaxRisk\n| order by DaysOpen desc, MaxRisk desc",
+        "query": "let _Latest = toscalar(SI_RiskAnalysis_Summary_CL | where TimeGenerated {TimeRange} | summarize max(CollectionTime));\nlet _OpenNow =\n    SI_RiskAnalysis_Summary_CL\n    | where TimeGenerated {TimeRange} and CollectionTime == _Latest\n    | where '*' in ({SecurityDomain})   or SecurityDomain   in ({SecurityDomain})\n    | where '*' in ({SecuritySeverity}) or SecuritySeverity in ({SecuritySeverity})\n    | where '*' in ({CriticalityTier})  or tostring(CriticalityTier) in ({CriticalityTier})\n    | where '*' in ({SubCategory})      or Subcategory      in ({SubCategory})\n    | where ('{SearchText}' == '') or ConfigurationName contains '{SearchText}' or TraceName contains '{SearchText}'\n    | distinct TraceID;\nSI_RiskAnalysis_Summary_CL\n| where TimeGenerated {TimeRange}\n| where TraceID in (_OpenNow)\n| summarize\n    FirstSeen   = min(CollectionTime),\n    LastSeen    = max(CollectionTime),\n    Appearances = count_distinct(CollectionTime),\n    MaxRisk     = max(todouble(RiskScoreTotal)),\n    AnyTrace    = any(TraceName),\n    AnyConfig   = any(ConfigurationName),\n    AnySeverity = any(SecuritySeverity)\n    by TraceID\n| extend DaysOpen = datetime_diff('day', LastSeen, FirstSeen)\n| where Appearances > 1\n| project TraceID, TraceName = AnyTrace, ConfigurationName = AnyConfig, SecuritySeverity = AnySeverity, FirstSeen, LastSeen, DaysOpen, Appearances, MaxRisk\n| order by DaysOpen desc, MaxRisk desc",
         "size": 0,
         "title": "Stale findings (multi-run persistence in the time range)",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "table",
         "gridSettings": {
           "formatters": [
@@ -297,9 +304,7 @@
 
     {
       "type": 1,
-      "content": {
-        "json": "## Identity inventory — latest collection\nPulls from `SI_IdentityAssets_CL`. Slicing lives in the filter: tick `IsPrivileged` / `IsStale` / `IsExternal` rows via the column header filter."
-      },
+      "content": { "json": "## Identity inventory — latest collection\nPulls from `SI_IdentityAssets_CL` (Workspace pill above drives the binding). Column-filter rows by `IsPrivileged` / `IsStale` / `IsExternal` / etc." },
       "name": "h-identity"
     },
     {
@@ -311,6 +316,7 @@
         "title": "Latest identity collection",
         "queryType": 0,
         "resourceType": "microsoft.operationalinsights/workspaces",
+        "crossComponentResources": [ "{Workspace}" ],
         "visualization": "table",
         "gridSettings": {
           "formatters": [
@@ -328,6 +334,5 @@
       "name": "identity-latest"
     }
   ],
-  "fallbackResourceIds": [ "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-securityinsight/providers/Microsoft.OperationalInsights/workspaces/log-securityinsight" ],
   "$schema": "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
 }

@@ -90,14 +90,31 @@ Every tile respects the filter pills at the top of the workbook. Parameters:
 
 | Parameter | Type | Default | Drives |
 |---|---|---|---|
-| `TimeRange` | Built-in time range | Last 30 days | `| where TimeGenerated in TimeRange` on every query |
+| `Workspace` | **Resource picker** (LA workspace) | (prompt on first open) | Every query's `crossComponentResources` — no per-tile workspace picker. |
+| `TimeRange` | Built-in time range | Last 30 days | `where TimeGenerated in TimeRange` on every query |
 | `LatestRunOnly` | Dropdown (Yes/No) | Yes | KPIs + Top-N respect only `max(CollectionTime)` when Yes |
-| `SecurityDomain` | Multi-select dropdown | All | `| where SecurityDomain in ({SecurityDomain})` |
-| `SecuritySeverity` | Multi-select dropdown | All | `| where SecuritySeverity in ({SecuritySeverity})` |
-| `CriticalityTier` | Multi-select dropdown | All | `| where CriticalityTier in ({CriticalityTier})` |
-| `SubCategory` | Multi-select dropdown | All | `| where Subcategory in ({SubCategory})` |
+| `SecurityDomain` | Multi-select dropdown | `*` (all) | `where '*' in ({SecurityDomain}) or SecurityDomain in ({SecurityDomain})` |
+| `SecuritySeverity` | Multi-select dropdown | `*` (all) | Same `'*' in ...` sentinel pattern |
+| `CriticalityTier` | Multi-select dropdown | `*` (all) | Same |
+| `SubCategory` | Multi-select dropdown | `*` (all) | Same |
 | `SearchText` | Free text | (empty) | `contains` match on `ConfigurationName` + `TraceName` |
 | `TopN` | Free text (number) | 25 | Size of the Top-N table |
+
+**How "All" works:** every multi-select dropdown's query prepends a hard-coded
+`*` value to the dynamic list, and every KQL filter is written as:
+
+```
+| where '*' in ({Param}) or Column in ({Param})
+```
+
+So selecting `*` alone skips the filter entirely (both KPIs and drill-downs
+still return rows). Deselecting `*` and ticking specific values applies the
+normal `in (...)` filter. This pattern avoids the "empty expansion" parse
+error you get when a `value::all` sentinel expands to nothing.
+
+**Workspace chaining:** every query (including the dropdown-population queries)
+is bound to `{Workspace}` via `crossComponentResources`. Pick the workspace
+once at the top — never get prompted again per tile.
 
 Filter chaining: every dropdown query also filters by `TimeRange`, so changing
 the time range automatically updates what values show up in the pills.

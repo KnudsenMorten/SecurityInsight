@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Community VM launcher for SecurityInsight\IdentityAssetsCollectDefineTierIngestLog.
@@ -68,7 +68,7 @@ function Test-LauncherModule {
         [switch]$AutoInstall
     )
     $mod = Get-Module -ListAvailable -Name $Name -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($mod) { Write-Ok "module '$Name' v$($mod.Version) present"; return $true }
+    if ($mod) { return $true }  # silent-on-success; engine's Ensure-SecurityInsightModules logs the canonical [MODULE] X v... present line
     if ($AutoInstall) {
         Write-Warn2 "module '$Name' missing -- attempting Install-Module -Scope CurrentUser"
         try {

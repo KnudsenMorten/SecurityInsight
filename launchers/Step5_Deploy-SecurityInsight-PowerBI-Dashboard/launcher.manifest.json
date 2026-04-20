@@ -1,0 +1,18 @@
+{
+  "scriptName": "Step5_Deploy-SecurityInsight-PowerBI-Dashboard",
+  "engineScript": "Step5_Deploy-SecurityInsight-PowerBI-Dashboard",
+  "version": "2.0.0",
+  "scriptType": "Engine",
+  "community": true,
+  "communityRepo": "SecurityInsight",
+  "description": "Deploys the SecurityInsight Risk Analysis management dashboard into the customer's Power BI tenant via REST API. Creates/updates the workspace, uploads the .pbix, rebinds parameters (LA workspace / tenant / StalenessDays / TopNFindings), optionally grants an AAD group access, and queues an initial dataset refresh. One-time per customer + re-run whenever you rev the .pbix design.",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "notes": "The Step 5 engine handles its own Power BI OAuth (token endpoint + REST API). Launcher just loads LauncherConfig.custom.ps1 and splats globals to engine params. No Az.Accounts / Connect-AzAccount required.",
+  "parameters": {
+    "PowerBIWorkspaceName": "SecurityInsight-Reports",
+    "ReportName": "SecurityInsight - Risk Analysis",
+    "StalenessDays": 30,
+    "TopNFindings": 25,
+    "TriggerInitialRefresh": true
+  }
+}

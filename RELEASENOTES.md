@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.1.139
+## v2.1.140
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI RELEASENOTES): split MEM26 resync entry to v2.1.140 (v2.1.139 already used) (804836ed)
+- docs(SI README): resync sections 4.1-4.5 to verbatim text from MEM26 PDF (134fb73c)
 - docs(SI README): Power BI 'Beta' + fill §5 What's-New gap from v2.1.113..v2.1.129 (544af373)
 - refactor(SI LAUNCHERS): silence Test-LauncherModule success line -- engine owns the 'module present' log (84e8a20d)
 - fix(SI CUSTOMDATA sample): use canonical 'dce-securityinsight' naming (was 'dce-si-identity') (4f535db4)
@@ -32,8 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - refactor(SI): centralize module guards -- every engine uses _shared/Ensure-Module (ab435826)
 - feat(SI): centralize Ensure-Module helper under SCRIPTS/_shared/ (6ccf68f9)
 - feat(SI YAML): merge Custom queries into Locked (ship curated defaults) (28662620)
-- fix(SI Step0 bootstrap): resolve latest tag then fetch tag-pinned raw (9810c130)
-- fix(SI Step0): banner reads 'Step 0' not 'Step 1' (post-renumber leftover) (eb655c70)
 
 ---
 
@@ -49,10 +49,23 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
 
+### v2.1.140 — § 4.1–4.5 resync to verbatim MEM26 PDF text
+
+- 📚 **§ 4.1 Severity definitions** rewritten with the verbatim PDF page-27 attack-impact text (was paraphrased / abbreviated).
+- 📚 **§ 4.2 Criticality definitions** rewritten with the verbatim PDF page-30 attack-impact text per tier — full Kerberos-ticket-forging / MFA-reset / SharePoint exfil / phishing-foothold descriptions, not the one-line summaries.
+- 📚 **§ 4.3 Asset classification: Identity** restored to the full PDF page 35–39 detail across Tier-0 → Tier-3, with the proper sub-groupings (Cloud — Entra ID Roles, Cloud — Entra ID Services, Application Permissions (Graph/API), Azure Built-in Roles, Azure Permissions, AD, AD Built-in Groups, AD Permissions, Accounts).
+- 📚 **§ 4.4 Asset classification: Endpoint** rebuilt from PDF page 40–43 — was a 4-row summary table, now a Tier-0 → Tier-3 detail set with the same shape as 4.3 (Core Identity Infrastructure / Privileged Management / Network & OT, Servers & Services, etc.).
+- 📚 **§ 4.5 Asset classification: Azure** rebuilt from PDF page 44–47 — was a 4-row summary table, now a Tier-0 → Tier-3 detail set (Azure Built-in Roles per scope, Identity & Control Plane, Workload Identities & Permissions, Critical Azure Resources).
+
 ### v2.1.139 — README polish: Power BI "Beta" + v2.1.113/114/116/122/125/129 highlights
 
 - 📚 **Power BI status flipped from "In development" to "Beta".** The Step 4 deploy engine, `.pbix` REST API upload, `$global:SendToPowerBI` per-run refresh, Setup Configurator tab, and prereq doc have all shipped. Matches the BETA badge in the Setup Configurator UI.
 - 📚 **`§ 5 What's New` table gained three rows** covering the v2.1.113 → v2.1.129 arc that previously only lived in this curated log: single canonical PowerShell module set + `-Scope AllUsers` default (v2.1.113/114/122/125), daily auto-refresh scheduled task (v2.1.116), and sub+RG-scoped DCE/DCR cache filter (v2.1.129).
+- 📚 **§ 4.1 Severity definitions** rewritten with the verbatim PDF page-27 attack-impact text (was paraphrased / abbreviated).
+- 📚 **§ 4.2 Criticality definitions** rewritten with the verbatim PDF page-30 attack-impact text per tier — full Kerberos-ticket-forging / MFA-reset / SharePoint exfil / phishing-foothold descriptions, not the one-line summaries.
+- 📚 **§ 4.3 Asset classification: Identity** restored to the full PDF page 35–39 detail across Tier-0 → Tier-3, with the proper sub-groupings (Cloud — Entra ID Roles, Cloud — Entra ID Services, Application Permissions (Graph/API), Azure Built-in Roles, Azure Permissions, AD, AD Built-in Groups, AD Permissions, Accounts).
+- 📚 **§ 4.4 Asset classification: Endpoint** rebuilt from PDF page 40–43 — was a 4-row summary table, now a Tier-0 → Tier-3 detail set with the same shape as 4.3 (Core Identity Infrastructure / Privileged Management / Network & OT, Servers & Services, etc.).
+- 📚 **§ 4.5 Asset classification: Azure** rebuilt from PDF page 44–47 — was a 4-row summary table, now a Tier-0 → Tier-3 detail set (Azure Built-in Roles per scope, Identity & Control Plane, Workload Identities & Permissions, Critical Azure Resources).
 
 ### v2.1.138 — Silence duplicate `module 'X' v... present` lines from launcher templates
 

@@ -1205,25 +1205,25 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 
 | Defender score | SI label | Attack impact |
 |---|---|---|
-| **10** | **Very High** | **Absence of this control gives attackers an immediate and decisive advantage.** Either a critical attack path is fully exposed, or a single exploitation leads directly to full environment compromise with no further steps required. |
-| **9** | **High** | Addresses weaknesses **actively weaponized in the wild** by ransomware operators, credential theft campaigns, and APTs. Exploitation is well-documented, tooling is widely available, remediation should be urgent. |
-| **8** | **Medium-High** | A **foundational hardening measure** that meaningfully shrinks the attack surface and disrupts common lateral movement techniques. Not immediately catastrophic if missing, but its absence creates conditions attackers routinely chain to escalate. |
-| **5–7** | **Medium** | Established security best practice. Exploitation is possible but less consistent, typically requiring specific environmental conditions or attacker patience. |
-| **1–4** | **Low** | Security hygiene contribution. Missing controls in this range are unlikely to be directly targeted but may marginally increase attacker cost / noise. |
+| **10** | **Very High** | Absence of this control gives attackers an immediate and decisive advantage. Either a critical attack path is left fully exposed, or a single exploitation leads directly to full environment compromise with no further steps required. |
+| **9** | **High** | This control addresses weaknesses that are actively weaponized in the wild by ransomware operators, credential theft campaigns, and advanced persistent threat actors. Exploitation is well-documented, tooling is widely available, and remediation should be treated as urgent. |
+| **8** | **Medium-High** | This control is a foundational hardening measure that meaningfully shrinks the attack surface and disrupts common lateral movement techniques. While not immediately catastrophic if missing, its absence creates conditions that attackers routinely chain together to escalate privileges or move laterally. |
+| **5–7** | **Medium** | This control reflects established security best practice and reduces exposure to known attack patterns. Exploitation is possible but less consistent, typically requiring specific environmental conditions or attacker patience. Prioritize after higher-severity items are addressed. |
+| **1–4** | **Low** | This control contributes to security hygiene and long-term posture improvement. Missing controls in this range are unlikely to be directly targeted but may marginally increase the cost or noise for an attacker operating in the environment. |
 
 <a id="42-criticality-definitions"></a>
 ### 4.2 Criticality definitions
 
 [⤴ Back to top](#top)
 
-**Criticality** is set per-asset by `CriticalAssetTagging` and reflects "how bad it is if THIS asset is compromised". Generic table:
+**Criticality** is set per-asset by `CriticalAssetTagging` and reflects "how bad it is if THIS asset is compromised":
 
 | Tier | Label | Attack impact | Defender Portal | API value |
 |---|---|---|---|---|
-| **0** | **Critical** | **Immediate full environment compromise** if taken. Compromise of a Domain Controller, krbtgt, or Global Administrator yields unrestricted control over every identity, credential, and resource. Recovery requires full forest rebuild. | Very High - tier 0 | 0 |
-| **1** | **High** | **High impact, 1–2 pivots to full compromise.** Exchange server, Auth Admin, jump server. Provides credential material, token abuse, or lateral movement to Tier 0 within 1–2 steps. | High - tier 1 | 1 |
-| **2** | **Medium** | **Significant workload impact, conditional path to escalation.** File server, dev workstation, SharePoint. Mass data exfiltration possible; escalation requires chaining additional weaknesses. | Medium - tier 2 | 2 |
-| **3** | **Low** | **Low blast radius.** Standard employee workstation, guest PC, read-only service account. Limited immediate value beyond a foothold for phishing or recon. | Low - tier 3 | 3 |
+| **0** | **Critical** | **Immediate full environment compromise if taken.** Compromise of a Domain Controller, krbtgt account, or Global Administrator yields unrestricted control over every identity, credential, and resource in the environment. An attacker can forge Kerberos tickets, replicate the entire AD database, assign any Entra role, and persist indefinitely without detection. Recovery requires full forest rebuild. | Very High - tier 0 | 0 |
+| **1** | **High** | **High impact, one or two pivots to full compromise.** Compromise of an Exchange server, Authentication Administrator, or jump server provides credential material, token abuse opportunities, or lateral movement paths that lead to tier 0 within one or two steps. An attacker can reset MFA, intercept authentication flows, abuse unconstrained delegation, or exploit ADCS misconfigurations to escalate without direct access to tier 0 assets. | High - tier 1 | 1 |
+| **2** | **Medium** | **Significant workload impact, conditional path to escalation.** Compromise of a file server, developer workstation, or SharePoint environment enables mass data exfiltration, credential harvesting from application configs, and abuse of scoped service accounts. Escalation to tier 0 is possible but requires chaining multiple weaknesses such as finding reused credentials, misconfigured delegation, or an over-permissioned service principal. | Medium - tier 2 | 2 |
+| **3** | **Low** | **Low blast radius, limited lateral movement potential.** Compromise of a standard employee workstation, guest PC, or read-only service account yields limited immediate value. An attacker gains a foothold for phishing, internal reconnaissance, or credential capture via keylogging, but cannot directly access sensitive systems or escalate without exploiting additional misconfigurations elsewhere in the environment. | Low - tier 3 | 3 |
 
 <a id="43-asset-classification-identity"></a>
 ### 4.3 Asset classification: Identity
@@ -1231,40 +1231,220 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 [⤴ Back to top](#top)
 
 <details open>
-<summary><b>Tier 0 — Critical (Immediate tenant takeover)</b></summary>
+<summary><b>Tier-0 — Critical (Immediate full environment compromise if taken)</b></summary>
 
-- **Entra roles**: Global Administrator, Privileged Role Administrator, Privileged Authentication Administrator, Partner / GDAP Delegated Admin, Directory Synchronization Accounts, Hybrid Identity Administrator (when Entra Connect is in PHS mode)
-- **Graph application permissions**: `RoleManagement.ReadWrite.Directory`, `Directory.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`, `Policy.ReadWrite.AuthenticationMethod`, `PrivilegedAccess.ReadWrite.AzureAD`, `Organization.ReadWrite.All`, `Domain.ReadWrite.All`, `OnPremDirectorySynchronization.ReadWrite.All`
-- **Azure built-in roles**: Owner / User Access Administrator at root MG; Owner at tenant root subscription
-- **AD groups**: Domain Admins, Enterprise Admins, Schema Admins, Administrators (builtin), Group Policy Creator Owners, Cert Publishers, Domain Controllers
-- **AD permissions**: DCSync rights, DnsAdmins (with DC write), SYSTEM on any DC
-- **Accounts**: krbtgt, MSOL_ Entra Connect, AdminSDHolder-propagated ACLs, break-glass accounts
+**Cloud — Entra ID Roles**
+- Global Administrator accounts
+- Privileged Authentication Administrator
+- Privileged Role Administrator
+- Directory Synchronization Service Accounts
+- Break-glass Emergency Access Accounts
+- Directory Writers
+
+**Cloud — Entra ID Services**
+- Conditional Access and Identity Governance core policies
+
+**Azure**
+- Privileged Credential Vault Root Access
+
+**AD**
+- Domain Admins
+- Enterprise Admins
+- Schema Admins
+- Administrators (Built-in)
+- Key Admins / Crypto Admins
+- Cert Publishers
+- Group Policy Creator Owners
+- Incoming Forest Trust Builders
+- Protected Users Group
+- Privileged Kerberos delegation accounts
 
 </details>
 
 <details>
-<summary><b>Tier 1 — High (1–2 pivots to full compromise)</b></summary>
+<summary><b>Tier-1 — High (Fast-Track Takeover, Abusable Privileges)</b></summary>
 
-- **Entra roles**: Authentication Administrator, Hybrid Identity Administrator, Exchange Administrator, Cloud App Administrator, Application Administrator, Security Administrator, Intune Administrator, Identity Governance Administrator, External Identity Provider Administrator, Azure DevOps Administrator
-- **Graph application permissions**: `Application.ReadWrite.All`, `Mail.ReadWrite` (app, all users), `User.ReadWrite.All`, `Group.ReadWrite.All`, `Sites.FullControl.All`, `DeviceManagementServiceConfig.ReadWrite.All`, `Policy.ReadWrite.ConditionalAccess`, `EntitlementManagement.ReadWrite.All`, `UserAuthenticationMethod.ReadWrite.All`, `IdentityProvider.ReadWrite.All`
-- **AD groups**: Account Operators, Backup Operators, Server Operators, Print Operators
-- **AD permissions**: GPO edit on Tier 0 OUs, AdminSDHolder write, msDS-KeyCredentialLink write, WriteOwner / WriteDACL on domain root, AD CS ESC1–ESC8 vulnerable templates, unconstrained delegation
-- **Accounts**: Entra Connect service account, MIs with Owner/UAA at sub scope, federated identity creds on T0 apps
+**Cloud — Entra ID Roles**
+- Authentication Administrator
+- Hybrid Identity Administrator
+- Exchange Administrator
+- Application Administrator
+- Cloud App Administrator
+- Security Administrator
+- Intune Administrator
+- Identity Governance Administrator
+- Helpdesk Administrator (targeting admins)
+- Password Administrator (targeting admins)
+- Azure DevOps Administrator
+- Windows 365 Administrator
+
+**Application Permissions (Graph/API)**
+- `Application.ReadWrite.All`
+- `Mail.ReadWrite` (app, all users)
+- `User.ReadWrite.All`
+- `Group.ReadWrite.All`
+- `Sites.FullControl.All`
+- `DeviceManagement*.ReadWrite.All`
+- `Policy.ReadWrite.ConditionalAccess`
+- `Policy.ReadWrite.PermissionGrant`
+- `EntitlementManagement.ReadWrite.All`
+- `UserAuthenticationMethod.ReadWrite.All`
+- `AccessReview.ReadWrite.All`
+- `Organization.ReadWrite.All`
+
+**Azure Built-in Roles**
+- Owner (sub or RG)
+- User Access Admin (sub scope)
+- Key Vault Administrator
+- AKS Cluster Admin
+- VM Contributor
+- Automation Account Contributor
+- Logic App Contributor
+
+**Azure Permissions**
+- Contributor on Key Vault (access policy model)
+- Storage Account Contributor
+- Azure Arc onboarding rights
+- Defender for Cloud admin
+- IMDS token theft via VM access
+
+**AD Built-in Groups**
+- Account Operators
+- Backup Operators
+- Server Operators
+- Print Operators
+
+**AD Permissions**
+- GPO edit rights on Tier-0 OUs
+- AdminSDHolder write access
+- msDS-KeyCredentialLink write
+- WriteOwner / WriteDACL on domain root
+- GenericAll on Tier-0 groups
+- AllExtendedRights on domain root
+- ForceChangePassword on admin accounts
+- Manage CA (AD CS)
+- Certificate enrollment agents
+- ESC1–ESC8 vulnerable cert templates
+- SeBackupPrivilege / SeRestorePrivilege
+- SeTakeOwnershipPrivilege
+- SeDebugPrivilege / SeImpersonatePrivilege on DC
+- Unconstrained delegation accounts
+- Shadow Credentials write on admin accounts
+- SID History injection rights
+- GPO link rights on Tier-0 OUs
+
+**Accounts**
+- Entra Connect service account
+- Service principals with T0 Graph permissions
+- Admin-consented OAuth apps (T1 perms)
+- AD CS enrollment agent accounts
+- SAs with unconstrained delegation
+- Accounts with GenericAll on Tier-0 objects
+- Federated identity credentials on high-priv apps
+- Managed identities as Owner / UAA at sub scope
+- Azure Automation Run-As accounts
+- Service principals with secrets in shared Key Vaults
 
 </details>
 
 <details>
-<summary><b>Tier 2 — Medium (data / workload impact)</b></summary>
+<summary><b>Tier-2 — Medium (Conditional Takeover, Needs Chaining / Misconfig)</b></summary>
 
-- **Entra roles**: User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator
-- **Graph application permissions**: `Mail.Read` (app, all users), `Calendars.ReadWrite`, `Files.ReadWrite.All`, `AuditLog.Read.All`, `IdentityRiskyUser.ReadWrite.All`, `DeviceManagementConfiguration.ReadWrite.All`, `IMAP.AccessAsApp`, `POP.AccessAsApp`
+**Cloud — Entra ID Roles**
+- User Administrator
+- Groups Administrator
+- Conditional Access Administrator
+- SharePoint Administrator
+- Teams Administrator
+- Lifecycle Workflows Administrator
+
+**Application Permissions (Graph/API)**
+- `Mail.Read` (app, all users)
+- `Calendars.ReadWrite`
+- `Files.ReadWrite.All`
+- `AuditLog.Read.All`
+- `IdentityRiskyUser.ReadWrite.All`
+- `DeviceManagementConfiguration.ReadWrite.All`
+
+**Azure Built-in Roles**
+- Network Contributor
+- Log Analytics Contributor
+- Automation Operator
+- Azure DevOps stakeholder
+- AKS Cluster User
+
+**Azure Permissions**
+- Contributor on single non-sensitive RG
+- Storage Blob Data Reader (scoped)
+- Log Analytics Reader / Monitoring Reader
+- Security Reader (Defender for Cloud)
+- Managed Identity on low-privilege workload
+- Service principal scoped to single RG
+
+**AD Built-in Groups**
+- DNS Admins
+
+**AD Permissions**
+- OU-scoped write ACLs
+- LAPS read rights
+- Constrained delegation (msDS-AllowedToDelegateTo)
+- RBCD write rights
+- Kerberoastable high-privilege SAs
+
+**Accounts**
+- SPs scoped to a single workload
+- Admin-consented OAuth apps with scoped perms
+- Automation accounts with limited RBAC
+- ADO service connections to single subscription
 
 </details>
 
 <details>
-<summary><b>Tier 3 — Low (scoped / read-only)</b></summary>
+<summary><b>Tier-3 — Low (Low Blast Radius, Limited Lateral Movement)</b></summary>
 
-- Standard user accounts, guest accounts, scoped read-only service principals.
+**Cloud — Entra ID Roles**
+- Global Reader
+- Security Reader
+- Reports Reader
+- Message Center Reader
+- Usage Summary Reports Reader
+- Directory Readers
+- Guest User (default)
+
+**Application Permissions (Graph/API)**
+- `User.Read` (delegated)
+- `Mail.Read` (delegated, self)
+- `Calendars.Read` (delegated)
+- `Directory.Read.All`
+- `AuditLog.Read.All` (delegated)
+- `IdentityRiskEvent.Read.All`
+
+**Azure Built-in Roles**
+- Reader (sub or RG)
+- Billing Reader
+- Cost Management Reader
+- Tag Contributor
+- Azure DevOps Basic user (no pipeline access)
+
+**Azure Permissions**
+- Storage Blob Data Reader (scoped, non-sensitive)
+- Managed Identity with Reader only
+- Service principal with Reader on isolated RG
+
+**AD Built-in Groups**
+- Domain Users (default)
+- Read-only DC (RODC)
+
+**AD Permissions**
+- Scoped helpdesk OU read
+- GenericRead on non-priv objects
+
+**Accounts**
+- Standard user accounts
+- Guest accounts
+- Read-only service accounts
+- Managed identities with no RBAC assignments
+- Expired or disabled service principals
 
 </details>
 
@@ -1273,24 +1453,242 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 
 [⤴ Back to top](#top)
 
-| Tier | Examples |
-|---|---|
-| **0** | Domain Controllers, Entra Connect servers, AD CS servers, PAW (Privileged Access Workstations) |
-| **1** | Exchange servers, Jump / RDS bastion hosts, SIEM collectors, ADFS, vCenter, Hypervisor hosts |
-| **2** | File servers, SQL servers, application servers, RDS user hosts, employee workstations with elevated access |
-| **3** | Standard employee workstations, guest devices, kiosks, IoT, print servers, NTP servers |
+<details open>
+<summary><b>Tier-0 — Critical</b></summary>
+
+**Core Identity Infrastructure**
+- Domain Controllers (primary & RODC)
+- AD Certificate Services (root & subordinate CA)
+- Entra Connect / AD Connect servers
+- Federation servers (AD FS primary)
+- HSM-attached servers (root CA keys)
+
+**Privileged Management**
+- PAWs used by Tier-0 admins
+- Backup servers with DC / CA data
+- Monitoring servers with domain agents
+- KMS with domain credential store
+- vCenter / SCVMM managing Tier-0 hypervisors
+- Hypervisor hosts running Tier-0 VMs
+
+**Network & OT**
+- Core routers (BGP / MPLS backbone)
+- Core switches spanning all VLANs
+- Firewall clusters (perimeter & segmentation)
+- Out-of-band mgmt (iDRAC, iLO, IPMI)
+- SD-WAN controllers, load balancers
+- BMS / physical security w/ domain integration
+
+</details>
+
+<details>
+<summary><b>Tier-1 — High</b></summary>
+
+**Servers & Services**
+- Exchange servers
+- MFA / RADIUS servers
+- PKI subordinate CA servers
+- DNS servers (non-DC hosted)
+- AD FS proxy servers
+
+**Privileged Management**
+- PAWs used by Tier-1 admins
+- Jump servers / bastion hosts
+- SIEM & EDR management servers
+- SCCM / MECM primary site servers
+- HashiCorp Vault, Azure Key Vault (private endpoints)
+- WSUS / patch mgmt, PIM approval servers
+- Azure Arc-connected servers with high-priv MI
+
+**Network & Client**
+- NAC servers, VPN concentrators
+- Wireless LAN controllers
+- Proxy servers (SSL inspection)
+- RADIUS / TACACS+ authentication servers
+- Citrix ADC / F5 BIG-IP remote access
+- IT staff workstations (helpdesk, sysadmin, SOC analyst)
+- SCADA / ICS servers (non-Tier-0 adjacent)
+
+</details>
+
+<details>
+<summary><b>Tier-2 — Medium</b></summary>
+
+**Servers & Applications**
+- File servers
+- SharePoint servers
+- SQL servers (sensitive databases)
+- Citrix / RDS session hosts
+- Web apps with Entra-integrated auth
+- API gateway servers
+- Teams on-prem / Skype for Business
+
+**Mgmt & Business Systems**
+- HR & identity lifecycle servers
+- Internal certificate RA servers
+- ITSM servers (ServiceNow, Jira)
+- Log aggregation servers
+- DevOps / CI-CD build agents
+- Kubernetes worker nodes
+- Hypervisor hosts running Tier-2 VMs
+
+**Network**
+- Access-layer switches (user VLANs)
+- Managed wireless access points
+- Network monitoring appliances (read-only)
+- Standalone DHCP servers (non-domain)
+- Content filtering / web proxy appliances
+
+</details>
+
+<details>
+<summary><b>Tier-3 — Low</b></summary>
+
+**Client Devices**
+- Standard user workstations
+- Standard user laptops
+- BYOD devices (unmanaged)
+- Shared / kiosk devices (low-privilege)
+
+**Lab / Test / Dev**
+- Test and lab machines
+- Isolated / air-gapped workstations
+- Training / classroom PCs
+- Non-production VM hosts (isolated)
+
+**Network / Peripherals / IoT**
+- Guest network devices
+- Network-attached printers (no domain integration)
+- IoT sensors without domain integration
+- Consumer-grade Wi-Fi APs (guest)
+- Digital signage endpoints
+
+</details>
 
 <a id="45-asset-classification-azure"></a>
 ### 4.5 Asset classification: Azure
 
 [⤴ Back to top](#top)
 
-| Tier | Examples |
-|---|---|
-| **0** | Tenant root MG, Hub / Identity / Connectivity subscriptions, Key Vaults storing root CA / Entra Connect / break-glass keys, Storage accounts holding DC backups, VMs hosting Tier-0 workloads (DC, ADCS, Entra Connect) |
-| **1** | VMs hosting Exchange / ADFS / vCenter, AKS clusters with privileged workloads, Automation accounts with privileged runbooks, Logic Apps / Function Apps with admin-consented Graph perms |
-| **2** | Workload VMs, SQL DBs holding regulated data, Storage accounts holding business-sensitive content, AKS app clusters |
-| **3** | Dev / test resources, sandbox subs, ephemeral compute |
+<details open>
+<summary><b>Tier-0 — Critical (Total cloud takeover)</b></summary>
+
+**Azure Built-in Roles (Root / Tenant)**
+- Owner — root management group
+- User Access Administrator — root MG
+- Owner — tenant root subscription
+- Contributor + blueprint assign (root MG)
+- Managed Identity Contributor (root scope)
+
+**Identity & Control Plane**
+- Global Administrator (Entra ID)
+- Privileged Role Administrator
+- Hybrid Identity Administrator
+- Partner / GDAP Delegated Admin
+- Break-glass emergency access accounts
+- Service principals — `Directory.ReadWrite.All`
+- Service principals — `RoleManagement.ReadWrite.Directory`
+
+**Critical Azure Resources**
+- Key Vaults storing Tier-0 private keys / HSM
+- Azure AD Connect sync VMs
+- AD FS / Federation servers in Azure
+- Root management groups
+- Lighthouse delegations to external tenants
+- Cross-tenant access policies (admin)
+- Confidential VMs running AD DS (Tier-0)
+
+</details>
+
+<details>
+<summary><b>Tier-1 — High (Fast-track escalation)</b></summary>
+
+**Azure Built-in Roles (Subscription)**
+- Owner — workload subscription
+- User Access Administrator — subscription
+- Key Vault Administrator (non-root)
+- AKS Cluster Admin
+- VM Contributor / Automation Contributor
+- Logic App Contributor
+- Storage Account Contributor (Entra-integrated)
+
+**Workload Identities & Permissions**
+- Managed Identities — Owner at subscription
+- Managed Identity Operator (on high-priv MIs)
+- Service principals with client secrets in Key Vault
+- Azure DevOps project admin with T1 service connection
+- Azure Arc onboarding (Connected Machine Agent)
+- `Application.ReadWrite.All` (Graph app permission)
+- `Policy.ReadWrite.ConditionalAccess`
+
+**Critical Azure Resources**
+- Production Key Vaults (non-root keys)
+- Azure Automation accounts
+- Shared image galleries / custom images
+- Private DNS zones
+- Azure Firewall / Application Gateway
+- Sentinel / SIEM workspaces
+- PIM approval workflow infrastructure
+
+</details>
+
+<details>
+<summary><b>Tier-2 — Medium (Workload impact, conditional escalation)</b></summary>
+
+**Azure Built-in Roles (Workload Scope)**
+- Contributor — single resource group
+- Network Contributor
+- Log Analytics Contributor
+- Monitor Reader
+- Security Reader (Defender for Cloud)
+- AKS Cluster User
+- Automation Operator
+
+**Workload Identities & Permissions**
+- Managed identities scoped to workload
+- Service principals scoped to single RG
+- Azure DevOps service connections (scoped)
+- Storage Blob Data Reader (non-sensitive)
+- Storage Blob Data Contributor (non-sensitive)
+- OAuth apps with scoped permissions
+
+**Workload Azure Resources**
+- Application resource groups
+- Non-production Key Vaults
+- Workload storage accounts
+- App Service plans / Web Apps
+- Non-critical SQL databases
+- Log Analytics workspaces (workload)
+- AKS workload clusters
+
+</details>
+
+<details>
+<summary><b>Tier-3 — Low (Low blast radius, limited lateral movement)</b></summary>
+
+**Azure Built-in Roles (Read / Isolated)**
+- Reader — subscription or resource group
+- Billing Reader
+- Cost Management Reader
+- Tag Contributor
+- Azure DevOps Basic user (no pipeline)
+
+**Low-Privilege Identities**
+- Managed identities with Reader only
+- Service principals with Reader on isolated RG
+- Expired or disabled service principals
+- Guest users (default scope)
+- OAuth apps — delegated self-scope (`User.Read`, `Mail.Read`)
+
+**Isolated Azure Resources**
+- Dev / test resource groups
+- Sandbox subscriptions
+- Demo storage accounts
+- Storage Blob Data Reader (isolated, non-sensitive)
+- Decommissioned workload RGs
+- Evaluation / PoC environments
+
+</details>
 
 ---
 

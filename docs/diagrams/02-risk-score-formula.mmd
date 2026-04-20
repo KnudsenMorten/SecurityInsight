@@ -1,0 +1,10 @@
+%% The Risk Score formula: Severity * (Criticality + Risk Factors).
+%% Used in README § 2.2 (Risk Score model).
+flowchart LR
+    SEV[📛 Severity<br/>from Defender] --> CONS[Consequence Score<br/>1–4]
+    CRIT[🏷️ Criticality tier<br/>from Tagging] --> PROB[Probability Score<br/>1–4]
+    RF[⚡ Risk factors<br/>internet-exposed,<br/>public exploit,<br/>active-exploitation,<br/>lateral-move path, ...] -->|+1 each| PROB
+    CONS --> MULT[× ]
+    PROB --> MULT
+    MULT --> SCORE[🎯 Risk Score<br/>0–32]
+    style SCORE fill:#e8ffe8,stroke:#1a7a1a,stroke-width:2px

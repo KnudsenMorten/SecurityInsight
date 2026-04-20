@@ -1,0 +1,10 @@
+%% Attack path: how an attacker traverses 4 connected systems to reach a Domain Controller.
+%% Used in README § 2.1 (Why a graph, not a list).
+flowchart LR
+    A[🧑 End-user<br/>device<br/><i>phishing</i>] -->|lateral<br/>move| B[🖥️ Application<br/>server]
+    B -->|service<br/>account abuse| C[🔑 Service<br/>account]
+    C -->|credential<br/>theft / DCSync| D[🏛️ Domain<br/>Controller]
+    style A fill:#e8f4fd,stroke:#2a6592
+    style B fill:#fff4e1,stroke:#b07a00
+    style C fill:#fff0f0,stroke:#b03030
+    style D fill:#ffd6d6,stroke:#8b0000

@@ -2812,6 +2812,10 @@
 
                 CredentialLabels_Path = make_set(tostring(CredentialNodeLabel)),
                 SourceAssets_Path     = make_set(tostring(FirstGitHubSourceName)),
+                // TargetAssets_Path is what AssetCount (dcount(FinalTargetId)) actually counts --
+                // the Azure resources under attack. ImpactedAssets below uses this so the
+                // asset-count and the asset-names match the same entity (targets).
+                TargetAssets_Path     = make_set(tostring(FinalTargetName)),
                 TotalIssues_Path      = count()
               by
                 PathKey,
@@ -2837,7 +2841,7 @@
                 AssetCount   = dcount(FinalTargetId),
                 TotalIssues  = sum(TotalIssues_Path),
 
-                ImpactedAssets = strcat_array(array_sort_asc(make_set(strcat_array(SourceAssets_Path, ";"))), ";")
+                ImpactedAssets = strcat_array(array_sort_asc(make_set(strcat_array(TargetAssets_Path, ";"))), ";")
               by
                 SecurityDomain,
                 Category,
@@ -7507,6 +7511,10 @@
                 TargetRiskProbDetailedScore_Path = any(TargetRiskProbDetailedScore),
                 CredentialTypes_Set = make_set(tostring(CredentialNodeLabel)),
                 SourceAssets_Set    = make_set(tostring(DeviceNodeName)),
+                // TargetAssets_Set is what AssetCount (dcount(FinalTargetId)) actually counts --
+                // the Azure resources under attack. ImpactedAssets below uses this so the
+                // asset-count and the asset-names match the same entity (targets).
+                TargetAssets_Set    = make_set(tostring(FinalTargetName)),
                 TotalIssues_Path    = count()
               by
                 PathKey,
@@ -7531,7 +7539,7 @@
                 RiskFactor_Probability = max(TargetRiskProb_Path),
                 AssetCount  = dcount(FinalTargetId),
                 TotalIssues = sum(TotalIssues_Path),
-                ImpactedAssets = strcat_array(array_sort_asc(make_set(strcat_array(SourceAssets_Set, ";"))), ";")
+                ImpactedAssets = strcat_array(array_sort_asc(make_set(strcat_array(TargetAssets_Set, ";"))), ";")
               by
                 SecurityDomain,
                 Category,
@@ -8072,6 +8080,10 @@
                 TargetRiskProbDetailedScore_Path = any(TargetRiskProbDetailedScore),
                 CredentialLabels_Path            = make_set(tostring(CredentialLabel)),
                 SourceAssets_Path                = make_set(tostring(FirstSourceAssetName)),
+                // TargetAssets_Path is what AssetCount (dcount(FinalTargetId)) actually counts --
+                // the Azure resources under attack. ImpactedAssets below uses this so the
+                // asset-count and the asset-names match the same entity (targets).
+                TargetAssets_Path                = make_set(tostring(FinalTargetName)),
                 TotalIssues_Path                 = count()
               by
                 PathKey,
@@ -8093,7 +8105,7 @@
                 RiskFactor_Probability = max(TargetRiskProb_Path),
                 AssetCount             = dcount(FinalTargetId),
                 TotalIssues            = sum(TotalIssues_Path),
-                ImpactedAssets         = strcat_array(array_sort_asc(make_set(strcat_array(SourceAssets_Path, ";"))), ";")
+                ImpactedAssets         = strcat_array(array_sort_asc(make_set(strcat_array(TargetAssets_Path, ";"))), ";")
               by
                 SecurityDomain,
                 Category,

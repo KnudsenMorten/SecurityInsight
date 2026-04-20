@@ -2982,6 +2982,49 @@ if ($ResultAll.Count -eq 0) {
       $_
     }
 
+    # -------------------------------------------------------------------------
+    # TraceName + TraceID -- stable, deterministic identity columns applied
+    # to every RiskAnalysis row (both Summary and Detailed output modes).
+    #
+    # Purpose:
+    #   - Management reporting: "is observation X still open? how many assets?"
+    #     Group by TraceID across runs to see history.
+    #   - ServiceNow / ITSM integration: use TraceID as the external correlation
+    #     key so open/close/reopen events line up without fuzzy matching.
+    #
+    # TraceName = "<ConfigurationName>-<SecuritySeverity>-<CriticalityTierLevel>"
+    #   e.g. "Block rebooting machine in Safe Mode-High-Medium - tier 2"
+    #   Human-readable; safe to use as a ticket title.
+    #
+    # TraceID = first 16 hex chars of SHA256(TraceName_lowercased_utf8)
+    #   e.g. "a3f1c2d4e5f6a7b8"
+    #   Deterministic: same inputs always produce the same ID. Case-insensitive
+    #   by design (lowercased before hashing) so minor casing drift in source
+    #   data (Defender vs Exposure Graph) doesn't produce a "new" ID.
+    # -------------------------------------------------------------------------
+    $__sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        foreach ($row in @($Shaped)) {
+            $cfgName = if ($row.PSObject.Properties['ConfigurationName'])    { [string]$row.ConfigurationName }    else { '' }
+            $sev     = if ($row.PSObject.Properties['SecuritySeverity'])     { [string]$row.SecuritySeverity }     else { '' }
+            $tier    = if ($row.PSObject.Properties['CriticalityTierLevel']) { [string]$row.CriticalityTierLevel } else { '' }
+            $traceName = ('{0}-{1}-{2}' -f $cfgName, $sev, $tier)
+            $traceId = ''
+            if (-not [string]::IsNullOrWhiteSpace($traceName)) {
+                $bytes   = [System.Text.Encoding]::UTF8.GetBytes($traceName.ToLowerInvariant())
+                $hash    = $__sha.ComputeHash($bytes)
+                $traceId = ([System.BitConverter]::ToString($hash) -replace '-','').Substring(0, 16).ToLowerInvariant()
+            }
+            Add-Member -InputObject $row -NotePropertyName 'TraceName' -NotePropertyValue $traceName -Force
+            Add-Member -InputObject $row -NotePropertyName 'TraceID'   -NotePropertyValue $traceId   -Force
+        }
+    } finally { if ($__sha) { $__sha.Dispose() } }
+
+    # Include TraceName + TraceID in the final column order.
+    if ($DesiredColumns -notcontains 'TraceName') { $DesiredColumns += 'TraceName' }
+    if ($DesiredColumns -notcontains 'TraceID')   { $DesiredColumns += 'TraceID' }
+    $Shaped = $Shaped | Select-Object -Property $DesiredColumns
+
     if (-not $global:FinalRiskScoreColumnName -and -not [string]::IsNullOrWhiteSpace($RiskScoreOutputName)) {
         $global:FinalRiskScoreColumnName = $RiskScoreOutputName
     }

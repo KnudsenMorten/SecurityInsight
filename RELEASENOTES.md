@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.140
+## v2.1.141
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): byte-for-byte resync of sections 4.3 / 4.4 / 4.5 from c:\tmp\README.md (2cfa587a)
 - docs(SI RELEASENOTES): split MEM26 resync entry to v2.1.140 (v2.1.139 already used) (804836ed)
 - docs(SI README): resync sections 4.1-4.5 to verbatim text from MEM26 PDF (134fb73c)
 - docs(SI README): Power BI 'Beta' + fill §5 What's-New gap from v2.1.113..v2.1.129 (544af373)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - refactor(SI): single-source module set -- Ensure-SecurityInsightModules (88cd89b1)
 - refactor(SI): centralize module guards -- every engine uses _shared/Ensure-Module (ab435826)
 - feat(SI): centralize Ensure-Module helper under SCRIPTS/_shared/ (6ccf68f9)
-- feat(SI YAML): merge Custom queries into Locked (ship curated defaults) (28662620)
 
 ---
 
@@ -48,6 +48,10 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.141 — § 4.3 / 4.4 / 4.5 byte-for-byte resync from authoritative source README
+
+- 📚 **Sections 4.3 (Identity), 4.4 (Endpoint), 4.5 (Azure) now mirror the upstream catalog `c:\tmp\README.md` byte-for-byte** (verified row-MD5 + grep diff). Source format preserved verbatim — single-row 2-column markdown tables with inline `<br />` separators between sub-categories (Entra ID Roles / Application Permissions / Azure Built-in Roles / Azure Permissions / AD / AD Built-in Groups / AD Permissions / Accounts for Identity; Server Roles / Management / Infrastructure / Hypervisor / Network Equipment / IoT/OT / Client Devices for Endpoint; Compute / Storage / Identity & Access / Networking / Management & Governance / Hypervisor & Fabric for Azure). Includes the upstream disclaimer about classifications being a "strategic prioritization framework, not a definitive or exhaustive measure of asset risk".
 
 ### v2.1.140 — § 4.1–4.5 resync to verbatim MEM26 PDF text
 

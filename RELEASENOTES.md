@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.60
+## v2.1.61
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI export): auto-create blob container + best-effort RBAC grant (7d6328a)
+- fix(SI): filter DCE/DCR caches to target subscription to stop cross-sub name collision (a9bfbe9)
 
 ---
 

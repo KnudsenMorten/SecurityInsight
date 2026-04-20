@@ -298,10 +298,14 @@ Write-Ok "Location   : $WorkspaceLocation"
 
 #########################################################################################################
 # BUILD DCE/DCR CACHE
+#
+# Filter to $SubscriptionId so duplicate-named DCEs/DCRs in other subs don't
+# poison the module's internal name lookup (would cause a 403 "DCE FQDN not
+# associated with DCR immutable Id" error on ingest).
 #########################################################################################################
 
 Write-Sep
-Write-Step "Building DCE/DCR global cache"
+Write-Step "Building DCE/DCR global cache (filtered to sub: $SubscriptionId)"
 
 $global:AzDceDetails = Invoke-WithRetry -OperationName "List DCEs" -ScriptBlock {
     Get-AzDceListAll -TenantId $TenantId -Verbose:$false
@@ -309,6 +313,18 @@ $global:AzDceDetails = Invoke-WithRetry -OperationName "List DCEs" -ScriptBlock 
 $global:AzDcrDetails = Invoke-WithRetry -OperationName "List DCRs" -ScriptBlock {
     Get-AzDcrListAll -TenantId $TenantId -Verbose:$false
 }
+
+# Filter both caches to the target subscription (matches the DCE/DCR objects'
+# subscriptionId property, or parses from .id when the property is absent).
+$__filterToSub = {
+    param($item, [string]$sub)
+    $s = [string]$item.subscriptionId
+    if ([string]::IsNullOrWhiteSpace($s) -and $item.id -match '/subscriptions/([^/]+)/') { $s = $Matches[1] }
+    return ($s -eq $sub)
+}
+if ($global:AzDceDetails) { $global:AzDceDetails = @($global:AzDceDetails | Where-Object { & $__filterToSub $_ $SubscriptionId }) }
+if ($global:AzDcrDetails) { $global:AzDcrDetails = @($global:AzDcrDetails | Where-Object { & $__filterToSub $_ $SubscriptionId }) }
+
 Write-Ok "DCE cache: $(($global:AzDceDetails | Measure-Object).Count) | DCR cache: $(($global:AzDcrDetails | Measure-Object).Count)"
 
 #########################################################################################################

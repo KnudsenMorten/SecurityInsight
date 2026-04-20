@@ -18,13 +18,26 @@
 function Ensure-SecurityInsightAzDceDcrCache {
     <#
     Builds $global:AzDceDetails and $global:AzDcrDetails using the user's
-    AzLogDcrIngestPS module if either is empty. Safe to call repeatedly.
+    AzLogDcrIngestPS module if either is empty.
+
+    When $SubscriptionId is supplied, the resulting caches are FILTERED to only
+    entries in that subscription. This is essential when the same DCE/DCR name
+    exists in multiple subscriptions (e.g. the SecurityInsight solution deployed
+    to both an internal platform sub AND a community test sub): without the
+    filter, the module's internal name-based lookup inside
+    Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output picks the first match
+    across all subs and the ingestion API rejects the call with:
+      "The data collection endpoint FQDN '...' is not associated with the
+       data collection rule with immutable Id '...'."
+
+    Safe to call repeatedly.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string] $AzAppId,
         [Parameter(Mandatory)] [string] $AzAppSecret,
         [Parameter(Mandatory)] [string] $TenantId,
+        [string] $SubscriptionId,
         [switch] $Force
     )
     if ($Force -or -not $global:AzDceDetails) {
@@ -32,6 +45,24 @@ function Ensure-SecurityInsightAzDceDcrCache {
     }
     if ($Force -or -not $global:AzDcrDetails) {
         $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -Verbose:$false
+    }
+
+    # Filter to target subscription so duplicate-name lookups across subs don't
+    # pick the wrong resource. Both DCE and DCR objects carry a subscriptionId
+    # property; fall back to parsing it from the ARM .id string when absent.
+    if (-not [string]::IsNullOrWhiteSpace($SubscriptionId)) {
+        $__filterToSub = {
+            param($item, [string]$sub)
+            $s = [string]$item.subscriptionId
+            if ([string]::IsNullOrWhiteSpace($s) -and $item.id -match '/subscriptions/([^/]+)/') { $s = $Matches[1] }
+            return ($s -eq $sub)
+        }
+        if ($global:AzDceDetails) {
+            $global:AzDceDetails = @($global:AzDceDetails | Where-Object { & $__filterToSub $_ $SubscriptionId })
+        }
+        if ($global:AzDcrDetails) {
+            $global:AzDcrDetails = @($global:AzDcrDetails | Where-Object { & $__filterToSub $_ $SubscriptionId })
+        }
     }
 }
 
@@ -96,7 +127,7 @@ function Ensure-SecurityInsightDce {
         [Parameter(Mandatory)] [string] $AzAppSecret,
         [string] $IngestionSpnObjectId
     )
-    Ensure-SecurityInsightAzDceDcrCache -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId
+    Ensure-SecurityInsightAzDceDcrCache -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -SubscriptionId $SubscriptionId
 
     $dce = @($global:AzDceDetails | Where-Object { $_.name -eq $DceName }) | Select-Object -First 1
     if ($dce) {
@@ -128,7 +159,7 @@ function Ensure-SecurityInsightDce {
         Start-Sleep -Seconds 10
     }
 
-    Ensure-SecurityInsightAzDceDcrCache -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -Force
+    Ensure-SecurityInsightAzDceDcrCache -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -SubscriptionId $SubscriptionId -Force
     $dce = @($global:AzDceDetails | Where-Object { $_.name -eq $DceName }) | Select-Object -First 1
     if (-not $dce) {
         throw "DCE '$DceName' was created but did not appear in the refreshed cache -- provisioning state may still be 'Creating'"

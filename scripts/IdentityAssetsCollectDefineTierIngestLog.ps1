@@ -3345,11 +3345,17 @@ try {
     Connect-AzAccount -ServicePrincipal -Tenant $TenantId -Credential $global:Credential -WarningAction SilentlyContinue | Out-Null
     Set-AzContext -SubscriptionId $WorkspaceSubscriptionId -TenantId $TenantId -ErrorAction Stop | Out-Null
 
-    # Refresh DCE/DCR cache (uses ARM tokens)
-    $global:AzDceDetails = Get-AzDceListAll -AzAppId $IngestionSpnClientId -AzAppSecret $IngestionSpnClientSecret -TenantId $TenantId -Verbose:$false
-    $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $IngestionSpnClientId -AzAppSecret $IngestionSpnClientSecret -TenantId $TenantId -Verbose:$false
+    # Refresh DCE/DCR cache (uses ARM tokens). Filter to the target subscription
+    # so duplicate-named DCEs/DCRs in other subs don't poison the module's
+    # internal name lookup inside Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output.
+    Ensure-SecurityInsightAzDceDcrCache `
+        -AzAppId        $IngestionSpnClientId `
+        -AzAppSecret    $IngestionSpnClientSecret `
+        -TenantId       $TenantId `
+        -SubscriptionId $WorkspaceSubscriptionId `
+        -Force
 
-    Write-Ok "Auth tokens and DCE/DCR cache refreshed"
+    Write-Ok "Auth tokens and DCE/DCR cache refreshed (filtered to sub: $WorkspaceSubscriptionId)"
 } catch {
     Write-Warn "Token refresh failed: $($_.Exception.Message) - continuing with existing tokens"
 }

@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.116
+## v2.1.117
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI): daily auto-refresh via scheduled Step 0 task (8c9a00f)
+- fix(SI _shared): emit 'Checking N modules...' banner so customers don't think it hung (a463dd2)
 
 ---
 

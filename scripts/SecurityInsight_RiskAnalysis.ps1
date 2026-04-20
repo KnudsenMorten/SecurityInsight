@@ -79,15 +79,36 @@ foreach ($g in $optionalGlobals) {
 if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
   $global:SettingsPath = $PSScriptRoot
 }
-if (-not $global:ReportTemplate -or [string]::IsNullOrWhiteSpace([string]$global:ReportTemplate)) {
-  # Default matches a template name actually shipped in the Locked YAML.
-  # Other choice: RiskAnalysis_Detailed_Bucket (full per-row detail).
-  $global:ReportTemplate = 'RiskAnalysis_Summary_Bucket'
-}
 if ($null -eq $global:OverwriteXlsx)          { $global:OverwriteXlsx = $true  }
 if ($null -eq $global:AutomationFramework)   { $global:AutomationFramework = $false }
 if ($null -eq $global:Summary)               { $global:Summary = $false }
 if ($null -eq $global:Detailed)              { $global:Detailed = $false }
+
+# Mode override helpers -- lets a launcher flip between Summary/Detailed runs
+# without editing $global:ReportTemplate directly. Explicit $global:Summary /
+# $global:Detailed still win (set above or by the launcher). These only bump
+# the mode to $true; they never force it to $false.
+if ([bool]$global:RiskAnalysis_Detailed_Override) { $global:Detailed = $true }
+if ([bool]$global:RiskAnalysis_Summary_Override)  { $global:Summary  = $true }
+
+# Resolve $global:ReportTemplate. Precedence:
+#   1. Explicit $global:ReportTemplate (launcher wins per-run)
+#   2. $global:Detailed = $true -> $global:RiskAnalysis_ReportTemplate_Default_Detailed
+#                                  (default: 'RiskAnalysis_Detailed_Bucket')
+#   3. $global:Summary  = $true -> $global:RiskAnalysis_ReportTemplate_Default_Summary
+#                                  (default: 'RiskAnalysis_Summary_Bucket')
+#   4. Fallback: 'RiskAnalysis_Summary_Bucket'
+if (-not $global:ReportTemplate -or [string]::IsNullOrWhiteSpace([string]$global:ReportTemplate)) {
+    $__tmplDefaultDetailed = if (-not [string]::IsNullOrWhiteSpace([string]$global:RiskAnalysis_ReportTemplate_Default_Detailed)) {
+        [string]$global:RiskAnalysis_ReportTemplate_Default_Detailed
+    } else { 'RiskAnalysis_Detailed_Bucket' }
+    $__tmplDefaultSummary  = if (-not [string]::IsNullOrWhiteSpace([string]$global:RiskAnalysis_ReportTemplate_Default_Summary)) {
+        [string]$global:RiskAnalysis_ReportTemplate_Default_Summary
+    } else { 'RiskAnalysis_Summary_Bucket' }
+    if     ([bool]$global:Detailed) { $global:ReportTemplate = $__tmplDefaultDetailed }
+    elseif ([bool]$global:Summary)  { $global:ReportTemplate = $__tmplDefaultSummary }
+    else                            { $global:ReportTemplate = $__tmplDefaultSummary }
+}
 if ($null -eq $global:SendMail)              { $global:SendMail = $false }
 if ($null -eq $global:BuildSummaryByAI)      { $global:BuildSummaryByAI = $false }
 if ($null -eq $global:ShowConfig)            { $global:ShowConfig = $false }
@@ -147,10 +168,18 @@ if ([string]::IsNullOrWhiteSpace([string]$global:ReportTemplate)) {
   throw "Global:ReportTemplate is empty. Launcher must set it."
 }
 
-# If SendMail is enabled, MailTo must exist (non-automation path uses this)
+# If SendMail is enabled, at least one recipient source must be populated --
+# either the flat $global:MailTo or a per-template _To (new or legacy names).
 if ($global:SendMail -eq $true) {
-  if (-not $global:MailTo -or @($global:MailTo).Count -eq 0) {
-    throw "Global:SendMail is true, but Global:MailTo is empty."
+  $__hasFlatMailTo = ($global:MailTo -and @($global:MailTo).Count -gt 0)
+  $__hasPerTmplTo  = (
+      ($global:RiskAnalysis_Detailed_To        -and @($global:RiskAnalysis_Detailed_To).Count        -gt 0) -or
+      ($global:RiskAnalysis_Summary_To         -and @($global:RiskAnalysis_Summary_To).Count         -gt 0) -or
+      ($global:Mail_SecurityInsight_Detailed_To -and @($global:Mail_SecurityInsight_Detailed_To).Count -gt 0) -or
+      ($global:Mail_SecurityInsight_Summary_To  -and @($global:Mail_SecurityInsight_Summary_To).Count  -gt 0)
+  )
+  if (-not $__hasFlatMailTo -and -not $__hasPerTmplTo) {
+    throw "Global:SendMail is true, but no recipients are set. Populate Global:MailTo, or a per-template `$global:RiskAnalysis_(Detailed|Summary)_To / `$global:Mail_SecurityInsight_(Detailed|Summary)_To."
   }
 }
 
@@ -1833,13 +1862,39 @@ if ([bool]$global:AutomationFramework) {
     Write-Info "Chosen ReportTemplate: $($global:ReportTemplate)"
 
     #------------------------------------------------------------------------------------------------------------
-    # Mail routing
+    # Mail routing (community) -- supports per-template Detailed/Summary splits with
+    # new + legacy name fallback, and falls back to the flat $global:SendMail /
+    # $global:MailTo when per-template vars aren't set.
     #------------------------------------------------------------------------------------------------------------
-    $global:Report_SendMail = [bool]$global:SendMail
-    $global:Report_To       = @($global:MailTo)
+    $__detailedSend = if ($null -ne $global:RiskAnalysis_Detailed_SendMail)                 { [bool]$global:RiskAnalysis_Detailed_SendMail }
+                      elseif ($null -ne $global:Mail_SecurityInsight_Detailed_SendMail)     { [bool]$global:Mail_SecurityInsight_Detailed_SendMail }
+                      else                                                                  { $null }
+    $__detailedTo   = if ($global:RiskAnalysis_Detailed_To)                                 { @($global:RiskAnalysis_Detailed_To) }
+                      elseif ($global:Mail_SecurityInsight_Detailed_To)                     { @($global:Mail_SecurityInsight_Detailed_To) }
+                      else                                                                  { @() }
+    $__summarySend  = if ($null -ne $global:RiskAnalysis_Summary_SendMail)                  { [bool]$global:RiskAnalysis_Summary_SendMail }
+                      elseif ($null -ne $global:Mail_SecurityInsight_Summary_SendMail)      { [bool]$global:Mail_SecurityInsight_Summary_SendMail }
+                      else                                                                  { $null }
+    $__summaryTo    = if ($global:RiskAnalysis_Summary_To)                                  { @($global:RiskAnalysis_Summary_To) }
+                      elseif ($global:Mail_SecurityInsight_Summary_To)                      { @($global:Mail_SecurityInsight_Summary_To) }
+                      else                                                                  { @() }
 
-    if ($global:Report_SendMail -and (-not $global:Report_To -or $global:Report_To.Count -eq 0)) {
-        throw "SendMail was enabled, but no recipients were provided (MailTo is empty)."
+    if ([bool]$global:Detailed) {
+        Write-Info "Mail mode selected: Detailed"
+        $global:Report_SendMail = if ($null -ne $__detailedSend) { $__detailedSend } else { [bool]$global:SendMail }
+        $global:Report_To       = if ($__detailedTo.Count -gt 0) { $__detailedTo }   else { @($global:MailTo) }
+    } elseif ([bool]$global:Summary) {
+        Write-Info "Mail mode selected: Summary"
+        $global:Report_SendMail = if ($null -ne $__summarySend)  { $__summarySend } else { [bool]$global:SendMail }
+        $global:Report_To       = if ($__summaryTo.Count -gt 0)  { $__summaryTo }   else { @($global:MailTo) }
+    } else {
+        Write-Info "Mail mode selected: Default (neither Detailed nor Summary set)"
+        $global:Report_SendMail = [bool]$global:SendMail
+        $global:Report_To       = @($global:MailTo)
+    }
+
+    if ($global:Report_SendMail -and (-not $global:Report_To -or @($global:Report_To).Count -eq 0)) {
+        throw "SendMail was enabled, but no recipients were provided (MailTo empty and no matching per-template _To)."
     }
 
     Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))

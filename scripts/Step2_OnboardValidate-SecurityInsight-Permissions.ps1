@@ -264,7 +264,19 @@ try {
     Import-Module Az.Resources -ErrorAction Stop -WarningAction SilentlyContinue
     switch ($AuthMethod) {
         'Interactive' {
-            Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            # Try the default browser credential first. If the user's local
+            # Az.Accounts / Azure.Identity DLL graph is mismatched (a very
+            # common environment issue) this path throws
+            # MissingMethodException on InteractiveBrowserCredential.
+            # Fall back to device code auth -- different credential type,
+            # different code path, unaffected by the same DLL bug.
+            try {
+                Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            } catch [System.MissingMethodException] {
+                Write-Skip "browser credential path failed (Az.Accounts / Azure.Identity DLL mismatch in local module env)"
+                Write-Info "retrying with device code authentication..."
+                Connect-AzAccount -UseDeviceAuthentication -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+            }
         }
         'ManagedIdentity' {
             if ($AuthClientId) {
@@ -287,6 +299,18 @@ try {
 } catch {
     Write-Err2 ("Connect-AzAccount failed: {0}" -f $_.Exception.Message)
     Add-Result -Category 'Azure RBAC' -Item 'Connect-AzAccount' -Status 'FAIL' -Detail $_.Exception.Message
+    if ($_.Exception -is [System.MissingMethodException]) {
+        Write-Host ""
+        Write-Host "  This is a local Az.Accounts / Azure.Identity module environment mismatch, not a SecurityInsight bug." -ForegroundColor Yellow
+        Write-Host "  Typical cause: an older Azure.Identity.dll is being loaded from a sibling module (often Microsoft.Graph)" -ForegroundColor Yellow
+        Write-Host "  ahead of the one Az.Accounts expects. To fix:" -ForegroundColor Yellow
+        Write-Host "    1. Close ALL PowerShell windows (DLLs are locked for the lifetime of the AppDomain)." -ForegroundColor Yellow
+        Write-Host "    2. Open a NEW PowerShell as Administrator." -ForegroundColor Yellow
+        Write-Host "    3. Run:   Update-Module Az.Accounts -Force" -ForegroundColor Yellow
+        Write-Host "       (or)   Uninstall-Module Az.Accounts -AllVersions -Force; Install-Module Az.Accounts -Force" -ForegroundColor Yellow
+        Write-Host "    4. Close PowerShell again, open a fresh one, re-run the Step 2 launcher." -ForegroundColor Yellow
+        Write-Host ""
+    }
     throw
 }
 

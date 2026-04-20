@@ -358,6 +358,7 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 | **Step 2** | Create the SecurityInsight SPN. Grants Graph / Defender / ATP API permissions + Azure `Reader` + `Tag Contributor` at tenant-root MG (default). Idempotent.<br/>`LAUNCHERS/Step2_OnboardValidate-SecurityInsight-Permissions/` | **None** — community-vm falls back to interactive Graph sign-in. Fill in `LauncherConfig.custom.ps1` only to run unattended. |
 | **Step 3** | Provision Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` table + RBAC for the SPN.<br/>`LAUNCHERS/Step3_OnboardValidate-SecurityInsight-LogAnalytics/` | **Yes** — 4 lines (auth + subscription). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`. |
 | **Step 4** *(opt.)* | Provision pay-as-you-go Azure OpenAI account + model deployment. Only needed for RiskAnalysis AI summaries (`-BuildSummaryByAI`).<br/>`LAUNCHERS/Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | **Yes** — 8 lines (auth + placement + account/deployment names). |
+| **Step 5** *(opt.)* | Deploy the Risk Analysis management dashboard into the customer's Power BI tenant via REST API. One-time per customer + re-run when the `.pbix` design changes.<br/>`LAUNCHERS/Step5_Deploy-SecurityInsight-PowerBI-Dashboard/` | **Yes** — Power BI SPN + LA workspace ID. See [`DOCS/PowerBI-Prerequisites.md`](DOCS/PowerBI-Prerequisites.md) for the one-time tenant setup. |
 
 **Ingestion engines** (run on a schedule after the Steps):
 

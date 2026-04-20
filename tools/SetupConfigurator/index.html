@@ -93,6 +93,7 @@
       <button data-tab="step1" class="active" type="button">Step 2 — Permissions</button>
       <button data-tab="step2" type="button">Step 3 — Log Analytics</button>
       <button data-tab="step3" type="button">Step 4 — Azure OpenAI</button>
+      <button data-tab="step5" type="button">Step 5 — Power BI</button>
       <button data-tab="engines" type="button">Ingestion engines</button>
     </div>
 
@@ -296,6 +297,70 @@
       </div>
     </section>
 
+    <!-- STEP 5 -->
+    <section id="tab-step5" class="panel" hidden>
+      <h2>Step 5 — Deploy Power BI dashboard</h2>
+      <div class="panel-sub">Pushes the SecurityInsight management dashboard (.pbix) into the customer's Power BI tenant. One-time setup + re-run when you rev the dashboard design.</div>
+
+      <div class="panel-block warn">
+        <strong>Prereqs (one-time per tenant).</strong> See <code>DOCS/PowerBI-Prerequisites.md</code>: create a Power BI SPN, grant <code>Workspace.ReadWrite.All</code> + <code>Dataset.ReadWrite.All</code> API permissions, flip the Power BI admin tenant setting "Allow service principals to use Power BI APIs", add the SPN as admin on the target workspace (or let Step 5 create the workspace).
+      </div>
+
+      <h3 style="font-size:14px;">Auth (Power BI SPN)</h3>
+      <div class="field">
+        <label for="s5_auth_method">Auth method</label>
+        <select id="s5_auth_method">
+          <option value="SpnSecret">SPN + Secret (most common)</option>
+          <option value="SpnCertificate">SPN + Certificate</option>
+          <option value="ManagedIdentity">Managed Identity (Azure host)</option>
+          <option value="Interactive">Interactive (device code, ops laptop)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="field"><label for="s5_tenant">Tenant ID</label><input type="text" id="s5_tenant" placeholder="tenant-id-guid" /></div>
+        <div class="field s5-spn"><label for="s5_client">SPN client ID</label><input type="text" id="s5_client" placeholder="powerbi-spn-app-id" /></div>
+      </div>
+      <div class="field s5-secret"><label for="s5_secret">SPN client secret</label><input type="password" id="s5_secret" /></div>
+      <div class="field s5-cert"><label for="s5_thumb">Cert thumbprint</label><input type="text" id="s5_thumb" /></div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Log Analytics binding (REQUIRED)</h3>
+      <div class="panel-block">
+        The dashboard queries this LA workspace at open time. Copy from the LA portal → Properties → Workspace ID (the GUID, NOT the full Resource ID).
+      </div>
+      <div class="row">
+        <div class="field required"><label for="s5_laws">LA Workspace ID (GUID)</label><input type="text" id="s5_laws" placeholder="abc12345-6789-...-000000000000" /></div>
+        <div class="field required"><label for="s5_latenant">LA Tenant ID</label><input type="text" id="s5_latenant" placeholder="tenant-id-guid (usually same as SPN tenant)" /></div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Target workspace + report (optional)</h3>
+      <div class="row">
+        <div class="field"><label for="s5_pbiws">Power BI workspace name</label><input type="text" id="s5_pbiws" placeholder="SecurityInsight-Reports (default)" /></div>
+        <div class="field"><label for="s5_report">Report name</label><input type="text" id="s5_report" placeholder="SecurityInsight - Risk Analysis (default)" /></div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Dashboard parameters (optional)</h3>
+      <div class="row">
+        <div class="field"><label for="s5_stale">StalenessDays</label><input type="text" id="s5_stale" placeholder="30 (default)" /></div>
+        <div class="field"><label for="s5_topn">TopNFindings</label><input type="text" id="s5_topn" placeholder="25 (default)" /></div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">AAD group access (optional)</h3>
+      <div class="field">
+        <label for="s5_aadgroup">AAD group objectId (adds as workspace Viewer)</label>
+        <input type="text" id="s5_aadgroup" placeholder="aad-group-objectid (leave blank to manage access in the portal)" />
+      </div>
+      <div class="field">
+        <label for="s5_aadrole">Role granted to that group</label>
+        <select id="s5_aadrole">
+          <option value="">(none -- leave group access unchanged)</option>
+          <option value="Viewer">Viewer (recommended for managers)</option>
+          <option value="Member">Member</option>
+          <option value="Contributor">Contributor</option>
+          <option value="Admin">Admin</option>
+        </select>
+      </div>
+    </section>
+
     <!-- ENGINES -->
     <section id="tab-engines" class="panel" hidden>
       <h2>Ingestion engines</h2>
@@ -451,18 +516,21 @@ const sections = {
   step1:  document.getElementById('tab-step1'),
   step2:  document.getElementById('tab-step2'),
   step3:  document.getElementById('tab-step3'),
+  step5:  document.getElementById('tab-step5'),
   engines:document.getElementById('tab-engines'),
 };
 const targetPaths = {
   step1:  'LAUNCHERS\\Step2_OnboardValidate-SecurityInsight-Permissions\\LauncherConfig.custom.ps1',
   step2:  'LAUNCHERS\\Step3_OnboardValidate-SecurityInsight-LogAnalytics\\LauncherConfig.custom.ps1',
   step3:  'LAUNCHERS\\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\\LauncherConfig.custom.ps1',
+  step5:  'LAUNCHERS\\Step5_Deploy-SecurityInsight-PowerBI-Dashboard\\LauncherConfig.custom.ps1',
   engines:'LAUNCHERS\\<engine folder>\\LauncherConfig.custom.ps1',
 };
 const launcherCmds = {
   step1:   { cmd: '.\\LAUNCHERS\\Step2_OnboardValidate-SecurityInsight-Permissions\\launcher.community-vm.template.ps1',           note: 'Interactive browser sign-in by a Privileged Role Admin with tenant-root UAA. The engine creates the SPN, grants API perms, and assigns Reader + Tag Contributor at the tenant-root MG.' },
   step2:   { cmd: '.\\LAUNCHERS\\Step3_OnboardValidate-SecurityInsight-LogAnalytics\\launcher.community-vm.template.ps1',           note: 'Provisions the Log Analytics workspace + DCE + DCR + SI_IdentityAssets_CL table + RBAC for the SPN. Idempotent — re-run any time to validate drift.' },
   step3:   { cmd: '.\\LAUNCHERS\\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\\launcher.community-vm.template.ps1', note: 'Provisions the pay-as-you-go Azure OpenAI account + model deployment. Skip this tab if you don\'t need -BuildSummaryByAI on RiskAnalysis.' },
+  step5:   { cmd: '.\\LAUNCHERS\\Step5_Deploy-SecurityInsight-PowerBI-Dashboard\\launcher.community-vm.template.ps1',           note: 'Uploads the .pbix to the Power BI tenant, creates or finds the workspace, rebinds the LA parameters, optionally grants an AAD group access, and queues an initial refresh. One-time per customer; re-run whenever the .pbix design changes.' },
   enginesRA:  { cmd: '.\\LAUNCHERS\\SecurityInsight_RiskAnalysis\\launcher.community-vm.template.ps1',           note: 'Runs the Risk Analysis engine. Output lands in OUTPUT/ + (optionally) SI_RiskAnalysis_*_CL + mailed / uploaded per your config.' },
   enginesIAC: { cmd: '.\\LAUNCHERS\\IdentityAssetsCollectDefineTierIngestLog\\launcher.community-vm.template.ps1', note: 'Runs the identity collection engine. Writes tiered identity rows to SI_IdentityAssets_CL.' },
 };
@@ -542,6 +610,11 @@ function syncAuthVisibility() {
   toggleClass('.s3-secret',  s3 === 'SpnSecret');
   toggleClass('.s3-cert',    s3 === 'SpnCertificate');
   toggleClass('.s3-kv',      s3 === 'SpnKeyVault');
+
+  const s5 = val('s5_auth_method');
+  toggleClass('.s5-spn',    ['SpnSecret','SpnCertificate'].includes(s5));
+  toggleClass('.s5-secret',  s5 === 'SpnSecret');
+  toggleClass('.s5-cert',    s5 === 'SpnCertificate');
 
   const e = val('e_auth_method');
   toggleClass('.e-spn',    ['SpnSecret','SpnCertificate','SpnKeyVault'].includes(e));
@@ -704,6 +777,71 @@ function buildStep3() {
   return out.trim();
 }
 
+function buildStep5() {
+  const method = val('s5_auth_method');
+
+  // Power BI SPN auth (Step5_* prefix matches LauncherConfig.defaults.ps1)
+  let auth = '';
+  if (method === 'Interactive') {
+    auth = fmtLines([
+      ['Step5_AuthMethod',   'Interactive'],
+      ['Step5_AuthTenantId', val('s5_tenant')],
+    ]);
+  } else if (method === 'ManagedIdentity') {
+    auth = fmtLines([
+      ['Step5_AuthMethod',   'ManagedIdentity'],
+      ['Step5_AuthTenantId', val('s5_tenant')],
+      ['Step5_AuthClientId', val('s5_client')],
+    ]);
+  } else if (method === 'SpnSecret') {
+    auth = fmtLines([
+      ['Step5_AuthMethod',       'SpnSecret'],
+      ['Step5_AuthTenantId',     val('s5_tenant')],
+      ['Step5_AuthClientId',     val('s5_client')],
+      ['Step5_AuthClientSecret', val('s5_secret')],
+    ]);
+  } else if (method === 'SpnCertificate') {
+    auth = fmtLines([
+      ['Step5_AuthMethod',                'SpnCertificate'],
+      ['Step5_AuthTenantId',              val('s5_tenant')],
+      ['Step5_AuthClientId',              val('s5_client')],
+      ['Step5_AuthCertificateThumbprint', val('s5_thumb')],
+    ]);
+  }
+
+  const la = fmtLines([
+    ['Step5_LAWorkspaceId', val('s5_laws')],
+    ['Step5_LATenantId',    val('s5_latenant')],
+  ]);
+
+  const target = fmtLines([
+    ['Step5_PowerBIWorkspaceName', val('s5_pbiws')],
+    ['Step5_ReportName',           val('s5_report')],
+  ]);
+
+  const dashParams = fmtLines([
+    ['Step5_StalenessDays', val('s5_stale'), false],
+    ['Step5_TopNFindings',  val('s5_topn'),  false],
+  ]);
+
+  const aadRole = val('s5_aadrole');
+  let access = '';
+  if (val('s5_aadgroup') && aadRole) {
+    access = fmtLines([
+      ['Step5_AccessGroupObjectId', val('s5_aadgroup')],
+      ['Step5_AccessGroupRole',     aadRole],
+    ]);
+  }
+
+  let out = '';
+  out += section('POWER BI SPN AUTH (required)', auth);
+  out += section('LOG ANALYTICS BINDING (required)', la);
+  if (target)     out += section('TARGET WORKSPACE / REPORT', target);
+  if (dashParams) out += section('DASHBOARD PARAMETERS', dashParams);
+  if (access)     out += section('AAD GROUP ACCESS (optional)', access);
+  return out.trim();
+}
+
 function buildEngines() {
   const method = val('e_auth_method');
   let auth = '';
@@ -817,6 +955,7 @@ function render() {
     case 'step1':   body = buildStep1();   break;
     case 'step2':   body = buildStep2();   break;
     case 'step3':   body = buildStep3();   break;
+    case 'step5':   body = buildStep5();   break;
     case 'engines': body = buildEngines(); break;
   }
   document.getElementById('preview').textContent = wrap(body, currentTab);

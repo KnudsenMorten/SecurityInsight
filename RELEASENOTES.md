@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.82
+## v2.1.83
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(publish): include TOOLS/ in published tree + README renumber for new §3.2/3.3/3.4 (b1e5aac)
+- fix(SI SetupConfigurator): drop Step 2 DCR field -- Step 3 already grants it (6470ffc)
 
 ---
 

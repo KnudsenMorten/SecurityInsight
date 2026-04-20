@@ -37,13 +37,17 @@
     .\Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -Engine Step1_OnboardValidate-SecurityInsight-Permissions
 
 .EXAMPLE
-    # Bootstrap from ANYWHERE (no local copy of the repo yet).
-    # Note: we use Invoke-WebRequest -OutFile (NOT `irm | Out-File`). On PS 5.1,
-    # Invoke-RestMethod returns a string with the UTF-8 BOM embedded, and
-    # Out-File's default Unicode encoding ends up writing a UTF-16 BOM PLUS the
-    # UTF-8 BOM as a content character, which breaks PowerShell's parser.
-    # -OutFile writes raw bytes and preserves the file exactly.
-    $u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
+    # Bootstrap from ANYWHERE (no local copy of the repo yet). Resolves the
+    # latest release tag first so the fetched Step0.ps1 is always current --
+    # the tag-pinned raw URL is immutable and not CDN-cached, unlike
+    # raw/main/... which GitHub edge-caches for ~5 minutes and can return
+    # a stale Step0 right after a release.
+    # Invoke-WebRequest -OutFile (NOT `irm | Out-File`) preserves raw bytes --
+    # see "Unexpected attribute 'CmdletBinding'" pitfall with PS 5.1 + UTF-8
+    # BOM + Out-File default Unicode encoding.
+    $repo      = 'KnudsenMorten/SecurityInsight'
+    $latestTag = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
+    $u         = "https://raw.githubusercontent.com/$repo/$latestTag/scripts/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1"
     Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile "$env:TEMP\Step0.ps1"
     & "$env:TEMP\Step0.ps1" -Engine Step1_OnboardValidate-SecurityInsight-Permissions
 

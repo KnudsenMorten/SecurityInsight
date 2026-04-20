@@ -307,13 +307,16 @@ One **Step 0** script bootstraps the whole solution from GitHub. Copy-paste:
 # Pick your install path ONCE, re-use for every re-run -- default is C:\SCRIPTS\SecurityInsight.
 $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'   # <-- change to 'D:\Tools\SecurityInsight' etc. if you want
 
-# Fresh bootstrap (no local checkout yet):
-# Note: use Invoke-WebRequest -OutFile (not `irm | Out-File`). On PowerShell 5.1,
-# Invoke-RestMethod returns a string that INCLUDES the UTF-8 BOM char, and
-# Out-File's default is Unicode (UTF-16LE), so the saved file ends up with
-# a UTF-16 BOM AND a stray UTF-8-BOM character -- the parser then trips on
-# `[CmdletBinding()]` with "Unexpected attribute". -OutFile writes raw bytes.
-$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
+# Resolve the latest release tag, then fetch Step0.ps1 from that tag-pinned URL.
+# - Tag-pinned raw URLs are immutable + not CDN-cached, so you ALWAYS get the
+#   newest Step0 -- unlike raw/main/... which GitHub edge-caches for ~5 minutes.
+# - Invoke-WebRequest -OutFile (NOT `irm | Out-File`) preserves raw bytes: on
+#   PowerShell 5.1, irm returns a string with UTF-8 BOM embedded, then Out-File's
+#   default Unicode encoding writes UTF-16 BOM PLUS the UTF-8 BOM character and
+#   the parser later trips on `[CmdletBinding()]` with "Unexpected attribute".
+$repo      = 'KnudsenMorten/SecurityInsight'
+$latestTag = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
+$u         = "https://raw.githubusercontent.com/$repo/$latestTag/scripts/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1"
 Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile "$env:TEMP\Step0.ps1"
 & "$env:TEMP\Step0.ps1" -DestinationPath $SI_InstallPath
 ```

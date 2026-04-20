@@ -488,6 +488,54 @@ Write-Sep
 $results | Format-Table -AutoSize -Property Category, Item, Status, Detail
 Write-Sep
 
+# ----------------------------------------------------------------------------
+# SPN provisioning summary -- final report with copy-paste-ready SPN details
+# for LauncherConfig.custom.ps1 + verification next steps.
+# ----------------------------------------------------------------------------
+$apiCount        = @($results | Where-Object Category -eq 'API Permission'  | Where-Object Status -eq 'GRANTED').Count
+$rbacGranted     = @($results | Where-Object Category -eq 'Azure RBAC'      | Where-Object Status -eq 'GRANTED').Count
+$rbacFailed      = @($results | Where-Object Category -eq 'Azure RBAC'      | Where-Object Status -eq 'FAIL').Count
+$rbacSkipped     = @($results | Where-Object Category -eq 'Azure RBAC'      | Where-Object Status -eq 'SKIP').Count
+$defenderStatus  = @($results | Where-Object Item -like 'Log Analytics Reader*')      | Select-Object -First 1
+$dcrStatus       = @($results | Where-Object Item -like 'Monitoring Metrics Publisher*') | Select-Object -First 1
+$tenantIdForSpn  = if ($AuthTenantId) { $AuthTenantId } elseif ($targetSp.appOwnerOrganizationId) { [string]$targetSp.appOwnerOrganizationId } else { '' }
+
+Write-Host ""
+Write-Host "  ========= SecurityInsight SPN -- provisioning summary =========" -ForegroundColor Cyan
+Write-Host ""
+Write-Host ("  App display name       : {0}" -f $targetSp.displayName)   -ForegroundColor White
+Write-Host ("  App (client) ID        : {0}" -f $targetSp.appId)         -ForegroundColor White
+Write-Host ("  Service Principal ID   : {0}" -f $targetSp.id)            -ForegroundColor White
+if ($tenantIdForSpn) {
+    Write-Host ("  Tenant ID              : {0}" -f $tenantIdForSpn)     -ForegroundColor White
+}
+Write-Host ""
+Write-Host "  Counts" -ForegroundColor Gray
+Write-Host ("    API permissions      : {0} granted" -f $apiCount)                                        -ForegroundColor Gray
+Write-Host ("    Azure RBAC (subs)    : {0} granted / {1} failed / {2} skipped" -f $rbacGranted, $rbacFailed, $rbacSkipped) -ForegroundColor Gray
+if ($defenderStatus) { Write-Host ("    Defender workspace   : {0}  ({1})" -f $defenderStatus.Status, $defenderStatus.Detail) -ForegroundColor Gray }
+else                 { Write-Host ("    Defender workspace   : SKIP  (DefenderWorkspaceResourceId not provided)")            -ForegroundColor Gray }
+if ($dcrStatus)      { Write-Host ("    DCR grant            : {0}  ({1})" -f $dcrStatus.Status, $dcrStatus.Detail)           -ForegroundColor Gray }
+else                 { Write-Host ("    DCR grant            : SKIP  (DcrResourceId not provided)")                          -ForegroundColor Gray }
+
+Write-Host ""
+Write-Host "  Copy into LauncherConfig.custom.ps1 (community mode):" -ForegroundColor Yellow
+Write-Host ""
+if ($tenantIdForSpn) {
+    Write-Host ("    `$global:SpnTenantId     = '{0}'" -f $tenantIdForSpn) -ForegroundColor White
+}
+Write-Host ("    `$global:SpnClientId     = '{0}'" -f $targetSp.appId)      -ForegroundColor White
+Write-Host  "    `$global:SpnClientSecret = '<create a client secret in Entra -> App registrations -> Certificates & secrets>'" -ForegroundColor White
+Write-Host ""
+Write-Host "  Verification next steps:" -ForegroundColor Yellow
+Write-Host ("    1. Re-run this script with -SpnAppId {0} to confirm no drift." -f $targetSp.appId) -ForegroundColor Gray
+Write-Host  "    2. Run any SecurityInsight engine once (IAC, RiskAnalysis, ...) to ingest test data."                    -ForegroundColor Gray
+Write-Host  "    3. Verify in Log Analytics:"                                                                             -ForegroundColor Gray
+Write-Host  "         SI_IdentityAssets_CL | summarize Count=count() by ObjectType"                                       -ForegroundColor Gray
+Write-Host  "         SI_RiskAnalysis_Summary_CL | top 10 by RiskScoreTotal desc"                                         -ForegroundColor Gray
+Write-Host ""
+Write-Sep
+
 $failCount = ($results | Where-Object Status -eq 'FAIL').Count
 if ($failCount -gt 0) {
     Write-Err2 "$failCount item(s) failed -- review above and re-run after fixing."

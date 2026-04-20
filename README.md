@@ -1413,6 +1413,70 @@ flowchart TB
 
 **Locked is replaced; Custom is sacred.** Your edits survive every upgrade. The only time you touch Custom during an upgrade is if the RELEASE NOTES point out that a template you overrode has an updated schema — then you re-apply your override against the new Locked definition.
 
+<a id="66-critical-asset-tagging-mode-and-scope"></a>
+### 6.6 CriticalAssetTagging — `Mode:` (rule) + `$global:Scope` (launcher)
+
+[⤴ Back to top](#top)
+
+The **CriticalAssetTagging** engine has a two-stage "test before prod" workflow baked in, so you can develop new tagging rules against production data without tagging production assets until you're happy.
+
+**Stage 1 — tag each rule with a `Mode:`** in the YAML:
+
+```yaml
+# DATA/SecurityInsight_CriticalAssetTagging_Custom.yaml
+AssetTagging:
+  - AssetTagName: MyNewRule--tier1--SI
+    Mode: Test                     # <-- 'Test' while you iterate
+    QueryEngine: DefenderGraph
+    Query:
+      - |
+        ExposureGraphNodes
+        | where <your experimental KQL>
+        ...
+```
+
+Every rule in the shipped `..._Locked.yaml` is `Mode: Prod`. When you add a rule to `..._Custom.yaml`, set `Mode: Test` until you've validated the query output on real data.
+
+**Stage 2 — choose `$global:Scope` in the launcher:** the engine only runs rules whose `Mode:` is in the launcher's `$global:Scope` array:
+
+| `$global:Scope` | Runs rules with `Mode:` | Use when |
+|---|---|---|
+| `@('PROD')` *(default)* | `Prod` only | Scheduled production runs. Test rules are skipped with a `Skipping rule '<name>' (Mode=TEST) due to Scope filter` info line. |
+| `@('TEST')` | `Test` only | Dry-running a new rule before committing it. No existing production tags are touched. |
+| `@('PROD','TEST')` | Both — runs **everything** from Locked (Prod) *and* Custom's new Test rules | Once you've validated a Test rule, run with both scopes to apply it alongside production rules. When you're fully confident, flip the YAML `Mode:` from `Test` to `Prod` and drop back to `@('PROD')` on the launcher. |
+
+Set it in your launcher or `.custom.ps1`:
+
+```powershell
+$global:Scope = @('PROD','TEST')    # array, not a single string
+```
+
+**Engine output confirms the active scope(s):**
+
+```
+[STEP] execution scope initialized
+[INFO] Active Scope(s): PROD, TEST
+[STEP] loading Locked YAML: SecurityInsight_CriticalAssetTagging_Locked.yaml
+[STEP] loading Custom YAML: SecurityInsight_CriticalAssetTagging_Custom.yaml
+[INFO] AssetTagging rules loaded: Locked=24, Custom=2, Effective=26
+[STEP] starting asset tag enforcement
+[INFO] Processing: DomainControllerDNS--tier0--SI  (Mode=PROD, Engine=DEFENDERGRAPH)
+...
+[INFO] Processing: MyNewRule--tier1--SI  (Mode=TEST, Engine=DEFENDERGRAPH)
+...
+```
+
+**Typical iteration loop for a new tagging rule:**
+
+1. Add rule to `Custom.yaml` with `Mode: Test`.
+2. Run launcher with `$global:Scope = @('TEST')` — only your new rule fires; production tags are untouched.
+3. Inspect the output; tweak the KQL in Custom.yaml; repeat step 2.
+4. Once the rule produces the expected asset set, run with `$global:Scope = @('PROD','TEST')` to apply alongside Prod rules without yet committing to flipping the YAML.
+5. When fully confident, change the rule's `Mode:` from `Test` to `Prod` in Custom.yaml and revert `$global:Scope = @('PROD')` in the launcher.
+
+> [!TIP]
+> **Overriding a shipped Prod rule in Test first.** To experiment with modifications to an existing Locked rule (e.g. tightening the filter for `DomainControllerDNS--tier0--SI`), copy the rule into Custom.yaml **with the same `AssetTagName`** and set `Mode: Test`. Run `$global:Scope = @('TEST')`. When the tweaked KQL looks right, flip to `Mode: Prod` — Custom wins on same-name, so your override replaces the Locked version on subsequent `$global:Scope = @('PROD')` runs. Step 0 upgrades still never touch Custom.
+
 ---
 
 <a id="7-appendix"></a>

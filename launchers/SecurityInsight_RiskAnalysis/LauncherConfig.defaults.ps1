@@ -53,21 +53,22 @@ $global:WriteJsonOutput = $true
 $global:SendToLogAnalytics                    = $false
 
 # Two DCRs (one per table) -- HARDCODED in the engine ('dcr-si-risk-analysis-summary'
-# + 'dcr-si-risk-analysis-detailed'); customer doesn't pick the names. The
-# customer-tunable bit is only the resource group that holds them.
+# + 'dcr-si-risk-analysis-detailed'); customer doesn't pick the names.
 #
-# EVERYTHING AUTO-RESOLVES. The engine:
-#   - looks up DceIngestionUri from DceName via $global:AzDceDetails (Get-AzDceListAll)
-#   - looks up WorkspaceResourceId from WorkspaceName (or creates it if missing)
-#   - auto-creates the DCE + DCE RG + DCR RG if any are missing (with RBAC for the SPN)
-# Per-engine names (SI_RiskAnalysis_*) win over the shared short names, which win over
-# the engine defaults below.
-$global:SI_RiskAnalysis_DcrResourceGroup      = $null                                      # default: 'rg-dcr-securityinsight'
-$global:SI_RiskAnalysis_DceName               = $null                                      # default: 'dce-securityinsight'
-$global:SI_RiskAnalysis_DceIngestionUri       = $null                                      # auto-resolved from DceName
-$global:SI_RiskAnalysis_WorkspaceName         = 'log-platform-management-securityinsight'  # auto-created if missing
-$global:SI_RiskAnalysis_WorkspaceResourceId   = $null                                      # overrides WorkspaceName when set
-$global:SI_RiskAnalysis_WorkspaceResourceGroup = $null                                     # default: 'rg-securityinsight'
+# EVERYTHING AUTO-RESOLVES. The solution-wide shared defaults (Layer 0,
+# SecurityInsight.shared-defaults.ps1 in _lib) set $global:WorkspaceName,
+# $global:DceName, $global:DceResourceGroup, $global:DcrResourceGroup to the
+# canonical SecurityInsight layout. The engine auto-creates anything missing
+# (workspace, DCE, DCE RG, DCR RG) and assigns the SPN the roles it needs.
+#
+# SI_RiskAnalysis_* per-engine overrides win over the shared short names. Only
+# set them if this engine needs to deviate from the solution baseline.
+$global:SI_RiskAnalysis_DcrResourceGroup       = $null   # override: falls back to $global:DcrResourceGroup
+$global:SI_RiskAnalysis_DceName                = $null   # override: falls back to $global:DceName
+$global:SI_RiskAnalysis_DceIngestionUri        = $null   # auto-resolved from DceName -- rarely set explicitly
+$global:SI_RiskAnalysis_WorkspaceName          = $null   # override: falls back to $global:WorkspaceName
+$global:SI_RiskAnalysis_WorkspaceResourceId    = $null   # overrides WorkspaceName when set (cross-sub supported)
+$global:SI_RiskAnalysis_WorkspaceResourceGroup = $null   # override: falls back to $global:WorkspaceResourceGroup
 
 # Custom table base names (engine appends _CL when LA creates the table).
 $global:SI_RiskAnalysis_TableName_Summary     = 'SI_RiskAnalysis_Summary'

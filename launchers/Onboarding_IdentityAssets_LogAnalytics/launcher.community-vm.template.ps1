@@ -121,6 +121,15 @@ Write-Step "Resolving repo root"
 Write-Ok "repo root: $InstallPath"
 
 try {
+    # Layer 0: solution-wide shared defaults (DCE/DCR/Workspace names + RGs).
+    # Customer overrides in LauncherConfig.ps1 below win over these.
+    $sharedDefaults = Join-Path $PSScriptRoot '..\_lib\SecurityInsight.shared-defaults.ps1'
+    if (Test-Path -LiteralPath $sharedDefaults) {
+        Write-Step "Loading SecurityInsight shared defaults (Layer 0)"
+        . $sharedDefaults
+        Write-Ok "shared defaults loaded"
+    }
+
     Write-Step "Loading LauncherConfig.ps1"
     if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
     if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {

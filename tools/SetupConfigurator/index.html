@@ -426,6 +426,13 @@
         <br/>
         <strong>⬇ Download</strong> saves as <code>.ps1.txt</code> because Windows' Mark-of-the-Web blocks opening browser-downloaded <code>.ps1</code> files. Rename to <code>.ps1</code> after saving, or right-click the file → Properties → <em>Unblock</em>.
       </div>
+
+      <div class="panel-block" style="margin-top:12px;background:var(--ok-bg);border-left-color:var(--ok);">
+        <strong>✅ Next step — run the launcher.</strong>
+        Once the file is saved at the path above, kick off the Step / engine from an elevated PowerShell in your SecurityInsight install folder:
+        <pre style="background:var(--code-bg);color:var(--code-text);padding:8px 10px;border-radius:4px;margin:6px 0 2px;font-family:'Consolas',monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;" id="next-launcher-cmd">.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1</pre>
+        <span id="next-launcher-note" style="font-size:12px;color:var(--muted);">Interactive browser sign-in by a Privileged Role Admin with tenant-root UAA.</span>
+      </div>
     </div>
   </div>
 </div>
@@ -452,6 +459,25 @@ const targetPaths = {
   step3:  'LAUNCHERS\\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\\LauncherConfig.custom.ps1',
   engines:'LAUNCHERS\\<engine folder>\\LauncherConfig.custom.ps1',
 };
+const launcherCmds = {
+  step1:   { cmd: '.\\LAUNCHERS\\Step2_OnboardValidate-SecurityInsight-Permissions\\launcher.community-vm.template.ps1',           note: 'Interactive browser sign-in by a Privileged Role Admin with tenant-root UAA. The engine creates the SPN, grants API perms, and assigns Reader + Tag Contributor at the tenant-root MG.' },
+  step2:   { cmd: '.\\LAUNCHERS\\Step3_OnboardValidate-SecurityInsight-LogAnalytics\\launcher.community-vm.template.ps1',           note: 'Provisions the Log Analytics workspace + DCE + DCR + SI_IdentityAssets_CL table + RBAC for the SPN. Idempotent — re-run any time to validate drift.' },
+  step3:   { cmd: '.\\LAUNCHERS\\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\\launcher.community-vm.template.ps1', note: 'Provisions the pay-as-you-go Azure OpenAI account + model deployment. Skip this tab if you don\'t need -BuildSummaryByAI on RiskAnalysis.' },
+  enginesRA:  { cmd: '.\\LAUNCHERS\\SecurityInsight_RiskAnalysis\\launcher.community-vm.template.ps1',           note: 'Runs the Risk Analysis engine. Output lands in OUTPUT/ + (optionally) SI_RiskAnalysis_*_CL + mailed / uploaded per your config.' },
+  enginesIAC: { cmd: '.\\LAUNCHERS\\IdentityAssetsCollectDefineTierIngestLog\\launcher.community-vm.template.ps1', note: 'Runs the identity collection engine. Writes tiered identity rows to SI_IdentityAssets_CL.' },
+};
+function updateNextLauncher() {
+  const cmdEl  = document.getElementById('next-launcher-cmd');
+  const noteEl = document.getElementById('next-launcher-note');
+  if (!cmdEl || !noteEl) return;
+  let key = currentTab;
+  if (currentTab === 'engines') {
+    key = (val('e_engine') === 'ra') ? 'enginesRA' : 'enginesIAC';
+  }
+  const info = launcherCmds[key] || launcherCmds.step1;
+  cmdEl.textContent  = info.cmd;
+  noteEl.textContent = info.note;
+}
 let currentTab = 'step1';
 tabs.forEach(btn => {
   btn.addEventListener('click', () => {
@@ -460,6 +486,7 @@ tabs.forEach(btn => {
     currentTab = btn.dataset.tab;
     Object.entries(sections).forEach(([k, el]) => { el.hidden = (k !== currentTab); });
     document.getElementById('target-path').textContent = targetPaths[currentTab];
+    updateNextLauncher();
     render();
   });
 });
@@ -793,6 +820,7 @@ function render() {
     case 'engines': body = buildEngines(); break;
   }
   document.getElementById('preview').textContent = wrap(body, currentTab);
+  updateNextLauncher();
 }
 
 // ---------- copy + download ----------

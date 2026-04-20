@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.61
+## v2.1.62
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI): filter DCE/DCR caches to target subscription to stop cross-sub name collision (a9bfbe9)
+- fix(SI): refresh filtered DCE/DCR cache after CheckCreateUpdate-TableDcr-Structure (81ba881)
 
 ---
 

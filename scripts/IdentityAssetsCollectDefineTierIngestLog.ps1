@@ -3594,7 +3594,10 @@ if (-not [string]::IsNullOrWhiteSpace([string]$global:ExportDestination)) {
     Write-Step ("Uploading export files to: {0}" -f $global:ExportDestination)
     foreach ($localPath in @($tempFile, $__jsonPath)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$localPath)) {
-            Send-ExportFile -LocalPath $localPath -Destination $global:ExportDestination
+            Send-ExportFile -LocalPath $localPath `
+                -Destination          $global:ExportDestination `
+                -IngestionSpnAppId    $IngestionSpnClientId `
+                -IngestionSpnObjectId $spnObjectId
         }
     }
 }

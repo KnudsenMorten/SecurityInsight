@@ -370,6 +370,58 @@ Step 0 now emits per-file visibility so you can confirm the policy:
 
 Full file-by-file breakdown: [§ 7.2 Files deep-dive](#72-files-deep-dive).
 
+<a id="331-automate-daily-update"></a>
+#### 3.3.1 Automate it — daily "auto-refresh from GitHub"
+
+Don't want to remember to run Step 0 manually every time a new release ships? Register a Windows Scheduled Task that runs Step 0 once a day as `SYSTEM`:
+
+```powershell
+# Admin PowerShell (SYSTEM principal + RunLevel Highest need elevation).
+& (Join-Path $SI_InstallPath 'SCRIPTS\Register-SecurityInsightDailyUpdate.ps1')
+```
+
+Defaults: runs daily at **03:00 local time**, task name **`SecurityInsight - Daily update`**, install path auto-detected. Override per-box if needed:
+
+```powershell
+& (Join-Path $SI_InstallPath 'SCRIPTS\Register-SecurityInsightDailyUpdate.ps1') `
+    -InstallPath 'D:\Tools\SecurityInsight' `
+    -AtTime      '02:30'
+```
+
+Because Step 0's Locked/Custom policy is symmetrical, this is safe to run unattended — your `LauncherConfig.custom.ps1`, `launcher.override.ps1`, and `*_Custom.yaml` files are never touched. What *does* get refreshed every day:
+
+- 📘 **`data/SecurityInsight_RiskAnalysis_Queries_Locked.yaml`** — any new curated queries I ship land automatically, no manual YAML diffing.
+- 📘 **`data/SecurityInsight_CriticalAssetTagging_Locked.yaml`** — same story for asset-tagging rules.
+- 🧠 **Engine `.ps1` files + launcher templates** — new features and bug fixes propagate on the next run.
+- 📊 **`TOOLS/AzureWorkbook/*.json` + `TOOLS/PowerBI/*`** — workbook/dashboard template updates.
+
+Verify the task is registered:
+
+```powershell
+Get-ScheduledTask -TaskName 'SecurityInsight - Daily update' | Select-Object TaskName, State, Triggers
+```
+
+Force a manual run (useful after registration, to confirm it works):
+
+```powershell
+Start-ScheduledTask -TaskName 'SecurityInsight - Daily update'
+```
+
+Inspect the last run's result code + next scheduled time:
+
+```powershell
+Get-ScheduledTaskInfo -TaskName 'SecurityInsight - Daily update'
+```
+
+Remove it if you decide to go back to manual updates:
+
+```powershell
+& (Join-Path $SI_InstallPath 'SCRIPTS\Register-SecurityInsightDailyUpdate.ps1') -Unregister
+```
+
+> [!TIP]
+> **Air-gapped / offline boxes**: don't register the daily task — no internet = Step 0 will fail every run. Keep updates manual on a connected staging box, then rsync the install path to the offline box on your own schedule.
+
 After update, the running version is stamped on every launcher banner:
 
 ```

@@ -65,6 +65,15 @@ function Ensure-Module {
 
     $results = @{}
 
+    # Announce up front so the user doesn't think the script has hung. On a cold
+    # machine the first Get-Module -ListAvailable + PSGallery trust probe + NuGet
+    # provider bootstrap can take 10-60 seconds with no other output, which looks
+    # exactly like a freeze.
+    if (-not $Quiet) {
+        Write-Host ""
+        Write-Host ("[MODULE] Checking {0} PowerShell module(s) -- this can take a moment on the first run (no output != hung)..." -f @($Name).Count) -ForegroundColor Cyan
+    }
+
     # Resolve scope once. 'Auto' uses AllUsers when elevated, else CurrentUser.
     $effectiveScope = $Scope
     if ($Scope -eq 'Auto') {

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.125
+## v2.1.126
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): require admin PowerShell for Step 0 bootstrap (a92b428e)
 - fix(SI _shared): default -Scope AllUsers + fail fast if non-elevated (0b263886)
 - perf(SI _shared): drop all Import-Module calls -- trust PowerShell auto-load (ff869fb6)
 - perf(SI _shared): skip Import-Module on meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) (314c8fe0)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - refactor(SI): renumber Steps -- install=Step0, Permissions=Step1, LA=Step2, OpenAI=Step3, PowerBI=Step4 (636efc49)
 - fix(SI Workbook): use built-in value::all sentinel so "All" pre-selects reliably (da634d58)
 - feat(SI IdentityAssets + Workbook): stamp SolutionVersion on identity rows too (39ec5e31)
-- feat(SI RiskAnalysis + Workbook): version stamping end-to-end (929b6435)
 
 ---
 

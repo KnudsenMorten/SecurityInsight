@@ -301,6 +301,11 @@ Steps 1–4 are once-per-tenant. Step 4 runs daily/hourly. Step 6 runs daily. St
 
 [⤴ Back to top](#top)
 
+> [!IMPORTANT]
+> **Open PowerShell as Administrator.** The engines install missing modules to `C:\Program Files\WindowsPowerShell\Modules` (`-Scope AllUsers`) so they're visible to every user on the box — including the `SYSTEM` account the daily scheduled task runs under. A non-elevated session will fail fast with a clear error rather than silently installing a per-user copy.
+>
+> Press `Win`, type `powershell`, right-click **Windows PowerShell** → **Run as administrator**.
+
 One **Step 0** script bootstraps the whole solution from GitHub. Copy-paste:
 
 ```powershell

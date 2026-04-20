@@ -295,7 +295,17 @@ irm $u | Out-File $env:TEMP\Step1.ps1
 > [!TIP]
 > Prefer to pin the path inside the script itself so re-runs never need `-DestinationPath`? Open `SCRIPTS/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` and edit the first line of its param block — the `EDIT-ME DEFAULTS` header marks the spot. CLI `-DestinationPath` still overrides per-run.
 
-What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-files-deep-dive).
+**Step 1 parameters** (all optional):
+
+| Parameter | Default | Purpose |
+|---|---|---|
+| `-DestinationPath` | `C:\SCRIPTS\SecurityInsight` | Where the code lands on this machine. Same path on re-run upgrades in place. |
+| `-Channel` | `stable` | `stable` = latest tagged GitHub release (production). `preview` = HEAD of the `preview` branch (bleeding edge). |
+| `-Engine` | *(unset)* | Launcher folder to `cd` into after install, e.g. `Step2_OnboardValidate-SecurityInsight-Permissions`. Great for scheduled-run scripts that always run the same engine. |
+| `-Repo` | `KnudsenMorten/SecurityInsight` | Change if you fork the solution. |
+| `-PreservePatterns` | (see script) | Glob patterns that are never overwritten on update. Default covers customer configs + custom YAML. |
+
+Customer-owned files (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`) are **never overwritten** on update. What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-files-deep-dive).
 
 After update, the running version is stamped on every launcher banner:
 
@@ -361,45 +371,7 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 
 ### 🚀 30-second onboarding (absolute minimum)
 
-**Step 1 — install / update SecurityInsight from GitHub.** One-liner, self-downloading, merges customer files on update:
-
-```powershell
-# Bootstrap (fresh machine, no local checkout yet) -- default target is C:\SCRIPTS\SecurityInsight:
-$u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
-Invoke-RestMethod $u | Out-File $env:TEMP\Step1.ps1
-& $env:TEMP\Step1.ps1
-
-# Bootstrap with a CUSTOM install path (recommended if the default conflicts with something else):
-& $env:TEMP\Step1.ps1 -DestinationPath 'D:\Tools\SecurityInsight'
-
-# Already installed? Same command -- it's idempotent and respects customer files.
-.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -DestinationPath 'D:\Tools\SecurityInsight'
-
-# Optional: land inside a specific launcher folder immediately:
-.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 `
-    -DestinationPath 'D:\Tools\SecurityInsight' `
-    -Engine Step2_OnboardValidate-SecurityInsight-Permissions
-
-# Preview channel (HEAD of 'preview' branch -- bleeding-edge features before they hit a stable release):
-.\SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -DestinationPath 'D:\Tools\SecurityInsight' -Channel preview
-```
-
-**Step 1 parameters** (all optional):
-
-| Parameter | Default | Purpose |
-|---|---|---|
-| `-DestinationPath` | `C:\SCRIPTS\SecurityInsight` | Where the code lands on this machine. Change this if you want to install under another drive / folder. Same path on re-run upgrades in place. |
-| `-Channel` | `stable` | `stable` = latest tagged GitHub release (production). `preview` = HEAD of the `preview` branch (bleeding edge). |
-| `-Engine` | *(unset)* | Launcher folder to `cd` into after install, e.g. `Step2_OnboardValidate-SecurityInsight-Permissions`. Great for scheduled-run scripts that always run the same engine. |
-| `-Repo` | `KnudsenMorten/SecurityInsight` | Change if you fork the solution. |
-| `-PreservePatterns` | (see script) | Glob patterns that are never overwritten on update. Default covers customer configs + custom YAML. |
-
-| Channel | Source | When to use |
-|---|---|---|
-| `stable` (default) | Latest tagged GitHub release | Production VMs, scheduled tasks |
-| `preview` | HEAD of the `preview` branch | Dev box, testing upcoming features, early feedback |
-
-Customer-owned files (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`) are **never overwritten** on update. Re-runs preserve them.
+**Step 1 — install / update from GitHub.** Already covered in [§ 3.2 Install + update](#32-install--update) — copy the `$SI_InstallPath` block from there, it handles bootstrap, re-install, and `preview` channel in one snippet.
 
 ---
 

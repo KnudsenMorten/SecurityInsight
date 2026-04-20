@@ -41,8 +41,8 @@ $global:GitHubUri = "https://raw.githubusercontent.com/KnudsenMorten/SecurityIns
 #   * data/*_Custom.yaml                           -- your tagging + query customisations
 #   * launchers/*/LauncherConfig.ps1               -- your SPN credentials (.gitignore'd)
 #   * scripts/CriticalAssetTaggingMaintenance*.ps1
-#   * scripts/Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
-#   * scripts/Step2_OnboardValidate-SecurityInsight-LogAnalytics.ps1
+#   * scripts/Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+#   * scripts/Step3_OnboardValidate-SecurityInsight-LogAnalytics.ps1
 #     (these three scripts are one-shot or infrequently-changed; re-run manually
 #      when needed rather than updating silently in the background)
 #

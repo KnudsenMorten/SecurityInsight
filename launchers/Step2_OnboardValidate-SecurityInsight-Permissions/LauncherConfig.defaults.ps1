@@ -1,13 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Baseline defaults for Step1_OnboardValidate-SecurityInsight-Permissions.
+    Baseline defaults for Step2_OnboardValidate-SecurityInsight-Permissions.
 
 .DESCRIPTION
     Shipped with each release. The launcher dot-sources this FIRST then the
     customer's LauncherConfig.custom.ps1 (gitignored), then applies CLI args.
 
-    These globals map 1:1 to the Step1_OnboardValidate-SecurityInsight-Permissions.ps1
+    These globals map 1:1 to the Step2_OnboardValidate-SecurityInsight-Permissions.ps1
     parameters. The launcher reads them at runtime and forwards each non-null
     value to the script via splatting.
 
@@ -16,7 +16,7 @@
 .NOTES
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
-    Engine                : Step1_OnboardValidate-SecurityInsight-Permissions
+    Engine                : Step2_OnboardValidate-SecurityInsight-Permissions
     Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
 #>
 

@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.71
+## v2.1.72
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- docs(SI): 30-second onboarding quickstart + rebuild Step1-3 diagrams (087df72)
+- feat(SI): Step 0 -> Step 1 renumber + install/update script + browser Setup Configurator (76c98af)
 
 ---
 

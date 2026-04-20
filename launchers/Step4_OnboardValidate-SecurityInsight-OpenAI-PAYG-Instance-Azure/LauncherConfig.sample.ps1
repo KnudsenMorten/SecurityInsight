@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Quickstart customer config for Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.
+    Quickstart customer config for Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.
 
 .DESCRIPTION
     Copy this file to LauncherConfig.custom.ps1 in the SAME folder and fill in
@@ -20,7 +20,7 @@
 
 .NOTES
     Solution       : SecurityInsight
-    Engine         : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure
+    Engine         : Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten

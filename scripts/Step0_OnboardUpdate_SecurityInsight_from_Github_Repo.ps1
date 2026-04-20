@@ -91,7 +91,7 @@ function Write-Warn { param([string]$m) Write-Host "[WARN]  $m" -ForegroundColor
 
 Write-Host ""
 Write-Host "========================================================================================" -ForegroundColor Cyan
-Write-Host "  SecurityInsight -- Step 1: Install / Update from GitHub"                               -ForegroundColor Cyan
+Write-Host "  SecurityInsight -- Step 0: Install / Update from GitHub"                               -ForegroundColor Cyan
 Write-Host "  Repo           : $Repo"                                                                 -ForegroundColor Gray
 Write-Host "  Destination    : $DestinationPath"                                                      -ForegroundColor Gray
 Write-Host "  Channel        : $Channel"                                                              -ForegroundColor Gray

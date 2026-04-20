@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.56
+## v2.1.57
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI RiskAnalysis): mail globals accept both new + legacy names (new wins) (97a4054)
+- feat(SI RiskAnalysis): mode overrides + community per-template mail routing (50f5579)
 
 ---
 

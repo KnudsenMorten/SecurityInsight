@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.85
+## v2.1.86
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI launchers): auto-unblock customer-owned config files before dot-source (173c915)
+- chore(SI): remove legacy UpdateSecurityInsight + fix Step2 Az/Graph DLL conflict (a6e93d4)
 
 ---
 

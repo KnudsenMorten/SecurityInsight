@@ -249,6 +249,22 @@ function Add-Result {
 }
 
 # ----------------------------------------------------------------------------
+# Pre-load Az.Accounts BEFORE Microsoft.Graph.Authentication
+# ----------------------------------------------------------------------------
+# Both module families ship their own Azure.Identity.dll. Whichever loads first
+# wins in the PowerShell AppDomain; the other module then hits MissingMethod
+# errors (e.g. "InteractiveBrowserCredential.AuthenticateAsync" not found on
+# Connect-AzAccount when Graph already loaded an older Azure.Identity).
+# Pre-loading Az.Accounts here locks Azure.Identity.dll to Az's version, which
+# is the more reliable one for the cmdlets we use. Graph loads next and plays
+# nicely with the already-loaded DLL.
+try {
+    Import-Module Az.Accounts -ErrorAction Stop -WarningAction SilentlyContinue
+} catch {
+    Write-Host ("[WARN]    Az.Accounts pre-load failed -- Azure RBAC step may hit a DLL conflict later: {0}" -f $_.Exception.Message) -ForegroundColor Yellow
+}
+
+# ----------------------------------------------------------------------------
 # Connect to Microsoft Graph (admin scopes for SPN + permission management)
 # ----------------------------------------------------------------------------
 Write-Sep

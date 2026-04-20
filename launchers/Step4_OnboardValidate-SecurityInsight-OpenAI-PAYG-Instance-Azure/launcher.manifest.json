@@ -7,7 +7,7 @@
   "communityRepo": "SecurityInsight",
   "description": "Deploys (or reuses) an Azure OpenAI PAYG account + model deployment used by SecurityInsight for AI summary generation. Customer values (SubscriptionId, ResourceGroupName, Location, AccountName, DeploymentName) are set via launcher.override.ps1 (sibling, .gitignore'd) or edited directly in the launcher template.",
   "author": "Morten Knudsen <mok@mortenknudsen.net>",
-  "notes": "Single launcher for the Deploy_OpenAI engine. Edit launcher.override.ps1 (sibling) to swap any value at runtime without modifying the template.",
+  "notes": "Single launcher for the Step 4 OpenAI onboarding engine. Edit launcher.override.ps1 (sibling) to swap any value at runtime without modifying the template.",
   "parameters": {
     "SubscriptionId": "<your-subscription-id>",
     "ResourceGroupName": "rg-security-insight",

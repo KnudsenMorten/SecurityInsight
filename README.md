@@ -258,7 +258,7 @@ Every Risk Analysis run produces all of these from a single in-memory dataset (n
 flowchart TD
     S1[1 · Get / Update SecurityInsight from GitHub] --> S2[2 · Onboard Entra SPN or Managed Identity<br/>OnboardValidate-Permissions]
     S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step3_OnboardValidate-SecurityInsight-LogAnalytics]
-    S3 --> S4[4 · <i>optional</i> Deploy Azure OpenAI<br/>Deploy_OpenAI_PAYG_Instance]
+    S3 --> S4[4 · <i>optional</i> Deploy Azure OpenAI<br/>Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure]
     S4 --> S5[5 · Classify assets with tagging<br/>CriticalAssetTagging <b>-Scope TEST</b> then <b>PROD</b>]
     S5 --> S6[6 · Collect Identity tiers<br/>IdentityAssetsCollectDefineTierIngestLog]
     S6 --> S7[7 · Run Risk Analysis<br/>SecurityInsight_RiskAnalysis <b>-Summary</b> / <b>-Detailed</b>]

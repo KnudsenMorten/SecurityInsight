@@ -158,30 +158,12 @@ function Ensure-RoleAssignment {
 }
 
 #########################################################################################################
-# PREFLIGHT - modules
+# PREFLIGHT -- modules already verified by Ensure-SecurityInsightModules at top of file.
+# AzLogDcrIngestPS needs an explicit -Global import so its exported functions are visible
+# to dot-sourced engine code that PowerShell's auto-loader places in a child scope.
 #########################################################################################################
 
-Write-Sep
-Write-Step "Preflight: verifying required modules"
-
-$requiredModules = @(
-    'Az.Accounts', 'Az.Resources', 'Az.OperationalInsights', 'Az.Monitor', 'AzLogDcrIngestPS'
-)
-
-foreach ($m in $requiredModules) {
-    $mod = Get-Module -Name $m -ListAvailable -ErrorAction SilentlyContinue
-    if (-not $mod) {
-        if ($m -eq 'AzLogDcrIngestPS') {
-            Write-Info "Installing $m from PSGallery..."
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Install-Module -Name $m -Repository PSGallery -Force -Scope CurrentUser
-        } else {
-            throw "Required module '$m' is not installed. Run: Install-Module $m -Scope CurrentUser"
-        }
-    }
-}
 Import-Module AzLogDcrIngestPS -Global -Force -DisableNameChecking -WarningAction SilentlyContinue
-Write-Ok "All required modules present"
 
 #########################################################################################################
 # VALIDATE INPUT VARIABLES

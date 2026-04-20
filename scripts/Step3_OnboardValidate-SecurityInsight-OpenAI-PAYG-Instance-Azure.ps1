@@ -242,14 +242,6 @@ Write-Log INFO "Sanity checks passed."
 #endregion =======================================================
 
 #region ================= AZURE HELPERS ===========================
-function Ensure-AzModules {
-    foreach ($m in @("Az.Accounts","Az.Resources")) {
-        if (-not (Get-Module -ListAvailable -Name $m)) {
-            throw "Missing module '$m'. Install with: Install-Module $m -Scope CurrentUser"
-        }
-    }
-}
-
 function Ensure-AzContext {
     if (-not (Get-AzContext)) {
         Write-Log INFO "No Azure context detected. Running Connect-AzAccount..."
@@ -497,7 +489,6 @@ function New-DeploymentWithSkuAndModelFallback {
 
 #region ================= MAIN ===============================
 Write-Section "3) Azure Auth + Subscription"
-Ensure-AzModules
 Ensure-AzContext
 
 Write-Section "4) Resource Group"

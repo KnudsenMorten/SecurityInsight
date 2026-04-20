@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.129
+## v2.1.130
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- refactor(SI): delete every duplicate module-check leftover from the v2.1.113 refactor (53343c56)
 - fix(SI ingest): filter DCE/DCR cache by RG as well as sub (kills 'westeurope' 404) (8d59f0a1)
 - docs(SI): backfill curated RELEASENOTES for v2.1.120 -> v2.1.127 (d4b27a9c)
 - docs(SI README): section 6.6 -- CriticalAssetTagging Mode/Scope workflow (124fc81e)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI workbook): preselect '*' to dodge empty-list KQL parse error (v2.1.107) (b7658920)
 - fix(SI Workbook): filters use "empty = no filter" semantics -- no default value needed (9e12fea6)
 - docs(SI SetupConfigurator): add "Built by Morten Knudsen" branding (c0a1e0d2)
-- feat(SI SetupConfigurator): copy-to-clipboard "run-command" button (855d0923)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.130 — Kill every duplicate module-check across all engines
+
+- 🧰 **One source of truth for module validation.** The v2.1.113 refactor centralised `Ensure-Module` but left behind three layers of parallel module checks that were still running on every engine invocation, emitting duplicate `[STEP] Validating Az modules` / `[STEP] Validating Microsoft Graph modules` lines and re-doing work `Ensure-SecurityInsightModules` already did at the top of the file:
+  - `Test-AzModuleInstalled` / `Test-MicrosoftGraphInstalled` predicate functions in `SecurityInsight_RiskAnalysis.ps1` + all 3 CriticalAssetTagging engines (8 copies, deleted).
+  - `Ensure-AzModules` function + call-site in `Step3_OnboardValidate-OpenAI` (deleted).
+  - Ad-hoc `$requiredModules` + `Install-Module` loops in `Step2_LogAnalytics` and `Setup-SecurityInsight-CustomSecurityAttributes` (deleted).
+- Engines now rely exclusively on the single `Ensure-SecurityInsightModules` call at the top. Only exception kept: `Step2` still does an explicit `Import-Module AzLogDcrIngestPS -Global -Force` because that module needs `-Global` for cross-dot-source function visibility (auto-load puts it in a child scope).
 
 ### v2.1.129 — DCE/DCR cache filters by resource group too (fixes "immutable Id 'westeurope'")
 

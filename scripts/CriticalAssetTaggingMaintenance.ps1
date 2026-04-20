@@ -355,32 +355,8 @@ function Remove-DefenderTag {
   Invoke-DefenderRest -Method POST -Uri $uri -Headers $AccessHeaders -BodyObj $bodyObj
 }
 
-function Test-AzModuleInstalled {
-  Write-Step "Validating Az modules"
-  return $null -ne (Get-Module -ListAvailable -Name 'Az.Accounts' -ErrorAction SilentlyContinue)
-}
-
-function Test-MicrosoftGraphInstalled {
-  Write-Step "Validating Microsoft Graph modules"
-  return $null -ne (Get-Module -ListAvailable -Name 'Microsoft.Graph.Authentication' -ErrorAction SilentlyContinue)
-}
-
-#######################################################################################################
-# POWERSHELL MODULE VALIDATION
-#######################################################################################################
-
 Write-Step "initializing"
 Write-Info ("WhatIfMode: {0}" -f $WhatIfMode)
-
-if (-not (Test-AzModuleInstalled)) {
-  Write-Step "Installing Az modules ... Please Wait !"
-  Install-Module Az -Scope AllUsers -Force -AllowClobber
-}
-
-if (-not (Test-MicrosoftGraphInstalled)) {
-  Write-Step "Installing Microsoft Graph modules ... Please Wait !"
-  Install-Module Microsoft.Graph -Scope AllUsers -Force -AllowClobber
-}
 
 #######################################################################################################
 # CONNECTION

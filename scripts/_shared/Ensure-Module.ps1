@@ -130,3 +130,71 @@ function Ensure-Module {
 
     return $results
 }
+
+# =====================================================================
+#  CANONICAL SecurityInsight MODULE SET
+# =====================================================================
+# Single source of truth for "which PowerShell modules must exist on
+# any VM that runs any SecurityInsight engine". Every engine calls
+# Ensure-SecurityInsightModules once at the top, so a fresh customer
+# VM auto-installs the full set from PSGallery on first run and no
+# engine can trip on a missing module.
+#
+# Coverage rationale:
+#   Az                    -- meta-module that installs every Az.* sub-
+#                            module (Az.Accounts, Az.Resources,
+#                            Az.OperationalInsights, Az.Monitor, etc.)
+#   Az.ResourceGraph      -- NOT part of the Az meta-module; required
+#                            separately for Search-AzGraph queries.
+#   Microsoft.Graph       -- meta-module for v1.0 Graph submodules
+#                            (Authentication, Security, Applications,
+#                            Identity.Governance, Identity.DirectoryMgmt).
+#   Microsoft.Graph.Beta  -- beta endpoints (used by some inventory paths).
+#   AzLogDcrIngestPS      -- custom DCR ingest module (Morten Knudsen).
+#   MicrosoftGraphPS      -- Graph helper module (Morten Knudsen).
+#   ImportExcel           -- XLSX export used by the report engines.
+#   powershell-yaml       -- YAML parse for *_Locked.yaml / *_Custom.yaml.
+$script:SecurityInsight_RequiredModules = @(
+    'Az'
+    'Az.ResourceGraph'
+    'Microsoft.Graph'
+    'Microsoft.Graph.Beta'
+    'AzLogDcrIngestPS'
+    'MicrosoftGraphPS'
+    'ImportExcel'
+    'powershell-yaml'
+)
+
+function Ensure-SecurityInsightModules {
+<#
+.SYNOPSIS
+    Ensure every module any SecurityInsight engine might need is installed + imported.
+
+.DESCRIPTION
+    Calls Ensure-Module with the canonical SecurityInsight module set. Safe to call
+    from any engine; already-present modules short-circuit instantly.
+
+.PARAMETER Scope
+    Passed through to Ensure-Module (CurrentUser / AllUsers / Auto).
+
+.PARAMETER Quiet
+    Suppress per-module status lines.
+
+.PARAMETER Required
+    Throw if any install fails.
+#>
+    [CmdletBinding()]
+    param(
+        [ValidateSet('CurrentUser','AllUsers','Auto')]
+        [string]$Scope = 'CurrentUser',
+        [switch]$Quiet,
+        [switch]$Required
+    )
+
+    Ensure-Module `
+        -Name $script:SecurityInsight_RequiredModules `
+        -Scope $Scope `
+        -Import `
+        -Quiet:$Quiet `
+        -Required:$Required
+}

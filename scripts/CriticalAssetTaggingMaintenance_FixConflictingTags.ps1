@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     CriticalAssetTaggingMaintenance_FixConflictingTags - engine script in the SecurityInsight solution.
 
@@ -21,17 +21,7 @@ Write-host "********************************************************************
 #  Module dependencies -- centralized helper under _shared/
 # ----------------------------------------------------------------------
 . (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
-Ensure-Module -Name @(
-    'Az.Accounts'
-    'Az.Resources'
-    'Az.ResourceGraph'
-    'Microsoft.Graph.Authentication'
-    'Microsoft.Graph.Security'
-    'MicrosoftGraphPS'
-    'ImportExcel'
-    'powershell-yaml'
-) -Import
-
+Ensure-SecurityInsightModules
 # -------------------------------------------------------------------------------------------------
 # GLOBAL-ONLY CONFIG (launcher is source of truth)
 # -------------------------------------------------------------------------------------------------

@@ -806,7 +806,7 @@ For every engine that reads YAML, there are exactly two files:
 ```mermaid
 flowchart LR
     L[📘 <b>Locked.yaml</b><br/>curated content,<br/>replaced on every release] --> M{Engine<br/>merges<br/>by name}
-    C[📗 <b>Custom.yaml</b><br/>your content,<br/><u>never</u> overwritten} --> M
+    C[📗 <b>Custom.yaml</b><br/>your content,<br/><u>never</u> overwritten] --> M
     M -->|same ReportName<br/>or AssetTagName?| OVR[<i>Custom wins</i>]
     M -->|new name<br/>only in Custom?| ADD[<i>Added to runtime</i>]
     M -->|only in Locked?| KEEP[<i>Shipped default<br/>used as-is</i>]
@@ -1225,7 +1225,7 @@ flowchart TB
     subgraph You [Your edits -- gitignored, survive every update]
         L2[📒 <b>Layer 2</b> <i>internal mode only</i><br/>platform-defaults.ps1<br/><i>shared across ALL solutions</i><br/><small>SMTP, primary tenant, KV, paths</small>]
         L3[📗 <b>Layer 3</b><br/>SecurityInsight.custom.ps1<br/><i>solution-wide</i><br/><small>DCR URIs, exclude patterns</small>]
-        L4[📙 <b>Layer 4</b><br/>LAUNCHERS/[engine]/LauncherConfig.custom.ps1<br/><i>per-engine</i><br/><small>auth, per-engine deviations</small>]
+        L4["📙 <b>Layer 4</b><br/>LAUNCHERS/&lt;engine&gt;/LauncherConfig.custom.ps1<br/><i>per-engine</i><br/><small>auth, per-engine deviations</small>"]
     end
     L5[⌨️ <b>Layer 5</b><br/>CLI args<br/><i>last word, per-invocation</i>]
 

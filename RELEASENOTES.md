@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.124
+## v2.1.125
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI _shared): default -Scope AllUsers + fail fast if non-elevated (0b263886)
 - perf(SI _shared): drop all Import-Module calls -- trust PowerShell auto-load (ff869fb6)
 - perf(SI _shared): skip Import-Module on meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) (314c8fe0)
 - perf(SI _shared): fast directory-first module probe (fixes 30s stall on meta-modules) (4d3f37eb)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Workbook): use built-in value::all sentinel so "All" pre-selects reliably (da634d58)
 - feat(SI IdentityAssets + Workbook): stamp SolutionVersion on identity rows too (39ec5e31)
 - feat(SI RiskAnalysis + Workbook): version stamping end-to-end (929b6435)
-- fix(SI Workbook): resource picker needs explicit ARG filter query (27c81fff)
 
 ---
 

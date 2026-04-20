@@ -1,0 +1,834 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SecurityInsight — Setup Configurator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --panel: #ffffff;
+    --panel-border: #d0d7de;
+    --text: #1f2328;
+    --muted: #656d76;
+    --accent: #2a6592;
+    --accent-bg: #e8f4fd;
+    --ok: #1a7a1a;
+    --ok-bg: #e8ffe8;
+    --warn: #b07a00;
+    --warn-bg: #fff4e1;
+    --danger: #a83275;
+    --danger-bg: #fce4ec;
+    --code-bg: #0d1117;
+    --code-text: #e6edf3;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+  header { max-width: 1100px; margin: 0 auto 16px; }
+  header h1 { margin: 0 0 4px; font-size: 24px; }
+  header .sub { color: var(--muted); font-size: 14px; }
+  header .sub a { color: var(--accent); }
+
+  .container { max-width: 1100px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 920px) { .container { grid-template-columns: 1fr; } }
+
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tabs button { flex: 1; min-width: 160px; padding: 10px 12px; border: 1px solid var(--panel-border); background: var(--panel); cursor: pointer; font-size: 14px; border-radius: 6px 6px 0 0; border-bottom: 3px solid transparent; }
+  .tabs button.active { border-bottom-color: var(--accent); font-weight: 600; color: var(--accent); }
+  .tabs button:hover { background: var(--accent-bg); }
+
+  .panel { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 8px; padding: 20px; }
+  .panel h2 { margin: 0 0 4px; font-size: 18px; }
+  .panel .panel-sub { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .panel-block { background: var(--accent-bg); border-left: 3px solid var(--accent); padding: 10px 12px; margin: 10px 0 14px; font-size: 13px; color: var(--text); border-radius: 0 4px 4px 0; }
+  .panel-block.warn { background: var(--warn-bg); border-left-color: var(--warn); }
+  .panel-block.danger { background: var(--danger-bg); border-left-color: var(--danger); }
+
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .field .hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .field input[type="text"], .field input[type="password"], .field select, .field textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 4px; font-size: 14px; font-family: "Consolas", "SF Mono", monospace; }
+  .field input[type="text"]:focus, .field input[type="password"]:focus, .field select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
+  .field.required label::after { content: " *"; color: var(--danger); }
+
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 920px) { .row { grid-template-columns: 1fr; } }
+
+  .preview-wrap { position: sticky; top: 20px; }
+  .preview { background: var(--code-bg); color: var(--code-text); border-radius: 6px; padding: 16px; font-family: "Consolas", "SF Mono", monospace; font-size: 13px; line-height: 1.55; white-space: pre-wrap; word-break: break-all; max-height: 70vh; overflow: auto; }
+  .preview .hl-var { color: #79c0ff; }
+  .preview .hl-str { color: #a5d6ff; }
+  .preview .hl-cmt { color: #8b949e; font-style: italic; }
+  .preview-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+  .btn { padding: 8px 14px; border: 1px solid var(--panel-border); background: var(--panel); border-radius: 4px; font-size: 13px; cursor: pointer; }
+  .btn:hover { background: var(--accent-bg); border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.primary:hover { filter: brightness(1.1); }
+  .target-path { font-family: "Consolas", monospace; background: var(--accent-bg); padding: 6px 10px; border-radius: 4px; font-size: 12px; color: var(--text); margin-bottom: 8px; word-break: break-all; }
+
+  .layer-note { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin: 10px 0; padding: 8px 10px; background: var(--bg); border-radius: 4px; }
+  .layer-note strong { color: var(--text); }
+  .layer-pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; background: var(--accent-bg); color: var(--accent); margin-right: 4px; }
+
+  .ok-msg { display: none; padding: 8px 12px; background: var(--ok-bg); color: var(--ok); border-radius: 4px; font-size: 13px; margin-top: 10px; }
+  .ok-msg.show { display: block; }
+
+  footer { max-width: 1100px; margin: 24px auto 0; color: var(--muted); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>SecurityInsight — Setup Configurator</h1>
+  <div class="sub">
+    Build <code>LauncherConfig.custom.ps1</code> files for each Step and the ingestion engines. Fill in the forms → copy the generated PowerShell → paste into the right folder.
+    <br/>All processing is in-browser — nothing is sent to any server. <a href="https://github.com/KnudsenMorten/SecurityInsight" target="_blank" rel="noopener">GitHub repo</a>.
+  </div>
+</header>
+
+<div class="container">
+  <!-- LEFT: inputs -->
+  <div>
+    <div class="tabs" role="tablist">
+      <button data-tab="step1" class="active" type="button">Step 2 — Permissions</button>
+      <button data-tab="step2" type="button">Step 3 — Log Analytics</button>
+      <button data-tab="step3" type="button">Step 4 — Azure OpenAI</button>
+      <button data-tab="engines" type="button">Ingestion engines</button>
+    </div>
+
+    <!-- STEP 1 -->
+    <section id="tab-step1" class="panel">
+      <h2>Step 2 — OnboardValidate Permissions</h2>
+      <div class="panel-sub">Creates the <code>sp-securityinsight</code> SPN + grants API perms + Azure <code>Reader</code>. Default is interactive sign-in. <strong>If that's all you want, skip this tab — no file needed.</strong></div>
+
+      <div class="panel-block warn">
+        <strong>Unattended run</strong> (scheduled task / CI/CD) — fill the SPN-auth block. The onboarding identity needs <strong>Privileged Role Administrator</strong> or <strong>Global Administrator</strong> to create app registrations + grant admin consent.
+      </div>
+
+      <div class="field">
+        <label for="s1_auth_method">Auth method</label>
+        <select id="s1_auth_method">
+          <option value="Interactive">Interactive (default — browser sign-in)</option>
+          <option value="SpnSecret">SPN + Secret</option>
+          <option value="SpnCertificate">SPN + Certificate</option>
+          <option value="ManagedIdentity">Managed Identity</option>
+        </select>
+      </div>
+
+      <div class="s1-unattended">
+        <div class="field">
+          <label for="s1_tenant">Auth tenant ID</label>
+          <input type="text" id="s1_tenant" placeholder="00000000-0000-0000-0000-000000000000" />
+        </div>
+        <div class="field s1-spn">
+          <label for="s1_client">Onboarding SPN / MI client ID</label>
+          <input type="text" id="s1_client" placeholder="onboarding app (client) id guid" />
+        </div>
+        <div class="field s1-secret">
+          <label for="s1_secret">SPN client secret</label>
+          <input type="password" id="s1_secret" placeholder="***" />
+        </div>
+        <div class="field s1-cert">
+          <label for="s1_thumb">SPN certificate thumbprint (hex, no spaces)</label>
+          <input type="text" id="s1_thumb" placeholder="A1B2C3..." />
+        </div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Azure RBAC scope</h3>
+      <div class="field">
+        <label for="s1_rbacscope">Where to grant Reader + Tag Contributor</label>
+        <select id="s1_rbacscope">
+          <option value="">Tenant root MG (default — cascades to every sub)</option>
+          <option value="PerSubscription">Per subscription (legacy; use if you can't elevate to tenant root)</option>
+        </select>
+        <div class="hint">
+          <strong>Reader</strong> — read every resource in the tenant via Azure Resource Graph.<br/>
+          <strong>Tag Contributor</strong> — write tier tags on subs / RGs / resources (CriticalAssetTagging engine only; IdentityAssetsCollect just reads).<br/>
+          Tenant-root needs the onboarding identity to have <em>User Access Administrator</em> at tenant root (Entra admin center → Properties → <em>Access management for Azure resources</em> toggle ON).
+        </div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Optional — SPN display name</h3>
+      <div class="field">
+        <label for="s1_spndn">SPN display name</label>
+        <input type="text" id="s1_spndn" placeholder="sp-securityinsight (default — leave blank to use it)" />
+        <div class="hint">Naming standards vary by org. Leave blank to install as <code>sp-securityinsight</code>, or set a custom name like <code>sp-mysecurityinsight</code>.</div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Optional — extra grants</h3>
+      <div class="field">
+        <label for="s1_defender">Defender / Sentinel workspace resource ID</label>
+        <input type="text" id="s1_defender" placeholder="/subscriptions/.../workspaces/..." />
+        <div class="hint">Grants the SPN <code>Log Analytics Reader</code> on this workspace (for cross-workspace IdentityInfo).</div>
+      </div>
+      <div class="field">
+        <label for="s1_dcr">DCR resource ID</label>
+        <input type="text" id="s1_dcr" placeholder="/subscriptions/.../dataCollectionRules/..." />
+        <div class="hint">Grants the SPN <code>Monitoring Metrics Publisher</code> on this DCR.</div>
+      </div>
+    </section>
+
+    <!-- STEP 2 -->
+    <section id="tab-step2" class="panel" hidden>
+      <h2>Step 3 — OnboardValidate Log Analytics</h2>
+      <div class="panel-sub">Creates the workspace + DCE + DCR RG + SI_IdentityAssets_CL table + RBAC. Idempotent.</div>
+
+      <div class="panel-block">
+        <strong>Minimum is 4 lines</strong>: the SPN's tenant + app ID + secret + target subscription. Everything else auto-resolves to the standard layout (<code>rg-securityinsight</code>, <code>dce-securityinsight</code>, etc.) from Layer 0 shared defaults.
+      </div>
+
+      <h3 style="font-size:14px;">Auth (REQUIRED)</h3>
+      <div class="field">
+        <label for="s2_auth_method">Auth method</label>
+        <select id="s2_auth_method">
+          <option value="SpnSecret">SPN + Secret (testing / lab)</option>
+          <option value="SpnCertificate">SPN + Certificate (production)</option>
+          <option value="ManagedIdentity">Managed Identity (Azure VM / Function)</option>
+          <option value="SpnKeyVault">SPN + Key Vault secret (production)</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="field"><label for="s2_tenant">Tenant ID</label><input type="text" id="s2_tenant" placeholder="tenant-id-guid" /></div>
+        <div class="field s2-spn"><label for="s2_client">SPN client ID</label><input type="text" id="s2_client" placeholder="app-id-guid" /></div>
+      </div>
+      <div class="field s2-secret"><label for="s2_secret">SPN client secret</label><input type="password" id="s2_secret" /></div>
+      <div class="field s2-cert"><label for="s2_thumb">Cert thumbprint</label><input type="text" id="s2_thumb" placeholder="A1B2C3..." /></div>
+      <div class="row s2-kv">
+        <div class="field"><label for="s2_kvname">Key Vault name</label><input type="text" id="s2_kvname" placeholder="kv-name" /></div>
+        <div class="field"><label for="s2_kvsecret">KV secret name</label><input type="text" id="s2_kvsecret" placeholder="SecurityInsight-Secret" /></div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Target (REQUIRED for community mode)</h3>
+      <div class="field required">
+        <label for="s2_sub">Target subscription ID</label>
+        <input type="text" id="s2_sub" placeholder="sub-id-guid" />
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Optional overrides (leave blank to use shared defaults)</h3>
+      <div class="layer-note">
+        <span><span class="layer-pill">Layer 0</span>defaults:</span>
+        <span>
+          <strong>Workspace</strong> log-platform-management-securityinsight /
+          <strong>WS RG</strong> rg-securityinsight /
+          <strong>DCE</strong> dce-securityinsight /
+          <strong>DCE RG</strong> rg-dce-securityinsight /
+          <strong>DCR RG</strong> rg-dcr-securityinsight /
+          <strong>Location</strong> westeurope
+        </span>
+      </div>
+      <div class="row">
+        <div class="field"><label for="s2_ws">WorkspaceName</label><input type="text" id="s2_ws" /></div>
+        <div class="field"><label for="s2_wsrg">WorkspaceResourceGroup</label><input type="text" id="s2_wsrg" /></div>
+      </div>
+      <div class="row">
+        <div class="field"><label for="s2_dce">DceName</label><input type="text" id="s2_dce" /></div>
+        <div class="field"><label for="s2_dcerg">DceResourceGroup</label><input type="text" id="s2_dcerg" /></div>
+      </div>
+      <div class="row">
+        <div class="field"><label for="s2_dcrrg">DcrResourceGroup</label><input type="text" id="s2_dcrrg" /></div>
+        <div class="field"><label for="s2_loc">Location</label><input type="text" id="s2_loc" placeholder="westeurope" /></div>
+      </div>
+    </section>
+
+    <!-- STEP 3 -->
+    <section id="tab-step3" class="panel" hidden>
+      <h2>Step 4 — OnboardValidate Azure OpenAI</h2>
+      <div class="panel-sub">Provisions the PAYG OpenAI account + model deployment used by RiskAnalysis <code>-BuildSummaryByAI</code>. <em>Optional — skip if you don't need AI summaries.</em></div>
+
+      <h3 style="font-size:14px;">Auth</h3>
+      <div class="field">
+        <label for="s3_auth_method">Auth method</label>
+        <select id="s3_auth_method">
+          <option value="SpnSecret">SPN + Secret (testing / lab)</option>
+          <option value="SpnCertificate">SPN + Certificate</option>
+          <option value="ManagedIdentity">Managed Identity</option>
+          <option value="SpnKeyVault">SPN + Key Vault secret</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="field"><label for="s3_tenant">Tenant ID</label><input type="text" id="s3_tenant" placeholder="tenant-id-guid" /></div>
+        <div class="field s3-spn"><label for="s3_client">SPN client ID</label><input type="text" id="s3_client" placeholder="app-id-guid" /></div>
+      </div>
+      <div class="field s3-secret"><label for="s3_secret">SPN client secret</label><input type="password" id="s3_secret" /></div>
+      <div class="field s3-cert"><label for="s3_thumb">Cert thumbprint</label><input type="text" id="s3_thumb" /></div>
+      <div class="row s3-kv">
+        <div class="field"><label for="s3_kvname">Key Vault name</label><input type="text" id="s3_kvname" /></div>
+        <div class="field"><label for="s3_kvsecret">KV secret name</label><input type="text" id="s3_kvsecret" placeholder="SecurityInsight-Secret" /></div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Placement (REQUIRED)</h3>
+      <div class="row">
+        <div class="field required"><label for="s3_sub">SubscriptionId</label><input type="text" id="s3_sub" /></div>
+        <div class="field required"><label for="s3_rg">ResourceGroupName</label><input type="text" id="s3_rg" placeholder="rg-securityinsight-openai" /></div>
+      </div>
+      <div class="field required">
+        <label for="s3_loc">Location</label>
+        <select id="s3_loc">
+          <option value="swedencentral">swedencentral</option>
+          <option value="eastus">eastus</option>
+          <option value="eastus2">eastus2</option>
+          <option value="westus">westus</option>
+          <option value="westus3">westus3</option>
+          <option value="northeurope">northeurope</option>
+          <option value="westeurope">westeurope</option>
+          <option value="uksouth">uksouth</option>
+          <option value="francecentral">francecentral</option>
+          <option value="japaneast">japaneast</option>
+          <option value="australiaeast">australiaeast</option>
+        </select>
+        <div class="hint">Must be a region where Azure OpenAI is available (Sweden Central is a good default for most models).</div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Account + deployment (REQUIRED)</h3>
+      <div class="row">
+        <div class="field required">
+          <label for="s3_account">AccountName (globally unique DNS label)</label>
+          <input type="text" id="s3_account" placeholder="oai-securityinsight-<suffix>" />
+        </div>
+        <div class="field required">
+          <label for="s3_deploy">DeploymentName</label>
+          <input type="text" id="s3_deploy" value="gpt-4o-mini" />
+        </div>
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Optional tuning</h3>
+      <div class="row">
+        <div class="field"><label for="s3_model">ModelName</label><input type="text" id="s3_model" placeholder="gpt-4.1-mini (auto if blank)" /></div>
+        <div class="field"><label for="s3_capacity">Capacity (TPM thousands)</label><input type="text" id="s3_capacity" placeholder="100" /></div>
+      </div>
+    </section>
+
+    <!-- ENGINES -->
+    <section id="tab-engines" class="panel" hidden>
+      <h2>Ingestion engines</h2>
+      <div class="panel-sub">Shared auth block that applies to <code>IdentityAssetsCollectDefineTierIngestLog</code>, <code>SecurityInsight_RiskAnalysis</code>, and <code>CriticalAssetTagging*</code>.</div>
+
+      <div class="panel-block">
+        <strong>Re-use Step 3's auth!</strong> Put the same 4 values (Tenant / ClientId / Secret / SubscriptionId) in each engine's <code>LauncherConfig.custom.ps1</code> and you're done. The engines auto-pick-up the Workspace / DCE / DCR that Step 3 created.
+      </div>
+
+      <h3 style="font-size:14px;">Auth</h3>
+      <div class="field">
+        <label for="e_auth_method">Auth method</label>
+        <select id="e_auth_method">
+          <option value="SpnSecret">SPN + Secret</option>
+          <option value="SpnCertificate">SPN + Certificate</option>
+          <option value="ManagedIdentity">Managed Identity</option>
+          <option value="SpnKeyVault">SPN + Key Vault secret</option>
+        </select>
+      </div>
+      <div class="row">
+        <div class="field"><label for="e_tenant">Tenant ID</label><input type="text" id="e_tenant" /></div>
+        <div class="field e-spn"><label for="e_client">SPN client ID</label><input type="text" id="e_client" /></div>
+      </div>
+      <div class="field e-secret"><label for="e_secret">SPN client secret</label><input type="password" id="e_secret" /></div>
+      <div class="field e-cert"><label for="e_thumb">Cert thumbprint</label><input type="text" id="e_thumb" /></div>
+      <div class="row e-kv">
+        <div class="field"><label for="e_kvname">Key Vault name</label><input type="text" id="e_kvname" /></div>
+        <div class="field"><label for="e_kvsecret">KV secret name</label><input type="text" id="e_kvsecret" /></div>
+      </div>
+
+      <div class="field">
+        <label for="e_sub">SubscriptionId</label>
+        <input type="text" id="e_sub" />
+      </div>
+
+      <h3 style="font-size:14px;margin-top:18px;">Engine extras</h3>
+      <div class="row">
+        <div class="field">
+          <label for="e_engine">Which engine</label>
+          <select id="e_engine">
+            <option value="iac">IdentityAssetsCollect</option>
+            <option value="ra">SecurityInsight_RiskAnalysis</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="e_troubleshoot">Troubleshooting mode</label>
+          <select id="e_troubleshoot">
+            <option value="false">$false (production)</option>
+            <option value="true">$true (first 10 records only)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="ra-block">
+        <div class="row">
+          <div class="field">
+            <label for="e_send_la">Send to Log Analytics</label>
+            <select id="e_send_la"><option value="true">$true</option><option value="false">$false</option></select>
+          </div>
+          <div class="field">
+            <label for="e_template">ReportTemplate</label>
+            <select id="e_template">
+              <option value="">(No default — run Summary + Detailed per engine defaults)</option>
+              <option value="RiskAnalysis_Summary_Bucket">RiskAnalysis_Summary_Bucket</option>
+              <option value="RiskAnalysis_Detailed_Bucket">RiskAnalysis_Detailed_Bucket</option>
+            </select>
+            <div class="hint">Leave as "(No default)" unless you want to hard-code a single template for this launcher.</div>
+          </div>
+        </div>
+        <div class="field">
+          <label for="e_mailto">MailTo (one per line, leave empty to skip mail)</label>
+          <textarea id="e_mailto" rows="2" placeholder="soc@yourdomain.com"></textarea>
+        </div>
+
+        <div class="ra-smtp">
+          <h3 style="font-size:14px;margin-top:10px;">SMTP (only if MailTo is set)</h3>
+          <div class="row">
+            <div class="field">
+              <label for="e_smtp_server">SMTP server</label>
+              <input type="text" id="e_smtp_server" placeholder="smtp-relay.brevo.com" />
+            </div>
+            <div class="field">
+              <label for="e_smtp_port">SMTP port</label>
+              <input type="text" id="e_smtp_port" placeholder="587" />
+            </div>
+          </div>
+          <div class="row">
+            <div class="field">
+              <label for="e_smtp_user">SMTP user (also the From address)</label>
+              <input type="text" id="e_smtp_user" placeholder="no-reply@yourdomain.com" />
+            </div>
+            <div class="field">
+              <label for="e_smtp_pass">SMTP password</label>
+              <input type="password" id="e_smtp_pass" />
+            </div>
+          </div>
+          <div class="field">
+            <label for="e_smtp_ssl">Use SSL/TLS</label>
+            <select id="e_smtp_ssl">
+              <option value="true">$true (recommended)</option>
+              <option value="false">$false</option>
+            </select>
+          </div>
+          <div class="hint">Leave all SMTP fields blank to inherit the shared platform SMTP defaults (if configured).</div>
+        </div>
+
+        <div class="field">
+          <label for="e_export">ExportDestination (UNC or Azure blob — leave blank to skip)</label>
+          <input type="text" id="e_export" placeholder="https://&lt;acct&gt;.blob.core.windows.net/riskanalysis-summary/ or \\server\share\" />
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- RIGHT: preview -->
+  <div>
+    <div class="preview-wrap">
+      <h3 style="margin:0 0 6px;font-size:14px;">Generated <code>LauncherConfig.custom.ps1</code></h3>
+      <div class="target-path" id="target-path">LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\LauncherConfig.custom.ps1</div>
+      <pre class="preview" id="preview">// select a tab on the left</pre>
+      <div class="preview-actions">
+        <button class="btn primary" id="btn-copy" type="button">📋 Copy to clipboard</button>
+        <button class="btn" id="btn-download" type="button">⬇ Download as .ps1.txt</button>
+      </div>
+      <div class="ok-msg" id="ok-msg">Copied to clipboard!</div>
+      <div class="hint" style="margin-top:6px;font-size:12px;line-height:1.4;">
+        <strong>📋 Copy to clipboard</strong> is the recommended workflow — paste into your editor (VS Code / Notepad++) and save as <code>LauncherConfig.custom.ps1</code> in the target folder.
+        <br/>
+        <strong>⬇ Download</strong> saves as <code>.ps1.txt</code> because Windows' Mark-of-the-Web blocks opening browser-downloaded <code>.ps1</code> files. Rename to <code>.ps1</code> after saving, or right-click the file → Properties → <em>Unblock</em>.
+      </div>
+    </div>
+  </div>
+</div>
+
+<footer>
+  v1 &middot; Generated locally in your browser — no data leaves this page. &middot; Bug reports welcome on the
+  <a href="https://github.com/KnudsenMorten/SecurityInsight/issues" target="_blank" rel="noopener">GitHub repo</a>.
+</footer>
+
+<script>
+'use strict';
+
+// ---------- tab switching ----------
+const tabs = document.querySelectorAll('.tabs button');
+const sections = {
+  step1:  document.getElementById('tab-step1'),
+  step2:  document.getElementById('tab-step2'),
+  step3:  document.getElementById('tab-step3'),
+  engines:document.getElementById('tab-engines'),
+};
+const targetPaths = {
+  step1:  'LAUNCHERS\\Step2_OnboardValidate-SecurityInsight-Permissions\\LauncherConfig.custom.ps1',
+  step2:  'LAUNCHERS\\Step3_OnboardValidate-SecurityInsight-LogAnalytics\\LauncherConfig.custom.ps1',
+  step3:  'LAUNCHERS\\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\\LauncherConfig.custom.ps1',
+  engines:'LAUNCHERS\\<engine folder>\\LauncherConfig.custom.ps1',
+};
+let currentTab = 'step1';
+tabs.forEach(btn => {
+  btn.addEventListener('click', () => {
+    tabs.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentTab = btn.dataset.tab;
+    Object.entries(sections).forEach(([k, el]) => { el.hidden = (k !== currentTab); });
+    document.getElementById('target-path').textContent = targetPaths[currentTab];
+    render();
+  });
+});
+
+// ---------- helpers ----------
+function val(id) { const el = document.getElementById(id); return el ? (el.value || '').trim() : ''; }
+function line(k, v, quote = true) {
+  if (v === '' || v == null) return '';
+  const s = quote ? ("'" + String(v).replace(/'/g, "''") + "'") : String(v);
+  return '$global:' + k + ' = ' + s;
+}
+function fmtLines(pairs) {
+  // pairs: [[key, value, quote?], ...] -- skip blanks, align = signs
+  const rows = pairs.filter(p => p[1] !== '' && p[1] != null).map(p => [p[0], p[1], p[2] !== false]);
+  if (rows.length === 0) return '';
+  const maxK = Math.max(...rows.map(r => r[0].length));
+  return rows.map(r => {
+    const pad = ' '.repeat(maxK - r[0].length);
+    const val = r[2] ? ("'" + String(r[1]).replace(/'/g, "''") + "'") : String(r[1]);
+    return '$global:' + r[0] + pad + ' = ' + val;
+  }).join('\n');
+}
+function section(title, body) {
+  if (!body || body.trim() === '') return '';
+  const bar = '# ' + '='.repeat(72);
+  return bar + '\n# ' + title + '\n' + bar + '\n' + body + '\n';
+}
+function toggleClass(selector, show) {
+  document.querySelectorAll(selector).forEach(el => { el.style.display = show ? '' : 'none'; });
+}
+function showOk() {
+  const m = document.getElementById('ok-msg');
+  m.classList.add('show');
+  setTimeout(() => m.classList.remove('show'), 2000);
+}
+
+// ---------- auth-method toggling per tab ----------
+function syncAuthVisibility() {
+  const s1 = val('s1_auth_method');
+  document.querySelector('.s1-unattended').style.display = (s1 === 'Interactive') ? 'none' : '';
+  toggleClass('.s1-spn',    ['SpnSecret','SpnCertificate'].includes(s1));
+  toggleClass('.s1-secret',  s1 === 'SpnSecret');
+  toggleClass('.s1-cert',    s1 === 'SpnCertificate');
+
+  const s2 = val('s2_auth_method');
+  toggleClass('.s2-spn',    ['SpnSecret','SpnCertificate','SpnKeyVault'].includes(s2));
+  toggleClass('.s2-secret',  s2 === 'SpnSecret');
+  toggleClass('.s2-cert',    s2 === 'SpnCertificate');
+  toggleClass('.s2-kv',      s2 === 'SpnKeyVault');
+
+  const s3 = val('s3_auth_method');
+  toggleClass('.s3-spn',    ['SpnSecret','SpnCertificate','SpnKeyVault'].includes(s3));
+  toggleClass('.s3-secret',  s3 === 'SpnSecret');
+  toggleClass('.s3-cert',    s3 === 'SpnCertificate');
+  toggleClass('.s3-kv',      s3 === 'SpnKeyVault');
+
+  const e = val('e_auth_method');
+  toggleClass('.e-spn',    ['SpnSecret','SpnCertificate','SpnKeyVault'].includes(e));
+  toggleClass('.e-secret',  e === 'SpnSecret');
+  toggleClass('.e-cert',    e === 'SpnCertificate');
+  toggleClass('.e-kv',      e === 'SpnKeyVault');
+
+  toggleClass('.ra-block',  val('e_engine') === 'ra');
+}
+
+// ---------- generators ----------
+function buildStep1() {
+  const method = val('s1_auth_method');
+  const rbacScope = fmtLines([
+    ['OnboardValidate_AzureRbacScope', val('s1_rbacscope')],
+  ]);
+  const spnName = fmtLines([
+    ['OnboardValidate_SpnDisplayName', val('s1_spndn')],
+  ]);
+  const optional = fmtLines([
+    ['OnboardValidate_DefenderWorkspaceResourceId', val('s1_defender')],
+    ['OnboardValidate_DcrResourceId',               val('s1_dcr')],
+  ]);
+
+  if (method === 'Interactive') {
+    let out = '# Step 2 defaults to INTERACTIVE auth -- just run the launcher and sign in.\n';
+    out += '# You do NOT need to save this file at all in that case unless you\n';
+    out += '# want to override one of the Step2 defaults below.\n';
+    if (rbacScope) out += '\n' + section('AZURE RBAC SCOPE -- override default (TenantRoot)', rbacScope);
+    if (spnName)   out += '\n' + section('SPN DISPLAY NAME -- override default (sp-securityinsight)', spnName);
+    if (optional)  out += '\n' + section('OPTIONAL -- extra RBAC grants', optional);
+    return out.trim();
+  }
+
+  let auth = '';
+  if (method === 'ManagedIdentity') {
+    auth = fmtLines([
+      ['OnboardValidate_AuthMethod',   'ManagedIdentity'],
+      ['OnboardValidate_AuthTenantId', val('s1_tenant')],
+      ['OnboardValidate_AuthClientId', val('s1_client')],
+    ]);
+  } else if (method === 'SpnSecret') {
+    auth = fmtLines([
+      ['OnboardValidate_AuthMethod',       'SpnSecret'],
+      ['OnboardValidate_AuthTenantId',     val('s1_tenant')],
+      ['OnboardValidate_AuthClientId',     val('s1_client')],
+      ['OnboardValidate_AuthClientSecret', val('s1_secret')],
+    ]);
+  } else if (method === 'SpnCertificate') {
+    auth = fmtLines([
+      ['OnboardValidate_AuthMethod',                'SpnCertificate'],
+      ['OnboardValidate_AuthTenantId',              val('s1_tenant')],
+      ['OnboardValidate_AuthClientId',              val('s1_client')],
+      ['OnboardValidate_AuthCertificateThumbprint', val('s1_thumb')],
+    ]);
+  }
+
+  let out = section('STEP 1 AUTH -- unattended run', auth);
+  if (rbacScope) out += section('AZURE RBAC SCOPE -- override default (TenantRoot)', rbacScope);
+  if (spnName)   out += section('SPN DISPLAY NAME -- override default (sp-securityinsight)', spnName);
+  if (optional)  out += section('OPTIONAL -- extra RBAC grants', optional);
+  return out.trim() || '# Nothing to configure -- just run the launcher (interactive).';
+}
+
+function buildStep2() {
+  const method = val('s2_auth_method');
+  let auth = '';
+  if (method === 'ManagedIdentity') {
+    auth = fmtLines([
+      ['UseManagedIdentity', '$true',            false],
+      ['SpnTenantId',         val('s2_tenant')],
+      ['SpnClientId',         val('s2_client')],
+    ]);
+  } else if (method === 'SpnSecret') {
+    auth = fmtLines([
+      ['SpnTenantId',     val('s2_tenant')],
+      ['SpnClientId',     val('s2_client')],
+      ['SpnClientSecret', val('s2_secret')],
+    ]);
+  } else if (method === 'SpnCertificate') {
+    auth = fmtLines([
+      ['SpnTenantId',              val('s2_tenant')],
+      ['SpnClientId',              val('s2_client')],
+      ['SpnCertificateThumbprint', val('s2_thumb')],
+    ]);
+  } else if (method === 'SpnKeyVault') {
+    auth = fmtLines([
+      ['SpnTenantId',     val('s2_tenant')],
+      ['SpnClientId',     val('s2_client')],
+      ['SpnKeyVaultName', val('s2_kvname')],
+      ['SpnSecretName',   val('s2_kvsecret')],
+    ]);
+  }
+
+  const target = fmtLines([['SubscriptionId', val('s2_sub')]]);
+  const overrides = fmtLines([
+    ['WorkspaceName',          val('s2_ws')],
+    ['WorkspaceResourceGroup', val('s2_wsrg')],
+    ['DceName',                val('s2_dce')],
+    ['DceResourceGroup',       val('s2_dcerg')],
+    ['DcrResourceGroup',       val('s2_dcrrg')],
+    ['Location',               val('s2_loc')],
+  ]);
+
+  let out = '';
+  out += section('AUTH', auth);
+  out += section('TARGET SUBSCRIPTION', target);
+  if (overrides) out += section('OVERRIDES (leave out for Layer 0 shared defaults)', overrides);
+  return out.trim() || '# Fill in the auth + target subscription on the left.';
+}
+
+function buildStep3() {
+  const method = val('s3_auth_method');
+  let auth = '';
+  if (method === 'ManagedIdentity') {
+    auth = fmtLines([
+      ['UseManagedIdentity', '$true',           false],
+      ['SpnTenantId',         val('s3_tenant')],
+      ['SpnClientId',         val('s3_client')],
+    ]);
+  } else if (method === 'SpnSecret') {
+    auth = fmtLines([
+      ['SpnTenantId',     val('s3_tenant')],
+      ['SpnClientId',     val('s3_client')],
+      ['SpnClientSecret', val('s3_secret')],
+    ]);
+  } else if (method === 'SpnCertificate') {
+    auth = fmtLines([
+      ['SpnTenantId',              val('s3_tenant')],
+      ['SpnClientId',              val('s3_client')],
+      ['SpnCertificateThumbprint', val('s3_thumb')],
+    ]);
+  } else if (method === 'SpnKeyVault') {
+    auth = fmtLines([
+      ['SpnTenantId',     val('s3_tenant')],
+      ['SpnClientId',     val('s3_client')],
+      ['SpnKeyVaultName', val('s3_kvname')],
+      ['SpnSecretName',   val('s3_kvsecret')],
+    ]);
+  }
+
+  const placement = fmtLines([
+    ['SubscriptionId',    val('s3_sub')],
+    ['ResourceGroupName', val('s3_rg')],
+    ['Location',          val('s3_loc')],
+  ]);
+  const account = fmtLines([
+    ['AccountName',    val('s3_account')],
+    ['DeploymentName', val('s3_deploy')],
+  ]);
+  const tuning = fmtLines([
+    ['ModelName', val('s3_model')],
+    ['Capacity',  val('s3_capacity'), false],
+  ]);
+
+  let out = '';
+  out += section('AUTH', auth);
+  out += section('AZURE PLACEMENT (required)', placement);
+  out += section('OPENAI ACCOUNT + DEPLOYMENT (required)', account);
+  if (tuning) out += section('OPTIONAL TUNING', tuning);
+  return out.trim();
+}
+
+function buildEngines() {
+  const method = val('e_auth_method');
+  let auth = '';
+  if (method === 'ManagedIdentity') {
+    auth = fmtLines([
+      ['UseManagedIdentity', '$true',          false],
+      ['SpnTenantId',         val('e_tenant')],
+      ['SpnClientId',         val('e_client')],
+    ]);
+  } else if (method === 'SpnSecret') {
+    auth = fmtLines([
+      ['SpnTenantId',     val('e_tenant')],
+      ['SpnClientId',     val('e_client')],
+      ['SpnClientSecret', val('e_secret')],
+    ]);
+  } else if (method === 'SpnCertificate') {
+    auth = fmtLines([
+      ['SpnTenantId',              val('e_tenant')],
+      ['SpnClientId',              val('e_client')],
+      ['SpnCertificateThumbprint', val('e_thumb')],
+    ]);
+  } else if (method === 'SpnKeyVault') {
+    auth = fmtLines([
+      ['SpnTenantId',     val('e_tenant')],
+      ['SpnClientId',     val('e_client')],
+      ['SpnKeyVaultName', val('e_kvname')],
+      ['SpnSecretName',   val('e_kvsecret')],
+    ]);
+  }
+
+  const engine = val('e_engine');
+  const common = fmtLines([
+    ['SubscriptionId',      val('e_sub')],
+    ['TroubleshootingMode', val('e_troubleshoot') === 'true' ? '$true' : '$false', false],
+  ]);
+
+  let out = '';
+  out += section('AUTH', auth);
+  out += section('COMMON', common);
+
+  if (engine === 'ra') {
+    const raPairs = [
+      ['SendToLogAnalytics', val('e_send_la') === 'true' ? '$true' : '$false', false],
+    ];
+    const tmpl = val('e_template');
+    if (tmpl) raPairs.push(['ReportTemplate', tmpl]);
+    raPairs.push(['ExportDestination', val('e_export')]);
+    const ra = fmtLines(raPairs);
+    out += section('RISK ANALYSIS', ra);
+
+    const mailtoRaw = val('e_mailto');
+    if (mailtoRaw) {
+      const addrs = mailtoRaw.split(/[\r\n,;]+/).map(s => s.trim()).filter(Boolean);
+      if (addrs.length > 0) {
+        const arr = '@(' + addrs.map(a => "'" + a.replace(/'/g, "''") + "'").join(', ') + ')';
+        let mail  = "$global:SendMail = $true\n";
+        mail     += "$global:MailTo   = " + arr + "\n";
+        mail     += "$global:RiskAnalysis_Detailed_SendMail = $true\n";
+        mail     += "$global:RiskAnalysis_Detailed_To       = " + arr + "\n";
+        mail     += "$global:RiskAnalysis_Summary_SendMail  = $true\n";
+        mail     += "$global:RiskAnalysis_Summary_To        = " + arr;
+        out += section('MAIL', mail);
+
+        const smtpPairs = [];
+        const smtpServer = val('e_smtp_server');
+        const smtpPort   = val('e_smtp_port');
+        const smtpUser   = val('e_smtp_user');
+        const smtpPass   = val('e_smtp_pass');
+        const smtpSsl    = val('e_smtp_ssl');
+        if (smtpServer) smtpPairs.push(['SmtpServer',   smtpServer]);
+        if (smtpPort)   smtpPairs.push(['SmtpPort',     smtpPort, false]);
+        if (smtpUser)   smtpPairs.push(['SMTPUser',     smtpUser]);
+        if (smtpPass)   smtpPairs.push(['SMTPPassword', smtpPass]);
+        if (smtpSsl)    smtpPairs.push(['SMTP_UseSSL',  smtpSsl === 'true' ? '$true' : '$false', false]);
+        if (smtpPairs.length > 0) {
+          out += section('SMTP', fmtLines(smtpPairs));
+        } else {
+          out += section('SMTP (inherit shared platform defaults)', '# Leave SMTP fields blank in the configurator to inherit\n# $global:SmtpServer / Port / User / Password from the shared platform defaults.');
+        }
+      }
+    }
+
+    // Update target path hint for the engine choice
+    targetPaths.engines = 'LAUNCHERS\\SecurityInsight_RiskAnalysis\\LauncherConfig.custom.ps1';
+  } else {
+    targetPaths.engines = 'LAUNCHERS\\IdentityAssetsCollectDefineTierIngestLog\\LauncherConfig.custom.ps1';
+  }
+  document.getElementById('target-path').textContent = targetPaths.engines;
+
+  return out.trim() || '# Fill in the auth + subscription on the left.';
+}
+
+// ---------- wrapping + rendering ----------
+function wrap(bodies, stepName) {
+  if (!bodies || bodies.trim() === '' || /^# \w/.test(bodies.trim())) return bodies;
+  const header =
+    '#Requires -Version 5.1\n' +
+    '<#\n' +
+    '  GENERATED by SecurityInsight Setup Configurator.\n' +
+    '  Target file  : ' + targetPaths[stepName] + '\n' +
+    '  Review, then save AS LauncherConfig.custom.ps1 (filename matters).\n' +
+    '  All secrets in this file are stored in clear text -- rotate if exposed.\n' +
+    '#>\n\n';
+  return header + bodies;
+}
+
+function render() {
+  syncAuthVisibility();
+  let body = '';
+  switch (currentTab) {
+    case 'step1':   body = buildStep1();   break;
+    case 'step2':   body = buildStep2();   break;
+    case 'step3':   body = buildStep3();   break;
+    case 'engines': body = buildEngines(); break;
+  }
+  document.getElementById('preview').textContent = wrap(body, currentTab);
+}
+
+// ---------- copy + download ----------
+document.getElementById('btn-copy').addEventListener('click', async () => {
+  const text = document.getElementById('preview').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    showOk();
+  } catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    showOk();
+  }
+});
+document.getElementById('btn-download').addEventListener('click', () => {
+  const text = document.getElementById('preview').textContent;
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'LauncherConfig.custom.ps1.txt';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+// ---------- wire up all inputs to re-render ----------
+document.querySelectorAll('input, select, textarea').forEach(el => {
+  el.addEventListener('input',  render);
+  el.addEventListener('change', render);
+});
+
+render();
+</script>
+
+</body>
+</html>

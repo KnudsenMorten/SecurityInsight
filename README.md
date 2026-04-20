@@ -401,18 +401,32 @@ Invoke-RestMethod $u | Out-File $env:TEMP\Step1.ps1
 
 Customer-owned files (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`) are **never overwritten** on update. Re-runs preserve them.
 
-> [!TIP]
-> **Prefer a GUI?** Open the included **Setup Configurator** in your browser:
-> ```powershell
-> Start-Process .\TOOLS\SetupConfigurator\index.html
-> ```
-> It's a single offline HTML file that generates the `LauncherConfig.custom.ps1` content for each Step with form fields + live preview + copy-to-clipboard. All processing stays in your browser — no data leaves your machine.
+---
 
-**Step 2 — do nothing.** Just run the launcher:
+##### Step 2 — do nothing
+
+Just run the launcher:
 ```powershell
 .\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
 ```
 Browser sign-in as a Privileged Role Admin. The engine creates `sp-securityinsight`, grants all the API permissions, and assigns Azure `Reader` on every subscription you can see. Prints the AppId + secret-creation hint at the end — copy the AppId.
+
+---
+
+##### Steps 3 + 4 + ingestion engines — pick ONE path
+
+> [!TIP]
+> **⭐ Recommended: Setup Configurator (GUI).**
+> Open the included **Setup Configurator** in your browser — it writes every `LauncherConfig.custom.ps1` for you with form fields + live preview + copy-to-clipboard:
+> ```powershell
+> Start-Process .\TOOLS\SetupConfigurator\index.html
+> ```
+> Single offline HTML file, zero dependencies. Tabs for Step 2 / Step 3 / Step 4 / ingestion engines. All processing stays in your browser — no data leaves your machine. Re-use the 4 auth values (Tenant / ClientId / Secret / Subscription) across every tab and you're done.
+
+Or — **configure manually** if you prefer editing `.ps1` files directly:
+
+<details>
+<summary><b>Manual configuration (click to expand)</b></summary>
 
 **Step 3 — 4 lines in `LauncherConfig.custom.ps1`:**
 ```powershell
@@ -442,10 +456,9 @@ $global:DeploymentName    = 'gpt-4o-mini'
 ```
 Re-run `-ValidateOnly` any time to confirm the deployment is still healthy.
 
-That's it. The ingestion engines (`IdentityAssetsCollect`, `RiskAnalysis`) pick up the resources Step 3 created automatically — you only need to set `$global:SpnTenantId` + `$global:SpnClientId` + `$global:SpnClientSecret` + `$global:SubscriptionId` in *their* custom files to use the same SPN.
+**Ingestion engines** (`IdentityAssetsCollect`, `RiskAnalysis`) pick up the resources Step 3 created automatically — you only need to set `$global:SpnTenantId` + `$global:SpnClientId` + `$global:SpnClientSecret` + `$global:SubscriptionId` in *their* custom files to use the same SPN.
 
-> [!NOTE]
-> **Future roadmap — web-based config wizard.** A browser-based wizard that aggregates across all 5 config layers (Layer 0 shared-defaults → Layer 1 per-engine → Layer 2 platform-defaults → Layer 3 solution-custom → Layer 4 launcher-custom), shows the effective value at each layer, and generates a minimal `LauncherConfig.custom.ps1` containing only the overrides the user explicitly changes. Will ship alongside the Azure Monitor Workbooks (v2.2.x). Track on the [release page](https://github.com/KnudsenMorten/SecurityInsight/releases).
+</details>
 
 ---
 

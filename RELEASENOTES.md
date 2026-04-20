@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.74
+## v2.1.75
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI SetupConfigurator): SMTP fields + (No default) ReportTemplate option (6d64a9e)
+- docs(SI README): promote Setup Configurator as recommended path in §3.4 (24c47b6)
 
 ---
 

@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.94
+## v2.1.95
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- docs(SI Step5): Setup Configurator tab + PowerBI-Prerequisites doc + README (ed381c2)
+- docs(SI README): extend §1 Introduction with Outputs + Use-cases sections (2d89825)
 
 ---
 

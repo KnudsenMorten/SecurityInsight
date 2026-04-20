@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.120
+## v2.1.121
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI _shared): per-module '[MODULE] probing X ...' line so customers see which module is being checked (e8fbc177)
 - fix(SI _shared): detect modules installed in AllUsers + default Scope=Auto (b7277b76)
 - docs(SI): seed RELEASENOTES.md with curated human-friendly changelog (7caf0c6f)
 - fix(SI _shared): emit 'Checking N modules...' banner so customers don't think it hung (a463dd2b)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Workbook): resource picker -- use Azure Resource Graph (queryType 1) (d8f2f81f)
 - fix(SI Workbook): workspace picker at top + '*' sentinel for multi-select "All" (deccb5b7)
 - feat(SI Workbook): ship Azure Monitor Workbook JSON + import doc (0a366e0b)
-- docs(SI README): extend §1 Introduction with Outputs + Use-cases sections (2d898254)
 
 ---
 

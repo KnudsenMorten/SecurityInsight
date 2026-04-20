@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.55
+## v2.1.56
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- feat(SI config): add Layer 0 shared defaults + SubscriptionId derivation (92ee569)
+- feat(SI RiskAnalysis): mail globals accept both new + legacy names (new wins) (97a4054)
 
 ---
 

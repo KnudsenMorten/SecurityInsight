@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.110
+## v2.1.111
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI Step0): banner reads 'Step 0' not 'Step 1' (post-renumber leftover) (eb655c7)
+- fix(SI Step0 bootstrap): resolve latest tag then fetch tag-pinned raw (9810c13)
 
 ---
 

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Quickstart customer config for OnboardValidate-SecurityInsight-Permissions.
+    Quickstart customer config for Step1_OnboardValidate-SecurityInsight-Permissions.
 
 .DESCRIPTION
     Copy this file to LauncherConfig.custom.ps1 in the SAME folder. Customer
@@ -25,7 +25,7 @@
 .NOTES
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
-    Engine                : OnboardValidate-SecurityInsight-Permissions
+    Engine                : Step1_OnboardValidate-SecurityInsight-Permissions
     Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
 #>
 

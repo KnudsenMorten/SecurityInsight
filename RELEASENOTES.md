@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.67
+## v2.1.68
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- docs(SI README): update §3.4.1 + §3.4.2 quickstart for OnboardValidate + auto-provision (a6d5155)
+- refactor(SI): rename onboarding launchers + engines with Step1_/Step2_ prefix (dff2de0)
 
 ---
 

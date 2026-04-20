@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community-edition customer configuration for Onboarding_IdentityAssets_LogAnalytics.
+    Community-edition customer configuration for Step2_OnboardValidate_LogAnalytics.
 
 .DESCRIPTION
     Copy this file to LauncherConfig.ps1 in the SAME folder and edit the values.

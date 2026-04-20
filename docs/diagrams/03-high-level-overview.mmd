@@ -2,7 +2,7 @@
 %% Used in README § 3.1 (High-level overview).
 flowchart TD
     S1[1 · Get / Update SecurityInsight from GitHub] --> S2[2 · Onboard Entra SPN or Managed Identity<br/>OnboardValidate-Permissions]
-    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Onboarding_IdentityAssets_LogAnalytics]
+    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step2_OnboardValidate_LogAnalytics]
     S3 --> S4[4 · <i>optional</i> Deploy Azure OpenAI<br/>Deploy_OpenAI_PAYG_Instance]
     S4 --> S5[5 · Classify assets with tagging<br/>CriticalAssetTagging <b>-Scope TEST</b> then <b>PROD</b>]
     S5 --> S6[6 · Collect Identity tiers<br/>IdentityAssetsCollectDefineTierIngestLog]

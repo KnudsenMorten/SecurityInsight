@@ -42,7 +42,7 @@ $global:GitHubUri = "https://raw.githubusercontent.com/KnudsenMorten/SecurityIns
 #   * launchers/*/LauncherConfig.ps1               -- your SPN credentials (.gitignore'd)
 #   * scripts/CriticalAssetTaggingMaintenance*.ps1
 #   * scripts/Deploy_OpenAI_PAYG_Instance_SecurityInsights.ps1
-#   * scripts/Onboarding_IdentityAssets_LogAnalytics.ps1
+#   * scripts/Step2_OnboardValidate_LogAnalytics.ps1
 #     (these three scripts are one-shot or infrequently-changed; re-run manually
 #      when needed rather than updating silently in the background)
 #

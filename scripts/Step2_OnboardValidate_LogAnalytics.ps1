@@ -7,7 +7,7 @@
 
 .NOTES
     Solution       : SecurityInsight
-    File           : Onboarding_IdentityAssets_LogAnalytics.ps1
+    File           : Step2_OnboardValidate_LogAnalytics.ps1
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten

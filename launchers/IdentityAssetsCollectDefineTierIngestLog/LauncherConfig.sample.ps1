@@ -23,7 +23,7 @@
     table must exist. Provision them by running the sibling onboarding launcher
     once per customer tenant:
 
-        LAUNCHERS\Onboarding_IdentityAssets_LogAnalytics\launcher.community-vm.template.ps1
+        LAUNCHERS\Step2_OnboardValidate_LogAnalytics\launcher.community-vm.template.ps1
 
     Its end-of-run cheat-sheet prints the exact 6 globals to copy into section 2.
 

@@ -88,7 +88,7 @@
 
 .NOTES
     Solution     : SecurityInsight
-    File         : OnboardValidate-SecurityInsight-Permissions.ps1
+    File         : Step1_OnboardValidate-SecurityInsight-Permissions.ps1
 
     Adding a new permission later:
       - For an API permission: add a line under the matching $RequiredApiPermissions

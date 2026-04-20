@@ -1,88 +1,107 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Community-edition customer configuration for Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.
+    Quickstart customer config for Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.
+
 .DESCRIPTION
-    Copy this file to LauncherConfig.ps1 in the SAME folder and fill in the values
-    for whichever authentication method you want to use. LauncherConfig.ps1 is
-    .gitignore'd so the populated copy stays on your machine.
+    Copy this file to LauncherConfig.custom.ps1 in the SAME folder and fill in
+    the values. The custom file is gitignored so the populated copy stays on
+    your machine and is never overwritten by a release upgrade.
 
-    AUTHENTICATION METHODS (pick ONE)
+    Step3 creates (or validates) an Azure OpenAI pay-as-you-go account + a model
+    deployment so SecurityInsight_RiskAnalysis -BuildSummaryByAI works. All
+    operations are idempotent. Re-run any time with -ValidateOnly for a drift
+    check (non-zero exit code if any resource is missing).
 
-    The launcher resolves auth in this priority order (first match wins):
-
-      1.  Managed Identity  (production, most secure)
-      2.  SPN + Key Vault-stored secret  (production)
-      3.  SPN + certificate  (production; cert must be installed in user's cert store)
-      4.  SPN + plaintext secret  (TESTING ONLY - do NOT use in production)
-
-    In every production case the app still needs the Entra API permissions and
-    Azure RBAC described in the solution README, Step 2.
+    ABSOLUTE MINIMUM to run this step successfully (see section 5 for the full
+    copy-paste block):
+      - Auth block (one of sections 1-4)
+      - SubscriptionId, ResourceGroupName, Location, AccountName, DeploymentName
 
 .NOTES
     Solution       : SecurityInsight
-    File           : LauncherConfig.sample.ps1
+    Engine         : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure
     Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : For public repos, open a GitHub Issue on that solution's repo.
-
 #>
 
 # ================================================================================
-#  METHOD 1 -- Managed Identity  (RECOMMENDED for Azure VMs / Arc-enabled servers
-#                                 / Function Apps / Hybrid Runbook Workers)
+# 1.  AUTHENTICATION  -- pick ONE method block, uncomment, fill in values
 # ================================================================================
-# System-assigned MI is assumed. For user-assigned MI, set $global:SpnClientId to
-# the MI's client ID.
-#
+
+# ----- METHOD 1: Managed Identity (recommended for Azure VMs / Function Apps) --
 # $global:UseManagedIdentity = $true
-# $global:SpnTenantId         = '<your-tenant-id-guid>'   # still required for Graph connect
+# $global:SpnTenantId        = '<your-tenant-id-guid>'
 
+# ----- METHOD 2: SPN + secret stored in Azure Key Vault -------------------------
+# $global:SpnTenantId     = '<your-tenant-id-guid>'
+# $global:SpnClientId     = '<your-app-client-id-guid>'
+# $global:SpnKeyVaultName = '<kv-name>'
+# $global:SpnSecretName   = 'SecurityInsight-Secret'
 
-# ================================================================================
-#  METHOD 2 -- Service Principal + secret stored in Azure Key Vault
-# ================================================================================
-# Requires the VM / caller to have a Managed Identity with 'Key Vault Secrets User'
-# on the target Key Vault. The launcher uses MI to fetch the SPN secret, then
-# authenticates as the SPN.
-#
-# $global:SpnTenantId         = '<your-tenant-id-guid>'
-# $global:SpnClientId         = '<your-app-client-id-guid>'
-# $global:SpnKeyVaultName     = '<kv-name>'               # short name, not full URI
-# $global:SpnSecretName       = 'SecurityInsight-Secret'  # name of the secret holding the client secret
-
-
-# ================================================================================
-#  METHOD 3 -- Service Principal + certificate (thumbprint in local cert store)
-# ================================================================================
-# Upload the public key of the cert to the Entra app under Certificates & secrets.
-# The private key must be installed on THIS machine (CurrentUser\My or
-# LocalMachine\My). Certificate auth is silent and does not expire as fast as
-# secrets.
-#
-# $global:SpnTenantId             = '<your-tenant-id-guid>'
-# $global:SpnClientId             = '<your-app-client-id-guid>'
+# ----- METHOD 3: SPN + certificate (thumbprint in local cert store) ------------
+# $global:SpnTenantId              = '<your-tenant-id-guid>'
+# $global:SpnClientId              = '<your-app-client-id-guid>'
 # $global:SpnCertificateThumbprint = '<cert thumbprint, hex, no spaces>'
 
+# ----- METHOD 4: SPN + plaintext secret  *** TESTING ONLY *** ------------------
+# $global:SpnTenantId     = '<your-tenant-id-guid>'
+# $global:SpnClientId     = '<your-app-client-id-guid>'
+# $global:SpnClientSecret = '<your-client-secret>'
+
 
 # ================================================================================
-#  METHOD 4 -- Service Principal + plaintext secret  *** TESTING ONLY ***
+# 2.  AZURE PLACEMENT -- REQUIRED. Where Step3 creates (or finds) the resources.
 # ================================================================================
-# WARNING: storing a plaintext client secret in a .ps1 file is acceptable for a
-# short-lived TEST / LAB environment ONLY. For production use Method 1, 2, or 3.
-# LauncherConfig.ps1 is .gitignore'd, so it won't accidentally land in a git
-# commit -- but the secret is still in cleartext on disk, and on backup media,
-# and in any filesystem snapshot, and in whatever process the script runs under.
-# Expect to rotate the secret frequently if you do leave it here.
-#
+# $global:SubscriptionId     = '<your-target-subscription-id-guid>'
+# $global:ResourceGroupName  = 'rg-securityinsight-openai'      # any name; created if missing
+# $global:Location           = 'swedencentral'                  # any region where Azure OpenAI is available
+
+
+# ================================================================================
+# 3.  OPENAI ACCOUNT + DEPLOYMENT -- REQUIRED
+# ================================================================================
+# AccountName must be globally unique (DNS label for *.openai.azure.com)
+# $global:AccountName        = 'oai-securityinsight-<unique-suffix>'
+# DeploymentName is the logical name for the model deployment (you pass this
+# as $global:OpenAI_deployment in the RiskAnalysis launcher config)
+# $global:DeploymentName     = 'gpt-4o-mini'
+
+
+# ================================================================================
+# 4.  OPTIONAL TUNING (leave commented to accept safe defaults)
+# ================================================================================
+# Model preference -- if unset, the engine auto-selects the best available
+# model in the region (typically gpt-4.1-mini, with fallback to gpt-4, gpt-35-turbo)
+# $global:ModelName          = 'gpt-4.1-mini'
+# $global:ModelVersion       = 'latest'
+# $global:Capacity           = 100               # TPM capacity (thousands)
+# $global:PublicNetworkAccess = 'Enabled'        # or 'Disabled' for private access only
+# $global:DeploymentSkuOrder = @('GlobalStandard')  # try these deployment SKUs in order
+
+
+# ================================================================================
+# 5.  MINIMUM COPY-PASTE EXAMPLE -- community mode, bare minimum to provision
+# ================================================================================
+# Uncomment this whole block, replace the four '<your-*>' placeholders, save as
+# LauncherConfig.custom.ps1, and run:
+#   .\launcher.community-vm.template.ps1
+# Re-run with -ValidateOnly any time to check the deployment is still healthy.
+
+<#
+# --- Auth: SPN + plaintext secret (TESTING ONLY; use Method 1-3 in production) ---
 $global:SpnTenantId     = '<your-tenant-id-guid>'
 $global:SpnClientId     = '<your-app-client-id-guid>'
 $global:SpnClientSecret = '<your-client-secret>'
 
+# --- Azure placement ---
+$global:SubscriptionId     = '<your-target-subscription-id-guid>'
+$global:ResourceGroupName  = 'rg-securityinsight-openai'
+$global:Location           = 'swedencentral'
 
-# ================================================================================
-#  Optional engine-level settings (apply regardless of auth method)
-# ================================================================================
-# $global:Scope            = @('PROD')            # or @('TEST')
-# $global:WhatIfMode        = $false               # $true = dry run, no changes
+# --- Account + deployment ---
+$global:AccountName        = 'oai-securityinsight-<unique-suffix>'
+$global:DeploymentName     = 'gpt-4o-mini'
+#>

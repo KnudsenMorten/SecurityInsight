@@ -364,6 +364,51 @@ The solution ships three **Step** launchers that set a tenant up from zero, plus
 
 **Step 3** accepts `-ValidateOnly` — turns it into a hands-off health check. No resources are created, but the engine still reports `CREATED` / `REUSED` / `MISSING` status per resource + exits non-zero if anything is missing. Good for monitoring that your Azure OpenAI deployment hasn't drifted.
 
+---
+
+### 🚀 30-second onboarding (absolute minimum)
+
+**Step 1 — do nothing.** Just run the launcher:
+```powershell
+.\LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
+```
+Browser sign-in as a Privileged Role Admin. The engine creates `sp-securityinsight`, grants all the API permissions, and assigns Azure `Reader` on every subscription you can see. Prints the AppId + secret-creation hint at the end — copy the AppId.
+
+**Step 2 — 4 lines in `LauncherConfig.custom.ps1`:**
+```powershell
+# LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/LauncherConfig.custom.ps1
+$global:SpnTenantId     = '<your-tenant-id-guid>'
+$global:SpnClientId     = '<appid-from-Step1>'
+$global:SpnClientSecret = '<client-secret-you-created-for-that-app>'
+$global:SubscriptionId  = '<your-target-subscription-id-guid>'
+```
+Run it:
+```powershell
+.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
+```
+Workspace / DCE / DCR all land in their standard RGs (`rg-securityinsight`, `rg-dce-securityinsight`, `rg-dcr-securityinsight` in West Europe) — override in the same file only if you deviate. Step 2's end-of-run cheat-sheet prints the exact globals to paste into the ingestion engines' config files.
+
+**Step 3 — only if you want `-BuildSummaryByAI` on RiskAnalysis. 7 lines:**
+```powershell
+# LAUNCHERS/Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/LauncherConfig.custom.ps1
+$global:SpnTenantId      = '<your-tenant-id-guid>'
+$global:SpnClientId      = '<appid-from-Step1>'
+$global:SpnClientSecret  = '<client-secret>'
+$global:SubscriptionId   = '<your-target-subscription-id-guid>'
+$global:ResourceGroupName = 'rg-securityinsight-openai'
+$global:Location          = 'swedencentral'
+$global:AccountName       = 'oai-securityinsight-<unique-suffix>'
+$global:DeploymentName    = 'gpt-4o-mini'
+```
+Re-run `-ValidateOnly` any time to confirm the deployment is still healthy.
+
+That's it. The ingestion engines (`IdentityAssetsCollect`, `RiskAnalysis`) pick up the resources Step 2 created automatically — you only need to set `$global:SpnTenantId` + `$global:SpnClientId` + `$global:SpnClientSecret` + `$global:SubscriptionId` in *their* custom files to use the same SPN.
+
+> [!NOTE]
+> **Future roadmap — web-based config wizard.** A browser-based wizard that aggregates across all 5 config layers (Layer 0 shared-defaults → Layer 1 per-engine → Layer 2 platform-defaults → Layer 3 solution-custom → Layer 4 launcher-custom), shows the effective value at each layer, and generates a minimal `LauncherConfig.custom.ps1` containing only the overrides the user explicitly changes. Will ship alongside the Azure Monitor Workbooks (v2.2.x). Track on the [release page](https://github.com/KnudsenMorten/SecurityInsight/releases).
+
+---
+
 <a id="341-connectivity-spn-or-managed-identity"></a>
 #### 3.4.1 Connectivity: SPN or Managed Identity
 

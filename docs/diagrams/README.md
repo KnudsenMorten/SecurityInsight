@@ -1,16 +1,17 @@
 # SecurityInsight — Diagrams for Slides & Docs
 
-The 7 Mermaid diagrams from the main README, extracted as standalone `.mmd` source files **AND** pre-rendered as `.png` files (drop-in ready for slide decks, blog posts, whitepapers).
+The 8 Mermaid diagrams from the main README, extracted as standalone `.mmd` source files **AND** pre-rendered as `.png` files (drop-in ready for slide decks, blog posts, whitepapers).
 
 | # | Source (`.mmd`) | Rendered (`.png`) | What it shows | README |
 |---|---|---|---|---|
 | 1 | `01-attack-path.mmd` | `01-attack-path.png` | A 4-hop attacker path (user device → app server → service account → DC). Why we use a graph instead of a list. | § 2.1 |
 | 2 | `02-risk-score-formula.mmd` | `02-risk-score-formula.png` | The Risk Score math: Severity × (Criticality + Risk Factors). | § 2.2 |
-| 3 | `03-high-level-overview.mmd` | `03-high-level-overview.png` | The 7-step implementation workflow, from GitHub download to running Risk Analysis. | § 3.1 |
+| 3 | `03-high-level-overview.mmd` | `03-high-level-overview.png` | The 7-step implementation workflow, from GitHub download to running Risk Analysis (Step1 / Step2 / Step3 naming). | § 3.1 |
 | 4 | `04-yaml-merge-flow.mmd` | `04-yaml-merge-flow.png` | How the engine merges Locked + Custom YAML files (Custom wins on name collision). | § 6.2 |
 | 5 | `05-yaml-upgrade-before-after.mmd` | `05-yaml-upgrade-before-after.png` | What a release upgrade does to your YAML files (Locked replaced; Custom untouched). | § 6.5 |
 | 6 | `06-layered-config-flow.mmd` | `06-layered-config-flow.png` | The 5-layer launcher config waterfall (defaults → platform → solution-wide → per-engine → CLI args). | § 7.7 |
 | 7 | `07-end-to-end-architecture.mmd` | `07-end-to-end-architecture.png` | End-to-end architecture: data sources → engines → outputs. | § 7.8 |
+| 8 | `08-onboarding-flow.mmd` | `08-onboarding-flow.png` | Onboarding detail — Step1 → Step2 → (optional) Step3 decision flow with the values each step produces for the downstream ingestion engines. | § 3.4 |
 
 PNGs are rendered at **scale=2** with a **white background** — drop them straight into PowerPoint / Keynote / Google Slides without re-rendering. If you need different settings (bigger, transparent, SVG), keep reading.
 

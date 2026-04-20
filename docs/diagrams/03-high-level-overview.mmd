@@ -1,11 +1,14 @@
 %% 7-step quick-start workflow: from GitHub download to running Risk Analysis.
 %% Used in README § 3.1 (High-level overview).
 flowchart TD
-    S1[1 · Get / Update SecurityInsight from GitHub] --> S2[2 · Onboard Entra SPN or Managed Identity<br/>OnboardValidate-Permissions]
-    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step2_OnboardValidate-SecurityInsight-LogAnalytics]
-    S3 --> S4[4 · <i>optional</i> Deploy Azure OpenAI<br/>Deploy_OpenAI_PAYG_Instance]
-    S4 --> S5[5 · Classify assets with tagging<br/>CriticalAssetTagging <b>-Scope TEST</b> then <b>PROD</b>]
-    S5 --> S6[6 · Collect Identity tiers<br/>IdentityAssetsCollectDefineTierIngestLog]
-    S6 --> S7[7 · Run Risk Analysis<br/>SecurityInsight_RiskAnalysis <b>-Summary</b> / <b>-Detailed</b>]
+    S1["1 &middot; Download / update SecurityInsight<br/>from GitHub (releases.latest)"] --> S2["2 &middot; <b>Step1</b> &middot; Onboard SPN + API perms + Azure Reader<br/><i>Step1_OnboardValidate-SecurityInsight-Permissions</i>"]
+    S2 --> S3["3 &middot; <b>Step2</b> &middot; Provision Log Analytics workspace + DCE + DCR<br/><i>Step2_OnboardValidate-SecurityInsight-LogAnalytics</i>"]
+    S3 --> S4["4 &middot; <i>optional</i> &middot; <b>Step3</b> &middot; Deploy Azure OpenAI (PAYG)<br/><i>Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure</i>"]
+    S4 --> S5["5 &middot; Classify assets with tier tags<br/><i>CriticalAssetTagging</i> &nbsp;&minus;&minus;Scope TEST &rarr; PROD"]
+    S5 --> S6["6 &middot; Collect identity tiers &rarr; SI_IdentityAssets_CL<br/><i>IdentityAssetsCollectDefineTierIngestLog</i>"]
+    S6 --> S7["7 &middot; Run Risk Analysis &rarr; xlsx / json / SI_RiskAnalysis_*_CL<br/><i>SecurityInsight_RiskAnalysis</i> &nbsp;&minus;Summary / &minus;Detailed"]
     style S1 fill:#e8f4fd,stroke:#2a6592
+    style S2 fill:#e8f4fd,stroke:#2a6592
+    style S3 fill:#e8f4fd,stroke:#2a6592
+    style S4 fill:#fff4e1,stroke:#b07a00
     style S7 fill:#e8ffe8,stroke:#1a7a1a,stroke-width:2px

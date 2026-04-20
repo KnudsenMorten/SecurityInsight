@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.126
+## v2.1.127
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): section 6.6 -- CriticalAssetTagging Mode/Scope workflow (124fc81e)
 - docs(SI README): require admin PowerShell for Step 0 bootstrap (a92b428e)
 - fix(SI _shared): default -Scope AllUsers + fail fast if non-elevated (0b263886)
 - perf(SI _shared): drop all Import-Module calls -- trust PowerShell auto-load (ff869fb6)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI SetupConfigurator): copy-to-clipboard "run-command" button (855d0923)
 - refactor(SI): renumber Steps -- install=Step0, Permissions=Step1, LA=Step2, OpenAI=Step3, PowerBI=Step4 (636efc49)
 - fix(SI Workbook): use built-in value::all sentinel so "All" pre-selects reliably (da634d58)
-- feat(SI IdentityAssets + Workbook): stamp SolutionVersion on identity rows too (39ec5e31)
 
 ---
 

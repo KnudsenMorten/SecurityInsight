@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.134
+## v2.1.135
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Build_Tier): restore visible SECTION A header so AD tiering isn't invisible (9f3c41aa)
 - refactor(SI Build_Tier): drop on-prem AD enumeration entirely (ff5a7cf7)
 - fix(SI Build_Tier): drop dead 'AD_GroupMembership' key from tiering JSON (63cf116c)
 - docs(SI README): RSAT AD PowerShell prerequisite for Build_Tier_Definitions_JSON_File (4809b66d)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): add v2.1.88..v2.1.108 highlights to changelog (f26470df)
 - fix(SI Step0): use Invoke-WebRequest -OutFile in bootstrap, not irm | Out-File (160bffa1)
 - docs(SI README): cleaner override pattern in real-world sample (0c394553)
-- docs(SI README): add real-world RiskAnalysis .custom.ps1 sample (redacted) (d710a888)
 
 ---
 
@@ -48,6 +48,10 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.135 — Restore visible `SECTION A` marker in Build_Tier output
+
+- 🧰 **Engine log now shows `=== SECTION A: AD Built-in Groups (name-based AI tiering) ===` at the top** before Entra (SECTION B) and Azure (SECTION C) collection kicks in. The AI tiering for AD groups still happens inside the later `Invoke-AllAITiering` batch call, but the visible section header makes it clear that AD classification is part of the pipeline -- v2.1.134 removed the member-enumeration code and the associated log header together, which made it look like AD tiering had been dropped entirely. It hadn't. Output now also prints the catalog size (`$BuiltInADGroups.Count` names) and a one-liner explaining membership comes from the Exposure Graph.
 
 ### v2.1.134 — Remove on-prem AD enumeration from `Build_Tier_Definitions_JSON_File`
 

@@ -37,8 +37,19 @@
 
 
 # ============================================================================
-# 2.  AZURE SCOPE  (uncomment to limit scope; leave commented for "all subs")
+# 2.  AZURE RBAC SCOPE  (where SPN gets Reader + Tag Contributor)
 # ============================================================================
+# Default is 'TenantRoot' -- ONE assignment at the tenant root management group,
+# cascades to every sub + RG. Reader lets Resource Graph see everything;
+# Tag Contributor is needed by CriticalAssetTagging to write tier tags on
+# subs / RGs / resources.
+#
+# Switch to 'PerSubscription' if you can't elevate to tenant-root UAA, or to
+# limit blast radius to specific subs.
+# $global:OnboardValidate_AzureRbacScope = 'PerSubscription'
+
+# Only used when AzureRbacScope = 'PerSubscription'.
+# Uncomment to limit scope; leave commented for "all subs the caller can see".
 # $global:OnboardValidate_AzureSubscriptionIds = @(
 #     '<sub-guid-1>',
 #     '<sub-guid-2>'

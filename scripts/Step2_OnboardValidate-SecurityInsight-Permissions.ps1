@@ -55,6 +55,25 @@
     Dry run. Walks the catalog, prints status, but does NOT create the SPN,
     grant any permission, or assign any RBAC role. Use this first to preview.
 
+.PARAMETER AzureRbacScope
+    Scope at which the SPN gets its Azure RBAC roles (Reader + Tag Contributor).
+
+      TenantRoot      - default. ONE role assignment at the tenant root
+                        management group, cascades to every sub + every RG +
+                        every resource. Needs the onboarding identity to have
+                        Owner / User Access Administrator at tenant root (see
+                        "Access management for Azure resources" toggle).
+                        Best default because CriticalAssetTagging needs Tag
+                        Contributor on EVERY taggable resource in the tenant;
+                        one MG grant is simpler than fanning out per sub.
+
+      PerSubscription - legacy. Per-subscription grants. Use when you CAN'T
+                        elevate to tenant root, or want to limit blast radius
+                        via -AzureSubscriptionIds.
+
+    If TenantRoot fails at runtime (e.g. caller isn't elevated), the script
+    falls back to PerSubscription automatically so the run still completes.
+
 .PARAMETER AuthMethod
     How the script authenticates to Microsoft Graph + Azure. Default 'Interactive'
     (browser sign-in). Same 4 methods as every SI launcher; pick the one that
@@ -69,8 +88,11 @@
     Whichever identity you authenticate as MUST have:
       Entra : Privileged Role Administrator OR Application Administrator
               (to grant app permissions to the target SPN).
-      Azure : Owner or User Access Administrator at each subscription you want
-              RBAC granted on (or at the chosen DCR / workspace scope).
+      Azure : Owner or User Access Administrator at the scope picked by
+              -AzureRbacScope. Default ('TenantRoot') needs elevation to
+              tenant root -- Entra admin center -> Properties -> 'Access
+              management for Azure resources' toggle ON. 'PerSubscription'
+              needs Owner/UAA on each sub.
 
 .PARAMETER AuthTenantId
     Tenant id (GUID). Required for ManagedIdentity (Graph), SpnSecret, SpnCertificate.
@@ -106,6 +128,17 @@ param(
     [string]$DefenderWorkspaceResourceId,
     [string]$DcrResourceId,
     [switch]$WhatIfMode,
+
+    # ---- RBAC scope selection ----
+    # 'TenantRoot'     = grant Reader + Tag Contributor ONCE at the tenant root
+    #                    management group. Cascades to every sub. Requires the
+    #                    onboarding identity to have Owner / User Access Admin
+    #                    at tenant root (toggle "Access management for Azure
+    #                    resources" ON for a global admin first if needed).
+    # 'PerSubscription'= legacy behaviour. Grants per sub in $AzureSubscriptionIds
+    #                    (or every enabled sub the caller can see).
+    [ValidateSet('TenantRoot','PerSubscription')]
+    [string]$AzureRbacScope = 'TenantRoot',
 
     # ---- Auth selection ----
     [ValidateSet('Interactive','ManagedIdentity','SpnSecret','SpnCertificate')]
@@ -186,7 +219,14 @@ $RequiredApiPermissions = @(
 # ============================================================================
 
 $RequiredAzureRoles = @{
-    SubscriptionRoles      = @('Reader')                            # per subscription scope
+    # Applied at either tenant root MG (default) OR per subscription, depending
+    # on -AzureRbacScope. Role rationale:
+    #   - Reader          : needed to enumerate every resource in the tenant via
+    #                       Azure Resource Graph (RiskAnalysis + asset inventory).
+    #   - Tag Contributor : needed so CriticalAssetTagging can WRITE tier tags
+    #                       on subs, RGs, and resources. (IdentityAssetsCollect
+    #                       only READS -- Reader alone is enough for that one.)
+    AzureRoles             = @('Reader', 'Tag Contributor')
     DefenderWorkspaceRoles = @('Log Analytics Reader')              # only if -DefenderWorkspaceResourceId
     DcrRoles               = @('Monitoring Metrics Publisher')      # only if -DcrResourceId
 }
@@ -440,12 +480,39 @@ if (-not $targetSp) {
     Write-Skip "SPN not yet created (WhatIfMode) -- skipping Azure RBAC reconciliation"
 } else {
     Write-Sep
-    Write-Step ("Reconciling Azure RBAC for SPN objectId {0}" -f $targetSp.id)
+    Write-Step ("Reconciling Azure RBAC for SPN objectId {0}  (scope = {1})" -f $targetSp.id, $AzureRbacScope)
 
-    foreach ($subId in $AzureSubscriptionIds) {
-        $subScope = "/subscriptions/$subId"
-        foreach ($role in $RequiredAzureRoles.SubscriptionRoles) {
-            Grant-Role -ObjectId $targetSp.id -RoleName $role -Scope $subScope -ItemLabel ("{0} @ /subscriptions/{1}" -f $role, $subId)
+    $tenantRootFailed = $false
+    if ($AzureRbacScope -eq 'TenantRoot') {
+        $tenantIdForMg = (Get-AzContext).Tenant.Id
+        if (-not $tenantIdForMg -and $AuthTenantId) { $tenantIdForMg = $AuthTenantId }
+        if (-not $tenantIdForMg) {
+            Write-Err2 "Could not resolve tenant id for tenant-root scope -- falling back to per-subscription."
+            $tenantRootFailed = $true
+        } else {
+            $rootScope = "/providers/Microsoft.Management/managementGroups/$tenantIdForMg"
+            Write-Info ("tenant root MG scope: {0}" -f $rootScope)
+            foreach ($role in $RequiredAzureRoles.AzureRoles) {
+                $label = "{0} @ tenant-root MG" -f $role
+                $before = @($results | Where-Object { $_.Item -eq $label -and $_.Status -eq 'FAIL' }).Count
+                Grant-Role -ObjectId $targetSp.id -RoleName $role -Scope $rootScope -ItemLabel $label
+                $after  = @($results | Where-Object { $_.Item -eq $label -and $_.Status -eq 'FAIL' }).Count
+                if ($after -gt $before) { $tenantRootFailed = $true }
+            }
+            if ($tenantRootFailed) {
+                Write-Err2 "Tenant-root grant failed -- common cause: the onboarding identity lacks Owner / User Access Administrator at tenant root."
+                Write-Info "Fix: Entra admin center -> Properties -> 'Access management for Azure resources' toggle ON (elevates the signed-in Global Admin to User Access Admin at tenant root), then re-run Step2."
+                Write-Info "Falling back to per-subscription grants so the run still succeeds."
+            }
+        }
+    }
+
+    if ($AzureRbacScope -eq 'PerSubscription' -or $tenantRootFailed) {
+        foreach ($subId in $AzureSubscriptionIds) {
+            $subScope = "/subscriptions/$subId"
+            foreach ($role in $RequiredAzureRoles.AzureRoles) {
+                Grant-Role -ObjectId $targetSp.id -RoleName $role -Scope $subScope -ItemLabel ("{0} @ /subscriptions/{1}" -f $role, $subId)
+            }
         }
     }
 

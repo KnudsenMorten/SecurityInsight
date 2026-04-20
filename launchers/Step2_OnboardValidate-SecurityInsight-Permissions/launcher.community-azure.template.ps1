@@ -122,6 +122,7 @@ $splat = @{}
 $paramMap = @{
     SpnDisplayName             = $global:OnboardValidate_SpnDisplayName
     SpnAppId                   = $global:OnboardValidate_SpnAppId
+    AzureRbacScope             = $global:OnboardValidate_AzureRbacScope
     AzureSubscriptionIds       = $global:OnboardValidate_AzureSubscriptionIds
     DefenderWorkspaceResourceId = $global:OnboardValidate_DefenderWorkspaceResourceId
     DcrResourceId              = $global:OnboardValidate_DcrResourceId

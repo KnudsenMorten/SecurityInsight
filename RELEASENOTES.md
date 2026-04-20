@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.130
+## v2.1.131
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Build_Tier): fail fast with RSAT install command when ActiveDirectory module is missing (6e7d1834)
 - refactor(SI): delete every duplicate module-check leftover from the v2.1.113 refactor (53343c56)
 - fix(SI ingest): filter DCE/DCR cache by RG as well as sub (kills 'westeurope' 404) (8d59f0a1)
 - docs(SI): backfill curated RELEASENOTES for v2.1.120 -> v2.1.127 (d4b27a9c)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI mail): add $global:SMTPFrom for verified-sender From header (v2.1.108) (8e770613)
 - fix(SI workbook): preselect '*' to dodge empty-list KQL parse error (v2.1.107) (b7658920)
 - fix(SI Workbook): filters use "empty = no filter" semantics -- no default value needed (9e12fea6)
-- docs(SI SetupConfigurator): add "Built by Morten Knudsen" branding (c0a1e0d2)
 
 ---
 

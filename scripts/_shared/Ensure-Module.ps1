@@ -237,11 +237,18 @@ $script:SecurityInsight_RequiredModules = @(
 function Ensure-SecurityInsightModules {
 <#
 .SYNOPSIS
-    Ensure every module any SecurityInsight engine might need is installed + imported.
+    Ensure every module any SecurityInsight engine might need is INSTALLED on disk.
 
 .DESCRIPTION
     Calls Ensure-Module with the canonical SecurityInsight module set. Safe to call
     from any engine; already-present modules short-circuit instantly.
+
+    Does NOT call Import-Module. PowerShell's automatic module loading imports
+    a module the first time any of its cmdlets is invoked, which is both faster
+    (meta-modules like Az would otherwise force-load 70+ submodules upfront)
+    and quieter (no "unapproved verbs" warnings). If an engine needs a specific
+    module's exports visible in a non-default scope (e.g. -Global for cross-
+    dot-source visibility), it should call Import-Module explicitly.
 
 .PARAMETER Scope
     Passed through to Ensure-Module (CurrentUser / AllUsers / Auto).
@@ -260,37 +267,15 @@ function Ensure-SecurityInsightModules {
         [switch]$Required
     )
 
-    # Phase 1: install / verify every module is present on disk.
-    # No -Import here -- Import-Module on a meta-module (Az, Microsoft.Graph,
-    # Microsoft.Graph.Beta) force-loads all 70+ submodules and can stall for
-    # multiple minutes with noisy "unapproved verbs" warnings for Az.Cdn etc.
+    # Install / verify every required module is present on disk. NO Import-Module
+    # anywhere. PowerShell auto-loads a module the first time a cmdlet from it
+    # is called (Connect-AzAccount -> Az.Accounts, Get-MgContext -> Microsoft.Graph.Authentication,
+    # ConvertFrom-Yaml -> powershell-yaml, Export-Excel -> ImportExcel, etc.).
+    # Eagerly importing Az or Microsoft.Graph meta-modules force-loads 70+ submodules
+    # and blocks the script for 2-5 minutes with noisy "unapproved verbs" warnings.
     $null = Ensure-Module `
         -Name $script:SecurityInsight_RequiredModules `
         -Scope $Scope `
         -Quiet:$Quiet `
         -Required:$Required
-
-    # Phase 2: explicit Import-Module -Global ONLY for the submodules + helpers
-    # that need their exported commands visible in the parent scope NOW.
-    # Meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) are deliberately
-    # omitted -- PowerShell's auto-module-loading will pull the correct Az.*
-    # submodule on first use of each cmdlet (Connect-AzAccount -> Az.Accounts,
-    # Get-AzResourceGroup -> Az.Resources, etc.) without the massive upfront load.
-    $eagerImport = @(
-        'Az.ResourceGraph'   # Search-AzGraph (not in Az meta)
-        'AzLogDcrIngestPS'   # DCR ingest; needs -Global to be visible across dot-sources
-        'MicrosoftGraphPS'   # Graph helpers; same
-        'ImportExcel'        # XLSX output
-        'powershell-yaml'    # YAML parse
-    )
-    foreach ($mod in $eagerImport) {
-        try {
-            Import-Module -Name $mod -Global -Force -DisableNameChecking `
-                -WarningAction SilentlyContinue -ErrorAction Stop
-        } catch {
-            if (-not $Quiet) {
-                Write-Host ("[MODULE] import skipped: {0} -- {1}" -f $mod, $_.Exception.Message) -ForegroundColor Yellow
-            }
-        }
-    }
 }

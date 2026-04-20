@@ -3921,7 +3921,20 @@ Write-Section "mail dispatch decision"
 if ([bool]$global:Report_SendMail -eq $true) {
 
     $to          = @($global:Report_To)
-    $from        = $global:SMTPUser
+    # From address -- resolve in order:
+    #   1) $global:SMTPFrom   (canonical; required when SMTP relay demands a verified sender,
+    #      e.g. Brevo/SendGrid/Postmark reject mail whose From != verified sender)
+    #   2) $global:MailFrom   (shorthand)
+    #   3) $global:SMTPUser   (legacy fallback; works only when the relay accepts the
+    #      SMTP-login-as-sender, which most modern relays do NOT)
+    $from = $null
+    foreach ($_c in 'SMTPFrom','MailFrom','SMTPUser') {
+        $_v = (Get-Variable -Scope Global -Name $_c -ValueOnly -ErrorAction SilentlyContinue)
+        if (-not [string]::IsNullOrWhiteSpace([string]$_v)) { $from = [string]$_v; break }
+    }
+    if ([string]::IsNullOrWhiteSpace($from)) {
+        throw "Mail is enabled but no From address is available. Set `$global:SMTPFrom to a verified-sender address (e.g. 'noreply@yourdomain.com'). Many relays (Brevo, SendGrid, Postmark, Microsoft 365) reject mail whose From header does not match a verified sender."
+    }
     $subject     = "Security Insights | Risk Analysis | $($global:ReportTemplate)"
     $attachments = @($global:OutputXlsx)
 

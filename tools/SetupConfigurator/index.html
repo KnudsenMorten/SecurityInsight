@@ -458,22 +458,30 @@
           </div>
           <div class="row">
             <div class="field">
-              <label for="e_smtp_user">SMTP user (also the From address)</label>
-              <input type="text" id="e_smtp_user" placeholder="no-reply@yourdomain.com" />
+              <label for="e_smtp_user">SMTP login username</label>
+              <input type="text" id="e_smtp_user" placeholder="NNNNN@smtp-brevo.com" />
             </div>
             <div class="field">
-              <label for="e_smtp_pass">SMTP password</label>
+              <label for="e_smtp_pass">SMTP login password</label>
               <input type="password" id="e_smtp_pass" />
             </div>
           </div>
-          <div class="field">
-            <label for="e_smtp_ssl">Use SSL/TLS</label>
-            <select id="e_smtp_ssl">
-              <option value="true">$true (recommended)</option>
-              <option value="false">$false</option>
-            </select>
+          <div class="row">
+            <div class="field">
+              <label for="e_smtp_from">From address (verified sender)</label>
+              <input type="text" id="e_smtp_from" placeholder="noreply@yourdomain.com" />
+            </div>
+            <div class="field">
+              <label for="e_smtp_ssl">Use SSL/TLS</label>
+              <select id="e_smtp_ssl">
+                <option value="true">$true (recommended)</option>
+                <option value="false">$false</option>
+              </select>
+            </div>
           </div>
-          <div class="hint">Leave all SMTP fields blank to inherit the shared platform SMTP defaults (if configured).</div>
+          <div class="hint">
+            <strong>From address must be a VERIFIED sender</strong> in your relay. Brevo, SendGrid, Postmark and Microsoft 365 all reject mail where the From header is not a verified sender — the relay login (SMTP user) is NOT a valid From. If you omit From, the engine falls back to the SMTP user (legacy behaviour). Leave all SMTP fields blank to inherit shared platform defaults.
+          </div>
         </div>
 
         <div class="field">
@@ -935,11 +943,13 @@ function buildEngines() {
         const smtpPort   = val('e_smtp_port');
         const smtpUser   = val('e_smtp_user');
         const smtpPass   = val('e_smtp_pass');
+        const smtpFrom   = val('e_smtp_from');
         const smtpSsl    = val('e_smtp_ssl');
         if (smtpServer) smtpPairs.push(['SmtpServer',   smtpServer]);
         if (smtpPort)   smtpPairs.push(['SmtpPort',     smtpPort, false]);
         if (smtpUser)   smtpPairs.push(['SMTPUser',     smtpUser]);
         if (smtpPass)   smtpPairs.push(['SMTPPassword', smtpPass]);
+        if (smtpFrom)   smtpPairs.push(['SMTPFrom',     smtpFrom]);
         if (smtpSsl)    smtpPairs.push(['SMTP_UseSSL',  smtpSsl === 'true' ? '$true' : '$false', false]);
         if (smtpPairs.length > 0) {
           out += section('SMTP', fmtLines(smtpPairs));

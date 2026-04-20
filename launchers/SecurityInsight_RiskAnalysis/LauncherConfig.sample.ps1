@@ -89,8 +89,12 @@
 # $global:MailTo          = @('soc@yourdomain.com')
 # $global:SmtpServer      = 'smtp.yourdomain.com'
 # $global:SmtpPort        = 587
-# $global:SMTPUser        = 'no-reply@yourdomain.com'
-# $global:SMTPPassword    = '<your-smtp-password>'
+# $global:SMTP_UseSSL     = $true
+# $global:SMTPUser        = '<smtp-login-username>'       # relay login (e.g. Brevo/SendGrid API key user)
+# $global:SMTPPassword    = '<smtp-login-password>'
+# $global:SMTPFrom        = 'noreply@yourdomain.com'      # verified-sender address (From header).
+#                                                         # Required by Brevo/SendGrid/Postmark/M365.
+#                                                         # Omit to fall back to $SMTPUser (legacy).
 #
 # Per-template recipients (also works in AF mode; legacy $global:Mail_SecurityInsight_*
 # names are still accepted as a fallback):
@@ -188,12 +192,16 @@ $global:SendToLogAnalytics = $true
 $global:ReportTemplate     = 'RiskAnalysis_Summary_Bucket'
 
 # --- Mail: flat (fallback) + per-template (preferred) ---
+# Brevo/SendGrid/Postmark/M365 all REJECT mail whose From header is not a verified sender,
+# so $SMTPFrom must be a verified-sender address -- NOT the relay login username.
 $global:SendMail        = $true
 $global:MailTo          = @('fallback@yourdomain.com')
 $global:SmtpServer      = 'smtp-relay.brevo.com'
 $global:SmtpPort        = 587
-$global:SMTPUser        = '<your-smtp-username>'
-$global:SMTPPassword    = '<your-smtp-password>'
+$global:SMTP_UseSSL     = $true
+$global:SMTPUser        = '<smtp-login-username>'       # e.g. 'NNNNN@smtp-brevo.com'
+$global:SMTPPassword    = '<smtp-login-password>'
+$global:SMTPFrom        = 'noreply@yourdomain.com'      # verified sender in your relay
 
 $global:RiskAnalysis_Detailed_SendMail = $true
 $global:RiskAnalysis_Detailed_To       = @('soc@yourdomain.com')

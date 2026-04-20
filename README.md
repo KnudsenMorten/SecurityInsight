@@ -477,20 +477,10 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 | `IdentityAssetsCollectDefineTierIngestLog` | Collect identities + tier them → `SI_IdentityAssets_CL` | **Yes** — re-uses Step 3's 4 auth lines |
 | `SecurityInsight_RiskAnalysis` | Risk reports → `.xlsx` + `.json` + `SI_RiskAnalysis_*_CL` | **Yes** — re-uses Step 3's 4 auth lines, plus report options |
 | `CriticalAssetTagging` (+ 3 siblings) | Apply tier tags to Defender devices + Azure resources | **Yes** — re-uses Step 3's 4 auth lines |
-| `Build_Tier_Definitions_JSON_File` | Rebuild tier catalog JSON (run before `IdentityAssets…` if you customize tier rules). **Requires RSAT AD PowerShell** (see callout below) if your environment includes on-prem AD. | **Yes** — re-uses Step 3's 4 auth lines |
+| `Build_Tier_Definitions_JSON_File` | Rebuild tier catalog JSON (run before `IdentityAssets…` if you customize tier rules). **No on-prem AD dependency** — classifies built-in AD group names via AI without enumerating members. | **Yes** — re-uses Step 3's 4 auth lines |
 
-> [!WARNING]
-> **`Build_Tier_Definitions_JSON_File` prerequisite — RSAT AD PowerShell tools.**
-> SECTION A of this engine enumerates on-prem AD built-in groups via `Get-ADGroup` / `Get-ADUser` / `Get-ADDomain`. Those cmdlets ship with **RSAT** (a Windows *OS feature*), not from PSGallery — so `Ensure-SecurityInsightModules` can't install them automatically. Install once per VM, in an elevated PowerShell:
->
-> | OS | Install command |
-> |---|---|
-> | **Windows Server** (2019/2022/2025) | `Install-WindowsFeature RSAT-AD-PowerShell` |
-> | **Windows 10 / 11 client** | `Add-WindowsCapability -Online -Name Rsat.ActiveDirectory.DS-LDS.Tools~~~~0.0.1.0` |
->
-> Close + reopen PowerShell, verify with `Get-Command Get-ADGroup` (should resolve), then re-run the launcher. The engine detects a missing module at the top of SECTION A and throws a single clear error with these same commands — no cryptic `Get-ADGroup is not recognized` spam per built-in group.
->
-> **Cloud-only tenants with no on-prem AD**: don't schedule this engine — Entra-ID roles (SECTION B) and Azure built-in roles (SECTION C) can still be built, but they're not the primary reason to run `Build_Tier_Definitions_JSON_File`. The identity tier catalog shipped in the release (`data/SecurityInsight_IdentityTiering.json`) is sufficient for most cloud-only deployments.
+> [!NOTE]
+> **`Build_Tier_Definitions_JSON_File` does not enumerate AD members.** The engine uses Azure OpenAI to tier the hardcoded `$BuiltInADGroups` list (Domain Admins, Enterprise Admins, DnsAdmins, Account Operators, …) by name alone, then writes `AD_BuiltInPermissionGroups_Tier0..3` into `data/SecurityInsight_IdentityTiering.json`. Actual group-membership analysis ("does user X have access to Domain Admins?") happens at query time inside `IdentityAssetsCollectDefineTierIngestLog` via the Exposure Graph — no RSAT, no on-prem AD PowerShell module, no domain-joined VM required. Works identically on cloud-only community VMs and hybrid/on-prem VMs.
 
 > [!TIP]
 > **Internal (AF) / community-azure flavours don't need `LauncherConfig.custom.ps1`** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from the customer file.

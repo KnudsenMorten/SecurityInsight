@@ -29,17 +29,18 @@
    - 2.5 [Outputs at a glance](#25-outputs-at-a-glance)
 3. [How to Implement (Quick Start)](#3-how-to-implement-quick-start)
    - 3.1 [High-level overview](#31-high-level-overview)
-   - 3.2 [Install + update](#32-install--update)
+   - 3.2 [Install (fresh machine)](#32-install-fresh-machine)
    - 3.3 [Update an existing install](#33-update-an-existing-install)
-   - 3.4 [Pre-requisite configuration](#34-pre-requisite-configuration)
-     - 3.4.1 [Connectivity: SPN or Managed Identity](#341-connectivity-spn-or-managed-identity)
-     - 3.4.2 [Identity infrastructure: Workspace + DCE + DCR](#342-identity-infrastructure-workspace--dce--dcr)
-     - 3.4.3 [Azure OpenAI](#343-azure-openai-optional)
-   - 3.5 [Run the Risk Analysis](#35-run-the-risk-analysis)
-   - 3.6 [Understand the LauncherConfig files](#36-understand-the-launcherconfig-files)
-   - 3.7 [Endpoint asset tagging](#37-endpoint-asset-tagging)
-   - 3.8 [Azure asset tagging](#38-azure-asset-tagging)
-   - 3.9 [Defender Criticality Level (optional)](#39-defender-criticality-level-optional)
+   - 3.4 [Try out a preview release](#34-try-out-a-preview-release)
+   - 3.5 [Pre-requisite configuration](#35-pre-requisite-configuration)
+     - 3.5.1 [Connectivity: SPN or Managed Identity](#351-connectivity-spn-or-managed-identity)
+     - 3.5.2 [Identity infrastructure: Workspace + DCE + DCR](#352-identity-infrastructure-workspace--dce--dcr)
+     - 3.5.3 [Azure OpenAI](#353-azure-openai-optional)
+   - 3.6 [Run the Risk Analysis](#36-run-the-risk-analysis)
+   - 3.7 [Understand the LauncherConfig files](#37-understand-the-launcherconfig-files)
+   - 3.8 [Endpoint asset tagging](#38-endpoint-asset-tagging)
+   - 3.9 [Azure asset tagging](#39-azure-asset-tagging)
+   - 3.10 [Defender Criticality Level (optional)](#310-defender-criticality-level-optional)
 4. [Severity & Criticality Definitions](#4-severity--criticality-definitions)
    - 4.1 [Severity definitions](#41-severity-definitions)
    - 4.2 [Criticality definitions](#42-criticality-definitions)
@@ -267,14 +268,12 @@ flowchart TD
 
 Steps 1–4 are once-per-tenant. Step 5 runs daily/hourly. Step 6 runs daily. Step 7 runs daily/weekly/on-demand.
 
-<a id="32-install--update"></a>
-### 3.2 Install + update
+<a id="32-install-fresh-machine"></a>
+### 3.2 Install (fresh machine)
 
 [⤴ Back to top](#top)
 
-Both fresh install and ongoing updates use the same **Step 1** script — see [§ 3.4](#34-pre-requisite-configuration) for the full 30-second onboarding runbook including the bootstrap one-liner, `-DestinationPath` / `-Channel` / `-Engine` parameters, and the customer-file preservation rules on re-run.
-
-Quick reference:
+One **Step 1** script bootstraps the whole solution from GitHub. Copy-paste:
 
 ```powershell
 # Pick your install path ONCE, re-use for every re-run -- default is C:\SCRIPTS\SecurityInsight.
@@ -284,12 +283,6 @@ $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'   # <-- change to 'D:\Tools\Secur
 $u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
 irm $u | Out-File $env:TEMP\Step1.ps1
 & $env:TEMP\Step1.ps1 -DestinationPath $SI_InstallPath
-
-# Update in place (same command, idempotent, customer files preserved):
-& (Join-Path $SI_InstallPath 'SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath
-
-# Channel 'preview' for bleeding-edge features before they hit a stable release:
-& (Join-Path $SI_InstallPath 'SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath -Channel preview
 ```
 
 > [!TIP]
@@ -305,25 +298,53 @@ irm $u | Out-File $env:TEMP\Step1.ps1
 | `-Repo` | `KnudsenMorten/SecurityInsight` | Change if you fork the solution. |
 | `-PreservePatterns` | (see script) | Glob patterns that are never overwritten on update. Default covers customer configs + custom YAML. |
 
-Customer-owned files (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`) are **never overwritten** on update. What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-files-deep-dive).
-
-After update, the running version is stamped on every launcher banner:
-
-```
-========================================================================================
-  SecurityInsight -- SecurityInsight_RiskAnalysis    [community-vm]   SecurityInsight-v2.1.72
-========================================================================================
-```
+Next stop: [§ 3.5 Pre-requisite configuration](#35-pre-requisite-configuration) for the Steps 2 / 3 / 4 onboarding runbook.
 
 <a id="33-update-an-existing-install"></a>
 ### 3.3 Update an existing install
 
 [⤴ Back to top](#top)
 
-Same script as §3.2 — re-running Step 1 is idempotent and preserves every customer-owned file (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`). See [§ 3.2](#32-install--update) for the command + [§ 7.2 Files deep-dive](#72-files-deep-dive) for the full preservation list.
+Re-running **Step 1** against the same path is idempotent and preserves every customer-owned file (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`):
 
-<a id="34-pre-requisite-configuration"></a>
-### 3.4 Pre-requisite configuration
+```powershell
+# Same $SI_InstallPath as when you first installed:
+$SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'
+
+# Update in place -- customer files preserved, platform files refreshed from the latest stable release:
+& (Join-Path $SI_InstallPath 'SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath
+```
+
+What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-files-deep-dive).
+
+After update, the running version is stamped on every launcher banner:
+
+```
+========================================================================================
+  SecurityInsight -- SecurityInsight_RiskAnalysis    [community-vm]   SecurityInsight-v2.1.81
+========================================================================================
+```
+
+<a id="34-try-out-a-preview-release"></a>
+### 3.4 Try out a preview release
+
+[⤴ Back to top](#top)
+
+The `preview` channel tracks the HEAD of the `preview` branch on the public GitHub repo — bleeding-edge features that haven't shipped in a tagged release yet. Good for a dev box or for giving early feedback.
+
+```powershell
+# Same $SI_InstallPath you already use (ideally a SEPARATE folder from stable to avoid mixing channels):
+$SI_InstallPath = 'C:\SCRIPTS\SecurityInsight-preview'
+
+# Pull preview channel:
+& (Join-Path $SI_InstallPath 'SCRIPTS\Step1_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath -Channel preview
+```
+
+> [!NOTE]
+> Preview = uncut, unrewindable. Bugs may exist that don't exist in `stable`. File issues at [KnudsenMorten/SecurityInsight](https://github.com/KnudsenMorten/SecurityInsight/issues). When a preview feature stabilizes it's cut to a new `stable` release — update via § 3.3.
+
+<a id="35-pre-requisite-configuration"></a>
+### 3.5 Pre-requisite configuration
 
 [⤴ Back to top](#top)
 
@@ -385,7 +406,7 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 > ```
 > Single offline HTML file, zero dependencies. Tabs for Step 2 / Step 3 / Step 4 / ingestion engines. All processing stays in your browser — no data leaves your machine. Re-use the 4 auth values (Tenant / ClientId / Secret / Subscription) across every tab and you're done.
 
-Or — **configure manually** if you prefer editing `.ps1` files directly (expand the block at the end of § 3.4).
+Or — **configure manually** if you prefer editing `.ps1` files directly (expand the block at the end of § 3.5).
 
 ---
 
@@ -440,8 +461,8 @@ Re-run `-ValidateOnly` any time to confirm the deployment is still healthy.
 
 ---
 
-<a id="341-connectivity-spn-or-managed-identity"></a>
-#### 3.4.1 Connectivity: SPN or Managed Identity
+<a id="351-connectivity-spn-or-managed-identity"></a>
+#### 3.5.1 Connectivity: SPN or Managed Identity
 
 [⤴ Back to top](#top)
 
@@ -484,13 +505,13 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > - Optional: `Monitoring Metrics Publisher` on a specific DCR (`-DcrResourceId`)
 >
 > **What OnboardValidate does NOT cover:**
-> - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Step3_OnboardValidate-SecurityInsight-LogAnalytics` launcher (§3.4.2) OR auto-created by the engines themselves on first run (v2.1.54+).
-> - Granting the SPN `Owner` or `Contributor + User Access Administrator` — which is what the engines' auto-provisioning needs for **first-run** workspace/DCE creation + container RBAC grants. On `Reader`-only subs, auto-provision will fail cleanly with a `403 AuthorizationFailed` warning and you'll need to provision manually via §3.4.2 or grant higher perms.
+> - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Step3_OnboardValidate-SecurityInsight-LogAnalytics` launcher (§3.5.2) OR auto-created by the engines themselves on first run (v2.1.54+).
+> - Granting the SPN `Owner` or `Contributor + User Access Administrator` — which is what the engines' auto-provisioning needs for **first-run** workspace/DCE creation + container RBAC grants. On `Reader`-only subs, auto-provision will fail cleanly with a `403 AuthorizationFailed` warning and you'll need to provision manually via §3.5.2 or grant higher perms.
 >
 > **Required permissions** are listed in [§ 7.1](#71-permissions-catalog).
 
-<a id="342-identity-infrastructure-workspace--dce--dcr"></a>
-#### 3.4.2 Identity infrastructure: Workspace + DCE + DCR
+<a id="352-identity-infrastructure-workspace--dce--dcr"></a>
+#### 3.5.2 Identity infrastructure: Workspace + DCE + DCR
 
 [⤴ Back to top](#top)
 
@@ -511,7 +532,7 @@ Just run `IdentityAssetsCollect` or `RiskAnalysis` directly. You'll see lines li
 [OK]   DCE exists: dce-securityinsight (rg=rg-dce-securityinsight, location=westeurope)
 [INFO] RG exists: rg-dcr-securityinsight (westeurope)
 ```
-…or — if missing — `[STEP] DCE '...' not found -- auto-provisioning` followed by `[OK] Created DCE` and `[OK] Assigned 'Monitoring Metrics Publisher' at ...`. The canonical names live in **Layer 0** (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) — see [§ 3.6](#36-understand-the-launcherconfig-files). Override any of them in your `LauncherConfig.custom.ps1` if you deviate from the defaults.
+…or — if missing — `[STEP] DCE '...' not found -- auto-provisioning` followed by `[OK] Created DCE` and `[OK] Assigned 'Monitoring Metrics Publisher' at ...`. The canonical names live in **Layer 0** (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) — see [§ 3.7](#37-understand-the-launcherconfig-files). Override any of them in your `LauncherConfig.custom.ps1` if you deviate from the defaults.
 
 **Option B — explicit provisioning**
 
@@ -532,10 +553,10 @@ This creates (or re-uses if they exist):
 
 At the end of the run, the engine prints a **mode-aware cheat-sheet** with the exact globals to copy into your `LauncherConfig.custom.ps1`. You don't have to memorize the URIs.
 
-> **Which option do I need?** Run `Step2_OnboardValidate-SecurityInsight-Permissions` (§ 3.4.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
+> **Which option do I need?** Run `Step2_OnboardValidate-SecurityInsight-Permissions` (§ 3.5.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
-<a id="343-azure-openai-optional"></a>
-#### 3.4.3 Azure OpenAI (optional)
+<a id="353-azure-openai-optional"></a>
+#### 3.5.3 Azure OpenAI (optional)
 
 [⤴ Back to top](#top)
 
@@ -557,8 +578,8 @@ $global:OpenAI_apiKey     = '<your-azure-openai-key>'
 > [!TIP]
 > AI summary is appended both to the **Excel report** (as a 'Summary' worksheet) and the **email body**. Token budget is configurable via `$global:OpenAI_MaxTokensPerRequest` (default 16384).
 
-<a id="35-run-the-risk-analysis"></a>
-### 3.5 Run the Risk Analysis
+<a id="36-run-the-risk-analysis"></a>
+### 3.6 Run the Risk Analysis
 
 [⤴ Back to top](#top)
 
@@ -611,8 +632,8 @@ Two report templates ship out of the box:
 
 </details>
 
-<a id="36-understand-the-launcherconfig-files"></a>
-### 3.6 Understand the LauncherConfig files
+<a id="37-understand-the-launcherconfig-files"></a>
+### 3.7 Understand the LauncherConfig files
 
 [⤴ Back to top](#top)
 
@@ -829,8 +850,8 @@ $global:ExportDestination  = 'https://<your-storacct>.blob.core.windows.net/iden
 ```
 </details>
 
-<a id="37-endpoint-asset-tagging"></a>
-### 3.7 Endpoint asset tagging
+<a id="38-endpoint-asset-tagging"></a>
+### 3.8 Endpoint asset tagging
 
 [⤴ Back to top](#top)
 
@@ -890,8 +911,8 @@ $global:ExportDestination  = 'https://<your-storacct>.blob.core.windows.net/iden
 
 </details>
 
-<a id="38-azure-asset-tagging"></a>
-### 3.8 Azure asset tagging
+<a id="39-azure-asset-tagging"></a>
+### 3.9 Azure asset tagging
 
 [⤴ Back to top](#top)
 
@@ -913,8 +934,8 @@ Same engine, same YAML — just use `QueryEngine: AzureResourceGraph` for rules 
 
 The KQL is yours — query for the resources you consider critical and emit the four required columns. Inspiration lives in `DATA/_samples/SecurityInsight_CriticalAssetTagging_Custom.yaml`.
 
-<a id="39-defender-criticality-level-optional"></a>
-### 3.9 Defender Criticality Level (optional)
+<a id="310-defender-criticality-level-optional"></a>
+### 3.10 Defender Criticality Level (optional)
 
 [⤴ Back to top](#top)
 

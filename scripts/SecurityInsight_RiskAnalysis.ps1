@@ -177,7 +177,9 @@ function Write-Step   ($msg){ Write-Host ("[STEP] {0}" -f $msg) -ForegroundColor
 function Write-Info   ($msg){ Write-Host ("[INFO] {0}" -f $msg) -ForegroundColor Gray }
 function Write-Ok     ($msg){ Write-Host ("[OK]   {0}" -f $msg) -ForegroundColor Green }
 function Write-Warn2  ($msg){ Write-Host ("[WARN] {0}" -f $msg) -ForegroundColor Yellow }
+function Write-Warn   ($msg){ Write-Host ("[WARN] {0}" -f $msg) -ForegroundColor Yellow }
 function Write-Err2   ($msg){ Write-Host ("[ERR]  {0}" -f $msg) -ForegroundColor Red }
+function Write-Sep          { Write-Host ("-" * 80) -ForegroundColor DarkGray }
 function Tick { param([string]$Label="") if($script:_sw){ $script:_sw.Stop(); Write-Info ("{0} completed in {1:n2}s" -f $Label,$script:_sw.Elapsed.TotalSeconds); $script:_sw=$null } }
 function Tock { $script:_sw = [System.Diagnostics.Stopwatch]::StartNew() }
 

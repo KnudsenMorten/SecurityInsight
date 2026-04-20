@@ -933,6 +933,11 @@ function Main {
     Write-Log "SecurityInsight Identity Tiering - Starting" "INFO"
     Write-Log "Output: $OutputFile" "INFO"
 
+    Write-Log "=== SECTION A: AD Built-in Groups (name-based AI tiering) ===" "INFO"
+    Write-Log "Catalog size: $($BuiltInADGroups.Count) built-in group names (hardcoded list)." "INFO"
+    Write-Log "Classification method: Azure OpenAI tiers each group name into Tier 0/1/2/3." "INFO"
+    Write-Log "Membership analysis happens at query time in IdentityAssetsCollect via the Exposure Graph -- no on-prem AD enumeration, no RSAT required." "INFO"
+
     # ---- Collect all data first ----
     $entraRoles     = Get-EntraRoleDefinitions
     $apiPermissions = Get-EntraAPIPermissionCatalog

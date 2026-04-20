@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.115
+## v2.1.116
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI _shared): suppress Ensure-SecurityInsightModules hashtable output (b6d75ce)
+- feat(SI): daily auto-refresh via scheduled Step 0 task (8c9a00f)
 
 ---
 

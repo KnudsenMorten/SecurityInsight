@@ -16,10 +16,11 @@
       - 'Monitoring Metrics Publisher' RBAC on the DCR for the SPN that will
          later run the IdentityAssetsCollectDefineTierIngestLog engine
 
-    The engine prints, at the end of its run, the exact 6 globals to copy
+    The engine prints, at the end of its run, the exact globals to copy
     into LauncherConfig.ps1 of the IdentityAssetsCollectDefineTierIngestLog
-    launcher (DceIngestionUri / WorkspaceResourceId / DcrResourceGroup /
-    DcrName / DceName / TableName).
+    launcher (WorkspaceResourceId / DcrResourceGroup / DcrName / DceName /
+    TableName). DceIngestionUri is no longer needed -- the ingestion engine
+    resolves it from the DCE name at run time via Get-AzDceListAll.
 
     AUTHENTICATION METHODS  --  pick exactly ONE block in section 1.
 
@@ -97,10 +98,14 @@
 # $global:SubscriptionId = '<sub-guid>'
 
 # Resource Group (created if missing)
-$global:ResourceGroup = 'rg-securityinsight'           # default: rg-securityinsight
+$global:ResourceGroup    = 'rg-securityinsight'           # workspace RG (default)
+
+# Separate RGs for DCE + DCR (standard SecurityInsight layout)
+$global:DceResourceGroup = 'rg-dce-securityinsight'       # default
+$global:DcrResourceGroup = 'rg-dcr-securityinsight'       # default
 
 # Azure region for the workspace + DCE + DCR
-$global:Location      = 'westeurope'                   # default: westeurope
+$global:Location         = 'westeurope'                   # default: westeurope
 
 
 # ============================================================================
@@ -108,13 +113,13 @@ $global:Location      = 'westeurope'                   # default: westeurope
 # ============================================================================
 # All optional. Defaults align with the platform-management naming convention.
 
-# Log Analytics workspace name
+# Log Analytics workspace name (shared by RiskAnalysis + Identity engines)
 $global:WorkspaceName = 'log-platform-management-securityinsight'   # default
 
-# Data Collection Endpoint name
-$global:DceName       = 'dce-si-identity'                           # default
+# Data Collection Endpoint name (shared across all SI engines)
+$global:DceName       = 'dce-securityinsight'                       # default
 
-# Data Collection Rule name
+# Data Collection Rule name (engine-specific -- Identity schema)
 $global:DcrName       = 'dcr-si-identity-assets'                    # default
 
 # Custom table base name (engine appends _CL when creating the table)

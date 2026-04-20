@@ -3025,13 +3025,29 @@ if ($null -eq $global:SendToLogAnalytics) { $global:SendToLogAnalytics = $false 
 if ([bool]$global:SendToLogAnalytics) {
     Write-Sep
 
-    # Resolve effective config (per-RiskAnalysis name wins; falls back to IAC short names)
+    # Resolve effective config (per-RiskAnalysis name wins; falls back to IAC short names).
+    # Everything except Workspace (ResourceId OR Name) is optional -- sane defaults below.
+    #
+    # Lookup hierarchy (highest priority first):
+    #   Workspace       : $SI_RiskAnalysis_WorkspaceResourceId > $SI_RiskAnalysis_WorkspaceName >
+    #                     $WorkspaceResourceId > $WorkspaceName > default 'log-platform-management-securityinsight'
+    #   DceIngestionUri : $SI_RiskAnalysis_DceIngestionUri > $DceIngestionUri > auto-resolved from DceName
+    #   DceName         : $SI_RiskAnalysis_DceName > $DceName > default 'dce-securityinsight'
+    #   DcrResourceGroup: $SI_RiskAnalysis_DcrResourceGroup > $DcrResourceGroup > default 'rg-dcr-securityinsight'
     $laDce       = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DceIngestionUri))     { [string]$global:SI_RiskAnalysis_DceIngestionUri }     else { [string]$global:DceIngestionUri }
     $laWs        = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_WorkspaceResourceId)) { [string]$global:SI_RiskAnalysis_WorkspaceResourceId } else { [string]$global:WorkspaceResourceId }
+    $laWsName    = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_WorkspaceName))       { [string]$global:SI_RiskAnalysis_WorkspaceName }       else { [string]$global:WorkspaceName }
     $laDceName   = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DceName))             { [string]$global:SI_RiskAnalysis_DceName }             else { [string]$global:DceName }
     $laDcrRg     = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DcrResourceGroup))    { [string]$global:SI_RiskAnalysis_DcrResourceGroup }    else { [string]$global:DcrResourceGroup }
     $tblSummary  = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_TableName_Summary))   { [string]$global:SI_RiskAnalysis_TableName_Summary }   else { 'SI_RiskAnalysis_Summary' }
     $tblDetailed = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_TableName_Detailed))  { [string]$global:SI_RiskAnalysis_TableName_Detailed }  else { 'SI_RiskAnalysis_Detailed' }
+
+    # SecurityInsight defaults -- if nothing is set, the standard layout is assumed.
+    if ([string]::IsNullOrWhiteSpace($laDceName)) { $laDceName = 'dce-securityinsight' }
+    if ([string]::IsNullOrWhiteSpace($laDcrRg))   { $laDcrRg   = 'rg-dcr-securityinsight' }
+    if ([string]::IsNullOrWhiteSpace($laWs) -and [string]::IsNullOrWhiteSpace($laWsName)) {
+        $laWsName = 'log-platform-management-securityinsight'
+    }
 
     # Pick the DCR + table for this run (Summary catches the "neither set" fall-through)
     if ([bool]$global:Detailed) {
@@ -3042,10 +3058,12 @@ if ([bool]$global:SendToLogAnalytics) {
         $laDcrName = $RiskAnalysis_DcrName_Summary
     }
 
-    # Validate required values
+    # Validate required values. DceIngestionUri auto-resolves from DceName. Workspace
+    # auto-resolves from name (and is auto-created if missing, along with the DCE/DCR RGs).
     $missing = @()
-    if ([string]::IsNullOrWhiteSpace($laDce))     { $missing += 'DceIngestionUri (or SI_RiskAnalysis_DceIngestionUri)' }
-    if ([string]::IsNullOrWhiteSpace($laWs))      { $missing += 'WorkspaceResourceId (or SI_RiskAnalysis_WorkspaceResourceId)' }
+    if ([string]::IsNullOrWhiteSpace($laWs) -and [string]::IsNullOrWhiteSpace($laWsName)) {
+        $missing += 'WorkspaceResourceId or WorkspaceName (or SI_RiskAnalysis_* variant)'
+    }
     if ([string]::IsNullOrWhiteSpace($laDcrRg))   { $missing += 'DcrResourceGroup (or SI_RiskAnalysis_DcrResourceGroup)' }
     if ([string]::IsNullOrWhiteSpace($laDceName)) { $missing += 'DceName (or SI_RiskAnalysis_DceName)' }
 
@@ -3060,6 +3078,80 @@ if ([bool]$global:SendToLogAnalytics) {
         if ($null -eq $modOk) { $modOk = $true }
 
         if ($modOk) {
+            # Build DCE/DCR cache + self-heal infra (creates workspace + DCE + DCR RG + RBAC if missing).
+            # Shared logic mirrors Onboarding_IdentityAssets_LogAnalytics.ps1.
+            . (Join-Path $PSScriptRoot '_shared\Ensure-SecurityInsightInfra.ps1')
+            try {
+                # Resolve SPN object ID for RBAC assignments
+                $spnObj = Get-AzADServicePrincipal -ApplicationId $global:SpnClientId -ErrorAction SilentlyContinue
+                $spnObjectId = if ($spnObj) { [string]$spnObj.Id } else { $null }
+
+                # Resolve location (explicit override > workspace RG > default)
+                $laLocation = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_Location)) { [string]$global:SI_Location }
+                              elseif (-not [string]::IsNullOrWhiteSpace([string]$global:Location)) { [string]$global:Location }
+                              else { 'westeurope' }
+
+                # Resolve workspace: prefer ResourceId; else look up by name; else create
+                $laWsRg = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_WorkspaceResourceGroup)) { [string]$global:SI_RiskAnalysis_WorkspaceResourceGroup }
+                          elseif (-not [string]::IsNullOrWhiteSpace([string]$global:WorkspaceResourceGroup))            { [string]$global:WorkspaceResourceGroup }
+                          else { 'rg-securityinsight' }
+
+                # Need a subscription for workspace creation fallback. Prefer the one embedded
+                # in $laWs, else current Az context.
+                $laSubId = $null
+                if ($laWs -match '/subscriptions/([^/]+)/') { $laSubId = $Matches[1] }
+                if (-not $laSubId) {
+                    try { $laSubId = (Get-AzContext -ErrorAction Stop).Subscription.Id } catch { }
+                }
+                if (-not $laSubId) { throw "Cannot determine subscription ID for workspace resolution" }
+
+                try { Set-AzContext -SubscriptionId $laSubId -TenantId $global:SpnTenantId -ErrorAction Stop | Out-Null } catch { }
+
+                # If workspace RG exists, use its location (more accurate than the default)
+                try { $__rgLoc = (Get-AzResourceGroup -Name $laWsRg -ErrorAction Stop).Location; if ($__rgLoc) { $laLocation = $__rgLoc } } catch { }
+
+                $laWs = Ensure-SecurityInsightWorkspace `
+                              -WorkspaceResourceId     $laWs `
+                              -WorkspaceName           $laWsName `
+                              -WorkspaceResourceGroup  $laWsRg `
+                              -Location                $laLocation `
+                              -SubscriptionId          $laSubId `
+                              -IngestionSpnObjectId    $spnObjectId
+
+                # Re-derive subscription from the resolved workspace (may differ if customer
+                # set only a name and it resolved to a cross-sub workspace).
+                if ($laWs -match '/subscriptions/([^/]+)/') { $laSubId = $Matches[1] }
+
+                $laDceRg = if (-not [string]::IsNullOrWhiteSpace([string]$global:DceResourceGroup)) { [string]$global:DceResourceGroup } else { 'rg-dce-securityinsight' }
+
+                $null = Ensure-SecurityInsightDce `
+                              -DceName              $laDceName `
+                              -DceResourceGroup     $laDceRg `
+                              -Location             $laLocation `
+                              -SubscriptionId       $laSubId `
+                              -TenantId             $global:SpnTenantId `
+                              -AzAppId              $global:SpnClientId `
+                              -AzAppSecret          $global:SpnClientSecret `
+                              -IngestionSpnObjectId $spnObjectId
+
+                $null = Ensure-SecurityInsightRg `
+                              -ResourceGroup        $laDcrRg `
+                              -Location             $laLocation `
+                              -SubscriptionId       $laSubId `
+                              -IngestionSpnObjectId $spnObjectId
+            } catch {
+                Write-Warn ("DCE/DCR/Workspace infra self-heal failed: {0} -- module will still attempt per-call resolution" -f $_.Exception.Message)
+            }
+
+            # Resolve DCE ingestion URI from name if not explicitly supplied (optional override).
+            if ([string]::IsNullOrWhiteSpace($laDce)) {
+                $__uri = Resolve-SecurityInsightDceIngestionUri -DceName $laDceName
+                if ($__uri) {
+                    $laDce = $__uri
+                    Write-Info ("Resolved DCE ingestion URI from name '{0}': {1}" -f $laDceName, $laDce)
+                }
+            }
+
             Write-Step ("Ingesting to Log Analytics: {0}_CL" -f $laTable)
             Write-Info ("  DCR : {0} (rg={1})" -f $laDcrName, $laDcrRg)
             Write-Info ("  DCE : {0}" -f $laDceName)

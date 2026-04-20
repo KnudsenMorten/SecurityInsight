@@ -113,14 +113,22 @@
 #
 # $global:SendToLogAnalytics              = $true
 #
-# Optional -- only set if RiskAnalysis uses a different DCE / workspace / RG
-# than the IAC engine. Otherwise the engine reuses the IAC short names
-# ($global:DceIngestionUri / WorkspaceResourceId / DcrResourceGroup / DceName)
-# already set for IAC.
-# $global:SI_RiskAnalysis_DcrResourceGroup    = '<rg-holding-the-dcrs>'
-# $global:SI_RiskAnalysis_DceName             = '<dce-name>'
-# $global:SI_RiskAnalysis_DceIngestionUri     = 'https://...ingest.monitor.azure.com'
-# $global:SI_RiskAnalysis_WorkspaceResourceId = '/subscriptions/.../workspaces/<ws>'
+# EVERYTHING AUTO-RESOLVES. By default the engine targets:
+#   Workspace : log-platform-management-securityinsight (in rg-securityinsight)
+#   DCE       : dce-securityinsight                     (in rg-dce-securityinsight)
+#   DCR RG    : rg-dcr-securityinsight
+# All four RGs + the workspace + the DCE are auto-created if missing, and the
+# ingestion SPN is granted the roles it needs. DceIngestionUri is looked up from
+# the DCE name via Get-AzDceListAll -- you do NOT have to hardcode it anymore.
+#
+# Override only what differs from the defaults. Per-engine names
+# (SI_RiskAnalysis_*) win over the short names the IAC launcher sets.
+# $global:SI_RiskAnalysis_WorkspaceName        = 'log-platform-management-securityinsight'  # default; override if this engine uses a different workspace
+# $global:SI_RiskAnalysis_WorkspaceResourceId  = '/subscriptions/.../workspaces/<ws>'       # overrides WorkspaceName when set (cross-sub supported)
+# $global:SI_RiskAnalysis_WorkspaceResourceGroup = 'rg-securityinsight'                     # only used if the workspace is missing and must be created
+# $global:SI_RiskAnalysis_DceName              = 'dce-securityinsight'                      # default; override if you have a pre-existing DCE with another name
+# $global:SI_RiskAnalysis_DcrResourceGroup     = 'rg-dcr-securityinsight'                   # default; override only to consolidate with an existing DCR RG
+# $global:SI_RiskAnalysis_DceIngestionUri      = 'https://...ingest.monitor.azure.com'     # rarely needed -- auto-resolved from DceName
 
 # ----- Export upload (Phase 3) -----------------------------------------------
 # Uploads BOTH the .xlsx and the .json to a destination after they are written

@@ -717,13 +717,16 @@ $global:SpnClientId              = '<your-app-client-id-guid>'
 $global:SpnCertificateThumbprint = '<cert thumbprint, hex, no spaces>'
 
 # Mail (community mode short names)
+# NOTE: $SMTPFrom must be a VERIFIED sender in your relay (Brevo/SendGrid/Postmark/M365
+# all reject mail where From != verified sender). $SMTPUser is just the relay login.
 $global:SendMail        = $true
 $global:MailTo          = @('soc@yourdomain.com','exec-summary@yourdomain.com')
 $global:SmtpServer      = 'smtp.yourdomain.com'
 $global:SMTPPort        = 587
 $global:SMTP_UseSSL     = $true
-$global:SMTPUser        = 'no-reply@yourdomain.com'
+$global:SMTPUser        = '<smtp-login-username>'        # relay login (e.g. 'NNNNN@smtp-brevo.com')
 $global:SMTPPassword    = '<smtp-password>'
+$global:SMTPFrom        = 'noreply@yourdomain.com'       # verified sender -- appears in From header
 
 # AI executive summary
 $global:BuildSummaryByAI  = $true
@@ -807,12 +810,16 @@ $global:SendToLogAnalytics = $true
 $global:ReportTemplate     = 'RiskAnalysis_Summary_Bucket'
 
 # --- Mail: flat (fallback) + per-template (preferred) ---
+# $SMTPFrom MUST be a verified-sender address in your relay. Common relays
+# (Brevo, SendGrid, Postmark, M365) reject mail whose From header is not verified.
 $global:SendMail        = $true
 $global:MailTo          = @('fallback@yourdomain.com')
 $global:SmtpServer      = 'smtp-relay.brevo.com'
 $global:SmtpPort        = 587
-$global:SMTPUser        = '<your-smtp-username>'
-$global:SMTPPassword    = '<your-smtp-password>'
+$global:SMTP_UseSSL     = $true
+$global:SMTPUser        = '<smtp-login-username>'       # e.g. 'NNNNN@smtp-brevo.com'
+$global:SMTPPassword    = '<smtp-login-password>'
+$global:SMTPFrom        = 'noreply@yourdomain.com'      # verified sender in your relay
 
 $global:RiskAnalysis_Detailed_SendMail = $true
 $global:RiskAnalysis_Detailed_To       = @('soc@yourdomain.com')

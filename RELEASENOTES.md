@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.107
+## v2.1.108
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI workbook): preselect '*' to dodge empty-list KQL parse error (v2.1.107) (b765892)
+- feat(SI mail): add $global:SMTPFrom for verified-sender From header (v2.1.108) (8e77061)
 
 ---
 

@@ -113,8 +113,11 @@ $global:SmtpServer         = $null
 $global:SMTPPort           = 587
 $global:SMTP_UseSSL        = $true
 $global:Mail_SendAnonymous = $false
-$global:SMTPUser           = $null                # also used as the From address
-$global:SMTPPassword       = $null
+$global:SMTPUser           = $null                # SMTP login username
+$global:SMTPPassword       = $null                # SMTP login password
+$global:SMTPFrom           = $null                # From header address -- MUST be a verified
+                                                  # sender for relays like Brevo/SendGrid/
+                                                  # Postmark. Falls back to $SMTPUser if null.
 
 
 # ============================================================================

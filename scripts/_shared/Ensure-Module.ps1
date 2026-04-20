@@ -109,43 +109,55 @@ function Ensure-Module {
     foreach ($mod in $Name) {
         if ([string]::IsNullOrWhiteSpace($mod)) { continue }
 
-        # Progress ping BEFORE the probe. Get-Module -ListAvailable has to
-        # scan every entry on $env:PSModulePath, and for meta-modules like
-        # Microsoft.Graph / Microsoft.Graph.Beta the scan can stall for
-        # 10-30 seconds while PowerShell enumerates their 30+ submodules.
-        # Without this line it looked like a hang between probes.
         if (-not $Quiet) {
             Write-Host ("[MODULE] probing {0} ..." -f $mod) -ForegroundColor DarkGray
         }
 
-        $existing = Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue |
-                    Sort-Object Version -Descending | Select-Object -First 1
+        # FAST PATH: direct directory lookup in the 4 well-known module roots.
+        # `Get-Module -ListAvailable -Name X` is bafflingly slow for Az /
+        # Microsoft.Graph / Microsoft.Graph.Beta because PowerShell scans
+        # EVERY sibling module's manifest on $env:PSModulePath before
+        # filtering -- with 70+ Az.* submodules installed that can stall
+        # for 30+ seconds per call. Doing a Test-Path + single manifest
+        # read finishes in milliseconds.
+        $existing = $null
+        foreach ($root in $moduleRoots) {
+            $modDir = Join-Path $root $mod
+            if (-not (Test-Path -LiteralPath $modDir)) { continue }
 
-        # Fallback: scan well-known module roots for a <mod>\<version>\ layout.
-        # Catches the "installed but not on PSModulePath" + "meta-module
-        # without discoverable exports" edge cases. We treat the presence of
-        # a directory-with-a-.psd1 inside as "module present".
-        if (-not $existing) {
-            foreach ($root in $moduleRoots) {
-                $modDir = Join-Path $root $mod
-                if (Test-Path -LiteralPath $modDir) {
-                    $psd = Get-ChildItem -LiteralPath $modDir -Recurse -Filter "$mod.psd1" -ErrorAction SilentlyContinue -Depth 2 |
-                           Select-Object -First 1
-                    if ($psd) {
-                        # Build a shim object so downstream code sees the same shape as Get-Module.
-                        $ver = try {
-                            $man = Import-PowerShellDataFile -LiteralPath $psd.FullName -ErrorAction Stop
-                            $man.ModuleVersion
-                        } catch { 'unknown' }
-                        $existing = [pscustomobject]@{
-                            Name    = $mod
-                            Version = $ver
-                            Path    = $psd.FullName
-                        }
-                        break
-                    }
-                }
+            # Module files live at <root>\<mod>\<version>\<mod>.psd1 --
+            # pick the highest-version subfolder that has a readable manifest.
+            $versionDir = Get-ChildItem -LiteralPath $modDir -Directory -ErrorAction SilentlyContinue |
+                          Sort-Object { try { [version]$_.Name } catch { [version]'0.0.0' } } -Descending |
+                          Select-Object -First 1
+            if (-not $versionDir) { continue }
+
+            $psd = Join-Path $versionDir.FullName "$mod.psd1"
+            if (-not (Test-Path -LiteralPath $psd)) {
+                # Some modules ship the manifest directly under <mod>\ with no version subfolder.
+                $psd = Join-Path $modDir "$mod.psd1"
+                if (-not (Test-Path -LiteralPath $psd)) { continue }
             }
+
+            $ver = try {
+                $man = Import-PowerShellDataFile -LiteralPath $psd -ErrorAction Stop
+                $man.ModuleVersion
+            } catch { $versionDir.Name }
+
+            $existing = [pscustomobject]@{
+                Name    = $mod
+                Version = $ver
+                Path    = $psd
+            }
+            break
+        }
+
+        # SLOW FALLBACK: only if the directory scan found nothing. This
+        # covers modules installed to non-standard locations added to
+        # $env:PSModulePath manually (e.g. system-specific tooling paths).
+        if (-not $existing) {
+            $existing = Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue |
+                        Sort-Object Version -Descending | Select-Object -First 1
         }
 
         if ($existing) {

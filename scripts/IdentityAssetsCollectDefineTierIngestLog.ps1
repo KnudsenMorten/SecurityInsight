@@ -1174,9 +1174,12 @@ $IngestionSpnClientSecret = [string]$global:SpnClientSecret
 # Community mode: read from $global:DceIngestionUri etc. set directly by the launcher.
 #########################################################################################################
 
+# LOG_* names (platform-defaults-set) are still AF-only; the four behaviour
+# globals (TroubleshootingMode / CsaAttributeSet / Defender workspace /
+# SubscriptionNameExcludePatterns) are now read from the PLAIN names in BOTH
+# modes, with fallback to the legacy SecurityInsight_Identity_* / _Defender_*
+# names so existing platform-defaults.ps1 installs keep working.
 if ($AutomationFramework) {
-    $TroubleshootingMode  = if ($null -ne $global:SecurityInsight_Identity_TroubleshootingMode)                                { [bool]$global:SecurityInsight_Identity_TroubleshootingMode    } else { $false }
-    $CsaAttributeSet      = if (-not [string]::IsNullOrWhiteSpace([string]$global:SecurityInsight_Identity_CsaAttributeSet))  { [string]$global:SecurityInsight_Identity_CsaAttributeSet      } else { 'SecurityInsight' }
     $BatchSize            = if ($null -ne $global:SecurityInsight_LOG_BatchSize -and $global:SecurityInsight_LOG_BatchSize -gt 0) { [int]$global:SecurityInsight_LOG_BatchSize               } else { 300 }
     $TableName            = if (-not [string]::IsNullOrWhiteSpace([string]$global:SecurityInsight_LOG_TableName))              { [string]$global:SecurityInsight_LOG_TableName                 } else { 'SI_IdentityAssets' }
     $WorkspaceResourceId  = [string]$global:SecurityInsight_LOG_WorkspaceResourceId
@@ -1186,16 +1189,9 @@ if ($AutomationFramework) {
     $DcrName              = [string]$global:SecurityInsight_LOG_DcrName
     $DceName              = [string]$global:SecurityInsight_LOG_DceName
     $DceResourceGroup     = [string]$global:SecurityInsight_LOG_DceResourceGroup
-    $DceIngestionUri              = [string]$global:SecurityInsight_LOG_DceIngestionUri
-    $TenantDomain                 = [string]$global:TenantDomain
-    # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
-    # than the identity table workspace. When set, queries use cross-workspace KQL.
-    $DefenderWorkspaceResourceId  = [string]$global:SecurityInsight_Defender_WorkspaceResourceId
-    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
-    $SubscriptionNameExcludePatterns = @($global:SecurityInsight_Identity_SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $DceIngestionUri      = [string]$global:SecurityInsight_LOG_DceIngestionUri
+    $TenantDomain         = [string]$global:TenantDomain
 } else {
-    $TroubleshootingMode  = if ($null -ne $global:TroubleshootingMode)                                                        { [bool]$global:TroubleshootingMode                            } else { $false }
-    $CsaAttributeSet      = if (-not [string]::IsNullOrWhiteSpace([string]$global:CsaAttributeSet))                           { [string]$global:CsaAttributeSet                              } else { 'SecurityInsight' }
     $BatchSize            = if ($null -ne $global:BatchSize -and $global:BatchSize -gt 0)                                     { [int]$global:BatchSize                                       } else { 300 }
     $TableName            = if (-not [string]::IsNullOrWhiteSpace([string]$global:TableName))                                  { [string]$global:TableName                                    } else { 'SI_IdentityAssets' }
     $WorkspaceResourceId  = [string]$global:WorkspaceResourceId
@@ -1205,14 +1201,30 @@ if ($AutomationFramework) {
     $DcrName              = [string]$global:DcrName
     $DceName              = [string]$global:DceName
     $DceResourceGroup     = [string]$global:DceResourceGroup
-    $DceIngestionUri              = [string]$global:DceIngestionUri
-    $TenantDomain                 = [string]$global:TenantDomain
-    # Sentinel/Defender workspace (optional) - set if IdentityInfo lives in a different LA workspace
-    # than the identity table workspace. When set, queries use cross-workspace KQL.
-    $DefenderWorkspaceResourceId  = [string]$global:DefenderWorkspaceResourceId
-    # Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
-    $SubscriptionNameExcludePatterns = @($global:SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $DceIngestionUri      = [string]$global:DceIngestionUri
+    $TenantDomain         = [string]$global:TenantDomain
 }
+
+# Behaviour globals -- plain names preferred in BOTH modes, fall back to legacy.
+$TroubleshootingMode = if ($null -ne $global:TroubleshootingMode)                                      { [bool]$global:TroubleshootingMode }
+                       elseif ($null -ne $global:SecurityInsight_Identity_TroubleshootingMode)         { [bool]$global:SecurityInsight_Identity_TroubleshootingMode }
+                       else                                                                            { $false }
+$CsaAttributeSet     = if (-not [string]::IsNullOrWhiteSpace([string]$global:CsaAttributeSet))         { [string]$global:CsaAttributeSet }
+                       elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SecurityInsight_Identity_CsaAttributeSet)) { [string]$global:SecurityInsight_Identity_CsaAttributeSet }
+                       else                                                                            { 'SecurityInsight' }
+# Sentinel/Defender workspace -- set when IdentityInfo lives in a different LA
+# workspace than the identity table workspace. Accepts three names:
+#   $global:Defender_WorkspaceNameResourceId  (new canonical)
+#   $global:DefenderWorkspaceResourceId       (legacy community)
+#   $global:SecurityInsight_Defender_WorkspaceResourceId (legacy AF)
+$DefenderWorkspaceResourceId = if (-not [string]::IsNullOrWhiteSpace([string]$global:Defender_WorkspaceNameResourceId))       { [string]$global:Defender_WorkspaceNameResourceId }
+                               elseif (-not [string]::IsNullOrWhiteSpace([string]$global:DefenderWorkspaceResourceId))        { [string]$global:DefenderWorkspaceResourceId }
+                               elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SecurityInsight_Defender_WorkspaceResourceId)) { [string]$global:SecurityInsight_Defender_WorkspaceResourceId }
+                               else                                                                                           { '' }
+# Subscription name exclude patterns (wildcard, e.g. '*Azure for Students*')
+$SubscriptionNameExcludePatterns = if ($global:SubscriptionNameExcludePatterns)                                { @($global:SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) }
+                                   elseif ($global:SecurityInsight_Identity_SubscriptionNameExcludePatterns)   { @($global:SecurityInsight_Identity_SubscriptionNameExcludePatterns | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) }
+                                   else                                                                        { @() }
 
 #########################################################################################################
 # DEFAULTS + VALIDATE - infrastructure locals must be set regardless of auth mode
@@ -3511,6 +3523,68 @@ try {
 
 Write-Progress -Id 3 -Activity "Ingesting" -Completed
 Write-Ok "Ingest complete: $ingestCounter records in $chunkNum chunks"
+
+#########################################################################################################
+# JSON SIBLING + UPLOAD EXPORT
+#
+# The engine already streams every collected record to
+#   OUTPUT\IdentityAssets_Collection.jsonl
+# during collection. When $global:WriteJsonOutput is $true (default ON), the
+# engine converts that JSONL into a standard JSON array at
+#   OUTPUT\IdentityAssets_Collection.json
+# (sibling of the .jsonl).
+#
+# When $global:ExportDestination is set, both files (the .jsonl and the .json)
+# are uploaded to the destination. Destination type is auto-detected:
+#   \\server\share\path\                                -> UNC share
+#   https://<acct>.blob.core.windows.net/<container>/   -> Azure Storage blob
+#########################################################################################################
+
+if ($null -eq $global:WriteJsonOutput) { $global:WriteJsonOutput = $true }
+
+$__jsonPath = $null
+if ([bool]$global:WriteJsonOutput) {
+    $__jsonPath = [System.IO.Path]::ChangeExtension($tempFile, 'json')
+    Write-Sep
+    Write-Step "Writing JSON sibling of the collection file"
+    Write-Info ("path: {0}" -f $__jsonPath)
+    try {
+        # Read JSONL line-by-line and emit a single JSON array -- avoids loading
+        # the whole dataset into memory twice.
+        $__reader = [System.IO.StreamReader]::new($tempFile, [System.Text.Encoding]::UTF8)
+        $__writer = [System.IO.StreamWriter]::new($__jsonPath, $false, [System.Text.Encoding]::UTF8)
+        try {
+            $__writer.Write('[')
+            $__first = $true
+            while (-not $__reader.EndOfStream) {
+                $__line = $__reader.ReadLine()
+                if ([string]::IsNullOrWhiteSpace($__line)) { continue }
+                if (-not $__first) { $__writer.Write(',') }
+                $__writer.Write($__line)
+                $__first = $false
+            }
+            $__writer.Write(']')
+        } finally {
+            $__writer.Flush(); $__writer.Dispose()
+            $__reader.Dispose()
+        }
+        Write-Ok ("json file ready: {0}" -f $__jsonPath)
+    } catch {
+        Write-Warn ("JSON export failed: {0} (continuing -- jsonl is still on disk)" -f $_.Exception.Message)
+        $__jsonPath = $null
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace([string]$global:ExportDestination)) {
+    . (Join-Path $PSScriptRoot '_shared\Send-SecurityInsightExportFile.ps1')
+    Write-Sep
+    Write-Step ("Uploading export files to: {0}" -f $global:ExportDestination)
+    foreach ($localPath in @($tempFile, $__jsonPath)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$localPath)) {
+            Send-ExportFile -LocalPath $localPath -Destination $global:ExportDestination
+        }
+    }
+}
 
 #########################################################################################################
 # SUMMARY

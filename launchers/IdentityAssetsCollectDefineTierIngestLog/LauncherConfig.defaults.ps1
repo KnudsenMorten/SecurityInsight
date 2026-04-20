@@ -43,7 +43,26 @@ $global:TableName                 = 'SI_IdentityAssets'
 # Leave $null to use $global:WorkspaceResourceId for both the SI ingestion
 # and the IdentityInfo reads. Set this only when IdentityInfo lives in a
 # different workspace -- the engine then issues cross-workspace KQL.
-$global:DefenderWorkspaceResourceId = $null
+# Canonical name is $global:Defender_WorkspaceNameResourceId; the engine also
+# accepts the legacy $global:DefenderWorkspaceResourceId and
+# $global:SecurityInsight_Defender_WorkspaceResourceId.
+$global:Defender_WorkspaceNameResourceId = $null
+
+
+# ============================================================================
+#  EXPORT OUTPUT  (JSON sibling + optional upload)
+# ============================================================================
+# The engine already streams every collected record to
+#   OUTPUT\IdentityAssets_Collection.jsonl
+# during collection. When WriteJsonOutput is $true (default), a standard JSON
+# array sibling (.json) is written next to the .jsonl. When ExportDestination
+# is set, both files are uploaded to the destination.
+#
+# Destination type is AUTO-DETECTED from the value's prefix:
+#   '\\server\share\path\'                              -> UNC share
+#   'https://<acct>.blob.core.windows.net/<container>/' -> Azure Storage blob
+$global:WriteJsonOutput    = $true
+$global:ExportDestination  = $null
 
 
 # ============================================================================

@@ -37,10 +37,15 @@
     .\Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1 -Engine Step1_OnboardValidate-SecurityInsight-Permissions
 
 .EXAMPLE
-    # Bootstrap from ANYWHERE (no local copy of the repo yet):
-    $u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/SCRIPTS/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
-    Invoke-RestMethod $u | Out-File $env:TEMP\Step0.ps1
-    & $env:TEMP\Step0.ps1 -Engine Step1_OnboardValidate-SecurityInsight-Permissions
+    # Bootstrap from ANYWHERE (no local copy of the repo yet).
+    # Note: we use Invoke-WebRequest -OutFile (NOT `irm | Out-File`). On PS 5.1,
+    # Invoke-RestMethod returns a string with the UTF-8 BOM embedded, and
+    # Out-File's default Unicode encoding ends up writing a UTF-16 BOM PLUS the
+    # UTF-8 BOM as a content character, which breaks PowerShell's parser.
+    # -OutFile writes raw bytes and preserves the file exactly.
+    $u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
+    Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile "$env:TEMP\Step0.ps1"
+    & "$env:TEMP\Step0.ps1" -Engine Step1_OnboardValidate-SecurityInsight-Permissions
 
 .EXAMPLE
     # Scheduled "keep up to date" run -- same command, idempotent:
@@ -135,18 +140,27 @@ try {
         Write-Info "created destination"
     }
 
-    $copied    = 0
-    $preserved = 0
+    # Policy:
+    #   * Locked content (`*_Locked.*`, SCRIPTS/*, LAUNCHERS/*.template.ps1,
+    #     LauncherConfig.defaults.ps1, README.md, etc.) is ALWAYS overwritten
+    #     from the GitHub release -- these are curated by the maintainer and
+    #     must stay in sync with the engine code.
+    #   * Customer content (everything in $PreservePatterns) is NEVER touched
+    #     if a destination copy already exists -- these are the customer's
+    #     own config, YAML overrides, and working data.
+    $copied       = 0
+    $lockedUpdate = 0
+    $preserved    = 0
     Get-ChildItem -Path $staging -Recurse -File | ForEach-Object {
         $rel = $_.FullName.Substring($staging.Length + 1)
         $dst = Join-Path $DestinationPath $rel
 
-        # Honour PreservePatterns: skip copy if destination already has the file.
         $shouldPreserve = $false
         foreach ($pat in $PreservePatterns) {
             if ($rel -like $pat) { $shouldPreserve = $true; break }
         }
         if ($shouldPreserve -and (Test-Path -LiteralPath $dst)) {
+            Write-Host ("[PRESERVE] {0}" -f $rel) -ForegroundColor DarkGray
             $preserved++
             return
         }
@@ -156,9 +170,13 @@ try {
             New-Item -ItemType Directory -Force -Path $dstDir | Out-Null
         }
         Copy-Item -LiteralPath $_.FullName -Destination $dst -Force
+        if ($rel -like '*_Locked.*') {
+            Write-Host ("[UPDATE]   {0}  (locked content -- force-refreshed from release)" -f $rel) -ForegroundColor Green
+            $lockedUpdate++
+        }
         $copied++
     }
-    Write-Ok ("copied: $copied  |  preserved: $preserved customer file(s)")
+    Write-Ok ("copied: $copied files  ({0} of which are *_Locked.* force-refreshed)  |  preserved: $preserved customer file(s)" -f $lockedUpdate)
 
     # ---- 3. Land in the launcher folder --------------------------------------
     $launchersRoot = Get-ChildItem -Path $DestinationPath -Directory |

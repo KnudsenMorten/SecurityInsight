@@ -308,9 +308,14 @@ One **Step 0** script bootstraps the whole solution from GitHub. Copy-paste:
 $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'   # <-- change to 'D:\Tools\SecurityInsight' etc. if you want
 
 # Fresh bootstrap (no local checkout yet):
+# Note: use Invoke-WebRequest -OutFile (not `irm | Out-File`). On PowerShell 5.1,
+# Invoke-RestMethod returns a string that INCLUDES the UTF-8 BOM char, and
+# Out-File's default is Unicode (UTF-16LE), so the saved file ends up with
+# a UTF-16 BOM AND a stray UTF-8-BOM character -- the parser then trips on
+# `[CmdletBinding()]` with "Unexpected attribute". -OutFile writes raw bytes.
 $u = 'https://raw.githubusercontent.com/KnudsenMorten/SecurityInsight/main/scripts/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1'
-irm $u | Out-File $env:TEMP\Step1.ps1
-& $env:TEMP\Step1.ps1 -DestinationPath $SI_InstallPath
+Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile "$env:TEMP\Step0.ps1"
+& "$env:TEMP\Step0.ps1" -DestinationPath $SI_InstallPath
 ```
 
 > [!TIP]
@@ -333,7 +338,14 @@ Next stop: [§ 3.5 Pre-requisite configuration](#35-pre-requisite-configuration)
 
 [⤴ Back to top](#top)
 
-Re-running **Step 0** against the same path is idempotent and preserves every customer-owned file (`LauncherConfig.custom.ps1`, `launcher.override.ps1`, `CUSTOMDATA/*`, `*_Custom.yaml`):
+Re-running **Step 0** against the same path is idempotent. The policy is strict and symmetrical:
+
+| Category | Behaviour on update | Examples |
+|---|---|---|
+| 🔒 **Locked content** (curated by maintainer) | **Always force-refreshed** from the latest release | `data/*_Locked.yaml`, `scripts/*.ps1`, `launchers/*/launcher.*.template.ps1`, `launchers/*/LauncherConfig.defaults.ps1`, `README.md`, `TOOLS/**` |
+| 🧷 **Customer content** (your config + overrides) | **Never touched** if a copy already exists on disk | `launchers/*/LauncherConfig.custom.ps1`, `launchers/*/launcher.override.ps1`, `CUSTOMDATA/**`, `data/*_Custom.yaml`, `data/*_Custom.*` |
+
+Same rule applies to both engines: RiskAnalysis (`SecurityInsight_RiskAnalysis_Queries_Custom.yaml` / `_Locked.yaml`) **and** CriticalAssetTagging (`SecurityInsight_CriticalAssetTagging_Custom.yaml` / `_Locked.yaml`).
 
 ```powershell
 # Same $SI_InstallPath as when you first installed:
@@ -343,7 +355,17 @@ $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'
 & (Join-Path $SI_InstallPath 'SCRIPTS\Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath
 ```
 
-What gets updated vs preserved is documented in [§ 7.2 Files deep-dive](#72-files-deep-dive).
+Step 0 now emits per-file visibility so you can confirm the policy:
+
+```
+[UPDATE]   data\SecurityInsight_RiskAnalysis_Queries_Locked.yaml  (locked content -- force-refreshed from release)
+[UPDATE]   data\SecurityInsight_CriticalAssetTagging_Locked.yaml  (locked content -- force-refreshed from release)
+[PRESERVE] data\SecurityInsight_RiskAnalysis_Queries_Custom.yaml
+[PRESERVE] launchers\SecurityInsight_RiskAnalysis\LauncherConfig.custom.ps1
+[OK]    copied: 245 files  (2 of which are *_Locked.* force-refreshed)  |  preserved: 4 customer file(s)
+```
+
+Full file-by-file breakdown: [§ 7.2 Files deep-dive](#72-files-deep-dive).
 
 After update, the running version is stamped on every launcher banner:
 
@@ -851,6 +873,74 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 </details>
 
 <details>
+<summary>📄 <b>Real-world RiskAnalysis LauncherConfig.custom.ps1 (annotated, sensitive values redacted)</b></summary>
+
+A working config as actually deployed on a community box — full ingest to Log Analytics, JSON + XLSX uploaded to Azure Blob, per-template mail routing via a Brevo relay with a verified sender, and AI executive summary via Azure OpenAI. All credentials / GUIDs / keys replaced with `xxxxx` placeholders; substitute your own.
+
+```powershell
+# --- Auth: SPN + plaintext secret ---
+$global:SpnTenantId     = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+$global:SpnClientId     = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+$global:SpnClientSecret = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+
+# --- Infrastructure (auto-provisioned on first run if missing) ---
+$global:DcrResourceGroup = 'rg-dcr-securityinsight-community'
+$global:DceResourceGroup = 'rg-dce-securityinsight-community'
+$global:DceName          = 'dce-securityinsight-community'
+$global:WorkspaceName    = 'log-platform-management-si-community'
+$global:SubscriptionId   = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'
+
+# --- Ingest ---
+# $global:ReportTemplate is deliberately unset -- the Override flags below
+# drive which template(s) run. This is the cleanest pattern for scheduled runs.
+$global:SendToLogAnalytics = $true
+
+# --- Mail: Brevo relay, verified sender, per-template recipients ---
+$global:SendMail        = $true
+$global:MailTo          = @('fallback@yourdomain.com')
+$global:SmtpServer      = 'smtp-relay.brevo.com'
+$global:SmtpPort        = 587
+$global:SMTP_UseSSL     = $true
+$global:SMTPUser        = 'xxxxxxxxx@smtp-brevo.com'       # Brevo relay login
+$global:SMTPPassword    = 'xxxxxxxxxxxxxxxx'
+$global:SMTPFrom        = 'svc-automation@yourdomain.com'  # verified sender in Brevo console
+
+# --- Output: JSON sibling + upload to Azure Blob (container auto-created) ---
+$global:WriteJsonOutput    = $true
+$global:ExportDestination  = 'https://<your-storacct>.blob.core.windows.net/riskanalysis-summary/'
+
+# --- Launcher mode overrides (drive mode without setting $ReportTemplate) ---
+# Override flags only BUMP a mode flag to $true; they never force it to $false.
+# Pattern below: Summary ON, Detailed OFF -- only the Summary template runs
+# on scheduled invocations. Flip Detailed to $true to run both.
+$global:RiskAnalysis_Summary_Override                = $true
+$global:RiskAnalysis_Detailed_Override               = $false
+$global:RiskAnalysis_ReportTemplate_Default_Summary  = 'RiskAnalysis_Summary_Bucket'
+$global:RiskAnalysis_ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_Bucket'
+
+# --- Per-template mail recipients (win over the flat $MailTo above) ---
+$global:RiskAnalysis_Detailed_SendMail = $true
+$global:RiskAnalysis_Detailed_To       = @('IT-Alerts-Identity@yourdomain.com')
+$global:RiskAnalysis_Summary_SendMail  = $true
+$global:RiskAnalysis_Summary_To        = @('IT-Alerts-Identity@yourdomain.com')
+
+# --- Behaviour tuning ---
+$global:TroubleshootingMode              = $false
+$global:CsaAttributeSet                  = 'SecurityInsight'
+$global:SubscriptionNameExcludePatterns  = @(
+    '*Azure for Students*'
+)
+
+# --- AI executive summary (Azure OpenAI) ---
+$global:OpenAI_apiKey              = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+$global:OpenAI_endpoint            = 'https://<your-aoai-account>.openai.azure.com'
+$global:OpenAI_deployment          = '<your-deployment-name>'
+$global:OpenAI_apiVersion          = '2025-01-01-preview'
+$global:OpenAI_MaxTokensPerRequest = 16384
+```
+</details>
+
+<details>
 <summary>📄 <b>Full Identity-collection LauncherConfig.custom.ps1 (community mode)</b></summary>
 
 For `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/LauncherConfig.custom.ps1`:
@@ -1114,9 +1204,15 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | 🎯 **Sub-scoped DCE/DCR cache** | `$global:AzDceDetails` / `$global:AzDcrDetails` now filtered to the target subscription, so duplicate-named DCRs in other tenant subs can't poison `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` (fixes spurious 403 "DCE FQDN not associated with DCR immutable Id"). | v2.1.61 / v2.1.62 |
 | 🔑 **SubscriptionId honored** | Both IAC and RiskAnalysis self-heal blocks now read `$global:SubscriptionId` first, parsed from `$WorkspaceResourceId` second, Az context last. Ends the silent "wrong subscription" behaviour when only `$global:WorkspaceName` + `$global:SubscriptionId` are set. | v2.1.59 / v2.1.63 |
 | 📋 **OnboardValidate summary** | `Step1_OnboardValidate-SecurityInsight-Permissions` now emits a final copy-paste-ready summary block (App (client) ID, SPN ObjectId, Tenant ID, counts, ready-to-paste `$global:Spn*` block, verification KQL). | v2.1.64 |
-
-> [!IMPORTANT]
-> **Coming next** (v2.1.65+): polished **Azure Monitor Workbooks** for `SI_RiskAnalysis_*_CL` tables — drop-in dashboards for SOC, exec, compliance audiences. Track on the [release page](https://github.com/KnudsenMorten/SecurityInsight/releases).
+| 🎯 **Deterministic TraceID / TraceName** | Every RiskAnalysis row carries a `TraceName` (e.g. `Update vulnerable software--Very High--Critical - tier 0`) + a SHA-256-derived `TraceID` that stays stable across runs. Group-by TraceID in KQL to track the same finding across time. Separator bumped to `--` so severities containing a hyphen don't collide. | v2.1.88 / v2.1.93 |
+| ⏱️ **CollectionTime stamping** | RiskAnalysis ingest pipeline now mirrors the identity engine: `Add-CollectionTimeToAllEntriesInArray` → `Add-ColumnDataToAllEntriesInArray` → `ValidateFix-AzLogAnalyticsTableSchemaColumnNames` → `Build-DataArrayToAlignWithSchema` → `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output`. One `CollectionTime` per run, so `\| where CollectionTime == toscalar(...max(CollectionTime))` gives the latest slice. | v2.1.92 |
+| 🧮 **`$global:SolutionVersion` on every row** | VERSION.txt walk-up from `$PSScriptRoot`; stamped as a column on both `SI_RiskAnalysis_*_CL` and `SI_IdentityAssets_CL`. Tells you which engine version wrote which batch of rows. Surfaced in the Workbook "Data powered by" footer tile. | v2.1.96 |
+| 📊 **Azure Monitor Workbook** | Drop-in workbook template `TOOLS/AzureWorkbook/SecurityInsight-RiskAnalysis.workbook.json` with workspace pill (ARG-backed), time-range, multi-select filters (SecurityDomain / SecuritySeverity / CriticalityTier / Subcategory), trends, velocity (new vs resolved), Top-N, stale findings, identity inventory, Data-powered-by footer. Version badge visible in the GUI. | v2.1.99 / v2.1.106 |
+| 📤 **Power BI dataset refresh (community)** | New `$global:SendToPowerBI` toggle in the RiskAnalysis engine; when `$true`, acquires an OAuth2 token via SPN client-credentials and POSTs to the dataset's `/refreshes` endpoint so the customer's Power BI workspace picks up the latest KQL-ingested data on each scheduled run. Paired with a new Step4 one-time deploy engine for fully-automated `.pbix` upload + parameter rebind. | v2.1.98 / v2.1.102 |
+| 🗂️ **Step folders renumbered 0–4** | Bootstrap is now `Step0` (install / update from GitHub); engines are `Step1` Permissions → `Step2` Log Analytics → `Step3` Azure OpenAI → `Step4` Power BI (BETA). Setup Configurator tabs + launcher folder names + docs all aligned. | v2.1.103 |
+| 🧰 **Workbook multi-select fix** | Dropdowns now preselect `*` as a synthetic first option (`union (print Col='*'), (<query>)`); KQL guard is `'*' in ({Param}) or Col in ({Param})` so an empty pill never produces `Col in ()` and parse errors on fresh import. | v2.1.107 |
+| 📧 **`$global:SMTPFrom` (verified sender)** | Separate the SMTP login username from the `From` header. Brevo / SendGrid / Postmark / M365 all reject mail whose `From` isn't a verified sender — the relay login is NOT a valid `From`. Engine resolves `$SMTPFrom` → `$MailFrom` → `$SMTPUser` (legacy fallback) and throws if all three are empty. Configurator, sample, defaults, and README updated in lock-step. | v2.1.108 |
+| 🩹 **Step0 bootstrap: `iwr -OutFile`, not `irm \| Out-File`** | `Invoke-RestMethod` on PS 5.1 returns a string that includes the UTF-8 BOM as a content character, then `Out-File`'s default Unicode encoding writes a UTF-16 BOM + that stray FEFF — the parser then trips on `[CmdletBinding()]` with "Unexpected attribute". Switch to `Invoke-WebRequest -OutFile` (raw bytes). | v2.1.108 |
 
 ---
 

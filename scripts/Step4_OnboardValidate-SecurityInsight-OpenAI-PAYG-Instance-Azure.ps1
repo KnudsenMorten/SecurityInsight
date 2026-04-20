@@ -10,14 +10,18 @@ PURPOSE
   ON-DEMAND / PAY-PER-USE where possible (NO PTU).
 
 USAGE
-  Run defaults (edit $ScriptDefaults):
-    .\Deploy_OpenAI_PAYG_Instance.ps1
+  Preferred: run via the Step 4 launcher (no CLI args needed, reads auth + config
+  from LauncherConfig.custom.ps1 in the same folder):
+    .\LAUNCHERS\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\launcher.community-vm.template.ps1
 
-  Override params:
-    .\Deploy_OpenAI_PAYG_Instance.ps1 -AccountName "security-insight-02" -DeploymentName "chat" -Verbose
+  Direct invocation (rare -- engine defaults in $ScriptDefaults):
+    .\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+
+  Override params at invocation:
+    .\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -AccountName "security-insight-02" -DeploymentName "chat" -Verbose
 
   Force a model (still tries SKUs if needed):
-    .\Deploy_OpenAI_PAYG_Instance.ps1 -ModelName "gpt-4" -ModelVersion "latest" -Verbose
+    .\Step4_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -ModelName "gpt-4" -ModelVersion "latest" -Verbose
 ================================================================================
 
 .NOTES

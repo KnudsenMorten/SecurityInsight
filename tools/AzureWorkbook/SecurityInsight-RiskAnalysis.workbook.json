@@ -20,17 +20,12 @@
             "label": "Log Analytics workspace",
             "type": 5,
             "isRequired": true,
-            "multiSelect": false,
-            "quote": "'",
-            "delimiter": ",",
             "typeSettings": {
-              "additionalResourceOptions": [],
-              "showDefault": false,
               "resourceTypeFilter": { "microsoft.operationalinsights/workspaces": true },
-              "includeAll": false
+              "additionalResourceOptions": []
             },
-            "value": null,
-            "resourceType": "microsoft.operationalinsights/workspaces"
+            "queryType": 1,
+            "resourceType": "microsoft.resourcegraph/resources"
           },
           {
             "id": "p-time",

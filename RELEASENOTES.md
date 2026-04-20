@@ -1,10 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.97
+## v2.1.98
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI Workbook): workspace picker at top + '*' sentinel for multi-select "All" (deccb5b)
+- fix(SI Workbook): resource picker -- use Azure Resource Graph (queryType 1) (d8f2f81)
 
 ---
 

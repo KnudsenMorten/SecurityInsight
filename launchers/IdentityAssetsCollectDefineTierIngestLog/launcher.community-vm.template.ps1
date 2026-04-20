@@ -153,6 +153,13 @@ try {
 $haveKv = Test-LauncherModule -Name 'Az.KeyVault' -AutoInstall
 $haveMg = Test-LauncherModule -Name 'Microsoft.Graph.Authentication' -AutoInstall
 
+# Modules the engine's infra self-heal needs (Ensure-SecurityInsightWorkspace/Dce/Rg +
+# AzLogDcrIngestPS ingest). Warn but don't throw if auto-install fails; the engine
+# will surface a clearer error later if a cmdlet is actually missing.
+foreach ($m in @('Az.Resources', 'Az.OperationalInsights', 'Az.Monitor', 'Az.Storage', 'AzLogDcrIngestPS')) {
+    [void](Test-LauncherModule -Name $m -AutoInstall)
+}
+
 $authMethodUsed = $null
 try {
     if ([bool]$global:UseManagedIdentity) {

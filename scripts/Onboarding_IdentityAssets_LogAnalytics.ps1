@@ -212,13 +212,13 @@ try {
 }
 
 #########################################################################################################
-# RESOLVE INGESTION SPN
+# RESOLVE SecurityInsight SPN
 #########################################################################################################
 
 Write-Sep
 Write-Step "Resolving ingestion service principal"
 
-$spn = Invoke-WithRetry -OperationName "Get ingestion SPN" -ScriptBlock {
+$spn = Invoke-WithRetry -OperationName "Get SecurityInsight SPN" -ScriptBlock {
     Get-AzADServicePrincipal -ApplicationId $IngestionSpnClientId -ErrorAction Stop
 }
 if (-not $spn) {
@@ -432,14 +432,14 @@ try {
 }
 
 #########################################################################################################
-# RBAC - ingestion SPN
+# RBAC - SecurityInsight SPN
 #   - Monitoring Metrics Publisher on RG (send data to DCRs)
 #   - Contributor on RG (manage DCE/DCR resources)
 #   - Contributor on the Log Analytics workspace
 #########################################################################################################
 
 Write-Sep
-Write-Step "Assigning RBAC roles to ingestion SPN"
+Write-Step "Assigning RBAC roles to SecurityInsight SPN"
 
 $rgWorkspaceScope = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroup"
 $rgDceScope       = "/subscriptions/$SubscriptionId/resourceGroups/$DceResourceGroup"

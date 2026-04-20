@@ -155,7 +155,7 @@
       PrivilegedAccess.Read.AzureADGroup    - PIM for Groups eligibility
       ThreatHunting.Read.All                - Exposure Graph (AD group memberships via Advanced Hunting)
 
-    Azure RBAC (on ingestion SPN):
+    Azure RBAC (on SecurityInsight SPN):
       Reader on all subscriptions           - Get-AzRoleAssignment
       Log Analytics Reader on WorkspaceResourceId
       Log Analytics Reader on DefenderWorkspaceResourceId (if set, for IdentityInfo + sign-in logs)
@@ -331,7 +331,7 @@
       PrivilegedAccess.Read.AzureADGroup    - PIM for Groups eligibility
       ThreatHunting.Read.All                - Exposure Graph (AD group memberships via Advanced Hunting)
 
-    Azure RBAC (on ingestion SPN):
+    Azure RBAC (on SecurityInsight SPN):
       Reader on all subscriptions           - Get-AzRoleAssignment
       Log Analytics Reader on WorkspaceResourceId
       Log Analytics Reader on DefenderWorkspaceResourceId (if set, for IdentityInfo + sign-in logs)
@@ -507,7 +507,7 @@
       PrivilegedAccess.Read.AzureADGroup    - PIM for Groups eligibility
       ThreatHunting.Read.All                - Exposure Graph (AD group memberships via Advanced Hunting)
 
-    Azure RBAC (on ingestion SPN):
+    Azure RBAC (on SecurityInsight SPN):
       Reader on all subscriptions           - Get-AzRoleAssignment
       Log Analytics Reader on WorkspaceResourceId
       Log Analytics Reader on DefenderWorkspaceResourceId (if set, for IdentityInfo + sign-in logs)
@@ -683,7 +683,7 @@
       PrivilegedAccess.Read.AzureADGroup    - PIM for Groups eligibility
       ThreatHunting.Read.All                - Exposure Graph (AD group memberships via Advanced Hunting)
 
-    Azure RBAC (on ingestion SPN):
+    Azure RBAC (on SecurityInsight SPN):
       Reader on all subscriptions           - Get-AzRoleAssignment
       Log Analytics Reader on WorkspaceResourceId
       Log Analytics Reader on DefenderWorkspaceResourceId (if set, for IdentityInfo + sign-in logs)
@@ -1417,10 +1417,38 @@ Write-Host "         Definitions date           : $($tierDefs.Metadata.Generated
 # AD_GroupMembership JSON snapshot is no longer used.
 
 #########################################################################################################
+# CONNECT TO MICROSOFT GRAPH
+# Must run BEFORE the Exposure Graph / Advanced Hunting query below, which uses
+# Invoke-MgGraphRequest. Kept here (not in the earlier auth block) so we have the
+# $TenantId / $IngestionSpnClientId / $IngestionSpnClientSecret locals available.
+#########################################################################################################
+
+Write-Sep
+Write-Step "Connecting to Microsoft Graph (token via REST)"
+try {
+    $tokenBody = @{
+        grant_type    = "client_credentials"
+        client_id     = $IngestionSpnClientId
+        client_secret = $IngestionSpnClientSecret
+        scope         = "https://graph.microsoft.com/.default"
+    }
+    $tokenResponse = Invoke-RestMethod `
+        -Method POST `
+        -Uri    "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" `
+        -Body   $tokenBody `
+        -ContentType "application/x-www-form-urlencoded" `
+        -ErrorAction Stop
+
+    $script:graphToken = $tokenResponse.access_token
+    Connect-MgGraph -AccessToken ($script:graphToken | ConvertTo-SecureString -AsPlainText -Force) -ErrorAction Stop | Out-Null
+    Write-Ok "Graph connected"
+} catch { Write-Err2 "Graph connect failed: $($_.Exception.Message)"; throw }
+
+#########################################################################################################
 # PRE-LOAD AD GROUP MEMBERSHIPS VIA EXPOSURE GRAPH (ADVANCED HUNTING)
 # Queries ExposureGraphEdges for "member of" edges between AD users and AD groups.
 # UserObjectId is the Entra Object ID (NodeId) so it matches $user.id during user processing.
-# Requires: ThreatHunting.Read.All permission on the Graph SPN.
+# Requires: ThreatHunting.Read.All permission on the SecurityInsight SPN.
 # AD group memberships are sourced exclusively from here - no JSON snapshot fallback.
 #########################################################################################################
 
@@ -1509,7 +1537,7 @@ ExposureGraphEdges
     }
 } catch {
     Write-Warn "Exposure Graph query failed - AD tier will be null for all users: $($_.Exception.Message)"
-    Write-Warn "Ensure ThreatHunting.Read.All permission is granted to the ingestion SPN"
+    Write-Warn "Ensure ThreatHunting.Read.All permission is granted to the SecurityInsight SPN"
 }
 
 
@@ -1528,12 +1556,18 @@ if ($TroubleshootingMode) {
 Write-Sep
 Write-Step "Setting Azure subscription context"
 
-# Determine subscription: prefer workspace resource ID, else current Az context
-if (-not [string]::IsNullOrWhiteSpace($WorkspaceResourceId) -and $WorkspaceResourceId -match '/subscriptions/([^/]+)/') {
+# Subscription priority:
+#   1. Explicit $global:SubscriptionId (community customer sets it; AF derives from
+#      $global:MainLogAnalyticsWorkspaceSubId via Initialize-LauncherConfig)
+#   2. Parsed from $WorkspaceResourceId if it's a full ARM ID
+#   3. Current Az context (fallback)
+if (-not [string]::IsNullOrWhiteSpace([string]$global:SubscriptionId)) {
+    $WorkspaceSubscriptionId = [string]$global:SubscriptionId
+} elseif (-not [string]::IsNullOrWhiteSpace($WorkspaceResourceId) -and $WorkspaceResourceId -match '/subscriptions/([^/]+)/') {
     $WorkspaceSubscriptionId = $Matches[1]
 } else {
     try { $WorkspaceSubscriptionId = (Get-AzContext -ErrorAction Stop).Subscription.Id } catch { $WorkspaceSubscriptionId = $null }
-    if (-not $WorkspaceSubscriptionId) { throw "Cannot determine subscription -- set Az context or provide WorkspaceResourceId" }
+    if (-not $WorkspaceSubscriptionId) { throw "Cannot determine subscription -- set `$global:SubscriptionId, provide WorkspaceResourceId, or ensure an Az context." }
 }
 try {
     Set-AzContext -SubscriptionId $WorkspaceSubscriptionId -TenantId $TenantId -ErrorAction Stop | Out-Null
@@ -1545,11 +1579,11 @@ try {
 . (Join-Path $PSScriptRoot '_shared\Ensure-SecurityInsightInfra.ps1')
 Write-Step "Ensuring SecurityInsight Workspace/DCE/DCR infra (auto-provisions if missing)"
 try {
-    # Resolve ingestion SPN ObjectId -- needed for RBAC assignments on auto-created resources
+    # Resolve SecurityInsight SPN ObjectId -- needed for RBAC assignments on auto-created resources
     $spnObj = Get-AzADServicePrincipal -ApplicationId $IngestionSpnClientId -ErrorAction SilentlyContinue
     $spnObjectId = if ($spnObj) { [string]$spnObj.Id } else { $null }
     if (-not $spnObjectId) {
-        Write-Warn "Could not resolve ingestion SPN ObjectId -- RBAC assignments will be skipped on auto-create"
+        Write-Warn "Could not resolve SecurityInsight SPN ObjectId -- RBAC assignments will be skipped on auto-create"
     }
 
     # Derive location: explicit global > workspace RG location > default
@@ -1598,27 +1632,6 @@ try {
     Write-Ok "WorkspaceResourceId: $WorkspaceResourceId"
     Write-Ok "DCE entries: $(($global:AzDceDetails | Measure-Object).Count) | DCR entries: $(($global:AzDcrDetails | Measure-Object).Count)"
 } catch { Write-Err2 "Workspace/DCE/DCR infra build failed: $($_.Exception.Message)"; throw }
-
-Write-Step "Connecting to Microsoft Graph (token via REST)"
-# Obtain bearer token via REST - compatible with all versions of Microsoft.Graph module
-try {
-    $tokenBody = @{
-        grant_type    = "client_credentials"
-        client_id     = $IngestionSpnClientId
-        client_secret = $IngestionSpnClientSecret
-        scope         = "https://graph.microsoft.com/.default"
-    }
-    $tokenResponse = Invoke-RestMethod `
-        -Method POST `
-        -Uri    "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token" `
-        -Body   $tokenBody `
-        -ContentType "application/x-www-form-urlencoded" `
-        -ErrorAction Stop
-
-    $script:graphToken = $tokenResponse.access_token
-    Connect-MgGraph -AccessToken ($script:graphToken | ConvertTo-SecureString -AsPlainText -Force) -ErrorAction Stop | Out-Null
-    Write-Ok "Graph connected"
-} catch { Write-Err2 "Graph connect failed: $($_.Exception.Message)"; throw }
 
 #########################################################################################################
 # LOAD IDENTITYINFO FROM SENTINEL (MDI enrichment - AD groups, risk, SIDs, location)
@@ -1755,7 +1768,7 @@ IdentityInfo
 } catch {
     Write-Warn "IdentityInfo query failed - AD enrichment will be empty: $($_.Exception.Message)"
     $hint = if ($isCrossWorkspace) { "Log Analytics Reader on the Defender/Sentinel workspace ($DefenderWorkspaceResourceId)" } else { "Log Analytics Reader on $WorkspaceResourceId" }
-    Write-Warn "Ensure the ingestion SPN has $hint"
+    Write-Warn "Ensure the SecurityInsight SPN has $hint"
 }
 
 #########################################################################################################
@@ -1823,7 +1836,7 @@ SPNSignIn
     }
 } catch {
     Write-Warn "SPN/MI sign-in query failed: $($_.Exception.Message)"
-    Write-Warn "Ensure the ingestion SPN has Log Analytics Reader on $identityInfoSourceWorkspace"
+    Write-Warn "Ensure the SecurityInsight SPN has Log Analytics Reader on $identityInfoSourceWorkspace"
 }
 #########################################################################################################
 
@@ -2436,7 +2449,7 @@ try {
     Write-Ok "Azure RBAC delegations loaded: $azureDelegationCount assignments across $($azureDelegationLookup.Count) unique principals"
 } catch {
     Write-Warn "Azure delegation collection failed - Azure_Delegations will be empty: $($_.Exception.Message)"
-    Write-Warn "Ensure the ingestion SPN has Reader on subscriptions"
+    Write-Warn "Ensure the SecurityInsight SPN has Reader on subscriptions"
 }
 
 # Helper: build Azure_Delegations JSON for a given ObjectId.

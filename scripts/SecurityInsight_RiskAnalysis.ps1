@@ -3360,7 +3360,7 @@ function Send-ExportFile-AzStorage {
         Set-AzStorageBlobContent -Context $ctx -Container $Container -Blob $blobName -File $LocalPath -Force | Out-Null
         Write-Ok ("  uploaded -> https://{0}.blob.core.windows.net/{1}/{2}" -f $StorageAccount, $Container, $blobName)
     } catch {
-        Write-Warn ("  Azure Storage upload of '{0}' failed: {1} (Storage Blob Data Contributor on the container required for the ingestion SPN)" -f $FileName, $_.Exception.Message)
+        Write-Warn ("  Azure Storage upload of '{0}' failed: {1} (Storage Blob Data Contributor on the container required for the SecurityInsight SPN)" -f $FileName, $_.Exception.Message)
     }
 }
 

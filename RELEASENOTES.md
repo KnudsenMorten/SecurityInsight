@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.150
+## v2.1.151
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
 - fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
 - docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
 - refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _shared): default -Scope AllUsers + fail fast if non-elevated (0b263886)
 - perf(SI _shared): drop all Import-Module calls -- trust PowerShell auto-load (ff869fb6)
 - perf(SI _shared): skip Import-Module on meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) (314c8fe0)
-- perf(SI _shared): fast directory-first module probe (fixes 30s stall on meta-modules) (4d3f37eb)
 
 ---
 
@@ -48,6 +48,11 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.151 — Config snapshot lists every `$global:*` **assigned** per layer (AST-parsed)
+
+- 🧰 **Every layer's snapshot section now includes every `$global:Foo = ...` the layer's `.ps1` file assigned**, not just the values that changed. Previous versions used value-diff only — so if Layer 2 set `$DceName = 'dce-securityinsight'` and Layer 5 later re-assigned it to the SAME value, Layer 5's touch was invisible. This mattered for debugging "why did my Layer 5 override not take effect?" cases: now you see the assignment under Layer 5 even when it was a no-op, making "closer wins" behaviour auditable.
+- 🧰 **How it works:** PowerShell AST parser walks each layer file and extracts every `[AssignmentStatementAst]` whose Left is `$global:*`. Union with the prior value-diff logic catches both literal assignments AND dynamic sets (`Set-Variable -Scope Global`, function side-effects). Any touched variable gets attributed to the latest-touching layer in the provenance map, preserving the existing "last wins" semantics.
 
 ### v2.1.150 — Config snapshot captures `Layer 0 — pre-existing` + widens variable coverage
 

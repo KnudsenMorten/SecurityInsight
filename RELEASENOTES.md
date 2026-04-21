@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.163
+## v2.1.164
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
 - docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
 - docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
 - docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - refactor(SI LAUNCHERS): silence Test-LauncherModule success line -- engine owns the 'module present' log (84e8a20d)
 - fix(SI CUSTOMDATA sample): use canonical 'dce-securityinsight' naming (was 'dce-si-identity') (4f535db4)
 - docs(SI README): real-world .custom.ps1 samples for Identity + Build_Tier engines (7dabefd0)
-- fix(SI Build_Tier): restore visible SECTION A header so AD tiering isn't invisible (9f3c41aa)
 
 ---
 
@@ -44,6 +44,11 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.164 — Layer 3 `<Solution>.custom.ps1` now resolves correctly on community installs
+
+- 🔧 **Bug fix.** On community-vm installs where `$RepoRoot` IS the solution folder, the layered-config loader was checking only the monorepo-style path `<RepoRoot>\SOLUTIONS\<Solution>\CUSTOMDATA\<Solution>.custom.ps1` — a path that doesn't exist on community layouts. Layer 3 silently skipped on every run, so any solution-wide SPN / OpenAI / SMTP values the customer put in `CUSTOMDATA\SecurityInsight.custom.ps1` (the correct community path) never loaded, and the engine threw `$global:SpnTenantId is required` even though the file was sitting right there.
+- 🔧 **Fix**: `Initialize-LauncherConfig.ps1` now probes **both** paths in order: monorepo first (`<RepoRoot>\SOLUTIONS\<Solution>\CUSTOMDATA\...`), community second (`<RepoRoot>\CUSTOMDATA\...`). Whichever exists wins; when neither exists, the "absent" info log uses the layout-appropriate path so the reader knows where to drop the file.
 
 ### v2.1.163 — Collapse § 3.3 / 3.3.1 / 3.4 + all § 4.x and § 6.x subsections; add Step 1–5 markers
 

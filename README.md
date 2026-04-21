@@ -40,17 +40,21 @@
    - 3.3 [Update an existing install](#update-an-existing-install)
    - 3.4 [Try out a preview release](#try-out-a-preview-release)
    - 3.5 [Pre-requisite configuration](#pre-requisite-configuration)
-     - 3.5.1 [Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
-     - 3.5.2 [Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
-     - 3.5.3 [Azure OpenAI](#azure-openai-optional)
-   - 3.6 [Run the Risk Analysis](#run-the-risk-analysis)
-   - 3.7 [Understand the LauncherConfig files](#understand-the-launcherconfig-files)
+     - 3.5.1 [Config-file model — `.defaults.` vs `.custom.`](#config-file-model)
+     - 3.5.2 [Setup Configurator](#setup-configurator)
+     - 3.5.3 [Solution component overview](#solution-component-overview)
+     - 3.5.4 [Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
+     - 3.5.5 [Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
+     - 3.5.6 [Azure OpenAI](#azure-openai-optional)
+   - 3.7 [Run the Risk Analysis](#run-the-risk-analysis)
+   - 3.6 [Understand the LauncherConfig files](#understand-the-launcherconfig-files)
    - 3.8 [Endpoint asset tagging](#endpoint-asset-tagging)
    - 3.9 [Azure asset tagging](#azure-asset-tagging)
    - 3.10 [Defender Criticality Level (optional)](#defender-criticality-level-optional)
 4. [Severity & Criticality Definitions](#severity--criticality-definitions)
    - 4.1 [Severity definitions](#severity-definitions)
    - 4.2 [Criticality definitions](#criticality-definitions)
+     - 4.2.1 [Tier 0–3 at a glance](#tier-0-3-at-a-glance)
    - 4.3 [Asset classification: Identity](#asset-classification-identity)
    - 4.4 [Asset classification: Endpoint](#asset-classification-endpoint)
    - 4.5 [Asset classification: Azure](#asset-classification-azure)
@@ -100,7 +104,7 @@ A core focus is the **Identity collection** — users, service principals, and m
 - How to classify user, SPN, and managed identity criticality from permissions — not tags
 - How AI-driven classification keeps pace with Microsoft's ever-expanding role catalog
 
-You'll leave with a concrete, reproducible framework — free and community-maintained — and a way to finally answer *"what should we fix first?"* with confidence.
+What this gives you is a concrete, reproducible framework — free and community-maintained — and a repeatable way to answer *"what should we fix first?"* with confidence.
 
 > **Risk Score = Consequence (severity) × Probability (criticality + risk factors)**
 
@@ -467,7 +471,9 @@ $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight-preview'
 
 Before you can run any launcher, the solution needs to know **your** values — tenant / subscription IDs, SPN credentials, workspace names, mail recipients, OpenAI endpoint. You provide these through PowerShell config files next to each launcher.
 
-#### `.defaults.ps1` vs `.custom.ps1` — the only rule that matters
+<a id="config-file-model"></a>
+
+#### 🧱 3.5.1 Config-file model — `.defaults.ps1` vs `.custom.ps1`
 
 | Filename pattern | Who owns it | Gets overwritten on update? | When to edit |
 |---|---|---|---|
@@ -503,7 +509,7 @@ flowchart TD
 
 <a id="setup-configurator"></a>
 
-#### ⭐ Setup Configurator — GUI that writes your `.custom.ps1` files
+#### ⭐ 3.5.2 Setup Configurator — GUI that writes your `.custom.ps1` files
 
 The solution ships an **offline, single-file HTML tool** that generates the `SecurityInsight.custom.ps1` + per-engine `LauncherConfig.custom.ps1` files for you. Form fields + live preview + one-click copy-to-clipboard. Zero dependencies; all processing stays in your browser — no data leaves your machine.
 
@@ -518,7 +524,9 @@ Each tab corresponds to one launcher or the solution-wide `SecurityInsight.custo
 > [!TIP]
 > **Internal (AF) / community-azure flavours don't need a customer config file at all** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from customer files. This whole section (layered config + Setup Configurator) is for community-vm operators.
 
-#### Solution component overview
+<a id="solution-component-overview"></a>
+
+#### 🧩 3.5.3 Solution component overview
 
 Every SI component ships as its own launcher folder under `LAUNCHERS/`. Two groups: **Steps** (once per tenant, during onboarding) and **Engines** (on a schedule after onboarding).
 
@@ -571,7 +579,7 @@ Every SI component ships as its own launcher folder under `LAUNCHERS/`. Two grou
 ---
 
 <a id="351-connectivity-spn-or-managed-identity"></a><a id="connectivity-spn-or-managed-identity"></a>
-#### 🔐 3.5.1 Connectivity: SPN or Managed Identity
+#### 🔐 3.5.4 Connectivity: SPN or Managed Identity
 
 [⤴ Back to top](#top)
 
@@ -620,7 +628,7 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > **Required permissions** are listed in [§ 7.1](#permissions-catalog).
 
 <a id="352-identity-infrastructure-workspace--dce--dcr"></a><a id="identity-infrastructure-workspace--dce--dcr"></a>
-#### 🏗️ 3.5.2 Identity infrastructure: Workspace + DCE + DCR
+#### 🏗️ 3.5.5 Identity infrastructure: Workspace + DCE + DCR
 
 [⤴ Back to top](#top)
 
@@ -665,7 +673,7 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 > **Which option do I need?** Run `Step1_OnboardValidate-SecurityInsight-Permissions` (§ 3.5.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
 <a id="353-azure-openai-optional"></a><a id="azure-openai-optional"></a>
-#### 🤖 3.5.3 Azure OpenAI (optional)
+#### 🤖 3.5.6 Azure OpenAI (optional)
 
 [⤴ Back to top](#top)
 
@@ -687,62 +695,8 @@ $global:OpenAI_apiKey     = '<your-azure-openai-key>'
 > [!TIP]
 > AI summary is appended both to the **Excel report** (as a 'Summary' worksheet) and the **email body**. Token budget is configurable via `$global:OpenAI_MaxTokensPerRequest` (default 16384).
 
-<a id="36-run-the-risk-analysis"></a><a id="run-the-risk-analysis"></a>
-### ▶️ 3.6 Run the Risk Analysis
-
-[⤴ Back to top](#top)
-
-Two report templates ship out of the box:
-
-| Template | Audience | What it has |
-|---|---|---|
-| `RiskAnalysis_Summary_Bucket` | Executives, weekly cadence | Aggregated findings per tier, overall risk rollups |
-| `RiskAnalysis_Detailed_Bucket` | Vulnerability / remediation team | Per-asset rows with CVE IDs and remediation guidance |
-
-**Run as Summary**:
-
-```powershell
-.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 -Summary
-```
-
-**Run as Detailed**:
-
-```powershell
-.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 -Detailed
-```
-
-**Run a custom report template**:
-
-```powershell
-.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 `
-    -ReportTemplate 'RiskAnalysis_Detailed_Bucket_Test'
-```
-
-**Dry-run (no Excel / mail / LA writes)**:
-
-```powershell
-.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 -Summary -WhatIfMode
-```
-
-<details>
-<summary>🎛️ <b>Full CLI parameter list</b></summary>
-
-| Switch | Purpose |
-|---|---|
-| `-Summary` / `-Detailed` | Pick the report template (mutually exclusive). |
-| `-ReportTemplate '<name>'` | Force a specific template (overrides Summary/Detailed). |
-| `-BuildSummaryByAI` | Generate AI executive summary (requires OpenAI globals). |
-| `-AutoBucketCount` / `-AutoBucketCache` / `-AutoBucketMax <n>` | Adaptive bucketing controls (see [§ 7.3](#bucketing--beating-the-30k-row-ceiling)). |
-| `-ResetCache` | Wipe the AutoBucket cache before this run. |
-| `-DebugQueryHash` | Log the hash + cache key per KQL query (debugging). |
-| `-ShowConfig` | Dump the resolved config and exit. |
-| `-WhatIfMode` | Dry run — no Excel / mail / LA / upload writes. |
-| `-LauncherConfigPath '<path>'` | Override the customer config file location (default sibling). |
-
-</details>
-
 <a id="37-understand-the-launcherconfig-files"></a><a id="understand-the-launcherconfig-files"></a>
-### 📂 3.7 Understand the LauncherConfig files
+### 📂 3.6 Understand the LauncherConfig files
 
 [⤴ Back to top](#top)
 
@@ -1089,6 +1043,60 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 > No `$SubscriptionId` / `$WorkspaceName` / `$DcrResourceGroup` needed — this engine doesn't ingest to Log Analytics or touch Azure resources beyond reading Entra role definitions + Azure built-in roles. Graph reads use the SPN above; Azure role reads use `Get-AzRoleDefinition` which is read-only and works against any subscription the SPN has `Reader`.
 </details>
 
+<a id="36-run-the-risk-analysis"></a><a id="run-the-risk-analysis"></a>
+### ▶️ 3.7 Run the Risk Analysis
+
+[⤴ Back to top](#top)
+
+Two report templates ship out of the box:
+
+| Template | Audience | What it has |
+|---|---|---|
+| `RiskAnalysis_Summary_Bucket` | Executives, weekly cadence | Aggregated findings per tier, overall risk rollups |
+| `RiskAnalysis_Detailed_Bucket` | Vulnerability / remediation team | Per-asset rows with CVE IDs and remediation guidance |
+
+**Run as Summary**:
+
+```powershell
+.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 -Summary
+```
+
+**Run as Detailed**:
+
+```powershell
+.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 -Detailed
+```
+
+**Run a custom report template**:
+
+```powershell
+.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 `
+    -ReportTemplate 'RiskAnalysis_Detailed_Bucket_Test'
+```
+
+**Dry-run (no Excel / mail / LA writes)**:
+
+```powershell
+.\LAUNCHERS\SecurityInsight_RiskAnalysis\launcher.community-vm.template.ps1 -Summary -WhatIfMode
+```
+
+<details>
+<summary>🎛️ <b>Full CLI parameter list</b></summary>
+
+| Switch | Purpose |
+|---|---|
+| `-Summary` / `-Detailed` | Pick the report template (mutually exclusive). |
+| `-ReportTemplate '<name>'` | Force a specific template (overrides Summary/Detailed). |
+| `-BuildSummaryByAI` | Generate AI executive summary (requires OpenAI globals). |
+| `-AutoBucketCount` / `-AutoBucketCache` / `-AutoBucketMax <n>` | Adaptive bucketing controls (see [§ 7.3](#bucketing--beating-the-30k-row-ceiling)). |
+| `-ResetCache` | Wipe the AutoBucket cache before this run. |
+| `-DebugQueryHash` | Log the hash + cache key per KQL query (debugging). |
+| `-ShowConfig` | Dump the resolved config and exit. |
+| `-WhatIfMode` | Dry run — no Excel / mail / LA / upload writes. |
+| `-LauncherConfigPath '<path>'` | Override the customer config file location (default sibling). |
+
+</details>
+
 <a id="38-endpoint-asset-tagging"></a><a id="endpoint-asset-tagging"></a>
 ### 🖥️ 3.8 Endpoint asset tagging
 
@@ -1220,10 +1228,29 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **2** | **Medium** | **Significant workload impact, conditional path to escalation.** Compromise of a file server, developer workstation, or SharePoint environment enables mass data exfiltration, credential harvesting from application configs, and abuse of scoped service accounts. Escalation to tier 0 is possible but requires chaining multiple weaknesses such as finding reused credentials, misconfigured delegation, or an over-permissioned service principal. | Medium - tier 2 | 2 |
 | **3** | **Low** | **Low blast radius, limited lateral movement potential.** Compromise of a standard employee workstation, guest PC, or read-only service account yields limited immediate value. An attacker gains a foothold for phishing, internal reconnaissance, or credential capture via keylogging, but cannot directly access sensitive systems or escalate without exploiting additional misconfigurations elsewhere in the environment. | Low - tier 3 | 3 |
 
+<a id="tier-0-3-at-a-glance"></a>
+
+#### 4.2.1 Tier 0–3 at a glance
+
+```mermaid
+flowchart TD
+    T0["<b>Tier 0 — Critical</b><br/>Domain Controllers · krbtgt · Global Admin<br/><i>one-step full environment compromise</i>"]
+    T1["<b>Tier 1 — High</b><br/>Exchange · Auth Admin · Jump server · Privileged MI<br/><i>1–2 pivots to Tier 0</i>"]
+    T2["<b>Tier 2 — Medium</b><br/>File server · Dev workstation · SharePoint · Scoped SPN<br/><i>significant impact, conditional escalation</i>"]
+    T3["<b>Tier 3 — Low</b><br/>Standard workstation · Guest PC · Read-only SPN<br/><i>small blast radius, lateral-only foothold</i>"]
+    T0 --> T1 --> T2 --> T3
+    style T0 fill:#ffd6d6,stroke:#8b0000,stroke-width:3px
+    style T1 fill:#fff0f0,stroke:#b03030,stroke-width:2px
+    style T2 fill:#fff4e1,stroke:#b07a00
+    style T3 fill:#e8f4fd,stroke:#2a6592
+```
+
+Tier 0 sits at the top because one compromise there is a full-environment compromise — the blast radius shrinks rapidly as you go down. The tables in §§ 4.3 – 4.5 show how these tiers map concretely to **Identity**, **Endpoint**, and **Azure** assets.
+
 <a id="43-asset-classification-identity"></a><a id="asset-classification-identity"></a>
 ### 4.3 Asset classification: Identity
 
-[â¤´ Back to top](#top)
+[⤴ Back to top](#top)
 
 
 **Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
@@ -1238,7 +1265,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 <a id="44-asset-classification-endpoint"></a><a id="asset-classification-endpoint"></a>
 ### 4.4 Asset classification: Endpoint
 
-[â¤´ Back to top](#top)
+[⤴ Back to top](#top)
 
 
 **Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
@@ -1253,7 +1280,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 <a id="45-asset-classification-azure"></a><a id="asset-classification-azure"></a>
 ### 4.5 Asset classification: Azure
 
-[â¤´ Back to top](#top)
+[⤴ Back to top](#top)
 
 
 **Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
@@ -1277,7 +1304,7 @@ SecurityInsight is **data-driven**. Two engines — `SecurityInsight_RiskAnalysi
 - You can add a new report template, a new tagging rule, or a new KQL query **without touching PowerShell**.
 - Releases update the curated "Locked" content in-place, while your environment-specific content lives alongside it in a sibling "Custom" file that a release **never overwrites**.
 
-### 6.1 Two files per topic
+### 5.1 Two files per topic
 
 For every engine that reads YAML, there are exactly two files:
 
@@ -1286,7 +1313,7 @@ For every engine that reads YAML, there are exactly two files:
 | Risk Analysis queries | `DATA/SecurityInsight_RiskAnalysis_Queries_Locked.yaml` | `DATA/SecurityInsight_RiskAnalysis_Queries_Custom.yaml` |
 | Asset Tagging rules | `DATA/SecurityInsight_CriticalAssetTagging_Locked.yaml` | `DATA/SecurityInsight_CriticalAssetTagging_Custom.yaml` |
 
-### 6.2 Merge flow
+### 5.2 Merge flow
 
 ```mermaid
 flowchart LR
@@ -1305,7 +1332,7 @@ flowchart LR
 
 Precedence rule (same for every topic): **Custom entries with the same `ReportName` / `AssetTagName` as a Locked entry OVERRIDE the Locked entry. New entries in Custom are ADDED.**
 
-### 6.3 Three things you do in Custom
+### 5.3 Three things you do in Custom
 
 | What | Example | Why |
 |---|---|---|
@@ -1313,7 +1340,7 @@ Precedence rule (same for every topic): **Custom entries with the same `ReportNa
 | **Override** a Locked entry | Redefine `RiskAnalysis_Detailed_Bucket` with your own `ReportQuery` | Rare. Customize the shipped behaviour without editing a tracked file. |
 | **Disable** a Locked entry | Re-declare the name with `Mode: Disabled` in Custom | Rare. Skip a shipped template that doesn't apply to your environment. |
 
-### 6.4 Concrete example
+### 5.4 Concrete example
 
 <details>
 <summary>📋 <b>Asset tagging — adding a custom rule</b></summary>
@@ -1383,7 +1410,7 @@ ReportTemplates:
 Running `-Detailed` now sends the email to `vuln-team@` and `audit@` regardless of what `$global:MailTo` says.
 </details>
 
-### 6.5 What a release upgrade does to your YAML
+### 5.5 What a release upgrade does to your YAML
 
 ```mermaid
 flowchart TB
@@ -1405,7 +1432,7 @@ flowchart TB
 **Locked is replaced; Custom is sacred.** Your edits survive every upgrade. The only time you touch Custom during an upgrade is if the RELEASE NOTES point out that a template you overrode has an updated schema — then you re-apply your override against the new Locked definition.
 
 <a id="66-critical-asset-tagging-mode-and-scope"></a><a id="critical-asset-tagging-mode-and-scope"></a>
-### 6.6 CriticalAssetTagging — `Mode:` (rule) + `$global:Scope` (launcher)
+### 5.6 CriticalAssetTagging — `Mode:` (rule) + `$global:Scope` (launcher)
 
 [⤴ Back to top](#top)
 
@@ -1469,7 +1496,7 @@ $global:Scope = @('PROD','TEST')    # array, not a single string
 > **Overriding a shipped Prod rule in Test first.** To experiment with modifications to an existing Locked rule (e.g. tightening the filter for `DomainControllerDNS--tier0--SI`), copy the rule into Custom.yaml **with the same `AssetTagName` stem** and set `Mode: Test`. Run `$global:Scope = @('TEST')`. When the tweaked KQL looks right, flip to `Mode: Prod` — Custom wins on same-stem, so your override replaces the Locked version on subsequent `$global:Scope = @('PROD')` runs. Step 0 upgrades still never touch Custom.
 
 <a id="67-asset-tag-name-convention-and-stem-based-merge"></a><a id="asset-tag-name-convention-and-stem-based-merge"></a>
-### 6.7 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
+### 5.7 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
 
 [⤴ Back to top](#top)
 

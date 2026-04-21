@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.161
+## v2.1.162
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
 - docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
 - docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
 - docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): real-world .custom.ps1 samples for Identity + Build_Tier engines (7dabefd0)
 - fix(SI Build_Tier): restore visible SECTION A header so AD tiering isn't invisible (9f3c41aa)
 - refactor(SI Build_Tier): drop on-prem AD enumeration entirely (ff5a7cf7)
-- fix(SI Build_Tier): drop dead 'AD_GroupMembership' key from tiering JSON (63cf116c)
 
 ---
 
@@ -44,6 +44,20 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.162 — § 3 + § 4 readability pass: section numbers, reading order, Tier 0–3 drawing, mojibake fix
+
+- 🆕 **§ 4.2.1 Tier 0–3 at a glance** — new mermaid drawing (added next to the criticality definitions; existing § 4.2 table untouched). Tier 0 at the top (smallest + darkest) down to Tier 3 at the bottom, so the blast-radius pyramid is visible in one look. Additive only.
+- 🧰 **§ 3.5 subsections now numbered.** Three previously-unnumbered blocks inside § 3.5 got proper subsection numbers so the TOC shows them:
+  - § 3.5.1 Config-file model — `.defaults.` vs `.custom.`
+  - § 3.5.2 Setup Configurator
+  - § 3.5.3 Solution component overview
+  - § 3.5.4 Connectivity: SPN or Managed Identity *(was § 3.5.1)*
+  - § 3.5.5 Identity infrastructure: Workspace + DCE + DCR *(was § 3.5.2)*
+  - § 3.5.6 Azure OpenAI *(was § 3.5.3)*
+- 🔀 **§ 3.6 and § 3.7 swapped.** "Understand the LauncherConfig files" (reference) now comes *before* "Run the Risk Analysis" (action). Readers see the config model in context before they're told to run the engine. Numbers and TOC updated to match.
+- 🧰 **§ 5 YAML Concept subsections renumbered `6.x → 5.x`.** Left over from the earlier top-level § 6 → § 5 move — the nested subsection numbers weren't updated and collided with the `6.1–6.8` under § 6 Appendix.
+- 🔧 **Mojibake fix.** Three `[⤴ Back to top]` links had been saved as double-encoded UTF-8 (bytes `c3 a2 c2 a4 c2 b4` instead of `e2 a4 b4`), rendering as `â¤´` on GitHub instead of the upward-curving arrow. Fixed in place.
 
 ### v2.1.161 — Drop the old one-line subtitle above the badges
 

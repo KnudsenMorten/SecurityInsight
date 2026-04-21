@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.166
+## v2.1.167
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
 - docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
 - fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
 - fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI RELEASENOTES): split MEM26 resync entry to v2.1.140 (v2.1.139 already used) (804836ed)
 - docs(SI README): resync sections 4.1-4.5 to verbatim text from MEM26 PDF (134fb73c)
 - docs(SI README): Power BI 'Beta' + fill §5 What's-New gap from v2.1.113..v2.1.129 (544af373)
-- refactor(SI LAUNCHERS): silence Test-LauncherModule success line -- engine owns the 'module present' log (84e8a20d)
 
 ---
 
@@ -44,6 +44,13 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.167 — Publish workflow: CUSTOMDATA/CUSTOMSCRIPTS safety rail no longer over-strips community-vm templates
+
+- 🔧 **Critical publish bug.** 8 of 11 community-vm templates were being silently stripped from every community release starting with v2.1.155. Root cause: the publish workflow at `.github/workflows/publish.yml` lines 204–210 had a substring regex (`CUSTOMSCRIPTS[\\/]|CUSTOMDATA[\\/]`) meant to catch internal-only tenant paths, but the v2.1.155 SpnTenantId-missing error message legitimately includes the literal `CUSTOMDATA\SecurityInsight.custom.ps1` as a user-facing path hint. The rail matched that hint and nuked the template.
+- 🔧 **Affected templates** (missing from v2.1.155 – v2.1.166 community releases): `Build_Tier_Definitions_JSON_File`, `CriticalAssetTagging`, `CriticalAssetTaggingMaintenance`, `CriticalAssetTaggingMaintenance_FixConflictingTags`, `IdentityAssetsCollectDefineTierIngestLog`, `SecurityInsight_RiskAnalysis`, `Step2_OnboardValidate-SecurityInsight-LogAnalytics`, `Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure`. Step 0 couldn't refresh them from the release zip, so community-vm customers who'd installed a version *before* v2.1.155 kept running pre-v2.1.145 templates that still expected the legacy `LauncherConfig.ps1` filename and threw "LauncherConfig.ps1 not found".
+- 🔧 **Fix.** Tightened the rail to only strip when `CUSTOMSCRIPTS` / `CUSTOMDATA` appears in a *programmatic path context* — i.e. preceded by a PowerShell variable (`$var\CUSTOMSCRIPTS\...`), a `Join-Path` call, or an explicit internal-only root segment (`AutomationFramework\`, `PlatformRoot\`, `AF_ROOT\`). Bare occurrences inside string literals (error messages, help text) no longer trigger the rail.
+- ℹ️ **What customers need to do after this release ships.** Re-run Step 0 on the test VM (or wait for the daily scheduled task) to pick up v2.1.167 — the missing `launcher.community-vm.template.ps1` files for the 8 affected engines will come back with the Initialize-LauncherConfig pattern already in place.
 
 ### v2.1.166 — Promote Step 2 / 3 / 4 out of § 3.5.x into top-level subsections
 

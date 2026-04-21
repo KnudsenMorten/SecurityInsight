@@ -80,8 +80,8 @@ function Initialize-LauncherConfig {
     # Denylist of PS built-in / session globals we DON'T want in the snapshot.
     # Everything else is captured so the snapshot answers "where is $global:Foo
     # actually set?" -- including values that leaked in from $PROFILE, a prior
-    # launcher invocation in the same session, launcher.override.ps1, or a
-    # parent script.
+    # launcher invocation in the same session, or a parent script that
+    # dot-sourced the launcher.
     $script:_CfgBuiltinNames = [System.Collections.Generic.HashSet[string]]::new(
         [string[]]@(
             'Host','PSCulture','PSUICulture','PSCommandPath','PSScriptRoot',
@@ -191,6 +191,18 @@ function Initialize-LauncherConfig {
         $script:_CfgSnapBefore = $after
     }
 
+    # Truncate a string to $Max chars, collapsing newlines so the log stays
+    # one-line-per-variable. Multi-line values (KQL, hashtable dumps) were the
+    # root cause of "impossible to read this" logs before v2.1.154.
+    function _CfgTruncate {
+        param([string]$S, [int]$Max = 120)
+        if ([string]::IsNullOrEmpty($S)) { return $S }
+        $orig = $S.Length
+        $flat = $S -replace '\r?\n', ' ' -replace '\s+', ' '
+        if ($flat.Length -le $Max) { return $flat }
+        return ($flat.Substring(0, $Max) + ("... [truncated, {0} total chars]" -f $orig))
+    }
+
     function _CfgFormatValue ([string]$Name, $Value) {
         # Redact anything whose NAME matches a secret-bearing pattern.
         if ($Name -match '(?i)Secret|Password|Pwd|ApiKey|Api_Key|AccessKey|AccessSecret|Token(?!Lifetime)|ClientSecret|Cert(?:ificate)?Thumbprint') {
@@ -205,15 +217,64 @@ function Initialize-LauncherConfig {
         }
         if ($null -eq $Value) { return '$null' }
         if ($Value -is [bool])  { return ('${0}' -f $Value.ToString().ToLower()) }
+
+        # Arrays / lists: show up to 3 items (each item truncated to 80 chars);
+        # summarize the remainder as "... [N elements total]". Prevents giant
+        # variables like $Exposure_Reports (9 elements × ~25KB of KQL each)
+        # from blowing the log out to ~400KB.
         if ($Value -is [array] -or $Value -is [System.Collections.IList]) {
+            $items = @($Value)
+            $count = $items.Count
+            if ($count -eq 0) { return '@()' }
+            $maxItems = 3
             $parts = @()
-            foreach ($item in $Value) { $parts += "'$item'" }
-            return "@(" + ($parts -join ", ") + ")"
+            $shown = [Math]::Min($count, $maxItems)
+            for ($i = 0; $i -lt $shown; $i++) {
+                $item = $items[$i]
+                if ($null -eq $item) { $parts += '$null'; continue }
+                if ($item -is [hashtable] -or $item -is [System.Collections.IDictionary]) {
+                    $keys = @($item.Keys)
+                    $keyPreview = ($keys | Select-Object -First 6) -join ', '
+                    if ($keys.Count -gt 6) { $keyPreview += ', ...' }
+                    $parts += ("@{{{0} keys: {1}}}" -f $keys.Count, $keyPreview)
+                } elseif ($item -is [string]) {
+                    $parts += "'" + (_CfgTruncate -S $item -Max 80) + "'"
+                } else {
+                    $parts += "'" + (_CfgTruncate -S ([string]$item) -Max 80) + "'"
+                }
+            }
+            if ($count -gt $maxItems) {
+                return ("@( {0}, ... [{1} elements total] )" -f ($parts -join ', '), $count)
+            }
+            return ("@( {0} )" -f ($parts -join ', '))
         }
+
+        # Hashtables: up to 5 keys shown with 60-char-truncated values; beyond
+        # that, just list the key names so the reader knows what's in there.
         if ($Value -is [hashtable] -or $Value -is [System.Collections.IDictionary]) {
-            return "@{ " + (($Value.Keys | ForEach-Object { "$_ = ..." }) -join "; ") + " }"
+            $keys = @($Value.Keys)
+            if ($keys.Count -le 5) {
+                $parts = @()
+                foreach ($k in $keys) {
+                    $v = $Value[$k]
+                    if ($null -eq $v) { $parts += ("{0} = `$null" -f $k); continue }
+                    if ($v -is [string]) {
+                        $parts += ("{0} = '{1}'" -f $k, (_CfgTruncate -S $v -Max 60))
+                    } else {
+                        $parts += ("{0} = {1}" -f $k, (_CfgTruncate -S ([string]$v) -Max 60))
+                    }
+                }
+                return "@{ " + ($parts -join "; ") + " }"
+            }
+            $keyPreview = ($keys | Select-Object -First 8) -join ', '
+            if ($keys.Count -gt 8) { $keyPreview += ', ...' }
+            return ("@{{ {0} keys: {1} }}" -f $keys.Count, $keyPreview)
         }
-        return [string]$Value
+
+        # Scalars: flatten + truncate long strings so KQL / JSON blobs don't
+        # wrap across 100 lines in the log.
+        if ($Value -is [string]) { return _CfgTruncate -S $Value -Max 200 }
+        return _CfgTruncate -S ([string]$Value) -Max 200
     }
 
     function _CfgWriteSnapshotAndPrune {
@@ -263,12 +324,8 @@ function Initialize-LauncherConfig {
         [void]$out.AppendLine(('Effective configuration ({0} variables, grouped by source layer):' -f $script:_CfgProvenance.Count))
         [void]$out.AppendLine(('-' * 100))
 
-        # SECTION 1 -- per-layer grouping: every variable the layer TOUCHED
-        # (assigned explicitly OR changed value), grouped under the last-
-        # touching layer. Shows what each layer contributed to the final
-        # effective config.
+        # SECTION 1 -- per-layer grouping.
         $layerOrder = @(
-            'Layer 0 - pre-existing (session / profile / prior run)',
             'Layer 1 - platform-defaults (internal)',
             'Layer 2 - shared-defaults',
             'Layer 3 - SecurityInsight.custom',
@@ -291,36 +348,8 @@ function Initialize-LauncherConfig {
             }
         }
 
-        # SECTION 2 -- value-change history: every variable touched by MORE
-        # than one layer, showing the full chain so the reader can see
-        # exactly which file changed the value (and when a later-layer
-        # override was a no-op because the value matched an earlier layer).
-        $changed = @($script:_CfgHistory.Keys | Where-Object { $script:_CfgHistory[$_].Count -gt 1 } | Sort-Object)
-        if ($changed.Count -gt 0) {
-            [void]$out.AppendLine('')
-            [void]$out.AppendLine(('=' * 100))
-            [void]$out.AppendLine(('Value change history ({0} variable(s) touched by more than one layer):' -f $changed.Count))
-            [void]$out.AppendLine(('-' * 100))
-            foreach ($n in $changed) {
-                $hist = $script:_CfgHistory[$n]
-                [void]$out.AppendLine('')
-                [void]$out.AppendLine(('  $global:{0}' -f $n))
-                for ($i = 0; $i -lt $hist.Count; $i++) {
-                    $step = $hist[$i]
-                    $prev = if ($i -gt 0) { $hist[$i-1].Value } else { $null }
-                    $changedMark = if ($i -gt 0 -and -not (_CfgValuesDiffer $prev $step.Value)) { '  [no-op: value unchanged by this layer]' } else { '' }
-                    $formatted = _CfgFormatValue $n $step.Value
-                    [void]$out.AppendLine(('    [{0}]  = {1}{2}' -f $step.Layer, $formatted, $changedMark))
-                    if (-not [string]::IsNullOrWhiteSpace($step.Path)) {
-                        [void]$out.AppendLine(('        file: {0}' -f $step.Path))
-                    }
-                }
-            }
-        }
-
-        # SECTION 3 -- aggregated effective configuration (alphabetical).
-        # Flat "what the engine actually sees" view: every variable, sorted
-        # by name, with final value + winning layer + source file path.
+        # SECTION 2 -- aggregated effective configuration (alphabetical).
+        # One line per variable: name + winning layer + value.
         [void]$out.AppendLine('')
         [void]$out.AppendLine(('=' * 100))
         [void]$out.AppendLine(('Aggregated effective configuration ({0} variable(s), alphabetical):' -f $script:_CfgProvenance.Count))
@@ -328,16 +357,9 @@ function Initialize-LauncherConfig {
         foreach ($n in @($script:_CfgProvenance.Keys | Sort-Object)) {
             $entry = $script:_CfgProvenance[$n]
             $formatted = _CfgFormatValue $n $entry.Value
-            [void]$out.AppendLine(('  $global:{0,-45} = {1}' -f $n, $formatted))
-            [void]$out.AppendLine(('      from: {0}' -f $entry.Source))
-            if (-not [string]::IsNullOrWhiteSpace($entry.Path)) {
-                [void]$out.AppendLine(('      file: {0}' -f $entry.Path))
-            }
+            $layerShort = ($entry.Source -replace '^Layer (\d+) - ', 'L$1 ')
+            [void]$out.AppendLine(('  $global:{0,-45} [{1,-30}]  = {2}' -f $n, $layerShort, $formatted))
         }
-
-        [void]$out.AppendLine('')
-        [void]$out.AppendLine(('=' * 100))
-        [void]$out.AppendLine('(Values for variables whose names match secret-bearing patterns are redacted as [REDACTED (len=N)] so presence can still be verified.)')
 
         try {
             Set-Content -LiteralPath $logFile -Value $out.ToString() -Encoding UTF8 -NoNewline
@@ -375,36 +397,11 @@ function Initialize-LauncherConfig {
     # "Start from top, then closer wins" -- broadest tenant baseline first,
     # closest per-engine customer override last.
 
-    # ---- Layer 0: pre-existing globals (inherited from session, $PROFILE,
-    #              prior launcher run, launcher.override.ps1, parent script) -
-    # Captured BEFORE any layer loads so the snapshot answers "where is $X set?"
-    # even when the answer is "before the initializer ever ran".
-    $script:_CfgSnapBefore = @{}
-    $__preExisting = _CfgGatherGlobals
-    _CfgStep "Layer 0/5: pre-existing globals (inherited from session)"
-    $__preSrc = 'Layer 0 - pre-existing (session / profile / prior run)'
-    $__prePath = '(set before initializer ran -- check $PROFILE, prior launcher run, launcher.override.ps1, parent script)'
-    if ($__preExisting.Count -gt 0) {
-        foreach ($n in $__preExisting.Keys) {
-            $script:_CfgProvenance[$n] = [ordered]@{ Value = $__preExisting[$n]; Source = $__preSrc; Path = $__prePath }
-            if (-not $script:_CfgHistory.Contains($n)) {
-                $script:_CfgHistory[$n] = [System.Collections.Generic.List[object]]::new()
-            }
-            [void]$script:_CfgHistory[$n].Add([pscustomobject]@{
-                Layer = $__preSrc
-                Value = $__preExisting[$n]
-                Path  = $__prePath
-            })
-        }
-        $trailLine = ("{0,-40}  {1,-7}  {2}" -f 'Layer 0 - pre-existing', 'loaded', ("{0} globals inherited from session" -f $__preExisting.Count))
-        $script:_CfgLayerTrail.Add($trailLine) | Out-Null
-        _CfgInfo ("{0} globals were already set before Layer 1 (captured in snapshot under 'Layer 0 - pre-existing')" -f $__preExisting.Count)
-    } else {
-        $trailLine = ("{0,-40}  {1,-7}  {2}" -f 'Layer 0 - pre-existing', 'empty', '(none)')
-        $script:_CfgLayerTrail.Add($trailLine) | Out-Null
-        _CfgInfo "no pre-existing globals at initializer entry -- session is clean"
-    }
-    $script:_CfgSnapBefore = $__preExisting
+    # Capture the pre-existing global state as the diff baseline for Layer 1
+    # onward. We do NOT record pre-existing values in the snapshot -- the user
+    # only wants globals that came from one of the 5-6 layered config files,
+    # not noise from $PROFILE / prior runs / parent scripts.
+    $script:_CfgSnapBefore = _CfgGatherGlobals
 
     # ---- Layer 1: platform-defaults.ps1 (tenant, internal mode only) ---------
     $platformPath = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1'

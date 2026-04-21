@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.153
+## v2.1.154
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI _lib Initialize-LauncherConfig): snapshot shows only values from the 5-6 layered files; simpler 2-section layout (5ab3ac42)
 - fix(SI _lib Initialize-LauncherConfig): write config snapshot to solution's DATA\LOGS, not repo-root (b7a3a08c)
 - feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
 - feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): backfill curated RELEASENOTES for v2.1.120 -> v2.1.127 (d4b27a9c)
 - docs(SI README): section 6.6 -- CriticalAssetTagging Mode/Scope workflow (124fc81e)
 - docs(SI README): require admin PowerShell for Step 0 bootstrap (a92b428e)
-- fix(SI _shared): default -Scope AllUsers + fail fast if non-elevated (0b263886)
 
 ---
 
@@ -48,6 +48,21 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.154 — Config snapshot: readable, only values from the 5-6 layered config files
+
+- 🔧 **Snapshot no longer dumps "Layer 0 — pre-existing" globals.** The previous release captured every `$global:*` already in session before the initializer ran (leaks from `$PROFILE`, a prior launcher run in the same PS host, parent scripts). In practice this meant ~150 unrelated variables — large arrays like `$Exposure_Reports` (9 × ~25 KB of inline KQL) and `$RiskDefinitions` — made the log unreadable. Only variables set by the 5-6 layered config files are captured now:
+  1. `platform-defaults.ps1` (tenant, internal only)
+  2. `<Solution>.shared-defaults.ps1` (solution baseline)
+  3. `<Solution>.custom.ps1` (solution-wide customer)
+  4. `LauncherConfig.defaults.ps1` (per-engine baseline)
+  5. `LauncherConfig.custom.ps1` (per-engine customer, closest wins)
+  6. derived (initializer fallback step)
+- 🔧 **Large values are now truncated.** Strings > 200 chars, arrays > 3 elements, and hashtables > 5 keys are summarized with `[truncated, N total chars]` / `[N elements total]` / `@{ N keys: k1, k2, ... }` markers so one run's log is a few KB instead of hundreds of KB.
+- 🔧 **Simpler layout.** Two sections only:
+  1. **Per-layer grouping** — platform / solution / engine layers in precedence order, each with source file path + its contributed variables.
+  2. **Aggregated alphabetical** — one line per variable: `$global:Foo  [L2 shared-defaults]  = value` (name + winning layer + value). The "winner" view customers want for "where does `$global:Foo` actually come from?".
+- 🧰 **Dropped the "Value change history" middle section** and the trailing redaction disclaimer. Less noise; the two remaining sections carry the same information.
 
 ### v2.1.153 — Config snapshot writes to the **solution's** `DATA\LOGS\` on internal-mode monorepo installs
 

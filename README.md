@@ -20,51 +20,51 @@
 <a id="toc"></a>
 ## 📑 Table of Contents
 
-1. [Introduction](#1-introduction)
-2. [Understanding the Framework](#2-understanding-the-framework)
-   - 2.1 [Why a graph, not a list](#21-why-a-graph-not-a-list)
-   - 2.2 [Risk Score model](#22-risk-score-model)
-   - 2.3 [Risk Factors](#23-risk-factors)
-   - 2.4 [Risk Index (customizable scoring)](#24-risk-index-customizable-scoring)
-   - 2.5 [Outputs at a glance](#25-outputs-at-a-glance)
-3. [How to Implement (Quick Start)](#3-how-to-implement-quick-start)
-   - 3.1 [High-level overview](#31-high-level-overview)
-   - 3.2 [Install (fresh machine)](#32-install-fresh-machine)
-   - 3.3 [Update an existing install](#33-update-an-existing-install)
-   - 3.4 [Try out a preview release](#34-try-out-a-preview-release)
-   - 3.5 [Pre-requisite configuration](#35-pre-requisite-configuration)
-     - 3.5.1 [Connectivity: SPN or Managed Identity](#351-connectivity-spn-or-managed-identity)
-     - 3.5.2 [Identity infrastructure: Workspace + DCE + DCR](#352-identity-infrastructure-workspace--dce--dcr)
-     - 3.5.3 [Azure OpenAI](#353-azure-openai-optional)
-   - 3.6 [Run the Risk Analysis](#36-run-the-risk-analysis)
-   - 3.7 [Understand the LauncherConfig files](#37-understand-the-launcherconfig-files)
-   - 3.8 [Endpoint asset tagging](#38-endpoint-asset-tagging)
-   - 3.9 [Azure asset tagging](#39-azure-asset-tagging)
-   - 3.10 [Defender Criticality Level (optional)](#310-defender-criticality-level-optional)
-4. [Severity & Criticality Definitions](#4-severity--criticality-definitions)
-   - 4.1 [Severity definitions](#41-severity-definitions)
-   - 4.2 [Criticality definitions](#42-criticality-definitions)
-   - 4.3 [Asset classification: Identity](#43-asset-classification-identity)
-   - 4.4 [Asset classification: Endpoint](#44-asset-classification-endpoint)
-   - 4.5 [Asset classification: Azure](#45-asset-classification-azure)
-5. [What's New (v2.1.x highlights)](#5-whats-new-v21x-highlights)
-6. [The YAML Concept (Locked + Custom)](#6-the-yaml-concept-locked--custom)
-7. [Appendix](#7-appendix)
-   - 7.1 [Permissions catalog](#71-permissions-catalog)
-   - 7.2 [Files deep-dive](#72-files-deep-dive)
-   - 7.3 [Bucketing — beating the 30k row ceiling](#73-bucketing--beating-the-30k-row-ceiling)
-   - 7.4 [Output destinations](#74-output-destinations)
-   - 7.5 [Per-template mail recipient override (YAML)](#75-per-template-mail-recipient-override-yaml)
-   - 7.6 [Cross-subscription workspace support](#76-cross-subscription-workspace-support)
-   - 7.7 [Layered config flow](#77-layered-config-flow)
-   - 7.8 [End-to-end architecture](#78-end-to-end-architecture)
-8. [Video walkthroughs](#video-walkthroughs)
-9. [Support](#9-support)
+1. [Introduction](#introduction)
+2. [Understanding the Framework](#understanding-the-framework)
+   - 2.1 [Why a graph, not a list](#why-a-graph-not-a-list)
+   - 2.2 [Risk Score model](#risk-score-model)
+   - 2.3 [Risk Factors](#risk-factors)
+   - 2.4 [Risk Index (customizable scoring)](#risk-index-customizable-scoring)
+   - 2.5 [Outputs at a glance](#outputs-at-a-glance)
+3. [How to Implement (Quick Start)](#how-to-implement-quick-start)
+   - 3.1 [High-level overview](#high-level-overview)
+   - 3.2 [Install (fresh machine)](#install-fresh-machine)
+   - 3.3 [Update an existing install](#update-an-existing-install)
+   - 3.4 [Try out a preview release](#try-out-a-preview-release)
+   - 3.5 [Pre-requisite configuration](#pre-requisite-configuration)
+     - 3.5.1 [Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
+     - 3.5.2 [Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
+     - 3.5.3 [Azure OpenAI](#azure-openai-optional)
+   - 3.6 [Run the Risk Analysis](#run-the-risk-analysis)
+   - 3.7 [Understand the LauncherConfig files](#understand-the-launcherconfig-files)
+   - 3.8 [Endpoint asset tagging](#endpoint-asset-tagging)
+   - 3.9 [Azure asset tagging](#azure-asset-tagging)
+   - 3.10 [Defender Criticality Level (optional)](#defender-criticality-level-optional)
+4. [Severity & Criticality Definitions](#severity--criticality-definitions)
+   - 4.1 [Severity definitions](#severity-definitions)
+   - 4.2 [Criticality definitions](#criticality-definitions)
+   - 4.3 [Asset classification: Identity](#asset-classification-identity)
+   - 4.4 [Asset classification: Endpoint](#asset-classification-endpoint)
+   - 4.5 [Asset classification: Azure](#asset-classification-azure)
+5. [The YAML Concept (Locked + Custom)](#the-yaml-concept-locked--custom)
+6. [Appendix](#appendix)
+   - 6.1 [Permissions catalog](#permissions-catalog)
+   - 6.2 [Files deep-dive](#files-deep-dive)
+   - 6.3 [Bucketing — beating the 30k row ceiling](#bucketing--beating-the-30k-row-ceiling)
+   - 6.4 [Output destinations](#output-destinations)
+   - 6.5 [Per-template mail recipient override (YAML)](#per-template-mail-recipient-override-yaml)
+   - 6.6 [Cross-subscription workspace support](#cross-subscription-workspace-support)
+   - 6.7 [Layered config flow](#layered-config-flow)
+   - 6.8 [End-to-end architecture](#end-to-end-architecture)
+7. [Video walkthroughs](#video-walkthroughs)
+8. [Support](#support)
+9. [What's New](#whats-new)
 
 ---
 
-<a id="1-introduction"></a>
-## 1. Introduction
+<a id="1-introduction"></a><a id="introduction"></a>
+## 📘 1. Introduction
 
 [⤴ Back to top](#top)
 
@@ -89,7 +89,7 @@ The same ranked dataset is fan-out to multiple sinks so every stakeholder gets i
 | **Log Analytics custom tables** (`SI_RiskAnalysis_Summary_CL`, `SI_RiskAnalysis_Detailed_CL`, `SI_IdentityAssets_CL`) | Durable time-series store for Kusto queries, Azure Monitor alerts, cross-run trending, compliance diffs. Every row carries a deterministic `TraceID` + `CollectionTime` so findings are stable across runs. | **Available** |
 | **JSON upload to UNC share** | Automatic publish of each run's Summary JSON to a `\\server\share\...` path. Drop-in feed for on-prem BI / file-based integrations. | **Available** |
 | **JSON upload to Azure Storage blob** | Automatic publish to `https://<acct>.blob.core.windows.net/<container>/`. Container auto-created + RBAC granted; ideal for cross-tenant reporting or Logic Apps / Power Automate pickup. | **Available** |
-| **Power BI management dashboard** | `.pbix` pushed into the customer's Power BI tenant via REST API. Trend line, stacked domain chart, top-N, stale findings, velocity. Per-run dataset refresh via `$global:SendToPowerBI`. See [§ 3.5](#35-pre-requisite-configuration) Step 4 + [`DOCS/PowerBI-Prerequisites.md`](DOCS/PowerBI-Prerequisites.md). | **Beta** |
+| **Power BI management dashboard** | `.pbix` pushed into the customer's Power BI tenant via REST API. Trend line, stacked domain chart, top-N, stale findings, velocity. Per-run dataset refresh via `$global:SendToPowerBI`. See [§ 3.5](#pre-requisite-configuration) Step 4 + [`DOCS/PowerBI-Prerequisites.md`](DOCS/PowerBI-Prerequisites.md). | **Beta** |
 | **Azure Workbooks** | Native Azure Monitor workbook over `SI_RiskAnalysis_*_CL` + `SI_IdentityAssets_CL` — 8 pills (time range, latest-run toggle, domain, severity, tier, subcategory, search, Top-N) + KPI tiles + trend / domain / tier charts + velocity + Top-N + stale + identity inventory. Import from `TOOLS/AzureWorkbook/SecurityInsight-RiskAnalysis.workbook.json` via Portal → Azure Monitor → Workbooks → Advanced Editor; full guide in [`DOCS/AzureWorkbook-Import.md`](DOCS/AzureWorkbook-Import.md). | **Available** |
 
 ### Use-cases
@@ -118,12 +118,12 @@ Real-world patterns customers run this against. Every one of them is cheap to li
 
 ---
 
-<a id="2-understanding-the-framework"></a>
-## 2. Understanding the Framework
+<a id="2-understanding-the-framework"></a><a id="understanding-the-framework"></a>
+## 🧠 2. Understanding the Framework
 
 [⤴ Back to top](#top)
 
-<a id="21-why-a-graph-not-a-list"></a>
+<a id="21-why-a-graph-not-a-list"></a><a id="why-a-graph-not-a-list"></a>
 ### 2.1 Why a graph, not a list
 
 [⤴ Back to top](#top)
@@ -148,7 +148,7 @@ The path goes through 4 systems. Three of them look *low-risk* in isolation. The
 > [!NOTE]
 > The technical underpinning is `ExposureGraphNodes` + `ExposureGraphEdges` (Defender) and Azure Resource Graph KQL — same data your SOC already has, framed as a graph instead of a flat table.
 
-<a id="22-risk-score-model"></a>
+<a id="22-risk-score-model"></a><a id="risk-score-model"></a>
 ### 2.2 Risk Score model
 
 [⤴ Back to top](#top)
@@ -159,21 +159,21 @@ Two dimensions, one formula:
 
 ```mermaid
 flowchart LR
-    SEV[📛 Severity<br/>from Defender] --> CONS[Consequence Score<br/>1–4]
-    CRIT[🏷️ Criticality tier<br/>from Tagging] --> PROB[Probability Score<br/>1–4]
+    SEV[📛 Severity<br/>from Defender] --> CONS[Consequence Score<br/>typically 1–5<br/>customizable]
+    CRIT[🏷️ Criticality tier<br/>from Tagging] --> PROB[Probability Score<br/>typically 1–5<br/>customizable]
     RF[⚡ Risk factors<br/>internet-exposed,<br/>public exploit,<br/>active-exploitation,<br/>lateral-move path, ...] -->|+1 each| PROB
     CONS --> MULT[× ]
     PROB --> MULT
-    MULT --> SCORE[🎯 Risk Score<br/>0–32]
+    MULT --> SCORE[🎯 Risk Score<br/>Consequence × Probability<br/>unbounded]
     style SCORE fill:#e8ffe8,stroke:#1a7a1a,stroke-width:2px
 ```
 
 | Dimension | Where it comes from |
 |---|---|
 | **Consequence Score** | Defender's `Severity` rating of the recommendation (Very High → Low). Reflects *how bad it is if this gets exploited.* |
-| **Probability Score** | The asset's **criticality tier** (Tier 0–3) modulated by **risk factors** (see [§ 2.3](#23-risk-factors)). Reflects *how likely it is to actually be exploited on THIS asset, in THIS environment.* |
+| **Probability Score** | The asset's **criticality tier** (Tier 0–3) modulated by **risk factors** (see [§ 2.3](#risk-factors)). Reflects *how likely it is to actually be exploited on THIS asset, in THIS environment.* |
 
-Both scores are integers from the **Risk Index CSV** ([§ 2.4](#24-risk-index-customizable-scoring)) — a fully customizable mapping that organizations tune to their own risk appetite.
+Both scores are positive integers from the **Risk Index CSV** ([§ 2.4](#risk-index-customizable-scoring)) — a fully customizable mapping that organizations tune to their own risk appetite. The shipped CSV uses 1–5 for each dimension (so scores run 1–25), but there's **no hardcoded ceiling** — customers who want finer-grained ranking can bump the scale to 1–10 or beyond and the product `Consequence × Probability` follows directly.
 
 **Worked example**:
 
@@ -188,7 +188,7 @@ Risk factor +1   : because the asset has the "InternetExposed" tag → Probabili
 Risk Score = 4 × 4 = 16  →  ranks above a Tier-3 internal-only finding
 ```
 
-<a id="23-risk-factors"></a>
+<a id="23-risk-factors"></a><a id="risk-factors"></a>
 ### 2.3 Risk Factors
 
 [⤴ Back to top](#top)
@@ -221,7 +221,7 @@ Each factor contributes +1 to the Probability score, capped per the Risk Index.
 PRs welcome to extend the engine with these — the scoring math stays the same, only the bump count changes.
 </details>
 
-<a id="24-risk-index-customizable-scoring"></a>
+<a id="24-risk-index-customizable-scoring"></a><a id="risk-index-customizable-scoring"></a>
 ### 2.4 Risk Index (customizable scoring)
 
 [⤴ Back to top](#top)
@@ -238,7 +238,7 @@ The mapping `Severity → Consequence` and `Criticality → Probability` lives i
 
 Want a different scoring matrix for a regulated business unit? Edit the CSV. Want to penalize Tier-0 findings more aggressively? Bump the Probability column for Tier-0 rows. Want certain `ConfigurationId`s to score harder regardless of severity? Add a row with that exact ConfigurationId — it overrides the generic mapping.
 
-<a id="25-outputs-at-a-glance"></a>
+<a id="25-outputs-at-a-glance"></a><a id="outputs-at-a-glance"></a>
 ### 2.5 Outputs at a glance
 
 [⤴ Back to top](#top)
@@ -259,59 +259,57 @@ Every Risk Analysis run produces all of these from a single in-memory dataset (n
 
 ---
 
-<a id="3-how-to-implement-quick-start"></a>
-## 3. How to Implement (Quick Start)
+<a id="3-how-to-implement-quick-start"></a><a id="how-to-implement-quick-start"></a>
+## 🚀 3. How to Implement (Quick Start)
 
 [⤴ Back to top](#top)
 
-<a id="31-high-level-overview"></a>
-### 3.1 High-level overview
+<a id="31-high-level-overview"></a><a id="high-level-overview"></a>
+### 🗺️ 3.1 High-level overview
 
 [⤴ Back to top](#top)
 
 ```mermaid
 flowchart TD
-    S1[1 · Get / Update SecurityInsight from GitHub] --> S2[2 · Onboard Entra SPN or Managed Identity<br/>OnboardValidate-Permissions]
-    S2 --> S3[3 · Provision LA Workspace + DCE + DCR<br/>Step2_OnboardValidate-SecurityInsight-LogAnalytics]
-    S3 --> S4[4 · <i>optional</i> Deploy Azure OpenAI<br/>Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure]
-    S4 --> S5[5 · Classify assets with tagging<br/>CriticalAssetTagging <b>-Scope TEST</b> then <b>PROD</b>]
-    S5 --> S6[6 · Collect Identity tiers<br/>IdentityAssetsCollectDefineTierIngestLog]
-    S6 --> S7[7 · Run Risk Analysis<br/>SecurityInsight_RiskAnalysis <b>-Summary</b> / <b>-Detailed</b>]
+    S1["1 · Get / Update SecurityInsight<br/>from GitHub"] --> S2["2 · Onboard Entra SPN<br/>or Managed Identity<br/><i>Step1_OnboardValidate-Permissions</i>"]
+    S2 --> S3["3 · Provision LA Workspace<br/>+ DCE + DCR<br/><i>Step2_OnboardValidate-LogAnalytics</i>"]
+    S3 --> S4["4 · <i>(optional)</i> Deploy Azure OpenAI<br/><i>Step3_OnboardValidate-OpenAI</i>"]
+    S4 --> S5["5 · Classify assets with tagging<br/><i>CriticalAssetTagging</i><br/>-Scope TEST then PROD"]
+    S5 --> S6["6 · Collect Identity tiers<br/><i>IdentityAssetsCollectDefineTierIngestLog</i>"]
+    S6 --> S7["7 · Run Risk Analysis<br/><i>SecurityInsight_RiskAnalysis</i><br/>-Summary / -Detailed"]
     style S1 fill:#e8f4fd,stroke:#2a6592
     style S7 fill:#e8ffe8,stroke:#1a7a1a,stroke-width:2px
 ```
 
-Steps 1–4 are once-per-tenant. Step 4 runs daily/hourly. Step 6 runs daily. Step 7 runs daily/weekly/on-demand.
+**Cadence.** Steps 2–4 are once-per-tenant setup (run in order, then forget about them). Step 1 (Get / Update from GitHub) re-runs whenever you want to pull a newer release — the launcher preserves your `CUSTOMDATA/**` and `LauncherConfig.custom.ps1` files. Step 5 (`CriticalAssetTagging`) runs daily or hourly. Step 6 (`IdentityAssetsCollectDefineTierIngestLog`) runs daily. Step 7 (`SecurityInsight_RiskAnalysis`) runs daily / weekly / on-demand — whichever matches your review cadence.
 
-<a id="32-install-fresh-machine"></a>
-### 3.2 Install (fresh machine)
+<a id="32-install-fresh-machine"></a><a id="install-fresh-machine"></a>
+### 📦 3.2 Install (fresh machine)
 
 [⤴ Back to top](#top)
 
-> [!IMPORTANT]
-> **Open PowerShell as Administrator.** The engines install missing modules to `C:\Program Files\WindowsPowerShell\Modules` (`-Scope AllUsers`) so they're visible to every user on the box — including the `SYSTEM` account the daily scheduled task runs under. A non-elevated session will fail fast with a clear error rather than silently installing a per-user copy.
->
-> Press `Win`, type `powershell`, right-click **Windows PowerShell** → **Run as administrator**.
-
-One **Step 0** script bootstraps the whole solution from GitHub. Copy-paste:
+One Step 0 script bootstraps the whole solution from GitHub. **Run PowerShell as Administrator**, then copy-paste:
 
 ```powershell
-# Pick your install path ONCE, re-use for every re-run -- default is C:\SCRIPTS\SecurityInsight.
-$SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'   # <-- change to 'D:\Tools\SecurityInsight' etc. if you want
-
-# Resolve the latest release tag, then fetch Step0.ps1 from that tag-pinned URL.
-# - Tag-pinned raw URLs are immutable + not CDN-cached, so you ALWAYS get the
-#   newest Step0 -- unlike raw/main/... which GitHub edge-caches for ~5 minutes.
-# - Invoke-WebRequest -OutFile (NOT `irm | Out-File`) preserves raw bytes: on
-#   PowerShell 5.1, irm returns a string with UTF-8 BOM embedded, then Out-File's
-#   default Unicode encoding writes UTF-16 BOM PLUS the UTF-8 BOM character and
-#   the parser later trips on `[CmdletBinding()]` with "Unexpected attribute".
+$SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'   # change path if you want
 $repo      = 'KnudsenMorten/SecurityInsight'
 $latestTag = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
 $u         = "https://raw.githubusercontent.com/$repo/$latestTag/scripts/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1"
 Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile "$env:TEMP\Step0.ps1"
 & "$env:TEMP\Step0.ps1" -DestinationPath $SI_InstallPath
 ```
+
+Next: [§ 3.5 Pre-requisite configuration](#pre-requisite-configuration).
+
+<details>
+<summary><b>Why admin + parameter reference + why the URL is tag-pinned (expand)</b></summary>
+
+> [!IMPORTANT]
+> **Open PowerShell as Administrator.** The engines install missing modules to `C:\Program Files\WindowsPowerShell\Modules` (`-Scope AllUsers`) so they're visible to every user on the box — including the `SYSTEM` account the daily scheduled task runs under. A non-elevated session will fail fast with a clear error rather than silently installing a per-user copy.
+>
+> Press `Win`, type `powershell`, right-click **Windows PowerShell** → **Run as administrator**.
+
+> **Why the bootstrap URL is tag-pinned (vs. `raw/main/...`):** tag-pinned raw URLs are immutable + not CDN-cached, so you ALWAYS get the newest Step 0. `raw/main/...` is GitHub edge-cached for ~5 minutes. `Invoke-WebRequest -OutFile` (NOT `irm | Out-File`) preserves raw bytes: on PowerShell 5.1, `irm` returns a string with UTF-8 BOM embedded, then `Out-File`'s default Unicode encoding writes UTF-16 BOM **plus** the UTF-8 BOM character, and the parser later trips on `[CmdletBinding()]` with "Unexpected attribute".
 
 > [!TIP]
 > Prefer to pin the path inside the script itself so re-runs never need `-DestinationPath`? Open `SCRIPTS/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` and edit the first line of its param block — the `EDIT-ME DEFAULTS` header marks the spot. CLI `-DestinationPath` still overrides per-run.
@@ -326,14 +324,22 @@ Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile "$env:TEMP\Step0.ps1"
 | `-Repo` | `KnudsenMorten/SecurityInsight` | Change if you fork the solution. |
 | `-PreservePatterns` | (see script) | Glob patterns that are never overwritten on update. Default covers customer configs + custom YAML. |
 
-Next stop: [§ 3.5 Pre-requisite configuration](#35-pre-requisite-configuration) for the Steps 2 / 3 / 4 onboarding runbook.
+</details>
 
-<a id="33-update-an-existing-install"></a>
-### 3.3 Update an existing install
+<a id="33-update-an-existing-install"></a><a id="update-an-existing-install"></a>
+### 🔄 3.3 Update an existing install
 
 [⤴ Back to top](#top)
 
-Re-running **Step 0** against the same path is idempotent. The policy is strict and symmetrical:
+Re-running Step 0 against the same path is idempotent: 🔒 **locked** files (ours) are refreshed; 🧷 **customer** files (`*.custom.ps1`, `*_Custom.yaml`, `CUSTOMDATA/**`) are never touched.
+
+```powershell
+$SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'
+& (Join-Path $SI_InstallPath 'SCRIPTS\Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath
+```
+
+<details>
+<summary><b>Full update policy + per-file output + file-by-file breakdown (expand)</b></summary>
 
 | Category | Behaviour on update | Examples |
 |---|---|---|
@@ -342,15 +348,7 @@ Re-running **Step 0** against the same path is idempotent. The policy is strict 
 
 Same rule applies to both engines: RiskAnalysis (`SecurityInsight_RiskAnalysis_Queries_Custom.yaml` / `_Locked.yaml`) **and** CriticalAssetTagging (`SecurityInsight_CriticalAssetTagging_Custom.yaml` / `_Locked.yaml`).
 
-```powershell
-# Same $SI_InstallPath as when you first installed:
-$SI_InstallPath = 'C:\SCRIPTS\SecurityInsight'
-
-# Update in place -- customer files preserved, platform files refreshed from the latest stable release:
-& (Join-Path $SI_InstallPath 'SCRIPTS\Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath
-```
-
-Step 0 now emits per-file visibility so you can confirm the policy:
+Step 0 emits per-file visibility:
 
 ```
 [UPDATE]   data\SecurityInsight_RiskAnalysis_Queries_Locked.yaml  (locked content -- force-refreshed from release)
@@ -360,19 +358,25 @@ Step 0 now emits per-file visibility so you can confirm the policy:
 [OK]    copied: 245 files  (2 of which are *_Locked.* force-refreshed)  |  preserved: 4 customer file(s)
 ```
 
-Full file-by-file breakdown: [§ 7.2 Files deep-dive](#72-files-deep-dive).
+Full file-by-file breakdown: [§ 7.2 Files deep-dive](#files-deep-dive).
 
-<a id="331-automate-daily-update"></a>
-#### 3.3.1 Automate it — daily "auto-refresh from GitHub"
+</details>
 
-Don't want to remember to run Step 0 manually every time a new release ships? Register a Windows Scheduled Task that runs Step 0 once a day as `SYSTEM`:
+<a id="331-automate-daily-update"></a><a id="automate-daily-update"></a>
+#### ⏰ 3.3.1 Automate it — daily "auto-refresh from GitHub"
+
+Register a Scheduled Task that runs Step 0 once a day as `SYSTEM`:
 
 ```powershell
-# Admin PowerShell (SYSTEM principal + RunLevel Highest need elevation).
 & (Join-Path $SI_InstallPath 'SCRIPTS\Register-SecurityInsightDailyUpdate.ps1')
 ```
 
-Defaults: runs daily at **03:00 local time**, task name **`SecurityInsight - Daily update`**, install path auto-detected. Override per-box if needed:
+Defaults: 03:00 local, task name `SecurityInsight - Daily update`, install path auto-detected. Safe to run unattended — customer files are never touched.
+
+<details>
+<summary><b>Override time / path + verify / unregister / air-gapped caveat (expand)</b></summary>
+
+Override per-box:
 
 ```powershell
 & (Join-Path $SI_InstallPath 'SCRIPTS\Register-SecurityInsightDailyUpdate.ps1') `
@@ -380,34 +384,21 @@ Defaults: runs daily at **03:00 local time**, task name **`SecurityInsight - Dai
     -AtTime      '02:30'
 ```
 
-Because Step 0's Locked/Custom policy is symmetrical, this is safe to run unattended — your `LauncherConfig.custom.ps1`, `launcher.override.ps1`, and `*_Custom.yaml` files are never touched. What *does* get refreshed every day:
+What *does* get refreshed every day:
 
 - 📘 **`data/SecurityInsight_RiskAnalysis_Queries_Locked.yaml`** — any new curated queries I ship land automatically, no manual YAML diffing.
 - 📘 **`data/SecurityInsight_CriticalAssetTagging_Locked.yaml`** — same story for asset-tagging rules.
 - 🧠 **Engine `.ps1` files + launcher templates** — new features and bug fixes propagate on the next run.
-- 📊 **`TOOLS/AzureWorkbook/*.json` + `TOOLS/PowerBI/*`** — workbook/dashboard template updates.
+- 📊 **`TOOLS/AzureWorkbook/*.json` + `TOOLS/PowerBI/*`** — workbook / dashboard template updates.
 
-Verify the task is registered:
+Verify / force-run / inspect / unregister:
 
 ```powershell
 Get-ScheduledTask -TaskName 'SecurityInsight - Daily update' | Select-Object TaskName, State, Triggers
-```
+Start-ScheduledTask     -TaskName 'SecurityInsight - Daily update'
+Get-ScheduledTaskInfo   -TaskName 'SecurityInsight - Daily update'
 
-Force a manual run (useful after registration, to confirm it works):
-
-```powershell
-Start-ScheduledTask -TaskName 'SecurityInsight - Daily update'
-```
-
-Inspect the last run's result code + next scheduled time:
-
-```powershell
-Get-ScheduledTaskInfo -TaskName 'SecurityInsight - Daily update'
-```
-
-Remove it if you decide to go back to manual updates:
-
-```powershell
+# Remove:
 & (Join-Path $SI_InstallPath 'SCRIPTS\Register-SecurityInsightDailyUpdate.ps1') -Unregister
 ```
 
@@ -422,87 +413,106 @@ After update, the running version is stamped on every launcher banner:
 ========================================================================================
 ```
 
-<a id="34-try-out-a-preview-release"></a>
-### 3.4 Try out a preview release
+</details>
+
+<a id="34-try-out-a-preview-release"></a><a id="try-out-a-preview-release"></a>
+### 🧪 3.4 Try out a preview release
 
 [⤴ Back to top](#top)
 
-The `preview` channel tracks the HEAD of the `preview` branch on the public GitHub repo — bleeding-edge features that haven't shipped in a tagged release yet. Good for a dev box or for giving early feedback.
+The `preview` channel tracks the HEAD of the `preview` branch — bleeding-edge features that haven't shipped in a tagged release. Use a **separate folder** from stable.
 
 ```powershell
-# Same $SI_InstallPath you already use (ideally a SEPARATE folder from stable to avoid mixing channels):
 $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight-preview'
-
-# Pull preview channel:
 & (Join-Path $SI_InstallPath 'SCRIPTS\Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1') -DestinationPath $SI_InstallPath -Channel preview
 ```
 
 > [!NOTE]
 > Preview = uncut, unrewindable. Bugs may exist that don't exist in `stable`. File issues at [KnudsenMorten/SecurityInsight](https://github.com/KnudsenMorten/SecurityInsight/issues). When a preview feature stabilizes it's cut to a new `stable` release — update via § 3.3.
 
-<a id="35-pre-requisite-configuration"></a>
-### 3.5 Pre-requisite configuration
+<a id="35-pre-requisite-configuration"></a><a id="pre-requisite-configuration"></a>
+### 🔧 3.5 Pre-requisite configuration
 
 [⤴ Back to top](#top)
 
+Before you can run any launcher, the solution needs to know **your** values — tenant / subscription IDs, SPN credentials, workspace names, mail recipients, OpenAI endpoint. You provide these through PowerShell config files next to each launcher.
+
+#### `.defaults.ps1` vs `.custom.ps1` — the only rule that matters
+
+| Filename pattern | Who owns it | Gets overwritten on update? | When to edit |
+|---|---|---|---|
+| `*.defaults.ps1` | **Us** — shipped with the solution | **Yes** — replaced on every Step 1 update | **Never.** Treat as read-only. |
+| `*.custom.ps1` | **You** — created from a `.sample.ps1` | **Never** — gitignored, preserved by Step 1 | **Yes.** This is the only file you ever edit. |
+
+You'll see both names repeated at three scopes (tenant / solution / engine). That's the **5-layer config stack** — the launcher loads them in order, and each layer overrides the previous (closest wins):
+
+```mermaid
+flowchart TD
+    L1["<b>Layer 1 — tenant scope</b><br/><i>platform-defaults.ps1</i><br/>SOLUTIONS/PlatformConfiguration/CUSTOMDATA/<br/><sub>(customer-owned; internal mode only)</sub>"]
+    L2["<b>Layer 2 — solution baseline</b><br/><i>SecurityInsight.shared-defaults.ps1</i><br/>LAUNCHERS/_lib/<br/><sub>(shipped by us — don't edit)</sub>"]
+    L3["<b>Layer 3 — solution customer</b> ⭐<br/><i>SecurityInsight.custom.ps1</i><br/>CUSTOMDATA/<br/><sub>(customer-owned; covers every SI engine)</sub>"]
+    L4["<b>Layer 4 — engine baseline</b><br/><i>LauncherConfig.defaults.ps1</i><br/>LAUNCHERS/&lt;engine&gt;/<br/><sub>(shipped by us — don't edit)</sub>"]
+    L5["<b>Layer 5 — engine customer</b> (closest wins)<br/><i>LauncherConfig.custom.ps1</i><br/>LAUNCHERS/&lt;engine&gt;/<br/><sub>(customer-owned; per-engine override)</sub>"]
+    L1 --> L2 --> L3 --> L4 --> L5
+    style L2 fill:#f0f0f0,stroke:#888
+    style L4 fill:#f0f0f0,stroke:#888
+    style L3 fill:#e8ffe8,stroke:#1a7a1a,stroke-width:2px
+    style L5 fill:#e8ffe8,stroke:#1a7a1a
+    style L1 fill:#fff4e1,stroke:#b07a00
+```
+
+**Legend.** Grey = shipped by us (`.defaults.`, never edit). Green = customer files (`.custom.`, edit here). Orange = internal-mode tenant layer (absent in community-vm installs).
+
+⭐ **Layer 3 (`CUSTOMDATA\SecurityInsight.custom.ps1`) is where 90% of customers put everything.** It's solution-wide — every SI engine picks it up automatically. You only drop down to Layer 5 if one specific engine needs a different value (e.g. a different mail recipient for Critical-only reports).
+
+> **Example — community-vm customer configures once, runs 10 engines.**
+> 1. Copy `CUSTOMDATA\SecurityInsight.custom.sample.ps1` → `SecurityInsight.custom.ps1` in the same folder.
+> 2. Uncomment the SPN block, fill in `$global:SpnTenantId` / `SpnClientId` / `SpnClientSecret`.
+> 3. Set `$global:MailTo = @('soc@contoso.com')`.
+> 4. Done. RiskAnalysis, CriticalAssetTagging, IdentityAssets, Step 2 / 3 / 4 — all 10 engines inherit these values on their next run.
+
+<a id="setup-configurator"></a>
+
+#### ⭐ Setup Configurator — GUI that writes your `.custom.ps1` files
+
+The solution ships an **offline, single-file HTML tool** that generates the `SecurityInsight.custom.ps1` + per-engine `LauncherConfig.custom.ps1` files for you. Form fields + live preview + one-click copy-to-clipboard. Zero dependencies; all processing stays in your browser — no data leaves your machine.
+
+```powershell
+Start-Process .\TOOLS\SetupConfigurator\index.html
+```
+
+![Setup Configurator — offline HTML tool that generates every SecurityInsight .custom.ps1 with form fields + live preview + copy-to-clipboard](DOCS/Images/SetupConfigurator-tool.png)
+
+Each tab corresponds to one launcher or the solution-wide `SecurityInsight.custom.ps1`. Re-use the 4 auth values (Tenant / ClientId / Secret / Subscription) across every tab and you're done in a minute. Prefer hand-editing? The `.sample.ps1` files next to each launcher are copy-paste templates — see the worked example above.
+
+> [!TIP]
+> **Internal (AF) / community-azure flavours don't need a customer config file at all** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from customer files. This whole section (layered config + Setup Configurator) is for community-vm operators.
+
 #### Solution component overview
 
-Every component ships as its own launcher folder under `LAUNCHERS/`. Two groups: **Steps** (run once per tenant, in order, during onboarding) and **Engines** (run on a schedule after onboarding).
+Every SI component ships as its own launcher folder under `LAUNCHERS/`. Two groups: **Steps** (once per tenant, during onboarding) and **Engines** (on a schedule after onboarding).
 
-**Onboarding Steps — one-time setup, run in order:**
+**Onboarding Steps — one-time, run in order:**
 
 | Component | Purpose |
 |---|---|
-| **Step1_OnboardValidate-SecurityInsight-Permissions** | Idempotent admin utility. Creates the Entra SPN, grants API permissions and Azure RBAC the platform needs. Re-run = validation pass. |
+| **Step1_OnboardValidate-SecurityInsight-Permissions** | Creates the Entra SPN, grants API permissions + Azure RBAC. Idempotent (re-run = validation pass). |
 | **Step2_OnboardValidate-SecurityInsight-LogAnalytics** | Provisions the Workspace + DCE + DCR + custom tables the engines ingest into. |
-| **Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure** *(optional)* | Provisions a PAYG Azure OpenAI account + model deployment for the RiskAnalysis AI summary. |
-| **Step4_Deploy-SecurityInsight-PowerBI-Dashboard** *(optional)* | Publishes the RiskAnalysis `.pbix` management dashboard to the customer's Power BI tenant via REST API. |
+| **Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure** *(opt.)* | Provisions PAYG Azure OpenAI + model deployment for the RiskAnalysis AI summary. |
+| **Step4_Deploy-SecurityInsight-PowerBI-Dashboard** *(opt.)* | Publishes the RiskAnalysis `.pbix` dashboard to the customer's Power BI tenant. |
 | **Setup-SecurityInsight-CustomSecurityAttributes** | One-time provisioning of the Entra Custom Security Attribute schema used by the tagging pipeline. |
-| **Build_Tier_Definitions_JSON_File** | Uses Azure OpenAI to attacker-centrically classify Entra roles, Graph permissions, AD groups and Azure built-in roles into Tier 0/1/2/3. Output is the catalog the rest of the engines consume. Re-run only when tier rules change. |
+| **Build_Tier_Definitions_JSON_File** | Uses Azure OpenAI to classify Entra roles / Graph permissions / AD groups / Azure built-in roles into Tier 0–3. Re-run only when tier rules change. |
 
 **Ingestion engines — run on a schedule:**
 
 | Component | Purpose |
 |---|---|
-| **SecurityInsight_RiskAnalysis** | The main analyzer. Pulls Defender vulnerabilities, exposure paths, configuration recommendations + Azure RBAC, scores them per the risk model, and produces ranked Excel + JSON + Log Analytics ingest + email + AI executive summary. |
-| **IdentityAssetsCollectDefineTierIngestLog** | Iterates every Entra user, SPN and MI; classifies their effective privilege tier; ingests into Log Analytics as `SI_IdentityAssets_CL`. |
-| **CriticalAssetTagging** (+ `CriticalAssetTaggingMaintenance` + `CAT_FixConflictingTags` siblings) | Auto-tags every device / Azure resource with its **criticality tier** (0=critical, 1=high, 2=standard, 3=low). Drives the Criticality dimension of the risk score. |
-
-The table below adds "is config needed?" + file paths for each component — use it as the checklist before the first run.
-
-The solution ships four **Step** launchers that set a tenant up from zero, plus several **engines** that produce the actual reports / ingests. Run the Steps once per tenant (in order), then run the engines as often as you like.
-
-**Onboarding Steps** (run once per tenant, in order):
-
-| # | Purpose | Config needed? |
-|---|---|---|
-| **Step 0** | Download / update SecurityInsight from GitHub. Preserves customer files. Supports `stable` (default) + `preview` channels.<br/>`SCRIPTS/Step0_OnboardUpdate_SecurityInsight_from_Github_Repo.ps1` | **None** — it's a script, use `-DestinationPath` / `-Channel` args or edit the inline defaults at the top of the file. |
-| **Step 0** | Create the SecurityInsight SPN. Grants Graph / Defender / ATP API permissions + Azure `Reader` + `Tag Contributor` at tenant-root MG (default). Idempotent.<br/>`LAUNCHERS/Step1_OnboardValidate-SecurityInsight-Permissions/` | **None** — community-vm falls back to interactive Graph sign-in. Fill in `LauncherConfig.custom.ps1` only to run unattended. |
-| **Step 0** | Provision Log Analytics workspace + DCE + DCR + `SI_IdentityAssets_CL` table + RBAC for the SPN.<br/>`LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/` | **Yes** — 4 lines (auth + subscription). Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`. |
-| **Step 0** *(opt.)* | Provision pay-as-you-go Azure OpenAI account + model deployment. Only needed for RiskAnalysis AI summaries (`-BuildSummaryByAI`).<br/>`LAUNCHERS/Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/` | **Yes** — 8 lines (auth + placement + account/deployment names). |
-| **Step 4** *(opt.)* | Deploy the Risk Analysis management dashboard into the customer's Power BI tenant via REST API. One-time per customer + re-run when the `.pbix` design changes.<br/>`LAUNCHERS/Step4_Deploy-SecurityInsight-PowerBI-Dashboard/` | **Yes** — Power BI SPN + LA workspace ID. See [`DOCS/PowerBI-Prerequisites.md`](DOCS/PowerBI-Prerequisites.md) for the one-time tenant setup. |
-
-**Ingestion engines** (run on a schedule after the Steps):
-
-| Engine | What it does | Config needed? |
-|---|---|---|
-| `IdentityAssetsCollectDefineTierIngestLog` | Collect identities + tier them → `SI_IdentityAssets_CL` | **Yes** — re-uses Step 3's 4 auth lines |
-| `SecurityInsight_RiskAnalysis` | Risk reports → `.xlsx` + `.json` + `SI_RiskAnalysis_*_CL` | **Yes** — re-uses Step 3's 4 auth lines, plus report options |
-| `CriticalAssetTagging` (+ 3 siblings) | Apply tier tags to Defender devices + Azure resources | **Yes** — re-uses Step 3's 4 auth lines |
-| `Build_Tier_Definitions_JSON_File` | Rebuild tier catalog JSON (run before `IdentityAssets…` if you customize tier rules). **No on-prem AD dependency** — classifies built-in AD group names via AI without enumerating members. | **Yes** — re-uses Step 3's 4 auth lines |
+| **SecurityInsight_RiskAnalysis** | Main analyzer — ranked Excel + JSON + LA ingest + email + AI executive summary. |
+| **IdentityAssetsCollectDefineTierIngestLog** | Iterates every Entra user / SPN / MI; ingests into `SI_IdentityAssets_CL`. |
+| **CriticalAssetTagging** (+ `CriticalAssetTaggingMaintenance` + `CAT_FixConflictingTags`) | Auto-tags every device / Azure resource with its criticality tier (0–3). |
 
 > [!NOTE]
-> **`Build_Tier_Definitions_JSON_File` does not enumerate AD members.** The engine uses Azure OpenAI to tier the hardcoded `$BuiltInADGroups` list (Domain Admins, Enterprise Admins, DnsAdmins, Account Operators, …) by name alone, then writes `AD_BuiltInPermissionGroups_Tier0..3` into `data/SecurityInsight_IdentityTiering.json`. Actual group-membership analysis ("does user X have access to Domain Admins?") happens at query time inside `IdentityAssetsCollectDefineTierIngestLog` via the Exposure Graph — no RSAT, no on-prem AD PowerShell module, no domain-joined VM required. Works identically on cloud-only community VMs and hybrid/on-prem VMs.
-
-> [!TIP]
-> **Internal (AF) / community-azure flavours don't need a customer config file** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from the customer file.
-
-> [!TIP]
-> **⭐ Put auth in `CUSTOMDATA\SecurityInsight.custom.ps1` once — covers every SI engine.** Since v2.1.149 the solution ships a Layer 3 sample (`CUSTOMDATA\SecurityInsight.custom.sample.ps1`) with complete SPN / OpenAI / SMTP / DCR / mail-routing sections. Copy it to `SecurityInsight.custom.ps1` in the same folder and fill in your values — all ~10 engines inherit it automatically. Fall back to per-engine `LauncherConfig.custom.ps1` only when one engine genuinely needs a different value (e.g. a different mail recipient).
-
-> [!NOTE]
-> **Where does `LauncherConfig.custom.ps1` come from?** There's no template created for you. **Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`** in the same folder, then edit. The `.custom.ps1` name is gitignored so the populated copy stays local. Use this file only for **per-engine** overrides; for shared auth use `SecurityInsight.custom.ps1` (see previous tip).
-> Some older solutions use the filename `LauncherConfig.ps1` (without `.custom.`) — both are recognized by the launcher; new work should prefer `.custom.ps1`.
+> **`Build_Tier_Definitions_JSON_File` does not enumerate AD members.** The engine uses Azure OpenAI to tier the hardcoded `$BuiltInADGroups` list (Domain Admins, Enterprise Admins, DnsAdmins, Account Operators, …) **by name alone**, then writes `AD_BuiltInPermissionGroups_Tier0..3` into `data/SecurityInsight_IdentityTiering.json`. Actual group-membership analysis ("does user X have access to Domain Admins?") happens at query time inside `IdentityAssetsCollectDefineTierIngestLog` via the Exposure Graph — no RSAT, no on-prem AD PowerShell module, no domain-joined VM required. Works identically on cloud-only community VMs and hybrid/on-prem VMs.
 
 **Unattended (hands-off) operation** — Steps 2-4 and every engine launcher support the same four auth methods, so a pipeline / scheduled task can run the whole chain with one identity. The launcher picks a method by **priority chain** (first row whose fields are populated wins, regardless of which config layer set them):
 
@@ -530,79 +540,8 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 
 ---
 
-### 🚀 30-second onboarding (absolute minimum)
-
-**Step 1 — install / update from GitHub.** Already covered in [§ 3.2 Install + update](#32-install--update) — copy the `$SI_InstallPath` block from there, it handles bootstrap, re-install, and `preview` channel in one snippet.
-
----
-
-##### ⭐ Right after Step 1 — open the Setup Configurator
-
-> [!TIP]
-> **⭐ Recommended: Setup Configurator (GUI).**
-> Open the included **Setup Configurator** in your browser *before* you run Step 2 — it writes every `LauncherConfig.custom.ps1` for Steps 2 / 3 / 4 + the ingestion engines in one sitting, with form fields + live preview + copy-to-clipboard:
-> ```powershell
-> Start-Process .\TOOLS\SetupConfigurator\index.html
-> ```
-> Single offline HTML file, zero dependencies. Tabs for Step 2 / Step 3 / Step 4 / ingestion engines. All processing stays in your browser — no data leaves your machine. Re-use the 4 auth values (Tenant / ClientId / Secret / Subscription) across every tab and you're done.
-
-Or — **configure manually** if you prefer editing `.ps1` files directly (expand the block at the end of § 3.5).
-
----
-
-##### Step 2 — do nothing
-
-Just run the launcher:
-```powershell
-.\LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\launcher.community-vm.template.ps1
-```
-Browser sign-in as a Privileged Role Admin **with Azure UAA at tenant root** (Entra admin center → Properties → *Access management for Azure resources* toggle ON). The engine creates `sp-securityinsight`, grants all the API permissions, and assigns Azure `Reader` + `Tag Contributor` at the tenant-root MG — one grant cascades to every sub. Prints the AppId + secret-creation hint at the end — copy the AppId. Falls back to per-subscription if tenant-root fails.
-
----
-
-##### Steps 3 + 4 + ingestion engines
-
-Use the Setup Configurator tabs (one per Step / engine) to generate each `LauncherConfig.custom.ps1`, then run the launcher. Prefer hand-editing? Expand the block below for minimum copy-paste examples.
-
-<details>
-<summary><b>Manual configuration (click to expand)</b></summary>
-
-**Step 3 — 4 lines in `LauncherConfig.custom.ps1`:**
-```powershell
-# LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/LauncherConfig.custom.ps1
-$global:SpnTenantId     = '<your-tenant-id-guid>'
-$global:SpnClientId     = '<appid-from-Step2>'
-$global:SpnClientSecret = '<client-secret-you-created-for-that-app>'
-$global:SubscriptionId  = '<your-target-subscription-id-guid>'
-```
-Run it:
-```powershell
-.\LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1
-```
-Workspace / DCE / DCR all land in their standard RGs (`rg-securityinsight`, `rg-dce-securityinsight`, `rg-dcr-securityinsight` in West Europe) — override in the same file only if you deviate. Step 2's end-of-run cheat-sheet prints the exact globals to paste into the ingestion engines' config files.
-
-**Step 4 — only if you want `-BuildSummaryByAI` on RiskAnalysis. 7 lines:**
-```powershell
-# LAUNCHERS/Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure/LauncherConfig.custom.ps1
-$global:SpnTenantId      = '<your-tenant-id-guid>'
-$global:SpnClientId      = '<appid-from-Step2>'
-$global:SpnClientSecret  = '<client-secret>'
-$global:SubscriptionId   = '<your-target-subscription-id-guid>'
-$global:ResourceGroupName = 'rg-securityinsight-openai'
-$global:Location          = 'swedencentral'
-$global:AccountName       = 'oai-securityinsight-<unique-suffix>'
-$global:DeploymentName    = 'gpt-4o-mini'
-```
-Re-run `-ValidateOnly` any time to confirm the deployment is still healthy.
-
-**Ingestion engines** (`IdentityAssetsCollect`, `RiskAnalysis`) pick up the resources Step 3 created automatically — you only need to set `$global:SpnTenantId` + `$global:SpnClientId` + `$global:SpnClientSecret` + `$global:SubscriptionId` in *their* custom files to use the same SPN.
-
-</details>
-
----
-
-<a id="351-connectivity-spn-or-managed-identity"></a>
-#### 3.5.1 Connectivity: SPN or Managed Identity
+<a id="351-connectivity-spn-or-managed-identity"></a><a id="connectivity-spn-or-managed-identity"></a>
+#### 🔐 3.5.1 Connectivity: SPN or Managed Identity
 
 [⤴ Back to top](#top)
 
@@ -648,10 +587,10 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > - Creating the Log Analytics workspace / DCE / DCR — that's either done by the `Step2_OnboardValidate-SecurityInsight-LogAnalytics` launcher (§3.5.2) OR auto-created by the engines themselves on first run (v2.1.54+).
 > - Granting the SPN `Owner` or `Contributor + User Access Administrator` — which is what the engines' auto-provisioning needs for **first-run** workspace/DCE creation + container RBAC grants. On `Reader`-only subs, auto-provision will fail cleanly with a `403 AuthorizationFailed` warning and you'll need to provision manually via §3.5.2 or grant higher perms.
 >
-> **Required permissions** are listed in [§ 7.1](#71-permissions-catalog).
+> **Required permissions** are listed in [§ 7.1](#permissions-catalog).
 
-<a id="352-identity-infrastructure-workspace--dce--dcr"></a>
-#### 3.5.2 Identity infrastructure: Workspace + DCE + DCR
+<a id="352-identity-infrastructure-workspace--dce--dcr"></a><a id="identity-infrastructure-workspace--dce--dcr"></a>
+#### 🏗️ 3.5.2 Identity infrastructure: Workspace + DCE + DCR
 
 [⤴ Back to top](#top)
 
@@ -672,7 +611,7 @@ Just run `IdentityAssetsCollect` or `RiskAnalysis` directly. You'll see lines li
 [OK]   DCE exists: dce-securityinsight (rg=rg-dce-securityinsight, location=westeurope)
 [INFO] RG exists: rg-dcr-securityinsight (westeurope)
 ```
-…or — if missing — `[STEP] DCE '...' not found -- auto-provisioning` followed by `[OK] Created DCE` and `[OK] Assigned 'Monitoring Metrics Publisher' at ...`. The canonical names live in **Layer 0** (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) — see [§ 3.7](#37-understand-the-launcherconfig-files). Override any of them in your `LauncherConfig.custom.ps1` if you deviate from the defaults.
+…or — if missing — `[STEP] DCE '...' not found -- auto-provisioning` followed by `[OK] Created DCE` and `[OK] Assigned 'Monitoring Metrics Publisher' at ...`. The canonical names live in **Layer 0** (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) — see [§ 3.7](#understand-the-launcherconfig-files). Override any of them in your `LauncherConfig.custom.ps1` if you deviate from the defaults.
 
 **Option B — explicit provisioning**
 
@@ -695,8 +634,8 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 
 > **Which option do I need?** Run `Step1_OnboardValidate-SecurityInsight-Permissions` (§ 3.5.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
-<a id="353-azure-openai-optional"></a>
-#### 3.5.3 Azure OpenAI (optional)
+<a id="353-azure-openai-optional"></a><a id="azure-openai-optional"></a>
+#### 🤖 3.5.3 Azure OpenAI (optional)
 
 [⤴ Back to top](#top)
 
@@ -718,8 +657,8 @@ $global:OpenAI_apiKey     = '<your-azure-openai-key>'
 > [!TIP]
 > AI summary is appended both to the **Excel report** (as a 'Summary' worksheet) and the **email body**. Token budget is configurable via `$global:OpenAI_MaxTokensPerRequest` (default 16384).
 
-<a id="36-run-the-risk-analysis"></a>
-### 3.6 Run the Risk Analysis
+<a id="36-run-the-risk-analysis"></a><a id="run-the-risk-analysis"></a>
+### ▶️ 3.6 Run the Risk Analysis
 
 [⤴ Back to top](#top)
 
@@ -763,7 +702,7 @@ Two report templates ship out of the box:
 | `-Summary` / `-Detailed` | Pick the report template (mutually exclusive). |
 | `-ReportTemplate '<name>'` | Force a specific template (overrides Summary/Detailed). |
 | `-BuildSummaryByAI` | Generate AI executive summary (requires OpenAI globals). |
-| `-AutoBucketCount` / `-AutoBucketCache` / `-AutoBucketMax <n>` | Adaptive bucketing controls (see [§ 7.3](#73-bucketing--beating-the-30k-row-ceiling)). |
+| `-AutoBucketCount` / `-AutoBucketCache` / `-AutoBucketMax <n>` | Adaptive bucketing controls (see [§ 7.3](#bucketing--beating-the-30k-row-ceiling)). |
 | `-ResetCache` | Wipe the AutoBucket cache before this run. |
 | `-DebugQueryHash` | Log the hash + cache key per KQL query (debugging). |
 | `-ShowConfig` | Dump the resolved config and exit. |
@@ -772,8 +711,8 @@ Two report templates ship out of the box:
 
 </details>
 
-<a id="37-understand-the-launcherconfig-files"></a>
-### 3.7 Understand the LauncherConfig files
+<a id="37-understand-the-launcherconfig-files"></a><a id="understand-the-launcherconfig-files"></a>
+### 📂 3.7 Understand the LauncherConfig files
 
 [⤴ Back to top](#top)
 
@@ -788,7 +727,7 @@ LAUNCHERS/<engine>/
 └── launcher.manifest.json             ← publish metadata (ours)
 ```
 
-Visual load order (each layer's `$global:*` overrides the previous — a diagram of how the layers merge lives in [§ 7.7](#77-layered-config-flow)):
+Visual load order (each layer's `$global:*` overrides the previous — a diagram of how the layers merge lives in [§ 7.7](#layered-config-flow)):
 
 | # | File | Owner | Purpose |
 |---|---|---|---|
@@ -800,7 +739,7 @@ Visual load order (each layer's `$global:*` overrides the previous — a diagram
 | 5 | CLI args | per-invocation | Last word |
 
 > [!TIP]
-> **Auto-provision, auto-resolve (v2.1.54+)**: missing Workspace / DCE / DCE RG / DCR RG are auto-created on first run, and `DceIngestionUri` is resolved from `DceName` at runtime — you don't have to hardcode endpoint URIs any more. See [§ 5](#5-whats-new-v21x-highlights) for the full v2.1.53–v2.1.64 feature matrix.
+> **Auto-provision, auto-resolve (v2.1.54+)**: missing Workspace / DCE / DCE RG / DCR RG are auto-created on first run, and `DceIngestionUri` is resolved from `DceName` at runtime — you don't have to hardcode endpoint URIs any more. See [§ 5](#whats-new-v21x-highlights) for the full v2.1.53–v2.1.64 feature matrix.
 
 **Quickstart**:
 
@@ -1120,12 +1059,12 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 > No `$SubscriptionId` / `$WorkspaceName` / `$DcrResourceGroup` needed — this engine doesn't ingest to Log Analytics or touch Azure resources beyond reading Entra role definitions + Azure built-in roles. Graph reads use the SPN above; Azure role reads use `Get-AzRoleDefinition` which is read-only and works against any subscription the SPN has `Reader`.
 </details>
 
-<a id="38-endpoint-asset-tagging"></a>
-### 3.8 Endpoint asset tagging
+<a id="38-endpoint-asset-tagging"></a><a id="endpoint-asset-tagging"></a>
+### 🖥️ 3.8 Endpoint asset tagging
 
 [⤴ Back to top](#top)
 
-`CriticalAssetTagging` walks every Defender device and Azure resource and applies a **tier tag** based on rules in YAML. The tags drive the Criticality dimension of the risk score. The YAML model is a central concept worth its own section — see [§ 6](#6-the-yaml-concept-locked--custom).
+`CriticalAssetTagging` walks every Defender device and Azure resource and applies a **tier tag** based on rules in YAML. The tags drive the Criticality dimension of the risk score. The YAML model is a central concept worth its own section — see [§ 6](#the-yaml-concept-locked--custom).
 
 **Run in TEST mode first** (only your custom rules, no production writes — dry-run-friendly via `WhatIfMode`):
 
@@ -1181,8 +1120,8 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 
 </details>
 
-<a id="39-azure-asset-tagging"></a>
-### 3.9 Azure asset tagging
+<a id="39-azure-asset-tagging"></a><a id="azure-asset-tagging"></a>
+### ☁️ 3.9 Azure asset tagging
 
 [⤴ Back to top](#top)
 
@@ -1204,8 +1143,8 @@ Same engine, same YAML — just use `QueryEngine: AzureResourceGraph` for rules 
 
 The KQL is yours — query for the resources you consider critical and emit the four required columns. Inspiration lives in `DATA/_samples/SecurityInsight_CriticalAssetTagging_Custom.yaml`.
 
-<a id="310-defender-criticality-level-optional"></a>
-### 3.10 Defender Criticality Level (optional)
+<a id="310-defender-criticality-level-optional"></a><a id="defender-criticality-level-optional"></a>
+### 🎯 3.10 Defender Criticality Level (optional)
 
 [⤴ Back to top](#top)
 
@@ -1217,12 +1156,12 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 
 ---
 
-<a id="4-severity--criticality-definitions"></a>
+<a id="4-severity--criticality-definitions"></a><a id="severity--criticality-definitions"></a>
 ## 4. Severity & Criticality Definitions
 
 [⤴ Back to top](#top)
 
-<a id="41-severity-definitions"></a>
+<a id="41-severity-definitions"></a><a id="severity-definitions"></a>
 ### 4.1 Severity definitions
 
 [⤴ Back to top](#top)
@@ -1237,7 +1176,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **5–7** | **Medium** | This control reflects established security best practice and reduces exposure to known attack patterns. Exploitation is possible but less consistent, typically requiring specific environmental conditions or attacker patience. Prioritize after higher-severity items are addressed. |
 | **1–4** | **Low** | This control contributes to security hygiene and long-term posture improvement. Missing controls in this range are unlikely to be directly targeted but may marginally increase the cost or noise for an attacker operating in the environment. |
 
-<a id="42-criticality-definitions"></a>
+<a id="42-criticality-definitions"></a><a id="criticality-definitions"></a>
 ### 4.2 Criticality definitions
 
 [⤴ Back to top](#top)
@@ -1251,7 +1190,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **2** | **Medium** | **Significant workload impact, conditional path to escalation.** Compromise of a file server, developer workstation, or SharePoint environment enables mass data exfiltration, credential harvesting from application configs, and abuse of scoped service accounts. Escalation to tier 0 is possible but requires chaining multiple weaknesses such as finding reused credentials, misconfigured delegation, or an over-permissioned service principal. | Medium - tier 2 | 2 |
 | **3** | **Low** | **Low blast radius, limited lateral movement potential.** Compromise of a standard employee workstation, guest PC, or read-only service account yields limited immediate value. An attacker gains a foothold for phishing, internal reconnaissance, or credential capture via keylogging, but cannot directly access sensitive systems or escalate without exploiting additional misconfigurations elsewhere in the environment. | Low - tier 3 | 3 |
 
-<a id="43-asset-classification-identity"></a>
+<a id="43-asset-classification-identity"></a><a id="asset-classification-identity"></a>
 ### 4.3 Asset classification: Identity
 
 [â¤´ Back to top](#top)
@@ -1266,7 +1205,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **Medium<br />(Tier-2)**<br /><br />Conditional Takeover (Needs Chaining / Misconfig) | **Entra ID Roles (built-in) – users/managed identities (list not complete):** User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator<br/><br/>**Application Permissions (Graph / API) (list not complete):** Mail.Read (app all users), Calendars.ReadWrite, Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All<br/><br/>**Azure Built-in Roles (list not complete):** Network Contributor, Log Analytics Contributor, Automation Operator, Azure DevOps stakeholder, Azure Kubernetes Service Cluster User<br /><br />**Azure Permissions (list not complete):** Contributor (single non-sensitive resource group), Storage Blob Data Reader (scoped to non-sensitive storage), Log Analytics Reader, Monitoring Reader, Security Reader (Defender for Cloud), Managed Identity on low-privilege workload, Service principal scoped to single resource group<br/><br />**AD Built-in Groups:** DNS Admins<br/><br />**AD Permissions (list not complete):** OU-scoped write ACLs, LAPS read rights, Constrained delegation (msDS-AllowedToDelegateTo), RBCD write rights, Kerberoastable high-priv SAs<br/><br />**Accounts (list not complete):** High-privilege service principals scoped to workload, Admin-consented OAuth apps with scoped permissions, Automation accounts with limited RBAC, Azure DevOps service connections scoped to single subscription |
 | **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Entra ID Roles (built-in) – users/managed identities:** Global Reader, Security Reader, Reports Reader, Message Center Reader, Usage Summary Reports Reader, Directory Readers, Guest User (default)<br/><br/>**Application Permissions (Graph / API) (list not complete):** User.Read (delegated), Mail.Read (delegated self), Calendars.Read (delegated), Directory.Read.All, AuditLog.Read.All (delegated), IdentityRiskEvent.Read.All<br/><br/>**Azure Built-in Roles (list not complete):** Reader (subscription or resource group), Billing Reader, Cost Management Reader, Tag Contributor, Azure DevOps Basic user (no pipeline access)<br /><br />**Azure Permissions (list not complete):** Storage Blob Data Reader (scoped, non-sensitive), Managed Identity with Reader only, Service principal with Reader on isolated resource group<br/><br/>**AD Built-in Groups:** Domain Users (default), Read-only DC (RODC)<br/><br/>**AD Permissions (list not complete):** Scoped helpdesk OU read, GenericRead on non-priv objects<br /><br />**Accounts (list not complete):** Standard user accounts, Guest accounts, Read-only service accounts, Managed identities with no RBAC assignments, Expired or disabled service principals |
 
-<a id="44-asset-classification-endpoint"></a>
+<a id="44-asset-classification-endpoint"></a><a id="asset-classification-endpoint"></a>
 ### 4.4 Asset classification: Endpoint
 
 [â¤´ Back to top](#top)
@@ -1281,7 +1220,7 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Server Roles:** File servers, SharePoint servers, SQL servers hosting sensitive databases, Citrix / RDS session hosts, Web application servers with Entra integrated auth, API gateway servers, Collaboration servers (Teams on-prem, Skype for Business), HR and identity lifecycle management servers, Internal certificate registration authority (RA) servers, IT service management servers (ServiceNow, Jira)<br/><br/>**Management:** Log aggregation servers, DevOps / CI-CD build agents, Container orchestration nodes (Kubernetes worker nodes)<br/><br />**Hypervisor:** Hypervisor hosts running tier 2 guest VMs<br/><br/>**Network Equipment:** Access layer switches (user-facing VLANs), Wireless access points (managed), Network monitoring appliances (read-only), Standalone DHCP servers (non-domain integrated), Content filtering / web proxy appliances, VoIP / SIP gateways<br/><br/>**IoT / OT:** Smart meeting room devices (displays, conferencing systems), Environmental sensors (temperature, humidity — data center), Badge readers (non-domain integrated, isolated), Laboratory equipment with network interfaces, IP cameras (isolated VLAN, no domain integration), Industrial sensors (read-only, no control plane access), Retail / POS terminals (isolated network segment)<br/><br/>**Client Devices:** Production workstations, Lab workstations, Shared devices, Developer workstations, Power user workstations (finance, legal, HR) |
 | **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Server Roles:** Print servers, DHCP servers, Time servers (NTP), VoIP servers, Internal wiki / intranet servers, Archival / cold storage servers, Physical access control servers, Test / sandbox servers<br/><br/>**Management:** Network monitoring probes<br/><br/>**Network Equipment:** Unmanaged access switches, Consumer-grade wireless access points, Out-of-band console servers (isolated, read-only access), Standalone print servers (network-connected, no domain join)<br/><br/>**IoT / OT:** Smart lighting controllers (isolated network), Consumer IoT devices (isolated guest VLAN), Non-networked or air-gapped sensors, Vending machines / coffee machines with network connectivity, Digital signage players (isolated, read-only content), Wearables / smart badges (no domain integration), USB-only peripheral devices with firmware update capability<br/><br/>**Client Devices:** Standard employee workstations, Student workstations, Kiosk machines, Guest PCs, Shared classroom / library computers, Development workstations (non-privileged, isolated, no production access), Personally-owned BYOD devices, Retired / decommissioned machines |
 
-<a id="45-asset-classification-azure"></a>
+<a id="45-asset-classification-azure"></a><a id="asset-classification-azure"></a>
 ### 4.5 Asset classification: Azure
 
 [â¤´ Back to top](#top)
@@ -1298,51 +1237,8 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 
 ---
 
-<a id="5-whats-new-v21x-highlights"></a>
-## 5. What's New (v2.1.x highlights)
-
-[⤴ Back to top](#top)
-
-| Area | Capability | Tag |
-|---|---|---|
-| 🎯 **Outputs** | JSON sibling of every XLSX (default ON) | v2.1.40 |
-| 📊 **Outputs** | Direct ingest to two Log Analytics tables (`SI_RiskAnalysis_Summary_CL` + `_Detailed_CL`) via auto-created DCRs (no manual table provisioning) | v2.1.41 |
-| ☁️ **Outputs** | Optional upload of `.xlsx` + `.json` to UNC share OR Azure Storage, type auto-detected, **backup-then-overwrite** semantics so re-runs never lose data | v2.1.42 / v2.1.44 |
-| 📧 **Mail routing** | Per-template recipient override in YAML (`Mail_To` / `Mail_SendMail` per `ReportName`) | v2.1.38 |
-| 🔐 **Permissions** | New `Step1_OnboardValidate-SecurityInsight-Permissions` admin utility — idempotent, data-driven catalog, supports interactive / SPN+secret / SPN+cert / MI auth | v2.1.32 / v2.1.33 |
-| 🧱 **Layered config** | Defaults vs. customer overrides cleanly separated. Customer file is gitignored, never overwritten by an upgrade | v2.1.24 / v2.1.26 |
-| 🩹 **Resilience** | MSAL token cache auto-recovery in `Build_Tier_Definitions_JSON_File` — no more silently empty Section B/C tier files | v2.1.34 |
-| 🌍 **Multi-sub** | Cross-subscription Defender / Sentinel workspace queries (resource ID embeds the sub — no Set-AzContext required) | v2.1.28 |
-| 🚫 **Scope filter** | `$global:SubscriptionNameExcludePatterns` wildcard filter for Azure-side enumeration | v2.1.21 |
-| 🏷️ **Banner** | Version-stamped banner across all 40 launcher templates — easy to confirm what's running | v2.1.31 / v2.1.36 |
-| 🤖 **Auth log** | `[INFO] Auth method (Graph) : SPN + Secret (clientId=..., tenant=...)` printed on every connect | v2.1.34 |
-| 📧 **SMTP fallback** | `$global:SecureCredentialsSMTP` can now be assembled from 9 global-name variants (`SMTPUser/SMTPPassword`, `Mail_SmtpUser/Password`, legacy `Mail_SecurityInsight_Username/Password`, …). Refuses interactive prompt under unattended runs. | v2.1.53 / v2.1.56 |
-| 🏗️ **Auto-provision infra** | Ingestion engines self-heal: if Log Analytics workspace / DCE / DCE RG / DCR RG is missing, create it and assign the SecurityInsight SPN the roles it needs. `DceIngestionUri` is auto-resolved from the DCE name (no longer required in the custom file). | v2.1.54 / v2.1.62 |
-| 🔀 **Layered defaults** | New **Layer 0** shared-defaults file (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) holds the canonical `$global:WorkspaceName`, `$global:DceName`, `$global:DceResourceGroup`, `$global:DcrResourceGroup`, `$global:Location`, and `$global:SubscriptionId`. Shared by every SI engine; customer overrides on top. | v2.1.55 |
-| 🧪 **Launcher mode override** | `$global:RiskAnalysis_Detailed_Override` / `_Summary_Override` lets a launcher flip Summary vs Detailed runs without touching `$global:ReportTemplate`. | v2.1.57 |
-| 📬 **Per-template mail (community)** | Community-mode mail now supports the same `RiskAnalysis_Detailed_To` / `_Summary_To` splits as AF mode — falls back to flat `$global:MailTo` when per-template vars aren't set. | v2.1.57 |
-| 📦 **IAC JSON + upload** | Identity collection engine now writes a `.json` array sibling of its `.jsonl` stream and optionally uploads both to UNC / Azure Storage (same pattern RiskAnalysis uses). Four unified behaviour globals (`TroubleshootingMode`, `CsaAttributeSet`, `Defender_WorkspaceNameResourceId`, `SubscriptionNameExcludePatterns`) work in both AF and community mode. | v2.1.58 |
-| 📁 **Auto-create container** | When `$global:ExportDestination` points at an Azure Storage URL and the container doesn't exist, the upload helper creates it and (best-effort) grants the SPN `Storage Blob Data Contributor` at the container scope. | v2.1.60 |
-| 🎯 **Sub-scoped DCE/DCR cache** | `$global:AzDceDetails` / `$global:AzDcrDetails` now filtered to the target subscription, so duplicate-named DCRs in other tenant subs can't poison `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` (fixes spurious 403 "DCE FQDN not associated with DCR immutable Id"). | v2.1.61 / v2.1.62 |
-| 🔑 **SubscriptionId honored** | Both IAC and RiskAnalysis self-heal blocks now read `$global:SubscriptionId` first, parsed from `$WorkspaceResourceId` second, Az context last. Ends the silent "wrong subscription" behaviour when only `$global:WorkspaceName` + `$global:SubscriptionId` are set. | v2.1.59 / v2.1.63 |
-| 📋 **OnboardValidate summary** | `Step1_OnboardValidate-SecurityInsight-Permissions` now emits a final copy-paste-ready summary block (App (client) ID, SPN ObjectId, Tenant ID, counts, ready-to-paste `$global:Spn*` block, verification KQL). | v2.1.64 |
-| 🎯 **Deterministic TraceID / TraceName** | Every RiskAnalysis row carries a `TraceName` (e.g. `Update vulnerable software--Very High--Critical - tier 0`) + a SHA-256-derived `TraceID` that stays stable across runs. Group-by TraceID in KQL to track the same finding across time. Separator bumped to `--` so severities containing a hyphen don't collide. | v2.1.88 / v2.1.93 |
-| ⏱️ **CollectionTime stamping** | RiskAnalysis ingest pipeline now mirrors the identity engine: `Add-CollectionTimeToAllEntriesInArray` → `Add-ColumnDataToAllEntriesInArray` → `ValidateFix-AzLogAnalyticsTableSchemaColumnNames` → `Build-DataArrayToAlignWithSchema` → `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output`. One `CollectionTime` per run, so `\| where CollectionTime == toscalar(...max(CollectionTime))` gives the latest slice. | v2.1.92 |
-| 🧮 **`$global:SolutionVersion` on every row** | VERSION.txt walk-up from `$PSScriptRoot`; stamped as a column on both `SI_RiskAnalysis_*_CL` and `SI_IdentityAssets_CL`. Tells you which engine version wrote which batch of rows. Surfaced in the Workbook "Data powered by" footer tile. | v2.1.96 |
-| 📊 **Azure Monitor Workbook** | Drop-in workbook template `TOOLS/AzureWorkbook/SecurityInsight-RiskAnalysis.workbook.json` with workspace pill (ARG-backed), time-range, multi-select filters (SecurityDomain / SecuritySeverity / CriticalityTier / Subcategory), trends, velocity (new vs resolved), Top-N, stale findings, identity inventory, Data-powered-by footer. Version badge visible in the GUI. | v2.1.99 / v2.1.106 |
-| 📤 **Power BI dataset refresh (community)** | New `$global:SendToPowerBI` toggle in the RiskAnalysis engine; when `$true`, acquires an OAuth2 token via SPN client-credentials and POSTs to the dataset's `/refreshes` endpoint so the customer's Power BI workspace picks up the latest KQL-ingested data on each scheduled run. Paired with a new Step4 one-time deploy engine for fully-automated `.pbix` upload + parameter rebind. | v2.1.98 / v2.1.102 |
-| 🗂️ **Step folders renumbered 0–4** | Bootstrap is now `Step0` (install / update from GitHub); engines are `Step1` Permissions → `Step2` Log Analytics → `Step3` Azure OpenAI → `Step4` Power BI (BETA). Setup Configurator tabs + launcher folder names + docs all aligned. | v2.1.103 |
-| 🧰 **Workbook multi-select fix** | Dropdowns now preselect `*` as a synthetic first option (`union (print Col='*'), (<query>)`); KQL guard is `'*' in ({Param}) or Col in ({Param})` so an empty pill never produces `Col in ()` and parse errors on fresh import. | v2.1.107 |
-| 📧 **`$global:SMTPFrom` (verified sender)** | Separate the SMTP login username from the `From` header. Brevo / SendGrid / Postmark / M365 all reject mail whose `From` isn't a verified sender — the relay login is NOT a valid `From`. Engine resolves `$SMTPFrom` → `$MailFrom` → `$SMTPUser` (legacy fallback) and throws if all three are empty. Configurator, sample, defaults, and README updated in lock-step. | v2.1.108 |
-| 🩹 **Step0 bootstrap: `iwr -OutFile`, not `irm \| Out-File`** | `Invoke-RestMethod` on PS 5.1 returns a string that includes the UTF-8 BOM as a content character, then `Out-File`'s default Unicode encoding writes a UTF-16 BOM + that stray FEFF — the parser then trips on `[CmdletBinding()]` with "Unexpected attribute". Switch to `Invoke-WebRequest -OutFile` (raw bytes). | v2.1.108 |
-| 📦 **One canonical PowerShell module set auto-installed on first run** | `Ensure-SecurityInsightModules` in `_shared/Ensure-Module.ps1` installs `Az`, `Az.ResourceGraph`, `Microsoft.Graph`, `Microsoft.Graph.Beta`, `AzLogDcrIngestPS`, `MicrosoftGraphPS`, `ImportExcel`, `powershell-yaml` — the superset any SI engine could need. Default `-Scope AllUsers` with fail-fast elevation check so installs land machine-wide and are visible to the daily scheduled task SYSTEM account. Directory-first module probe keeps warm-VM checks under 1 second even with 70+ Az.* submodules installed. | v2.1.113 / v2.1.114 / v2.1.122 / v2.1.125 |
-| 🗓️ **Daily auto-refresh scheduled task** | New `SCRIPTS/Register-SecurityInsightDailyUpdate.ps1` helper registers a Windows Scheduled Task that runs Step 0 every day at 03:00 as SYSTEM. New Locked YAML + engine code + launcher templates + workbook JSON land automatically while `LauncherConfig.custom.ps1` + `*_Custom.yaml` stay untouched. One-time admin setup, idempotent, `-Unregister` for clean removal. See [§ 3.3.1](#331-automate-daily-update). | v2.1.116 |
-| 🧰 **DCE/DCR cache filter: sub + RG** | `Ensure-SecurityInsightAzDceDcrCache` filters `$global:AzDcrDetails` / `$global:AzDceDetails` by both `-SubscriptionId` and `-DcrResourceGroup` / `-DceResourceGroup`. Stops the module's name-only lookup picking a neighbour DCR in a different RG (manifested as the cryptic `"Data collection rule with immutable Id 'westeurope' not found"` 404 on customer VMs with duplicate-named DCRs across RGs). | v2.1.129 |
-
----
-
-<a id="6-the-yaml-concept-locked--custom"></a>
-## 6. The YAML Concept (Locked + Custom)
+<a id="6-the-yaml-concept-locked--custom"></a><a id="the-yaml-concept-locked--custom"></a>
+## 📜 5. The YAML Concept (Locked + Custom)
 
 [⤴ Back to top](#top)
 
@@ -1478,7 +1374,7 @@ flowchart TB
 
 **Locked is replaced; Custom is sacred.** Your edits survive every upgrade. The only time you touch Custom during an upgrade is if the RELEASE NOTES point out that a template you overrode has an updated schema — then you re-apply your override against the new Locked definition.
 
-<a id="66-critical-asset-tagging-mode-and-scope"></a>
+<a id="66-critical-asset-tagging-mode-and-scope"></a><a id="critical-asset-tagging-mode-and-scope"></a>
 ### 6.6 CriticalAssetTagging — `Mode:` (rule) + `$global:Scope` (launcher)
 
 [⤴ Back to top](#top)
@@ -1542,7 +1438,7 @@ $global:Scope = @('PROD','TEST')    # array, not a single string
 > [!TIP]
 > **Overriding a shipped Prod rule in Test first.** To experiment with modifications to an existing Locked rule (e.g. tightening the filter for `DomainControllerDNS--tier0--SI`), copy the rule into Custom.yaml **with the same `AssetTagName` stem** and set `Mode: Test`. Run `$global:Scope = @('TEST')`. When the tweaked KQL looks right, flip to `Mode: Prod` — Custom wins on same-stem, so your override replaces the Locked version on subsequent `$global:Scope = @('PROD')` runs. Step 0 upgrades still never touch Custom.
 
-<a id="67-asset-tag-name-convention-and-stem-based-merge"></a>
+<a id="67-asset-tag-name-convention-and-stem-based-merge"></a><a id="asset-tag-name-convention-and-stem-based-merge"></a>
 ### 6.7 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
 
 [⤴ Back to top](#top)
@@ -1651,13 +1547,13 @@ Run with `$global:Scope = @('TEST')` first to confirm the row set, then flip to 
 
 ---
 
-<a id="7-appendix"></a>
-## 7. Appendix
+<a id="7-appendix"></a><a id="appendix"></a>
+## 📎 6. Appendix
 
 [⤴ Back to top](#top)
 
-<a id="71-permissions-catalog"></a>
-### 7.1 Permissions catalog
+<a id="71-permissions-catalog"></a><a id="permissions-catalog"></a>
+### 6.1 Permissions catalog
 
 [⤴ Back to top](#top)
 
@@ -1717,8 +1613,8 @@ The exact set the `Step1_OnboardValidate-SecurityInsight-Permissions.ps1` utilit
 
 </details>
 
-<a id="72-files-deep-dive"></a>
-### 7.2 Files deep-dive
+<a id="72-files-deep-dive"></a><a id="files-deep-dive"></a>
+### 6.2 Files deep-dive
 
 [⤴ Back to top](#top)
 
@@ -1788,8 +1684,8 @@ SecurityInsight/
 
 </details>
 
-<a id="73-bucketing--beating-the-30k-row-ceiling"></a>
-### 7.3 Bucketing — beating the 30k row ceiling
+<a id="73-bucketing--beating-the-30k-row-ceiling"></a><a id="bucketing--beating-the-30k-row-ceiling"></a>
+### 6.3 Bucketing — beating the 30k row ceiling
 
 [⤴ Back to top](#top)
 
@@ -1849,8 +1745,8 @@ Manually guessing the right `BucketCount` for every query is brittle. The engine
 
 </details>
 
-<a id="74-output-destinations"></a>
-### 7.4 Output destinations
+<a id="74-output-destinations"></a><a id="output-destinations"></a>
+### 6.4 Output destinations
 
 [⤴ Back to top](#top)
 
@@ -1904,12 +1800,12 @@ HTML email with .xlsx attachment + AI summary in the body. Routing differs by mo
 | **Community** | `$global:SendMail`, `$global:MailTo` (one list, used regardless of Summary/Detailed) |
 | **Internal (Automation Framework)** | `$global:Mail_SecurityInsight_Summary_SendMail` / `_To` and `_Detailed_SendMail` / `_To` (per-mode routing) |
 
-Per-template override: see [§ 7.5](#75-per-template-mail-recipient-override-yaml).
+Per-template override: see [§ 7.5](#per-template-mail-recipient-override-yaml).
 
 </details>
 
-<a id="75-per-template-mail-recipient-override-yaml"></a>
-### 7.5 Per-template mail recipient override (YAML)
+<a id="75-per-template-mail-recipient-override-yaml"></a><a id="per-template-mail-recipient-override-yaml"></a>
+### 6.5 Per-template mail recipient override (YAML)
 
 [⤴ Back to top](#top)
 
@@ -1931,8 +1827,8 @@ When present on the chosen template, `Mail_To` overrides `$global:Report_To` and
 [INFO] Mail recipients overridden by template 'RiskAnalysis_Detailed_Bucket': vuln-team@..., audit@...
 ```
 
-<a id="76-cross-subscription-workspace-support"></a>
-### 7.6 Cross-subscription workspace support
+<a id="76-cross-subscription-workspace-support"></a><a id="cross-subscription-workspace-support"></a>
+### 6.6 Cross-subscription workspace support
 
 [⤴ Back to top](#top)
 
@@ -1940,8 +1836,8 @@ If your Defender / Sentinel workspace lives in a **different Azure subscription*
 
 The SPN still needs `Log Analytics Reader` on the cross-sub workspace — granted automatically by `OnboardValidate-Permissions` when you pass `-DefenderWorkspaceResourceId`.
 
-<a id="77-layered-config-flow"></a>
-### 7.7 Layered config flow
+<a id="77-layered-config-flow"></a><a id="layered-config-flow"></a>
+### 6.7 Layered config flow
 
 [⤴ Back to top](#top)
 
@@ -1974,8 +1870,8 @@ flowchart TB
 
 Each layer only writes the values it cares about. If you don't set anything at Layer 4, Layer 3 values pass through. If you don't have Layer 3 either, Layer 1 defaults apply. This is why a working community install can be as small as a 3-line `LauncherConfig.custom.ps1` containing only the SPN auth.
 
-<a id="78-end-to-end-architecture"></a>
-### 7.8 End-to-end architecture
+<a id="78-end-to-end-architecture"></a><a id="end-to-end-architecture"></a>
+### 6.8 End-to-end architecture
 
 [⤴ Back to top](#top)
 
@@ -2030,7 +1926,7 @@ flowchart LR
 ---
 
 <a id="video-walkthroughs"></a>
-## 8. Video walkthroughs
+## 📺 7. Video walkthroughs
 
 [⤴ Back to top](#top)
 
@@ -2048,8 +1944,8 @@ flowchart LR
 
 ---
 
-<a id="9-support"></a>
-## 9. Support
+<a id="9-support"></a><a id="support"></a>
+## 💬 8. Support
 
 [⤴ Back to top](#top)
 
@@ -2062,6 +1958,52 @@ flowchart LR
 | **📺 YouTube** | [@KnudsenMorten](https://www.youtube.com/@KnudsenMorten) |
 
 ---
+
+---
+
+<a id="5-whats-new-v21x-highlights"></a><a id="whats-new-v21x-highlights"></a><a id="whats-new"></a>
+## 🆕 9. What's New
+
+[⤴ Back to top](#top)
+
+| Area | Capability | Tag |
+|---|---|---|
+| 🎯 **Outputs** | JSON sibling of every XLSX (default ON) | v2.1.40 |
+| 📊 **Outputs** | Direct ingest to two Log Analytics tables (`SI_RiskAnalysis_Summary_CL` + `_Detailed_CL`) via auto-created DCRs (no manual table provisioning) | v2.1.41 |
+| ☁️ **Outputs** | Optional upload of `.xlsx` + `.json` to UNC share OR Azure Storage, type auto-detected, **backup-then-overwrite** semantics so re-runs never lose data | v2.1.42 / v2.1.44 |
+| 📧 **Mail routing** | Per-template recipient override in YAML (`Mail_To` / `Mail_SendMail` per `ReportName`) | v2.1.38 |
+| 🔐 **Permissions** | New `Step1_OnboardValidate-SecurityInsight-Permissions` admin utility — idempotent, data-driven catalog, supports interactive / SPN+secret / SPN+cert / MI auth | v2.1.32 / v2.1.33 |
+| 🧱 **Layered config** | Defaults vs. customer overrides cleanly separated. Customer file is gitignored, never overwritten by an upgrade | v2.1.24 / v2.1.26 |
+| 🩹 **Resilience** | MSAL token cache auto-recovery in `Build_Tier_Definitions_JSON_File` — no more silently empty Section B/C tier files | v2.1.34 |
+| 🌍 **Multi-sub** | Cross-subscription Defender / Sentinel workspace queries (resource ID embeds the sub — no Set-AzContext required) | v2.1.28 |
+| 🚫 **Scope filter** | `$global:SubscriptionNameExcludePatterns` wildcard filter for Azure-side enumeration | v2.1.21 |
+| 🏷️ **Banner** | Version-stamped banner across all 40 launcher templates — easy to confirm what's running | v2.1.31 / v2.1.36 |
+| 🤖 **Auth log** | `[INFO] Auth method (Graph) : SPN + Secret (clientId=..., tenant=...)` printed on every connect | v2.1.34 |
+| 📧 **SMTP fallback** | `$global:SecureCredentialsSMTP` can now be assembled from 9 global-name variants (`SMTPUser/SMTPPassword`, `Mail_SmtpUser/Password`, legacy `Mail_SecurityInsight_Username/Password`, …). Refuses interactive prompt under unattended runs. | v2.1.53 / v2.1.56 |
+| 🏗️ **Auto-provision infra** | Ingestion engines self-heal: if Log Analytics workspace / DCE / DCE RG / DCR RG is missing, create it and assign the SecurityInsight SPN the roles it needs. `DceIngestionUri` is auto-resolved from the DCE name (no longer required in the custom file). | v2.1.54 / v2.1.62 |
+| 🔀 **Layered defaults** | New **Layer 0** shared-defaults file (`LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1`) holds the canonical `$global:WorkspaceName`, `$global:DceName`, `$global:DceResourceGroup`, `$global:DcrResourceGroup`, `$global:Location`, and `$global:SubscriptionId`. Shared by every SI engine; customer overrides on top. | v2.1.55 |
+| 🧪 **Launcher mode override** | `$global:RiskAnalysis_Detailed_Override` / `_Summary_Override` lets a launcher flip Summary vs Detailed runs without touching `$global:ReportTemplate`. | v2.1.57 |
+| 📬 **Per-template mail (community)** | Community-mode mail now supports the same `RiskAnalysis_Detailed_To` / `_Summary_To` splits as AF mode — falls back to flat `$global:MailTo` when per-template vars aren't set. | v2.1.57 |
+| 📦 **IAC JSON + upload** | Identity collection engine now writes a `.json` array sibling of its `.jsonl` stream and optionally uploads both to UNC / Azure Storage (same pattern RiskAnalysis uses). Four unified behaviour globals (`TroubleshootingMode`, `CsaAttributeSet`, `Defender_WorkspaceNameResourceId`, `SubscriptionNameExcludePatterns`) work in both AF and community mode. | v2.1.58 |
+| 📁 **Auto-create container** | When `$global:ExportDestination` points at an Azure Storage URL and the container doesn't exist, the upload helper creates it and (best-effort) grants the SPN `Storage Blob Data Contributor` at the container scope. | v2.1.60 |
+| 🎯 **Sub-scoped DCE/DCR cache** | `$global:AzDceDetails` / `$global:AzDcrDetails` now filtered to the target subscription, so duplicate-named DCRs in other tenant subs can't poison `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` (fixes spurious 403 "DCE FQDN not associated with DCR immutable Id"). | v2.1.61 / v2.1.62 |
+| 🔑 **SubscriptionId honored** | Both IAC and RiskAnalysis self-heal blocks now read `$global:SubscriptionId` first, parsed from `$WorkspaceResourceId` second, Az context last. Ends the silent "wrong subscription" behaviour when only `$global:WorkspaceName` + `$global:SubscriptionId` are set. | v2.1.59 / v2.1.63 |
+| 📋 **OnboardValidate summary** | `Step1_OnboardValidate-SecurityInsight-Permissions` now emits a final copy-paste-ready summary block (App (client) ID, SPN ObjectId, Tenant ID, counts, ready-to-paste `$global:Spn*` block, verification KQL). | v2.1.64 |
+| 🎯 **Deterministic TraceID / TraceName** | Every RiskAnalysis row carries a `TraceName` (e.g. `Update vulnerable software--Very High--Critical - tier 0`) + a SHA-256-derived `TraceID` that stays stable across runs. Group-by TraceID in KQL to track the same finding across time. Separator bumped to `--` so severities containing a hyphen don't collide. | v2.1.88 / v2.1.93 |
+| ⏱️ **CollectionTime stamping** | RiskAnalysis ingest pipeline now mirrors the identity engine: `Add-CollectionTimeToAllEntriesInArray` → `Add-ColumnDataToAllEntriesInArray` → `ValidateFix-AzLogAnalyticsTableSchemaColumnNames` → `Build-DataArrayToAlignWithSchema` → `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output`. One `CollectionTime` per run, so `\| where CollectionTime == toscalar(...max(CollectionTime))` gives the latest slice. | v2.1.92 |
+| 🧮 **`$global:SolutionVersion` on every row** | VERSION.txt walk-up from `$PSScriptRoot`; stamped as a column on both `SI_RiskAnalysis_*_CL` and `SI_IdentityAssets_CL`. Tells you which engine version wrote which batch of rows. Surfaced in the Workbook "Data powered by" footer tile. | v2.1.96 |
+| 📊 **Azure Monitor Workbook** | Drop-in workbook template `TOOLS/AzureWorkbook/SecurityInsight-RiskAnalysis.workbook.json` with workspace pill (ARG-backed), time-range, multi-select filters (SecurityDomain / SecuritySeverity / CriticalityTier / Subcategory), trends, velocity (new vs resolved), Top-N, stale findings, identity inventory, Data-powered-by footer. Version badge visible in the GUI. | v2.1.99 / v2.1.106 |
+| 📤 **Power BI dataset refresh (community)** | New `$global:SendToPowerBI` toggle in the RiskAnalysis engine; when `$true`, acquires an OAuth2 token via SPN client-credentials and POSTs to the dataset's `/refreshes` endpoint so the customer's Power BI workspace picks up the latest KQL-ingested data on each scheduled run. Paired with a new Step4 one-time deploy engine for fully-automated `.pbix` upload + parameter rebind. | v2.1.98 / v2.1.102 |
+| 🗂️ **Step folders renumbered 0–4** | Bootstrap is now `Step0` (install / update from GitHub); engines are `Step1` Permissions → `Step2` Log Analytics → `Step3` Azure OpenAI → `Step4` Power BI (BETA). Setup Configurator tabs + launcher folder names + docs all aligned. | v2.1.103 |
+| 🧰 **Workbook multi-select fix** | Dropdowns now preselect `*` as a synthetic first option (`union (print Col='*'), (<query>)`); KQL guard is `'*' in ({Param}) or Col in ({Param})` so an empty pill never produces `Col in ()` and parse errors on fresh import. | v2.1.107 |
+| 📧 **`$global:SMTPFrom` (verified sender)** | Separate the SMTP login username from the `From` header. Brevo / SendGrid / Postmark / M365 all reject mail whose `From` isn't a verified sender — the relay login is NOT a valid `From`. Engine resolves `$SMTPFrom` → `$MailFrom` → `$SMTPUser` (legacy fallback) and throws if all three are empty. Configurator, sample, defaults, and README updated in lock-step. | v2.1.108 |
+| 🩹 **Step0 bootstrap: `iwr -OutFile`, not `irm \| Out-File`** | `Invoke-RestMethod` on PS 5.1 returns a string that includes the UTF-8 BOM as a content character, then `Out-File`'s default Unicode encoding writes a UTF-16 BOM + that stray FEFF — the parser then trips on `[CmdletBinding()]` with "Unexpected attribute". Switch to `Invoke-WebRequest -OutFile` (raw bytes). | v2.1.108 |
+| 📦 **One canonical PowerShell module set auto-installed on first run** | `Ensure-SecurityInsightModules` in `_shared/Ensure-Module.ps1` installs `Az`, `Az.ResourceGraph`, `Microsoft.Graph`, `Microsoft.Graph.Beta`, `AzLogDcrIngestPS`, `MicrosoftGraphPS`, `ImportExcel`, `powershell-yaml` — the superset any SI engine could need. Default `-Scope AllUsers` with fail-fast elevation check so installs land machine-wide and are visible to the daily scheduled task SYSTEM account. Directory-first module probe keeps warm-VM checks under 1 second even with 70+ Az.* submodules installed. | v2.1.113 / v2.1.114 / v2.1.122 / v2.1.125 |
+| 🗓️ **Daily auto-refresh scheduled task** | New `SCRIPTS/Register-SecurityInsightDailyUpdate.ps1` helper registers a Windows Scheduled Task that runs Step 0 every day at 03:00 as SYSTEM. New Locked YAML + engine code + launcher templates + workbook JSON land automatically while `LauncherConfig.custom.ps1` + `*_Custom.yaml` stay untouched. One-time admin setup, idempotent, `-Unregister` for clean removal. See [§ 3.3.1](#automate-daily-update). | v2.1.116 |
+| 🧰 **DCE/DCR cache filter: sub + RG** | `Ensure-SecurityInsightAzDceDcrCache` filters `$global:AzDcrDetails` / `$global:AzDceDetails` by both `-SubscriptionId` and `-DcrResourceGroup` / `-DceResourceGroup`. Stops the module's name-only lookup picking a neighbour DCR in a different RG (manifested as the cryptic `"Data collection rule with immutable Id 'westeurope' not found"` 404 on customer VMs with duplicate-named DCRs across RGs). | v2.1.129 |
+
+---
+
 
 <sub>Developed by **Morten Knudsen** — Microsoft MVP (Security · Azure · Security Copilot). Licensed under MIT. PRs welcome.</sub>
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.157
+## v2.1.158
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
 - docs(SI README): move 'What's in the box' into section 3.5 as 'Solution component overview' (d5a83e17)
 - docs(SI README + custom.sample): document auth-method priority chain + cross-layer override gotcha (001c594e)
 - fix(SI templates): better SpnTenantId-missing error + README recommends SecurityInsight.custom.ps1 for shared auth (3fe7a138)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): RSAT AD PowerShell prerequisite for Build_Tier_Definitions_JSON_File (4809b66d)
 - fix(SI Build_Tier): fail fast with RSAT install command when ActiveDirectory module is missing (6e7d1834)
 - refactor(SI): delete every duplicate module-check leftover from the v2.1.113 refactor (53343c56)
-- fix(SI ingest): filter DCE/DCR cache by RG as well as sub (kills 'westeurope' 404) (8d59f0a1)
 
 ---
 
@@ -48,6 +48,51 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.158 — README overhaul: lighter § 3, stable anchors, "What's New" moved to the end
+
+Big batch of readability fixes driven by real-user feedback on the rendered README.
+
+**§ 3 made lighter to read**
+
+- 📚 **§ 3.5 Pre-requisite configuration restructured.** Now leads with `.defaults.ps1` vs `.custom.ps1` primer + mermaid drawing of the 5-layer stack + Setup Configurator with PNG screenshot at the top + worked example. Previously readers scrolled through four back-to-back NOTE/TIP callouts, two duplicate onboarding tables, and a "30-second onboarding" subsection before seeing the tool that generates the config files.
+- 🆕 **Setup Configurator screenshot embedded** — `DOCS/Images/SetupConfigurator-tool.png` captured headlessly from the offline HTML tool and shown inline in § 3.5.
+- 🔧 **§§ 3.2, 3.3, 3.3.1 collapsed under `<details>`.** Keeps the critical copy-paste command visible; tucks parameter tables + air-gapped caveats + scheduled-task verification commands behind a one-click expander for readers who know their way around.
+- 🔧 **Removed duplicate onboarding tables** (Onboarding Steps + Ingestion engines were listed twice — once in "Solution component overview", once in the old pre-requisite table).
+- 🔧 **Deleted redundant "30-second onboarding" subsection** now that § 3.5 top covers the same ground more clearly.
+- 🔧 **§ 3.1 cadence line fixed** — was contradicting itself ("Steps 1–4 are once-per-tenant. Step 4 runs daily/hourly"). Now explicit: Steps 2–4 once-per-tenant, Step 1 runs on updates, Step 5 (tagging) daily/hourly, Step 6 (identity) daily, Step 7 (RiskAnalysis) daily/weekly/on-demand.
+- 🔧 **§ 3.1 mermaid boxes no longer truncate on GitHub render.** Labels now wrapped in `"..."` literals with explicit `<br/>` breaks so long launcher names don't overflow the box width.
+
+**Navigation + icons**
+
+- 🆕 **Emoji icons added to every non-definition section header.** `📘` § 1, `🧠` § 2, `🚀` § 3, `📜` § 5, `📎` § 6, `📺` § 7, `💬` § 8, `🆕` § 9, plus icons on every § 3 subsection (`📦 3.2`, `🔄 3.3`, `⏰ 3.3.1`, `🧪 3.4`, `🔧 3.5`, `🔐 3.5.1`, `🏗️ 3.5.2`, `🤖 3.5.3`, `▶️ 3.6`, `📂 3.7`, `🖥️ 3.8`, `☁️ 3.9`, `🎯 3.10`). § 4 Severity & Criticality Definitions intentionally left untouched (user-requested invariant: definitions must stay as-is).
+- 🧰 **All 42 numbered `<a id="...">` anchors now have clean-slug aliases.** Every `<a id="43-asset-classification-identity">` gets a twin `<a id="asset-classification-identity">`. Internal cross-references (97 of them) switched to the clean slugs. Effect: **renumbering a chapter no longer breaks in-doc links**, and external URLs using the numbered form still resolve for backward compatibility.
+
+**What's New moved to the end**
+
+- 🔀 **§ 5 "What's New (v2.1.x highlights)" moved to the bottom of the doc as § 9 "What's New"** — it was wedged between the Framework and the YAML Concept on the way to Appendix, interrupting the natural read-flow. Now it's a reference section after Support. Renamed heading: dropped the "(v2.1.x highlights)" subtitle per user request. Renumbered the displaced sections: 6 → 5 (YAML), 7 → 6 (Appendix; sub-sections 7.1–7.8 → 6.1–6.8), 8 → 7 (Videos), 9 → 8 (Support). Third anchor `whats-new` added as a cleaner alias alongside the legacy `whats-new-v21x-highlights` + `5-whats-new-v21x-highlights`.
+
+**Risk Score diagram (§ 2.2)**
+
+- 📚 **Mermaid diagram relabelled.** `Consequence` / `Probability` changed from `1–4` to `typically 1–5 (customizable)`. `Risk Score` changed from `0–32` to `Consequence × Probability (unbounded)`. Clarification added that the shipped CSV uses 1–5 per dimension (scores 1–25) but there's no hardcoded ceiling — customers can bump the scale.
+
+**Auth-method priority chain + error messages**
+
+- 🔧 **Community-vm templates' missing-auth error now points at the right file.** 8 templates updated to list both `CUSTOMDATA\SecurityInsight.custom.ps1` (recommended) and `LAUNCHERS\<engine>\LauncherConfig.custom.ps1` (per-engine override) instead of the stale "set it in `LauncherConfig.ps1`" hint.
+- 📚 **Priority chain (MI → KV → Cert → Secret) now explicitly documented** in README + `SecurityInsight.custom.sample.ps1` comments, including the cross-layer override gotcha ("certificate at Layer 1 wins over secret at Layer 3 — null out the higher-priority field if you want the lower-priority one").
+
+**Component overview ("What's in the box")**
+
+- 🔀 **Moved out of the early intro** (where it interrupted the talk-track) and into § 3.5 as the "Solution component overview". Regrouped into two sub-tables (Onboarding Steps in order vs Ingestion engines on a schedule). Step 4 (Power BI dashboard) now included — was missing from the old flat list.
+
+### v2.1.158 — README § 2.2: Risk Score diagram no longer implies a fixed ceiling
+
+- 📚 **§ 3.5 now leads with "what you need to configure" + a `.defaults.` vs `.custom.` primer + a mermaid drawing of the 5-layer stack.** Previously readers had to scroll through four back-to-back NOTE/TIP callouts, two duplicate onboarding tables, and a 30-second onboarding subsection before seeing the tool that actually generates the config files.
+- 🆕 **Setup Configurator screenshot** — `DOCS/Images/SetupConfigurator-tool.png` captured from the offline HTML tool and embedded at the top of § 3.5 so readers can see the form-+-live-preview GUI without launching it first.
+- 🔧 **Removed the duplicate "Onboarding Steps" + "Ingestion engines" tables** (were listed twice — once in "Solution component overview", once in the old pre-requisite table). Kept a single copy.
+- 🔧 **Consolidated four back-to-back NOTE/TIP callouts** (the "heavy to read" block flagged in screenshot feedback) into the layered-config primer up top. The `Build_Tier_Definitions_JSON_File` AD-membership note stays because it addresses a distinct on-prem concern.
+- 🔧 **Renumbered "30-second onboarding" steps** — old "Step 2 — do nothing" clashed with product Step 2; renamed to action-oriented "Step 3 — run the permissions launcher" / "Step 4 — run Step 2 / 3 / 4 + ingestion engines".
+- 🧰 **Worked example added** — "community-vm customer configures once, runs 10 engines" demonstrates the Layer 3 `SecurityInsight.custom.ps1` flow end-to-end.
 
 ### v2.1.157 — README: move "What's in the box" into § 3.5 as "Solution component overview"
 

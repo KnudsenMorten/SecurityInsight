@@ -483,10 +483,13 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 > **`Build_Tier_Definitions_JSON_File` does not enumerate AD members.** The engine uses Azure OpenAI to tier the hardcoded `$BuiltInADGroups` list (Domain Admins, Enterprise Admins, DnsAdmins, Account Operators, …) by name alone, then writes `AD_BuiltInPermissionGroups_Tier0..3` into `data/SecurityInsight_IdentityTiering.json`. Actual group-membership analysis ("does user X have access to Domain Admins?") happens at query time inside `IdentityAssetsCollectDefineTierIngestLog` via the Exposure Graph — no RSAT, no on-prem AD PowerShell module, no domain-joined VM required. Works identically on cloud-only community VMs and hybrid/on-prem VMs.
 
 > [!TIP]
-> **Internal (AF) / community-azure flavours don't need `LauncherConfig.custom.ps1`** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from the customer file.
+> **Internal (AF) / community-azure flavours don't need a customer config file** — they pull auth from the platform bootstrap (`Initialize-PlatformAutomationFramework`) or a Managed Identity + Key Vault. Only the **community-vm** flavour reads credentials from the customer file.
+
+> [!TIP]
+> **⭐ Put auth in `CUSTOMDATA\SecurityInsight.custom.ps1` once — covers every SI engine.** Since v2.1.149 the solution ships a Layer 3 sample (`CUSTOMDATA\SecurityInsight.custom.sample.ps1`) with complete SPN / OpenAI / SMTP / DCR / mail-routing sections. Copy it to `SecurityInsight.custom.ps1` in the same folder and fill in your values — all ~10 engines inherit it automatically. Fall back to per-engine `LauncherConfig.custom.ps1` only when one engine genuinely needs a different value (e.g. a different mail recipient).
 
 > [!NOTE]
-> **Where does `LauncherConfig.custom.ps1` come from?** There's no template created for you. **Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`** in the same folder, then edit. The `.custom.ps1` name is gitignored so the populated copy stays local.
+> **Where does `LauncherConfig.custom.ps1` come from?** There's no template created for you. **Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`** in the same folder, then edit. The `.custom.ps1` name is gitignored so the populated copy stays local. Use this file only for **per-engine** overrides; for shared auth use `SecurityInsight.custom.ps1` (see previous tip).
 > Some older solutions use the filename `LauncherConfig.ps1` (without `.custom.`) — both are recognized by the launcher; new work should prefer `.custom.ps1`.
 
 **Unattended (hands-off) operation** — Steps 2-4 and every engine launcher support the same four auth methods, so a pipeline / scheduled task can run the whole chain with one identity:

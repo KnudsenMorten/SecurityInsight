@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.154
+## v2.1.155
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI templates): better SpnTenantId-missing error + README recommends SecurityInsight.custom.ps1 for shared auth (3fe7a138)
 - fix(SI _lib Initialize-LauncherConfig): snapshot shows only values from the 5-6 layered files; simpler 2-section layout (5ab3ac42)
 - fix(SI _lib Initialize-LauncherConfig): write config snapshot to solution's DATA\LOGS, not repo-root (b7a3a08c)
 - feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI ingest): filter DCE/DCR cache by RG as well as sub (kills 'westeurope' 404) (8d59f0a1)
 - docs(SI): backfill curated RELEASENOTES for v2.1.120 -> v2.1.127 (d4b27a9c)
 - docs(SI README): section 6.6 -- CriticalAssetTagging Mode/Scope workflow (124fc81e)
-- docs(SI README): require admin PowerShell for Step 0 bootstrap (a92b428e)
 
 ---
 
@@ -48,6 +48,14 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.155 — Better `$global:SpnTenantId is required` error + README promotes solution-wide `SecurityInsight.custom.ps1` for auth
+
+- 🔧 **Community-vm templates' missing-auth error now points at the right file.** The old message said "set it in `LauncherConfig.ps1`" (legacy filename). The new multi-line error explicitly names both options in the layered model:
+  - `CUSTOMDATA\SecurityInsight.custom.ps1` — solution-wide, recommended; covers every SI engine
+  - `LAUNCHERS\<engine>\LauncherConfig.custom.ps1` — per-engine override; closest wins
+  …and it points the reader at the matching `.sample.ps1` + README § 3.5. Applied to 8 community-vm templates (Build_Tier_Definitions, CriticalAssetTagging, CriticalAssetTaggingMaintenance, CAT_FixConflictingTags, IdentityAssetsCollectDefineTierIngestLog, RiskAnalysis, Step2, Step3).
+- 📚 **README § 3.5 now has a ⭐ TIP recommending `SecurityInsight.custom.ps1` for shared auth.** Motivation: most customers want to paste their SPN once and have all ~10 SI engines inherit it, not maintain a separate `LauncherConfig.custom.ps1` per engine. The per-engine override file is still documented for the rare case where one engine needs a different value.
 
 ### v2.1.154 — Config snapshot: readable, only values from the 5-6 layered config files
 

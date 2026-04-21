@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.141
+## v2.1.142
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI RiskAnalysis): append '--SI' source tag to every TraceName (9193d4d9)
 - docs(SI README): byte-for-byte resync of sections 4.3 / 4.4 / 4.5 from c:\tmp\README.md (2cfa587a)
 - docs(SI RELEASENOTES): split MEM26 resync entry to v2.1.140 (v2.1.139 already used) (804836ed)
 - docs(SI README): resync sections 4.1-4.5 to verbatim text from MEM26 PDF (134fb73c)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _shared): suppress Ensure-SecurityInsightModules hashtable output (b6d75cea)
 - refactor(SI): single-source module set -- Ensure-SecurityInsightModules (88cd89b1)
 - refactor(SI): centralize module guards -- every engine uses _shared/Ensure-Module (ab435826)
-- feat(SI): centralize Ensure-Module helper under SCRIPTS/_shared/ (6ccf68f9)
 
 ---
 
@@ -48,6 +48,11 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.142 — `TraceName` gets a trailing `--SI` source tag
+
+- 🧰 **TraceName format now `<ConfigurationName>--<SecuritySeverity>--<CriticalityTierLevel>--SI`** (was the same without the `--SI` suffix). Matches the `--SI` convention already used on Defender asset tags (e.g. `DomainControllerDNS--tier0--SI`), so aggregators, SIEMs, and Power BI can filter findings by source system at the TraceName level instead of needing a separate column lookup.
+- ⚠️ **`TraceID` values will change on next run** — SHA-256 is deterministic over the new string, so every finding gets a new 16-hex ID. Historical group-by-TraceID queries for the same finding pre-v2.1.142 will see a discontinuity at the run boundary. This is the expected behaviour of the rebrand, not a bug.
 
 ### v2.1.141 — § 4.3 / 4.4 / 4.5 byte-for-byte resync from authoritative source README
 

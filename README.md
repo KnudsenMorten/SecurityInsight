@@ -17,6 +17,16 @@
 
 ---
 
+> **Your Defender dashboard and an attacker's target list look very different.** One is sorted by severity; the other is sorted by opportunity. Microsoft Defender surfaces every vulnerability, misconfiguration, and exposure in your environment — but deciding which one to address *first* is where most teams get stuck. Closing that gap is the difference between staying busy and actually reducing risk.
+>
+> **SecurityInsight** is a free, community-built add-on to Microsoft Defender — created by a Microsoft MVP — that helps you see risk the way a hacker would, and act on it the way a defender must. Every recommendation across Endpoint, Azure, and Identity is scored on four dimensions: **consequence**, **Tier 0–3 asset criticality**, **risk factors** (Internet Exposure, Verified Secret, Lateral Movement, ExploitSignals, and more), and a **customizable Risk Index**.
+>
+> **ExposureGraph** correlates assets, relationships, and attack paths across endpoints and Azure. SecurityInsight uses that data to classify assets and expose risks. Hundreds of ready-made queries and a built-in classification framework get you tagging servers, clients, and Azure resources from day one. For users, service principals, and managed identities, tiers are derived from **actual assigned permissions** — no static tags — and **AI** categorizes new Entra, Graph, and Azure roles automatically.
+>
+> 🎯 **Think like the hacker. Act like the defender. Fix what matters — first.**
+
+---
+
 <a id="toc"></a>
 ## 📑 Table of Contents
 
@@ -68,9 +78,32 @@
 
 [⤴ Back to top](#top)
 
-Security teams are drowning. A typical Microsoft tenant surfaces **3,000–10,000 security recommendations** across Defender, Entra ID, Azure, Intune, and Purview — and every vendor's portal speaks its own language. *Which fix actually reduces breach risk this week?* is a question almost no one can answer from the raw data.
+Defender will happily tell you about every vulnerability, misconfiguration, and exposure in your environment. What it won't tell you is which one an attacker would reach for first. **That's the prioritization gap — and it's where most security teams lose the battle.**
 
-**SecurityInsight** is a PowerShell solution that takes the same Defender / Entra / Azure data you already have and rebuilds it into one coherent **risk-based prioritization model**:
+**SecurityInsight** is a free, community-built add-on to Microsoft Defender that applies a tier-based risk scoring model designed to think like a hacker and act like a defender. Every finding across Endpoint, Azure, and Identity is evaluated on four dimensions:
+
+- the **security consequence** of the missing control,
+- the **criticality tier** (0–3) of the affected asset,
+- the **risk factors** that amplify exposure (Internet Exposure, Verified Secret, Critical Resource, Lateral Movement, Sensitive Data, LegacyEndOfSupport, ExploitSignals),
+- and a **customizable Risk Index** that lets you adapt the model to your organization.
+
+The solution is built on **Microsoft Defender ExposureGraph**, which gives it the contextual view attackers already have: what runs where, what's connected to what, which device hosts a domain controller, which VM has a managed identity with high-privilege access. SecurityInsight uses ExposureGraph to detect roles and relationships across endpoints and Azure resources and tag them automatically — without depending on someone remembering to label them.
+
+On top of that, the solution ships with a detailed classification framework — an initial tier definition library already mapped across identity, endpoint, and cloud — and a large set of ExposureGraph-powered detection and tagging queries for Azure and endpoints that help you classify resources in your own environment quickly. You know your estate better than anyone; the queries give you a running start. Everything is continuously updated and fully customizable, so you can extend or replace any detection with your own as your environment changes.
+
+A core focus is the **Identity collection** — users, service principals, and managed identities. Rather than relying on admins to tag accounts as "privileged" (a process that is always out of date), the model derives tier level automatically from the actual effective permissions each identity holds across AD, Entra ID roles, Microsoft Graph / API application permissions, and Azure RBAC. When Microsoft introduces a new role — as they do constantly — AI evaluates the permissions it grants and slots it into the right tier without human intervention.
+
+#### What you'll get from this document
+
+- Why "sort by severity, fix the biggest pile first" is the wrong instinct
+- How consequence, criticality, risk factors, and a customizable Risk Index combine into one score
+- How Tier 0–3 prioritization works across Endpoint, Azure, and Identity
+- How ExposureGraph drives automatic role and resource detection
+- How the built-in classification framework and tagging query library accelerate rollout
+- How to classify user, SPN, and managed identity criticality from permissions — not tags
+- How AI-driven classification keeps pace with Microsoft's ever-expanding role catalog
+
+You'll leave with a concrete, reproducible framework — free and community-maintained — and a way to finally answer *"what should we fix first?"* with confidence.
 
 > **Risk Score = Consequence (severity) × Probability (criticality + risk factors)**
 

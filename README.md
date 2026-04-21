@@ -29,8 +29,7 @@
 | What | Count |
 |---|---:|
 | 🎯 **Risk Analysis queries** — attacker-centric KQL across Endpoint, Azure, Identity | **100** |
-| 🏷️ **Critical Asset detection rules** — ExposureGraph-powered auto-tagging for Tier-0 infrastructure | **3** |
-| 🏷️ *Plus starter samples in `CriticalAssetTagging_Custom.yaml` (all `Mode: Test`, opt-in per rule)* | *177* |
+| 🏷️ **Critical Asset detection rules** — ExposureGraph / Azure Resource Graph auto-tagging across Identity, Endpoint, Azure PaaS | **180** |
 
 These aren't signature-based detections — they're **graph traversals** over Microsoft Defender **ExposureGraph** and **Azure Resource Graph**. Each query follows the relationships an attacker would actually exploit (endpoint → credential → lateral → Tier-0 asset), rather than alerting on isolated findings in isolation. Same data your SOC already pays for, framed as a graph instead of a flat list — which is what lets one curated set of ~100 queries cover vulnerabilities, misconfigurations, identity posture, and attack paths without needing a separate detection per tool.
 
@@ -2221,13 +2220,192 @@ Templates bundle multiple reports into one launcher run (the Summary / Detailed 
 | 1 | `RiskAnalysis_Detailed_Bucket` | 50 | Detailed |
 | 2 | `RiskAnalysis_Summary_Bucket` | 50 | Overview |
 
-#### Critical Asset Tagging — Locked detection rules
+#### Critical Asset Tagging — 180 Locked detection rules
 
-| # | Tag name | Tier | Purpose |
-|---:|---|---:|---|
-| 1 | `DomainControllerDNS--tier0--SI` | 0 | Auto-tag any onboarded server that ExposureGraph classifies as a Domain Controller or DNS server. Treated as Tier 0 — compromise = full environment compromise (forge Kerberos, replicate AD database, persist indefinitely). |
-| 2 | `ADCertificateService--tier0--SI` | 0 | Auto-tag servers running Active Directory Certificate Services (AD CS). Tier 0 — a compromised CA enables attacker-signed client auth certificates (ESC1–ESC8 abuse paths) that bypass virtually every auth control. |
-| 3 | `EntraSyncService--tier0--SI` | 0 | Auto-tag Entra Connect / Azure AD Connect / Entra Cloud Sync servers. Tier 0 — owns the hybrid identity sync bridge; compromise enables password-hash replication, seamless SSO ticket forgery, and directory-level changes that propagate to the cloud tenant. |
+Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` or `--excluded--SI`. Stem = everything before that suffix (Custom overrides match by stem).
+
+| # | Tag name | Tier | Mode | Engine |
+|---:|---|:-:|:-:|:-:|
+| 1 | `DomainControllerDNS--tier0--SI` | 0 | Prod | DefenderGraph |
+| 2 | `ADCertificateService--tier0--SI` | 0 | Prod | DefenderGraph |
+| 3 | `EntraSyncService--tier0--SI` | 0 | Prod | DefenderGraph |
+| 4 | `AzHubPlatformManagementSub--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 5 | `AzHubPlatformManagementResources--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 6 | `AzHubPlatformSecuritySub--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 7 | `AzHubPlatformSecurityResources--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 8 | `AzLZDatacenterSub--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 9 | `AzLZDatacenterSub--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 10 | `AutomationServer--tier0--SI` | 0 | Test | DefenderGraph |
+| 11 | `ServerBusinessServices--tier2--SI` | 2 | Test | DefenderGraph |
+| 12 | `PAWDevices--tier0--SI` | 0 | Test | DefenderGraph |
+| 13 | `Network_Backbone_Switch--tier0--SI` | 0 | Test | DefenderGraph |
+| 14 | `Network_Backbone_Router--tier0--SI` | 0 | Test | DefenderGraph |
+| 15 | `Network_Backbone_Management--tier0--SI` | 0 | Test | DefenderGraph |
+| 16 | `Network_WLANAccessPoint--tier2--SI` | 2 | Test | DefenderGraph |
+| 17 | `Temp-Client-Devices--excluded--SI` | excl. | Test | DefenderGraph |
+| 18 | `EmployeeWorkstations--tier3--SI` | 3 | Test | DefenderGraph |
+| 19 | `EmployeeMobile--tier3--SI` | 3 | Test | DefenderGraph |
+| 20 | `IoT--tier3--SI` | 3 | Test | DefenderGraph |
+| 21 | `ADFederationService--tier0--SI` | 0 | Test | DefenderGraph |
+| 22 | `PTAAuthBroker--tier0--SI` | 0 | Test | DefenderGraph |
+| 23 | `SecurityMgmtServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 24 | `HypervisorHost--tier0--SI` | 0 | Test | DefenderGraph |
+| 25 | `AzKeyVaultHSM--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 26 | `AzManagedHSM--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 27 | `AzureADDS--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 28 | `EndpointMgmtAdminServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 29 | `RADIUSNPSServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 30 | `BackupMgmtServer--tier0--SI` | 0 | Test | DefenderGraph |
+| 31 | `PatchMgmtServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 32 | `FirewallProxyMgmt--tier1--SI` | 1 | Test | DefenderGraph |
+| 33 | `SSOGatewayOAuthBroker--tier1--SI` | 1 | Test | DefenderGraph |
+| 34 | `PrintSpoolerElevated--tier1--SI` | 1 | Test | DefenderGraph |
+| 35 | `AzProductionDatabase--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 36 | `AzAPIManagement--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 37 | `AzBackupVault_Production--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 38 | `AzProductionAppService--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 39 | `AzApplicationGateway--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 40 | `AzDevTestVM--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 41 | `InternalWikiDocServer--tier3--SI` | 3 | Test | DefenderGraph |
+| 42 | `KioskSharedTerminal--tier3--SI` | 3 | Test | DefenderGraph |
+| 43 | `SharedKioskMobile--tier3--SI` | 3 | Test | DefenderGraph |
+| 44 | `AzKeyVaultRootCA--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 45 | `AzImmutableStorageIdentity--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 46 | `AzKeyVaultHighActivity--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 47 | `AzAutomationRunbook--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 48 | `AzNetworkSecurityControlPlane--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 49 | `AzDevTestSubscription--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 50 | `AzDevTestResourceGroup--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 51 | `AzAVDSessionHost--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 52 | `AzPersonalSandboxResource--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 53 | `AzSandboxSubscription--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 54 | `AzPoCPilotWorkload--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 55 | `AzLabResourceGroup--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 56 | `Identity_EntraGlobalAdmin--tier0--SI` | 0 | Test | DefenderGraph |
+| 57 | `Identity_SPNGraphPerms--tier0--SI` | 0 | Test | DefenderGraph |
+| 58 | `Identity_ADGroupMember--tier0--SI` | 0 | Test | DefenderGraph |
+| 59 | `Identity_DCSync_DnsAdmin_Rights--tier0--SI` | 0 | Test | DefenderGraph |
+| 60 | `Identity_CriticalServiceAccount_krbtgt--tier0--SI` | 0 | Test | DefenderGraph |
+| 61 | `Identity_BreakGlassAccount--tier0--SI` | 0 | Test | DefenderGraph |
+| 62 | `Identity_EntraConnectSyncAccount--tier0--SI` | 0 | Test | DefenderGraph |
+| 63 | `Identity_DeviceWithGlobalAdminTokenCache--tier0--SI` | 0 | Test | DefenderGraph |
+| 64 | `Identity_EntraRole--tier1--SI` | 1 | Test | DefenderGraph |
+| 65 | `Identity_SPNGraphPerms--tier1--SI` | 1 | Test | DefenderGraph |
+| 66 | `Identity_ADGroupMember--tier1--SI` | 1 | Test | DefenderGraph |
+| 67 | `Identity_FederatedCredentialHighPrivApp--tier1--SI` | 1 | Test | DefenderGraph |
+| 68 | `Identity_EntraRole--tier2--SI` | 2 | Test | DefenderGraph |
+| 69 | `Identity_SPNGraphPerms--tier2--SI` | 2 | Test | DefenderGraph |
+| 70 | `Identity_DNSAdminsGroupMember--tier2--SI` | 2 | Test | DefenderGraph |
+| 71 | `Identity_ScopedHighPrivSPN--tier2--SI` | 2 | Test | DefenderGraph |
+| 72 | `Identity_AzDevOpsServiceConnection--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 73 | `Identity_StandardUserAccount--tier3--SI` | 3 | Test | DefenderGraph |
+| 74 | `Identity_GuestAccount--tier3--SI` | 3 | Test | DefenderGraph |
+| 75 | `Identity_ManagedIdentityNoRBAC--tier3--SI` | 3 | Test | DefenderGraph |
+| 76 | `Identity_DisabledExpiredSPN--tier3--SI` | 3 | Test | DefenderGraph |
+| 77 | `ITDeptClientPC--tier1--SI` | 1 | Test | DefenderGraph |
+| 78 | `DeveloperWorkstation--tier2--SI` | 2 | Test | DefenderGraph |
+| 79 | `ReadOnlyDomainController--tier0--SI` | 0 | Test | DefenderGraph |
+| 80 | `KMSServer--tier0--SI` | 0 | Test | DefenderGraph |
+| 81 | `vCenterSCVMMServer--tier0--SI` | 0 | Test | DefenderGraph |
+| 82 | `OOBMgmt_iDRAC_iLO_IPMI--tier0--SI` | 0 | Test | DefenderGraph |
+| 83 | `NetworkMgmtServer--tier0--SI` | 0 | Test | DefenderGraph |
+| 84 | `SDWANController--tier0--SI` | 0 | Test | DefenderGraph |
+| 85 | `AuthLoadBalancer--tier0--SI` | 0 | Test | DefenderGraph |
+| 86 | `IoT_OT_DomainIntegrated--tier0--SI` | 0 | Test | DefenderGraph |
+| 87 | `JumpServerBastionHost--tier1--SI` | 1 | Test | DefenderGraph |
+| 88 | `ExchangeMessagingServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 89 | `SecretMgmtServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 90 | `NACServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 91 | `VPNConcentrator--tier1--SI` | 1 | Test | DefenderGraph |
+| 92 | `InternalDNSResolver--tier1--SI` | 1 | Test | DefenderGraph |
+| 93 | `DHCPServer_DomainIntegrated--tier1--SI` | 1 | Test | DefenderGraph |
+| 94 | `NTPPrimaryServer--tier1--SI` | 1 | Test | DefenderGraph |
+| 95 | `PrivilegedDeveloperMachine--tier1--SI` | 1 | Test | DefenderGraph |
+| 96 | `Network_DistributionSwitch--tier1--SI` | 1 | Test | DefenderGraph |
+| 97 | `Network_WirelessLANController--tier1--SI` | 1 | Test | DefenderGraph |
+| 98 | `Network_SSLInspectionProxy--tier1--SI` | 1 | Test | DefenderGraph |
+| 99 | `IoT_OT_Industrial--tier1--SI` | 1 | Test | DefenderGraph |
+| 100 | `SOCAnalystWorkstation--tier1--SI` | 1 | Test | DefenderGraph |
+| 101 | `CommonServiceServer--tier2--SI` | 2 | Test | DefenderGraph |
+| 102 | `DevOpsCICDBuildAgent--tier2--SI` | 2 | Test | DefenderGraph |
+| 103 | `PowerUserWorkstation_FinLegalHR--tier2--SI` | 2 | Test | DefenderGraph |
+| 104 | `Network_AccessSwitch--tier2--SI` | 2 | Test | DefenderGraph |
+| 105 | `Network_VoIPSIPGateway--tier2--SI` | 2 | Test | DefenderGraph |
+| 106 | `IoT_OfficeEnv--tier2--SI` | 2 | Test | DefenderGraph |
+| 107 | `LowImpactInfraServer--tier3--SI` | 3 | Test | DefenderGraph |
+| 108 | `Network_UnmanagedLowTrust--tier3--SI` | 3 | Test | DefenderGraph |
+| 109 | `IoT_Consumer--tier3--SI` | 3 | Test | DefenderGraph |
+| 110 | `BYODPersonalDevice--tier3--SI` | 3 | Test | DefenderGraph |
+| 111 | `AzVMWorkload--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 112 | `AzBastionHost--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 113 | `AzStorageData--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 114 | `AzFirewall_CentralHub--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 115 | `AzExpressRouteCircuit--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 116 | `AzPrivateDNSZone--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 117 | `AzVPNGateway--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 118 | `AzSentinelWorkspace--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 119 | `AzLogAnalytics--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 120 | `AzDevOpsConnection--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 121 | `AzDedicatedHost--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 122 | `AzVMWorkload--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 123 | `AzAKS_PrivilegedWorkload--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 124 | `AzStorage_SIEMSecrets--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 125 | `AzFrontDoor--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 126 | `AzLoadBalancer--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 127 | `AzDNSResolver--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 128 | `AzLogAnalytics--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 129 | `AzKeyVaultAppSecrets--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 130 | `AzLighthouseDelegation_Privileged--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 131 | `AzVMWorkload--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 132 | `AzAppServicePlan_Internal--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 133 | `AzSpokeVNet--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 134 | `AzDataStore_AppData--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 135 | `AzTrafficMgrCDN--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 136 | `AzNonProdWorkload--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 137 | `AzVM_LowImpact--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 138 | `AzAppService_PublicFacing--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 139 | `AzStorage_PublicNonSensitive--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 140 | `AzCDN_PublicDNS--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 141 | `AzVMScaleSet--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 142 | `AzConfidentialCompute--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 143 | `AzBlobStorageAuditPipeline--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 144 | `AzDDoSProtection--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 145 | `AzVNetHub--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 146 | `AzNSGSubnet--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 147 | `AzAutomation_HighPrivMI--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 148 | `AzArcControlPlane--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 149 | `AzStackHCI--tier0--SI` | 0 | Test | AzureResourceGraph |
+| 150 | `AzContainerApps_Privileged--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 151 | `AzBatch_HighPrivMI--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 152 | `AzStackHCI--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 153 | `AzDedicatedHost--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 154 | `AzFileShare_PrivilegedVMs--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 155 | `AzB2CTenant_Federated--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 156 | `AzVNetHub--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 157 | `AzNVA_RoutingInspection--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 158 | `AzPrivateEndpoint--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 159 | `AzDevOpsPipeline--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 160 | `AzUpdateManager--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 161 | `AzAutomation_ScopedRunbook--tier1--SI` | 1 | Test | AzureResourceGraph |
+| 162 | `AzFunctions_ScopedMI--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 163 | `AzLogicApps_LimitedScope--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 164 | `AzAKS_WorkerNodes--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 165 | `AzStackHCI--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 166 | `AzDedicatedHost--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 167 | `AzFileShare_StandardWorkload--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 168 | `AzAppGateway_NonAuth--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 169 | `AzNSG_WorkloadSubnet--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 170 | `AzDevOpsPipeline--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 171 | `AzKeyVaultAppSecrets--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 172 | `AzMonitorAlert_WorkloadScoped--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 173 | `AzBackupVault--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 174 | `AzLogAnalytics_WorkloadScoped--tier2--SI` | 2 | Test | AzureResourceGraph |
+| 175 | `AzContainerInstance_Isolated--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 176 | `AzStaticWebApp--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 177 | `AzStackHCI_NonProd--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 178 | `AzDedicatedHost_Sandbox--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 179 | `AzNSG_IsolatedLowTrust--tier3--SI` | 3 | Test | AzureResourceGraph |
+| 180 | `AzVirtualWAN_ReadOnly--tier3--SI` | 3 | Test | AzureResourceGraph |
 
 
 

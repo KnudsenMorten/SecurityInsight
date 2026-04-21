@@ -433,7 +433,27 @@ function Initialize-LauncherConfig {
     }
 
     # ---- Layer 3: <Solution>.custom.ps1 (solution-wide customer overrides) ---
-    $solutionCustomPath = Join-Path $RepoRoot ("SOLUTIONS\{0}\CUSTOMDATA\{0}.custom.ps1" -f $Solution)
+    # Path depends on layout:
+    #   Monorepo (internal):   <RepoRoot>\SOLUTIONS\<Solution>\CUSTOMDATA\<Solution>.custom.ps1
+    #   Community:             <RepoRoot>\CUSTOMDATA\<Solution>.custom.ps1
+    # For community installs $RepoRoot IS the solution folder; the monorepo path
+    # resolves to a non-existent nested folder (<RepoRoot>\SOLUTIONS\<Solution>\...)
+    # which caused silent Layer-3 misses on community-vm deploys (v2.1.164 fix).
+    $solutionCustomMonorepo  = Join-Path $RepoRoot ("SOLUTIONS\{0}\CUSTOMDATA\{0}.custom.ps1" -f $Solution)
+    $solutionCustomCommunity = Join-Path $RepoRoot ("CUSTOMDATA\{0}.custom.ps1" -f $Solution)
+    if (Test-Path -LiteralPath $solutionCustomMonorepo) {
+        $solutionCustomPath = $solutionCustomMonorepo
+    } elseif (Test-Path -LiteralPath $solutionCustomCommunity) {
+        $solutionCustomPath = $solutionCustomCommunity
+    } else {
+        # Neither exists -- pick the layout-appropriate path for the "absent" log
+        # message so the reader knows where to put the file.
+        $solutionCustomPath = if (Test-Path -LiteralPath (Join-Path $RepoRoot "SOLUTIONS\$Solution")) {
+            $solutionCustomMonorepo
+        } else {
+            $solutionCustomCommunity
+        }
+    }
     _CfgStep "Layer 3/5: $Solution.custom.ps1 (solution-wide customer overrides)"
     if (Test-Path -LiteralPath $solutionCustomPath) {
         _CfgUnblock $solutionCustomPath

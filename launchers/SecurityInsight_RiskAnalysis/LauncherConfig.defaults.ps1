@@ -107,28 +107,27 @@ $global:ExportDestination = $null
 # ============================================================================
 # Engine writes the .xlsx either way. SendMail attaches it to an HTML email
 # (with the AI summary if BuildSummaryByAI=$true) and SMTP-relays it.
-$global:SendMail           = $false
-$global:MailTo             = @()                  # array of recipients
-$global:SmtpServer         = $null
-$global:SMTPPort           = 587
-$global:SMTP_UseSSL        = $true
-$global:Mail_SendAnonymous = $false
-$global:SMTPUser           = $null                # SMTP login username
-$global:SMTPPassword       = $null                # SMTP login password
-$global:SMTPFrom           = $null                # From header address -- MUST be a verified
-                                                  # sender for relays like Brevo/SendGrid/
-                                                  # Postmark. Falls back to $SMTPUser if null.
+# DO NOT unconditionally assign $null here -- that would clobber whatever the
+# customer set in Layer 3 (SecurityInsight.custom.ps1). Only set fallback values
+# when the variable hasn't been populated by a higher-priority layer.
+if (-not (Test-Path variable:global:SendMail))           { $global:SendMail           = $false }
+if (-not (Test-Path variable:global:MailTo))             { $global:MailTo             = @() }
+if (-not (Test-Path variable:global:SMTPPort))           { $global:SMTPPort           = 587 }
+if (-not (Test-Path variable:global:SMTP_UseSSL))        { $global:SMTP_UseSSL        = $true }
+if (-not (Test-Path variable:global:Mail_SendAnonymous)) { $global:Mail_SendAnonymous = $false }
+# $global:SmtpServer / $global:SMTPUser / $global:SMTPPassword / $global:SMTPFrom
+# have no sensible engine default -- customer provides them. Unset == $null, which
+# is what the engine's fail-fast check expects.
 
 
 # ============================================================================
 #  AI SUMMARY (Azure OpenAI)
 # ============================================================================
-$global:BuildSummaryByAI           = $false
-$global:OpenAI_endpoint            = $null
-$global:OpenAI_deployment          = $null
-$global:OpenAI_apiVersion          = '2024-08-01-preview'
-$global:OpenAI_apiKey              = $null
-$global:OpenAI_MaxTokensPerRequest = 16384
+# Same rule: only set defaults that are actually safe to ship.
+if (-not (Test-Path variable:global:BuildSummaryByAI))           { $global:BuildSummaryByAI           = $false }
+if (-not $global:OpenAI_apiVersion)                              { $global:OpenAI_apiVersion          = '2024-08-01-preview' }
+if (-not (Test-Path variable:global:OpenAI_MaxTokensPerRequest)) { $global:OpenAI_MaxTokensPerRequest = 16384 }
+# $global:OpenAI_endpoint / _deployment / _apiKey: customer-supplied, no fallback.
 
 
 # ============================================================================

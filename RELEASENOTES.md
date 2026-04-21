@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.176
+## v2.1.177
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Layer 4 defaults): stop clobbering Layer 3 customer OpenAI / SMTP values (8f0decca)
 - fix(SI Build_Tier): diagnose NRE-on-every-retry (Azure OpenAI error envelope) (a691dbfa)
 - fix(SI Build_Tier): populate Azure role catalog + EntraID_APIPermissions_Catalog (both were empty / null) (eb45c3b0)
 - feat(SI CriticalAssetTagging): promote 177 samples from Custom -> Locked; Custom becomes override scaffold (b70b40fd)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
 - docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
 - refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
-- fix(SI LAUNCHERS): drop -RequireCustom on all community-vm templates (41e5f772)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.177 — Layer 4 defaults no longer clobber Layer 3 customer values (OpenAI / SMTP)
+
+- 🔧 **Critical bug, masked by v2.1.176's fail-fast.** `Build_Tier_Definitions_JSON_File` and `SecurityInsight_RiskAnalysis` shipped `LauncherConfig.defaults.ps1` (Layer 4) files that **unconditionally** wrote `$global:OpenAI_ApiKey = $null`, `$global:OpenAI_Endpoint = $null`, `$global:OpenAI_Deployment = $null`, `$global:SMTPUser = $null`, etc. Since Layer 4 loads *after* Layer 3 (`SecurityInsight.custom.ps1`), those unconditional assignments stomped the customer's carefully-placed SPN / OpenAI / SMTP values. The v2.1.176 fail-fast validation then surfaced it as *"`$global:OpenAI_ApiKey is empty. Set it in SecurityInsight.custom.ps1 (Layer 3)…"*  — even though the customer **had** set it in Layer 3. The config-snapshot log in `DATA\LOGS\config-*.log` pinpoints the problem cleanly: under v2.1.176 it showed `OpenAI_ApiKey [L4 LauncherConfig.defaults]` with `len=0`, when the expected winning layer is Layer 3.
+- 🔧 **Fix.** Both defaults files rewritten to **only set values when the variable is not already defined** (`if (-not (Test-Path variable:global:Foo)) { $global:Foo = <default> }`), and to **delete the 3 OpenAI + 4 SMTP unconditional null assignments** entirely — an unset global is already `$null` in PowerShell, so explicit `= $null` is never required and always dangerous in a Layer 4 file. Variables with a genuinely safe engine default (`AI_ChunkSize`, `AI_MaxTokens`, `AI_MaxRetries`, `OpenAI_apiVersion`, `SendMail=$false`, `SMTPPort=587`, etc.) keep their defaults but behind the conditional, so Layer 3 values still win.
+- 📚 **Pattern going forward:** Layer 4 `LauncherConfig.defaults.ps1` must treat every `$global:` assignment as an opt-in fallback. If a customer could reasonably set the variable in Layer 3 / 5, the defaults file must use the conditional-assignment pattern. Unconditional writes in Layer 4 are a bug, not a safety net.
 
 ### v2.1.176 — Build_Tier AI retry: stop NRE'ing on unexpected Azure OpenAI response shapes
 

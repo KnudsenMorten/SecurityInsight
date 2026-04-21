@@ -68,6 +68,154 @@ function Initialize-LauncherConfig {
         try { Unblock-File -LiteralPath $p -ErrorAction SilentlyContinue } catch { }
     }
 
+    # ---- Config-snapshot helpers (written as DATA\LOGS\config-*.log at the end) ----
+    # Snapshots all SI-related $global:* variables so we can diff them between
+    # layers and attribute each variable's final value to the layer that set
+    # it. Names matching secret-bearing patterns are redacted in the log.
+    $script:_CfgSnapBefore   = @{}
+    $script:_CfgProvenance   = [ordered]@{}    # name -> @{ Value; Source }
+    $script:_CfgLayerTrail   = [System.Collections.Generic.List[string]]::new()
+
+    function _CfgGatherGlobals {
+        $out = @{}
+        # Broad pattern: capture any global whose name is plausibly an engine
+        # input. Keeps the log focused on SI config, not the whole session.
+        $pattern = '^(Spn|SMTP|SMTPFrom|Mail|Send|OpenAI|AI_|Dce|Dcr|Workspace|Subscription|Report|Risk|Asset|Critical|Identity|Defender|Sentinel|Tenant|Auth|Use|Pipeline|Build|Troubleshoot|Csa|Scope|Batch|TableName|TenantDomain|DceIngestionUri|MainLog|Platform|SI_|SecurityInsight|Automation|HighPriv|GlobalAdmin|BreakGlass|Target|TestObject|Subscription|Output|Export|Write|Trace|Settings|BucketCount|UseQueryBucketing|Placeholder|ChosenReportTemplate|ResetCache|AutoBucket)'
+        foreach ($v in (Get-Variable -Scope Global -ErrorAction SilentlyContinue)) {
+            if ($v.Name -match $pattern) { $out[$v.Name] = $v.Value }
+        }
+        return $out
+    }
+
+    function _CfgValuesDiffer($a, $b) {
+        if ($null -eq $a -and $null -eq $b) { return $false }
+        if ($null -eq $a -or  $null -eq $b) { return $true  }
+        try { return (([string]$a) -ne ([string]$b)) } catch { return $true }
+    }
+
+    function _CfgRecordLayer ([string]$LayerLabel, [string]$Path, [bool]$Loaded) {
+        $status = if ($Loaded) { 'loaded' } else { 'absent' }
+        $trailLine = ("{0,-40}  {1,-7}  {2}" -f $LayerLabel, $status, $Path)
+        $script:_CfgLayerTrail.Add($trailLine) | Out-Null
+        if (-not $Loaded) { return }
+        $after = _CfgGatherGlobals
+        foreach ($n in $after.Keys) {
+            $newVal = $after[$n]
+            $hadBefore = $script:_CfgSnapBefore.ContainsKey($n)
+            $oldVal = if ($hadBefore) { $script:_CfgSnapBefore[$n] } else { $null }
+            if (-not $hadBefore -or (_CfgValuesDiffer $oldVal $newVal)) {
+                $script:_CfgProvenance[$n] = [ordered]@{ Value = $newVal; Source = $LayerLabel }
+            }
+        }
+        $script:_CfgSnapBefore = $after
+    }
+
+    function _CfgFormatValue ([string]$Name, $Value) {
+        # Redact anything whose NAME matches a secret-bearing pattern.
+        if ($Name -match '(?i)Secret|Password|Pwd|ApiKey|Api_Key|AccessKey|AccessSecret|Token(?!Lifetime)|ClientSecret|Cert(?:ificate)?Thumbprint') {
+            $len = if ($Value -is [string]) { $Value.Length } elseif ($null -eq $Value) { 0 } else { ("$Value").Length }
+            return "[REDACTED (len=$len)]"
+        }
+        if ($Value -is [System.Management.Automation.PSCredential]) {
+            return "[REDACTED PSCredential; UserName=$($Value.UserName)]"
+        }
+        if ($Value -is [System.Security.SecureString]) {
+            return '[REDACTED SecureString]'
+        }
+        if ($null -eq $Value) { return '$null' }
+        if ($Value -is [bool])  { return ('${0}' -f $Value.ToString().ToLower()) }
+        if ($Value -is [array] -or $Value -is [System.Collections.IList]) {
+            $parts = @()
+            foreach ($item in $Value) { $parts += "'$item'" }
+            return "@(" + ($parts -join ", ") + ")"
+        }
+        if ($Value -is [hashtable] -or $Value -is [System.Collections.IDictionary]) {
+            return "@{ " + (($Value.Keys | ForEach-Object { "$_ = ..." }) -join "; ") + " }"
+        }
+        return [string]$Value
+    }
+
+    function _CfgWriteSnapshotAndPrune {
+        param(
+            [Parameter(Mandatory)][string]$RepoRoot,
+            [Parameter(Mandatory)][string]$Engine,
+            [int]$RetentionDays = 7
+        )
+        $logDir = Join-Path $RepoRoot 'DATA\LOGS'
+        try {
+            if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
+        } catch {
+            _CfgInfo ("config snapshot: cannot create {0} ({1}) -- skipping" -f $logDir, $_.Exception.Message)
+            return
+        }
+
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $device = $env:COMPUTERNAME
+        $logFile = Join-Path $logDir ("config-{0}-{1}-{2}.log" -f $Engine, $stamp, $device)
+
+        $out = New-Object System.Text.StringBuilder
+        [void]$out.AppendLine('SecurityInsight -- Launcher Config Snapshot')
+        [void]$out.AppendLine(('=' * 100))
+        [void]$out.AppendLine(('Engine       : {0}' -f $Engine))
+        [void]$out.AppendLine(('Device       : {0}' -f $device))
+        [void]$out.AppendLine(('User         : {0}\{1}' -f $env:USERDOMAIN, $env:USERNAME))
+        [void]$out.AppendLine(('Timestamp    : {0}' -f (Get-Date -Format 's')))
+        [void]$out.AppendLine(('Install root : {0}' -f $RepoRoot))
+        [void]$out.AppendLine(('PS version   : {0}' -f $PSVersionTable.PSVersion))
+        [void]$out.AppendLine('')
+        [void]$out.AppendLine('Layer load trail:')
+        [void]$out.AppendLine(('-' * 100))
+        foreach ($line in $script:_CfgLayerTrail) { [void]$out.AppendLine($line) }
+        [void]$out.AppendLine('')
+        [void]$out.AppendLine(('Effective configuration ({0} variables, grouped by source layer):' -f $script:_CfgProvenance.Count))
+        [void]$out.AppendLine(('-' * 100))
+
+        # Group by source layer in load order so reader can skim each layer's
+        # contribution to the final config. Keeps the ledger tight even on
+        # busy VMs with 100+ SI globals.
+        $layerOrder = @(
+            'Layer 0 - shared-defaults',
+            'Layer 1 - LauncherConfig.defaults',
+            'Layer 2 - platform-defaults (internal)',
+            'Layer 3 - SecurityInsight.custom',
+            'Layer 4 - LauncherConfig.custom',
+            'Layer 4b - derived'
+        )
+        foreach ($layer in $layerOrder) {
+            $keys = @($script:_CfgProvenance.Keys | Where-Object { $script:_CfgProvenance[$_].Source -eq $layer } | Sort-Object)
+            if ($keys.Count -eq 0) { continue }
+            [void]$out.AppendLine('')
+            [void]$out.AppendLine(('[{0}]   {1} variable(s)' -f $layer, $keys.Count))
+            foreach ($n in $keys) {
+                $formatted = _CfgFormatValue $n $script:_CfgProvenance[$n].Value
+                [void]$out.AppendLine(('  $global:{0,-45} = {1}' -f $n, $formatted))
+            }
+        }
+        [void]$out.AppendLine('')
+        [void]$out.AppendLine(('=' * 100))
+        [void]$out.AppendLine('(Values for variables whose names match secret-bearing patterns are redacted as [REDACTED (len=N)] so presence can still be verified.)')
+
+        try {
+            Set-Content -LiteralPath $logFile -Value $out.ToString() -Encoding UTF8 -NoNewline
+            _CfgInfo ("config snapshot: {0}" -f $logFile)
+        } catch {
+            _CfgInfo ("config snapshot: failed to write {0} ({1})" -f $logFile, $_.Exception.Message)
+        }
+
+        # Prune old config-*.log files > RetentionDays.
+        try {
+            $cutoff = (Get-Date).AddDays(-1 * $RetentionDays)
+            $toDelete = Get-ChildItem -LiteralPath $logDir -Filter 'config-*.log' -File -ErrorAction SilentlyContinue |
+                        Where-Object { $_.LastWriteTime -lt $cutoff }
+            foreach ($f in $toDelete) {
+                try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop } catch { }
+            }
+            if ($toDelete -and $toDelete.Count -gt 0) {
+                _CfgInfo ("config snapshot: pruned {0} log(s) older than {1} days" -f $toDelete.Count, $RetentionDays)
+            }
+        } catch { }
+    }
+
     # ---- Layer 0: <Solution>.shared-defaults.ps1 (solution-wide shared baseline, ours) ----
     # Optional. The file sits in _lib/, which is always a SIBLING of the launcher
     # folder in both layouts:
@@ -76,11 +224,14 @@ function Initialize-LauncherConfig {
     # Resolve it relative to $LauncherDir so both layouts work.
     $sharedPath = Join-Path (Split-Path -Parent $LauncherDir) ("_lib\{0}.shared-defaults.ps1" -f $Solution)
     _CfgStep "Layer 0/4: $Solution.shared-defaults.ps1 (solution-wide shared baseline)"
+    $script:_CfgSnapBefore = _CfgGatherGlobals
     if (Test-Path -LiteralPath $sharedPath) {
         . $sharedPath
         _CfgOk "loaded ($sharedPath)"
+        _CfgRecordLayer 'Layer 0 - shared-defaults' $sharedPath $true
     } else {
         _CfgInfo "absent ($sharedPath) -- skipping"
+        _CfgRecordLayer 'Layer 0 - shared-defaults' $sharedPath $false
     }
 
     # ---- Layer 1: defaults.ps1 (engine baseline, ours, must exist) -----------
@@ -91,6 +242,7 @@ function Initialize-LauncherConfig {
     }
     . $defaultsPath
     _CfgOk "loaded"
+    _CfgRecordLayer 'Layer 1 - LauncherConfig.defaults' $defaultsPath $true
 
     # ---- Layer 2: platform-defaults.ps1 (internal only) ----------------------
     if ($Mode -eq 'internal') {
@@ -99,8 +251,10 @@ function Initialize-LauncherConfig {
         if (Test-Path -LiteralPath $platformPath) {
             . $platformPath
             _CfgOk "loaded"
+            _CfgRecordLayer 'Layer 2 - platform-defaults (internal)' $platformPath $true
         } else {
             _CfgInfo "absent ($platformPath) -- skipping"
+            _CfgRecordLayer 'Layer 2 - platform-defaults (internal)' $platformPath $false
         }
     }
 
@@ -111,8 +265,10 @@ function Initialize-LauncherConfig {
         _CfgUnblock $solutionCustomPath
         . $solutionCustomPath
         _CfgOk "loaded"
+        _CfgRecordLayer 'Layer 3 - SecurityInsight.custom' $solutionCustomPath $true
     } else {
         _CfgInfo "absent ($solutionCustomPath) -- skipping"
+        _CfgRecordLayer 'Layer 3 - SecurityInsight.custom' $solutionCustomPath $false
     }
 
     # ---- Layer 4: per-engine custom (LauncherConfig.custom.ps1 preferred,
@@ -136,6 +292,7 @@ function Initialize-LauncherConfig {
         _CfgUnblock $customPath
         . $customPath
         _CfgOk "loaded ($customPath)"
+        _CfgRecordLayer 'Layer 4 - LauncherConfig.custom' $customPath $true
     } elseif ($RequireCustom) {
         $expected = Join-Path $LauncherDir 'LauncherConfig.custom.ps1'
         throw @"
@@ -147,15 +304,22 @@ Copy $(Join-Path $LauncherDir 'LauncherConfig.sample.ps1') to LauncherConfig.cus
 "@
     } else {
         _CfgInfo "absent ($customPath) -- skipping (auth comes from elsewhere on this flavour)"
+        _CfgRecordLayer 'Layer 4 - LauncherConfig.custom' $customPath $false
     }
 
     # ---- Derived defaults: run AFTER all 4 layers so late-bound vars resolve ----
     # Platform-defaults (Layer 2, internal only) sets $global:MainLogAnalyticsWorkspaceSubId
     # but doesn't set $global:SubscriptionId. Derive it here so engines that read
     # $global:SubscriptionId don't have to duplicate the fallback logic.
+    $__before4b = _CfgGatherGlobals
     if ([string]::IsNullOrWhiteSpace([string]$global:SubscriptionId) -and
         -not [string]::IsNullOrWhiteSpace([string]$global:MainLogAnalyticsWorkspaceSubId)) {
         $global:SubscriptionId = [string]$global:MainLogAnalyticsWorkspaceSubId
         _CfgInfo "derived `$global:SubscriptionId from `$global:MainLogAnalyticsWorkspaceSubId"
     }
+    $script:_CfgSnapBefore = $__before4b
+    _CfgRecordLayer 'Layer 4b - derived' '(initializer derivation step)' $true
+
+    # ---- Write config snapshot log + prune old logs (7-day retention) --------
+    _CfgWriteSnapshotAndPrune -RepoRoot $RepoRoot -Engine $Engine -RetentionDays 7
 }

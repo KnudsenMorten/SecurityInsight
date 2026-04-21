@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.159
+## v2.1.160
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
 - docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
 - docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
 - docs(SI README): move 'What's in the box' into section 3.5 as 'Solution component overview' (d5a83e17)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - refactor(SI Build_Tier): drop on-prem AD enumeration entirely (ff5a7cf7)
 - fix(SI Build_Tier): drop dead 'AD_GroupMembership' key from tiering JSON (63cf116c)
 - docs(SI README): RSAT AD PowerShell prerequisite for Build_Tier_Definitions_JSON_File (4809b66d)
-- fix(SI Build_Tier): fail fast with RSAT install command when ActiveDirectory module is missing (6e7d1834)
 
 ---
 
@@ -44,10 +44,6 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
-
-### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
-
-- 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
 
 ### v2.1.159 — README teaser + expanded Introduction (session-abstract-derived copy)
 
@@ -89,15 +85,6 @@ Big batch of readability fixes driven by real-user feedback on the rendered READ
 **Component overview ("What's in the box")**
 
 - 🔀 **Moved out of the early intro** (where it interrupted the talk-track) and into § 3.5 as the "Solution component overview". Regrouped into two sub-tables (Onboarding Steps in order vs Ingestion engines on a schedule). Step 4 (Power BI dashboard) now included — was missing from the old flat list.
-
-### v2.1.158 — README § 2.2: Risk Score diagram no longer implies a fixed ceiling
-
-- 📚 **§ 3.5 now leads with "what you need to configure" + a `.defaults.` vs `.custom.` primer + a mermaid drawing of the 5-layer stack.** Previously readers had to scroll through four back-to-back NOTE/TIP callouts, two duplicate onboarding tables, and a 30-second onboarding subsection before seeing the tool that actually generates the config files.
-- 🆕 **Setup Configurator screenshot** — `DOCS/Images/SetupConfigurator-tool.png` captured from the offline HTML tool and embedded at the top of § 3.5 so readers can see the form-+-live-preview GUI without launching it first.
-- 🔧 **Removed the duplicate "Onboarding Steps" + "Ingestion engines" tables** (were listed twice — once in "Solution component overview", once in the old pre-requisite table). Kept a single copy.
-- 🔧 **Consolidated four back-to-back NOTE/TIP callouts** (the "heavy to read" block flagged in screenshot feedback) into the layered-config primer up top. The `Build_Tier_Definitions_JSON_File` AD-membership note stays because it addresses a distinct on-prem concern.
-- 🔧 **Renumbered "30-second onboarding" steps** — old "Step 2 — do nothing" clashed with product Step 2; renamed to action-oriented "Step 3 — run the permissions launcher" / "Step 4 — run Step 2 / 3 / 4 + ingestion engines".
-- 🧰 **Worked example added** — "community-vm customer configures once, runs 10 engines" demonstrates the Layer 3 `SecurityInsight.custom.ps1` flow end-to-end.
 
 ### v2.1.157 — README: move "What's in the box" into § 3.5 as "Solution component overview"
 
@@ -268,6 +255,10 @@ Big batch of readability fixes driven by real-user feedback on the rendered READ
 - 🧰 **SECTION A no longer touches the on-prem directory.** Group-membership analysis has already moved to the Exposure Graph inside `IdentityAssetsCollectDefineTierIngestLog` (see its line 1440-1441 comment: *"AD group memberships are sourced exclusively from the Exposure Graph"*), so enumerating members in this engine was dead work. Removed `Get-ADGroupMembersRecursive` + `Get-ADBuiltInGroupData` functions (~115 lines), the `$rawADMembers` pipeline, the `-ADGroupMembership` / `-RawADMembers` params, and the `TotalMembers` summary field.
 - 🧰 **AI tiering still runs on the hardcoded `$BuiltInADGroups` name list** — the AI has enough signal in the Windows built-in group names (Domain Admins, Enterprise Admins, DnsAdmins, Account Operators, etc.) to classify tier without a member snapshot. `AD_BuiltInPermissionGroups_Tier0..3` JSON keys still populated; `IdentityAssetsCollect` consumer unchanged.
 - 📚 **No RSAT prereq anymore.** The engine now runs cleanly on cloud-only community VMs and hybrid/on-prem VMs alike — no `ActiveDirectory` PowerShell module required. README callout rewritten from a WARNING about RSAT install to a NOTE explaining the Exposure-Graph-centric design. Previous v2.1.131 / v2.1.132 "install RSAT" guidance is now historical.
+
+### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
+
+- 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
 
 ### v2.1.131 — `Build_Tier_Definitions_JSON_File` fails fast when RSAT AD is missing
 

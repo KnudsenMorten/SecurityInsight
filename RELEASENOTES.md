@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.143
+## v2.1.144
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI CriticalAssetTagging): merge Locked+Custom by '<stem>--SI' key instead of full AssetTagName (be8136e0)
 - feat(SI Initialize-LauncherConfig): per-run DATA/LOGS/config-*.log snapshot with layer provenance + secret redaction + 7-day prune (072c0340)
 - feat(SI RiskAnalysis): append '--SI' source tag to every TraceName (9193d4d9)
 - docs(SI README): byte-for-byte resync of sections 4.3 / 4.4 / 4.5 from c:\tmp\README.md (2cfa587a)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _shared): emit 'Checking N modules...' banner so customers don't think it hung (a463dd2b)
 - feat(SI): daily auto-refresh via scheduled Step 0 task (8c9a00f8)
 - fix(SI _shared): suppress Ensure-SecurityInsightModules hashtable output (b6d75cea)
-- refactor(SI): single-source module set -- Ensure-SecurityInsightModules (88cd89b1)
 
 ---
 
@@ -48,6 +48,13 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.144 — CriticalAssetTagging Locked/Custom merge by `<stem>--SI` (tier is overridable data)
+
+- 🧰 **Merge key is now the stem + `--SI` suffix**, not the full `AssetTagName`. Identity = asset class ("which rule is this"), the `--tier<N>--` segment is treated as overridable data. Customer can re-tier a shipped rule by dropping a Custom entry with the same stem and a different tier integer — no need to copy the full Locked query or disable the Locked rule.
+  - **Example:** Locked ships `BackupOperators--tier1--SI`; customer drops `BackupOperators--tier0--SI` in Custom.yaml; effective run tags Backup Operators at tier 0. Custom's full rule (query included) wins.
+- ⚠️ **Strict naming required.** Every `AssetTagName` must match `<stem>--tier<N>--SI`. Malformed names throw at YAML merge time with a clear error pointing at the offending entry and the source file (Locked.yaml vs Custom.yaml). There is intentionally no full-string fallback — simpler semantics, no ambiguous collisions.
+- 📚 **README § 6.7 new subsection** documents the convention + stem-based merge + two use-case recipes: (1) promote an asset class from Tier 1 to Tier 0, (2) force a full re-tag by dropping the trailing delta filter from a Custom override query.
 
 ### v2.1.143 — Per-run `config-*.log` snapshot in `DATA\LOGS\`
 

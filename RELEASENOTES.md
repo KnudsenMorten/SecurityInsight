@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.172
+## v2.1.173
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): 3-line intro under WOW table explaining graph-based detection (cfa9bd9c)
 - docs(SI README § 6.9): Locked catalog inventory -- name + purpose per report/rule (80432ca1)
 - docs(SI README): expand 'out of the box' WOW table with AI-classified tier catalog breakdown (7c6d2330)
 - docs(SI README): add 'what you get out of the box' count table under the teaser (7e5d44aa)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Initialize-LauncherConfig): Layer 1 (LauncherConfig.defaults.ps1) is now optional (3ff3203f)
 - refactor(SI LAUNCHERS): unify all 44 launcher templates on Initialize-LauncherConfig (27ac39c5)
 - feat(SI CriticalAssetTagging): merge Locked+Custom by '<stem>--SI' key instead of full AssetTagName (be8136e0)
-- feat(SI Initialize-LauncherConfig): per-run DATA/LOGS/config-*.log snapshot with layer provenance + secret redaction + 7-day prune (072c0340)
 
 ---
 
@@ -44,6 +44,10 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.173 — 3-line "graph, not signatures" intro under the WOW table
+
+- 📚 **New short paragraph right under the Locked-catalog WOW table** explains *why* 100 curated queries cover the whole attack surface: they're **graph traversals** over Microsoft Defender ExposureGraph + Azure Resource Graph, not signature-based detections. Each query follows the relationships an attacker would actually exploit (endpoint → credential → lateral → Tier-0) rather than alerting on isolated findings. Same data your SOC already pays for, framed as a graph instead of a flat list.
 
 ### v2.1.172 — Appendix § 6.9: Locked catalog — full query / rule inventory (name + purpose, each)
 

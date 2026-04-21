@@ -32,6 +32,8 @@
 | 🏷️ **Critical Asset detection rules** — ExposureGraph-powered auto-tagging for Tier-0 infrastructure | **3** |
 | 🏷️ *Plus starter samples in `CriticalAssetTagging_Custom.yaml` (all `Mode: Test`, opt-in per rule)* | *177* |
 
+These aren't signature-based detections — they're **graph traversals** over Microsoft Defender **ExposureGraph** and **Azure Resource Graph**. Each query follows the relationships an attacker would actually exploit (endpoint → credential → lateral → Tier-0 asset), rather than alerting on isolated findings in isolation. Same data your SOC already pays for, framed as a graph instead of a flat list — which is what lets one curated set of ~100 queries cover vulnerabilities, misconfigurations, identity posture, and attack paths without needing a separate detection per tool.
+
 **🤖 AI-classified tier catalog** — every role / permission slotted into Tier 0–3 by the AI classifier; consumed by `IdentityAssetsCollect` when deriving a user / SPN / MI's effective tier from its actual assignments:
 
 | Category | Tier 0 | Tier 1 | Tier 2 | Tier 3 | **Total** |

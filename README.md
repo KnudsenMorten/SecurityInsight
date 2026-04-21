@@ -28,7 +28,7 @@
 
 | What | Count |
 |---|---:|
-| 🎯 **Risk Analysis queries** — attacker-centric KQL across Endpoint, Azure, Identity | **102** |
+| 🎯 **Risk Analysis queries** — attacker-centric KQL across Endpoint, Azure, Identity | **100** |
 | 🏷️ **Critical Asset detection rules** — ExposureGraph-powered auto-tagging for Tier-0 infrastructure | **3** |
 | 🏷️ *Plus starter samples in `CriticalAssetTagging_Custom.yaml` (all `Mode: Test`, opt-in per rule)* | *177* |
 
@@ -89,6 +89,7 @@
    - 6.6 [Cross-subscription workspace support](#cross-subscription-workspace-support)
    - 6.7 [Layered config flow](#layered-config-flow)
    - 6.8 [End-to-end architecture](#end-to-end-architecture)
+   - 6.9 [Locked catalog — full query / rule inventory](#locked-catalog-full-inventory)
 7. [Video walkthroughs](#video-walkthroughs)
 8. [Support](#support)
 9. [What's New](#whats-new)
@@ -2093,6 +2094,144 @@ flowchart LR
 
 ---
 
+<a id="locked-catalog-full-inventory"></a>
+
+### 6.9 Locked catalog — full query / rule inventory
+
+[⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
+
+Every name + one-line purpose of every report and tagging rule that ships in `DATA/*_Locked.yaml` — force-refreshed on every Step 0 update. The full KQL behind each entry lives in the YAML next to this README.
+
+#### Risk Analysis — 100 Locked reports (sorted by SecurityDomain)
+
+| # | Domain | Report name | Purpose |
+|---:|---|---|---|
+| 1 | Azure | `Attack_Paths_Detailed_BucketFilter_Credential_Based_Lateral_Movement` | Identify credential driven attack paths in Exposure Graph and prioritize them by the business impact of the final target. |
+| 2 | Azure | `Attack_Paths_Detailed_BucketFilter_Data_Sensitivity_to_Exposed_Credentials` | Attack Paths with Data Sensitivity to Exposed Credentials. Sensitive Data -> Storage -> Exposed Credential. Key detection -> Data exfiltration risk |
+| 3 | Azure | `Attack_Paths_Detailed_BucketFilter_Github_to_Azure_Resources` | Attack Paths - Github to Azure resources. GitHub -> Secret -> Azure Resource. Key Detection -> Supply chain compromise |
+| 4 | Azure | `Attack_Paths_Detailed_BucketFilter_Identity_Group_Membership_to_Privileged_Resources` | Identify identities that are members of groups and where those groups have permissions or roles on privileged Azure targets. Enrich each path with the standard node context and prioritize by the business impact of the FINAL TARGET. |
+| 5 | Azure | `Attack_Paths_Detailed_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation` | Attack Paths with focus on Public IP to VM with CVE Exploitation. Public IP -> Vulnerable VM/Device. Key detection -> Internet-exposed vulnerabilities |
+| 6 | Azure | `Attack_Paths_Summary_BucketFilter_Credential_Based_Lateral_Movement` | Identify credential driven attack paths in Exposure Graph and prioritize them by the business impact of the final target. |
+| 7 | Azure | `Attack_Paths_Summary_BucketFilter_Data_Sensitivity_to_Exposed_Credentials` | Attack Paths with Data Sensitivity to Exposed Credentials. Sensitive Data -> Storage -> Exposed Credential. Key detection -> Data exfiltration risk |
+| 8 | Azure | `Attack_Paths_Summary_BucketFilter_Github_to_Azure_Resources` | Identify credentials stored in GitHub workflows or repositories and trace credential driven attack paths into Azure targets. Paths are prioritized by the business impact of the FINAL TARGET. |
+| 9 | Azure | `Attack_Paths_Summary_BucketFilter_Identity_Group_Membership_to_Privileged_Resources` | Attack Paths based on Identity Group Membership to Privileged Resources. Identity -> Group -> Privileged Resource. Key Detection -> Group-based attacks |
+| 10 | Azure | `Attack_Paths_Summary_BucketFilter_Public_IP_to_VM_with_CVE_Exploitation` | Attack Paths with focus on Public IP to VM with CVE Exploitation. Public IP -> Vulnerable VM/Device. Key detection -> Internet-exposed vulnerabilities |
+| 11 | Azure | `Azure_Recommendations_Detailed_BucketFilter` | Summarize Azure exposure graph findings per asset and recommendation with tier fallback from tags and probability scoring from all risk factors |
+| 12 | Azure | `Azure_Recommendations_Summary_BucketFilter` | Summarize Azure exposure graph findings per asset and recommendation with tier fallback from tags and probability scoring from all risk factors |
+| 13 | Endpoint | `Attack_Paths_Detailed_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` | Attack Paths with Device with high severity vulnerabilities allows lateral movement |
+| 14 | Endpoint | `Attack_Paths_Summary_BucketFilter_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` | Attack Paths with Device with high severity vulnerabilities allows lateral movement |
+| 15 | Endpoint | `Device_Missing_CVEs_Detailed_BucketFilter` | This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most critical and likely exploitable vulnerabilities. |
+| 16 | Endpoint | `Device_Missing_CVEs_Summary_BucketFilter` | This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most critical and likely exploitable vulnerabilities. |
+| 17 | Endpoint | `Device_Recommendations_Detailed_BucketFilter` | Show non-compliant TVM secure configuration controls for endpoints, enriched with Exposure Graph criticality and tags, and add a probability score based on Internet-Exposed (EG CustomerFacing) and LegacyEndOfSupport OS detection |
+| 18 | Endpoint | `Device_Recommendations_Summary_BucketFilter` | Identify non-compliant TVM secure configuration controls on endpoints, enriched with Exposure Graph criticality and risk context, and scored with a probability model that includes Internet-Exposed (from EG CustomerFacing) and LegacyEndOfSupport based on OS platform |
+| 19 | Identity | `Identity_Admin_LogonTo_InternetExposedDevice_Detailed` | Per-identity detail view for Admin LogonTo InternetExposedDevice Summary. |
+| 20 | Identity | `Identity_Admin_LogonTo_InternetExposedDevice_Summary` | Privileged users (Tier 0/1) authenticated to internet-facing devices. Privileged sessions should never occur on internet-exposed assets as these devices have a significantly higher chance of being compromised remotely. Even without CVEs, internet-exposed devices face constant attack attempts. An attacker who breaches an internet-exposed device gains access to any privileged credential or token present on that device. Severity: High (fixed). |
+| 21 | Identity | `Identity_Admin_LogonTo_LowTierDevice_Detailed` | Per-identity detail view for Admin LogonTo LowTierDevice Summary. |
+| 22 | Identity | `Identity_Admin_LogonTo_LowTierDevice_Summary` | Tier 0 privileged users (Global Admin, Domain Admin etc) authenticating to devices that are NOT classified as Tier 0 assets. Tier 0 admins should only use Tier 0 Privileged Access Workstations (PAWs). Logging on to a standard workstation, developer machine, or shared device exposes Tier 0 credentials to a device with a broader attack surface and potentially lower security controls. Severity: Very High (fixed) - Tier 0 admin on non-PAW device is a tiering violation. |
+| 23 | Identity | `Identity_Admin_LogonTo_VulnerableDevice_Detailed` | Per-pair detail: privileged admin and the specific vulnerable device they can authenticate to. Includes CVE score, internet exposure and device risk. |
+| 24 | Identity | `Identity_Admin_LogonTo_VulnerableDevice_Summary` | Privileged users (permanent or PIM-eligible Tier 0/1 roles) who are observed authenticating to devices that have high or critical severity CVEs outstanding. When an admin logs on to a vulnerable device, their privileged token/credential is exposed on that device. An attacker who exploits the CVE could harvest the admin credential via memory dumps, token theft, or keylogging. Severity: Very High (fixed) - privileged credential exposure on vulnerable device. |
+| 25 | Identity | `Identity_AdminAccount_HasMailbox_Detailed` | Per-admin detail: privileged accounts (Tier 0/1) with a primary mailbox. |
+| 26 | Identity | `Identity_AdminAccount_HasMailbox_Summary` | Privileged admin accounts (Tier 0/1) that have a primary mailbox (MailAddress populated). Admin accounts should be mail-disabled, dedicated accounts used only for privileged tasks. A mailbox on an admin account makes it a phishing target and widens the attack surface significantly — one phishing email can directly compromise a privileged session. |
+| 27 | Identity | `Identity_AdminAccount_NeverUsed_Detailed` | Per-identity detail view for AdminAccount NeverUsed Summary. |
+| 28 | Identity | `Identity_AdminAccount_NeverUsed_Summary` | Privileged accounts (Tier 0/1) created more than 14 days ago that have never signed in. Unused privileged accounts represent dormant attack surface - they hold permissions but have no operational owner actively monitoring them. Common cause: accounts created for a project that never started, or provisioned for a consultant who never onboarded. Severity: High (fixed). |
+| 29 | Identity | `Identity_AdminAccount_OnPremSynced_Detailed` | Per-identity detail view for AdminAccount OnPremSynced Summary. |
+| 30 | Identity | `Identity_AdminAccount_OnPremSynced_Summary` | Privileged admin accounts (Tier 0/1) that are synchronised from on-premises AD rather than being cloud-only. Admin accounts should be cloud-native to avoid on-prem compromise pivoting to cloud. A compromised AD environment (e.g. via ransomware) can directly take over cloud admin accounts that are synced from AD. Severity: Very High - on-prem sync of privileged accounts breaks cloud/AD separation. |
+| 31 | Identity | `Identity_AnyUser_NoMFA_Detailed` | Per-identity detail view for AnyUser NoMFA Summary. |
+| 32 | Identity | `Identity_AnyUser_NoMFA_Summary` | All enabled users with no MFA registration, across all tiers. Excludes accounts created within the last 7 days. Severity scales with tier. |
+| 33 | Identity | `Identity_BreakGlass_Anomaly_Detailed` | Per-identity detail view for BreakGlass Anomaly Summary. |
+| 34 | Identity | `Identity_BreakGlass_Anomaly_Summary` | Break-glass emergency access accounts with anomalous sign-in patterns. Detects two opposite problems: (1) Break-glass account used recently (< 30 days) WITHOUT an incident - possible misuse (2) Break-glass account has never been tested OR last test was > 180 days ago Break-glass accounts should only be used in genuine emergencies and tested periodically. Severity: Very High (fixed) - any break-glass anomaly is a critical governance failure. |
+| 35 | Identity | `Identity_BreakGlass_SignIn_Detected_Detailed` | Per-identity detail view for BreakGlass SignIn Detected Summary. |
+| 36 | Identity | `Identity_BreakGlass_SignIn_Detected_Summary` | Any successful sign-in by an account flagged as a break-glass emergency account. Break-glass accounts are only valid for use during genuine catastrophic failures where normal admin access is unavailable. Every sign-in by a break-glass account must be investigated to confirm it was authorised and justified. This is an operational alert that should trigger an immediate review process. Severity: Very High (fixed) — all break-glass usage is critical regardless of context. |
+| 37 | Identity | `Identity_DisabledAccount_ActivePIMAssignment_Detailed` | Per-identity detail view for DisabledAccount ActivePIMAssignment Summary. |
+| 38 | Identity | `Identity_DisabledAccount_ActivePIMAssignment_Summary` | Disabled user accounts that still have PIM eligible role assignments active. When an account is disabled (e.g. employee leaving), all role assignments should be removed as part of the offboarding process. An eligible assignment on a disabled account means the account could be re-enabled and immediately used to activate privileged access — a common post-compromise technique. Severity: High (fixed). |
+| 39 | Identity | `Identity_EligibleAdmin_LogonTo_ExploitableDevice_Detailed` | Per-identity detail view for EligibleAdmin LogonTo ExploitableDevice Summary. |
+| 40 | Identity | `Identity_EligibleAdmin_LogonTo_ExploitableDevice_Summary` | Users with PIM-eligible Tier 0/1 roles authenticated to devices that have vulnerabilities with known exploits available (isExploitVerified or isInExploitKit). Even if the PIM role is not currently activated, the credential harvested from an exploitable device could be used to activate PIM and gain full admin access. Severity: Very High (fixed) - eligible admin credential on actively exploitable device. |
+| 41 | Identity | `Identity_ExternalUser_PrivilegedRole_Detailed` | Per-identity detail view for ExternalUser PrivilegedRole Summary. |
+| 42 | Identity | `Identity_ExternalUser_PrivilegedRole_Summary` | External/B2B guest users with Tier 0/1 Entra ID roles. External identities should never hold privileged directory roles. Their accounts are governed by their home tenant's security posture which may be significantly lower than yours. A compromised partner account with Global Admin in your tenant is a catastrophic risk. |
+| 43 | Identity | `Identity_HighMDIInvestigationPriority_Detailed` | Per-identity detail view for HighMDIInvestigationPriority Summary. |
+| 44 | Identity | `Identity_HighMDIInvestigationPriority_Summary` | Active accounts with MDI Investigation Priority Percentile in the top 10% (MDI_InvestigationPriorityPct >= 90). MDI calculates this score based on observed anomalous behaviours, lateral movement signals, unusual access patterns, and UEBA risk scoring. A high investigation priority means MDI has observed behaviour that warrants review. When this is combined with a privileged identity, it represents a potentially active threat that requires immediate attention. Severity: High (fixed). |
+| 45 | Identity | `Identity_HighValueTarget_MDIRisk_Detailed` | Per-identity detail view for HighValueTarget MDIRisk Summary. |
+| 46 | Identity | `Identity_HighValueTarget_MDIRisk_Summary` | Identities flagged by Microsoft Defender for Identity as high or critical risk, cross-referenced with our asset tier classification. MDI risk signals include observed lateral movement, credential exposure, anomalous behaviour, and UEBA scoring. When a Tier 0/1 identity has elevated MDI risk, it indicates an active or recent threat that requires immediate investigation. |
+| 47 | Identity | `Identity_MultiTenant_HighPermission_SPN_Detailed` | Per-identity detail view for MultiTenant HighPermission SPN Summary. |
+| 48 | Identity | `Identity_MultiTenant_HighPermission_SPN_Summary` | Multi-tenant service principals (accessible from external tenants) with Tier 0/1 permissions. Multi-tenant apps expose credentials and permissions to external party control. If a partner tenant is compromised, the SPN can be leveraged to attack your tenant with full privileges. |
+| 49 | Identity | `Identity_NewAccount_ImmediateTier0Role_Detailed` | Per-identity detail view for NewAccount ImmediateTier0Role Summary. |
+| 50 | Identity | `Identity_NewAccount_ImmediateTier0Role_Summary` | User accounts created within the last 24 hours that already have a Tier 0 Entra ID role assigned. In a healthy environment, newly created accounts go through a provisioning workflow and role assignments require approval. Immediate Tier 0 role on a brand-new account indicates either a provisioning process bypass, a compromised privileged account creating rogue admin accounts, or a misconfigured automation script with excessive initial permissions. Severity: Very High (fixed) — immediate Tier 0 access on new account. |
+| 51 | Identity | `Identity_PasswordNeverExpires_Privileged_Detailed` | Per-identity detail view for PasswordNeverExpires Privileged Summary. |
+| 52 | Identity | `Identity_PasswordNeverExpires_Privileged_Summary` | Privileged accounts with password-never-expires flag set. While passwordless and MFA mitigate this, a non-expiring password on a privileged account means a compromised credential remains valid indefinitely. Combined with no MFA or stale sign-in, this represents a critical unmanaged risk. |
+| 53 | Identity | `Identity_PermanentPrivilegedRole_Detailed` | Per-identity detail view for PermanentPrivilegedRole Summary. |
+| 54 | Identity | `Identity_PermanentPrivilegedRole_Summary` | Privileged users with permanent (non-PIM) role assignments. Best practice requires all Tier 0/1 roles to be assigned via PIM (just-in-time) to reduce the standing attack surface. Permanent assignments mean the role is always active, even when not in use, providing a persistent target for attackers. |
+| 55 | Identity | `Identity_PIM_DuplicateRoleAssignment_Detailed` | Per-identity detail view for PIM DuplicateRoleAssignment Summary. |
+| 56 | Identity | `Identity_PIM_DuplicateRoleAssignment_Summary` | Users who have the same Entra ID role assigned both permanently AND as PIM eligible. This is a misconfiguration: the permanent assignment makes the PIM eligible one redundant and indicates the PIM policy was not followed. The permanent assignment should be removed and only the PIM eligible retained. Severity: Medium-High (fixed) - redundant permanent assignment defeats PIM purpose. |
+| 57 | Identity | `Identity_PIM_EligibleNeverActivated_Detailed` | Per-identity detail view for PIM EligibleNeverActivated Summary. |
+| 58 | Identity | `Identity_PIM_EligibleNeverActivated_Summary` | Users with PIM-eligible Tier 0/1 role assignments that have never been activated (no interactive sign-in with the role active). Eligible roles that are never used suggest the assignment is unnecessary and should be removed to reduce blast radius. This also applies to identities with eligible roles but no sign-in at all. Severity: Medium (fixed) - eligible roles are safer than permanent but unused assignments still represent unnecessary standing access that should be cleaned up. |
+| 59 | Identity | `Identity_PrivilegedSPN_NoLogin180Days_Detailed` | Per-SPN/MI detail for privileged workloads inactive for 180+ days. Includes permission details, credential info, and owner status. |
+| 60 | Identity | `Identity_PrivilegedSPN_NoLogin180Days_Summary` | Service Principals and Managed Identities with Tier 0/1 permissions (high-privilege app roles or directory roles) that have not authenticated for 180+ days. Dormant privileged workload identities are attractive targets as they may retain permissions long after the business use case has ended. |
+| 61 | Identity | `Identity_PrivilegedUser_BruteForceSuccess_Detailed` | Per-identity detail view for PrivilegedUser BruteForceSuccess Summary. |
+| 62 | Identity | `Identity_PrivilegedUser_BruteForceSuccess_Summary` | Privileged accounts (Tier 0/1) where multiple failed sign-in attempts were followed by a successful sign-in within a 1-hour window. This pattern is consistent with password spraying or brute-force attack that succeeded. Even with MFA, a brute-forced account can be used to trigger MFA fatigue. A confirmed brute-force success on a privileged account is one of the highest risk signals available from sign-in logs. Severity: Very High (fixed). |
+| 63 | Identity | `Identity_PrivilegedUser_ImpossibleTravel_Detailed` | Per-identity detail view for PrivilegedUser ImpossibleTravel Summary. |
+| 64 | Identity | `Identity_PrivilegedUser_ImpossibleTravel_Summary` | Privileged users with successful sign-ins from two or more different countries within a 4-hour window — physically impossible travel time. Impossible travel is one of the highest-confidence signals for account compromise, as it is not explainable by VPN (VPN would show consistent exit country) or time zones. Any impossible travel on a Tier 0 identity should be treated as an active incident. Severity: Very High (fixed). |
+| 65 | Identity | `Identity_PrivilegedUser_NoMFA_Detailed` | Detailed view of privileged users (Tier 0/1) with no MFA registration. Per-user record with role details, last sign-in, and tier information. |
+| 66 | Identity | `Identity_PrivilegedUser_NoMFA_Summary` | Identifies privileged users (Tier 0/1) who have not registered any MFA method. A privileged account without MFA is a single-credential compromise away from full domain/tenant takeover. Excludes accounts created within the last 7 days (grace period for new provisioning). |
+| 67 | Identity | `Identity_PrivilegedUser_SignIn_HighRiskCountry_Detailed` | Per-identity detail view for PrivilegedUser SignIn HighRiskCountry Summary. |
+| 68 | Identity | `Identity_PrivilegedUser_SignIn_HighRiskCountry_Summary` | Privileged users (Tier 0/1) who have successfully signed in from countries classified as high-risk (outside expected operational countries). The country list should be tuned to your organisation's footprint. Admin sign-ins from unexpected countries are a strong indicator of credential compromise, VPN circumvention, or use of a third-party device in a foreign location. Severity: Very High (fixed). |
+| 69 | Identity | `Identity_PrivilegedUser_SignIn_NonTrustedLocation_Detailed` | Per-user detail: privileged accounts with non-trusted location sign-ins. Shows sign-in count, IPs, countries, and last occurrence. |
+| 70 | Identity | `Identity_PrivilegedUser_SignIn_NonTrustedLocation_Summary` | Privileged users (Tier 0/1) who have successfully signed in from a network location that is NOT defined as a trusted named location in Conditional Access. Admin accounts should only authenticate from managed, trusted networks (corporate VPN, PAW networks, known office IPs). Sign-in from an untrusted location on a privileged account is a strong indicator of credential compromise, policy bypass, or an admin using personal devices/networks for privileged tasks. Severity: Very High (fixed). |
+| 71 | Identity | `Identity_PrivilegedUser_StalePassword_Detailed` | Per-identity detail view for PrivilegedUser StalePassword Summary. |
+| 72 | Identity | `Identity_PrivilegedUser_StalePassword_Summary` | Privileged accounts whose password has not been changed in over 365 days. Long-lived passwords increase the window of exploitation if credentials were exposed in a breach that was never detected. Applies to accounts where password authentication is still a factor (non-passwordless-only accounts). |
+| 73 | Identity | `Identity_ServiceAccount_InteractiveSignIn_Detailed` | Per-identity detail view for ServiceAccount InteractiveSignIn Summary. |
+| 74 | Identity | `Identity_ServiceAccount_InteractiveSignIn_Summary` | Accounts classified by MDI as service accounts (MDI_IsServiceAccount = true) that have interactive human sign-ins recorded in SigninLogs. Service accounts should authenticate exclusively via non-interactive flows (daemon credentials, managed identity, service principal). Interactive logins indicate the service account credentials are being used by a human — either a shared password problem, a developer using service credentials to bypass controls, or a threat actor who harvested the credentials and is performing hands-on-keyboard activity. Severity: High (fixed). |
+| 75 | Identity | `Identity_ServiceAccount_SignIn_NonTrustedLocation_Detailed` | Per-identity detail view for ServiceAccount SignIn NonTrustedLocation Summary. |
+| 76 | Identity | `Identity_ServiceAccount_SignIn_NonTrustedLocation_Summary` | Accounts classified as service accounts by MDI (MDI_IsServiceAccount = true) that have successfully authenticated from non-trusted network locations. Service accounts are expected to authenticate exclusively from known, trusted infrastructure (application servers, automation agents). Authentication from an untrusted location strongly suggests the service account credentials have been harvested and are being used by a threat actor. Severity: High (fixed). |
+| 77 | Identity | `Identity_ShadowAdmin_Detailed` | Per-identity detail view for ShadowAdmin Summary. |
+| 78 | Identity | `Identity_ShadowAdmin_Summary` | Users classified as shadow admins: they hold Tier 0/1 AD group membership (e.g. Domain Admins inherited via group nesting) but have no visible Entra ID role assignments. These accounts exercise privileged AD access that may not be tracked by standard Entra ID governance tooling, creating a blind spot in access reviews and PIM coverage. |
+| 79 | Identity | `Identity_SPN_AppRoleAssignmentWrite_Detailed` | Per-identity detail view for SPN AppRoleAssignmentWrite Summary. |
+| 80 | Identity | `Identity_SPN_AppRoleAssignmentWrite_Summary` | Service Principals with AppRoleAssignment.ReadWrite.All permission. This allows the SPN to grant any Graph application permission to any other SPN, including granting itself Global Admin-equivalent permissions such as RoleManagement.ReadWrite.Directory or Directory.ReadWrite.All. A compromised SPN with this permission can bootstrap full tenant takeover in two API calls: grant itself dangerous permissions, then use them. Severity: Very High (fixed). |
+| 81 | Identity | `Identity_SPN_ExpiringCredentials_Detailed` | Per-identity detail view for SPN ExpiringCredentials Summary. |
+| 82 | Identity | `Identity_SPN_ExpiringCredentials_Summary` | Service Principals with client secrets or certificates that have expired or will expire within 30 days. Expired credentials cause service outages. Credentials expiring on privileged SPNs are especially urgent as emergency secret rotation under pressure increases risk of mistakes or insecure handling. |
+| 83 | Identity | `Identity_SPN_MailboxAccess_Detailed` | Per-identity detail view for SPN MailboxAccess Summary. |
+| 84 | Identity | `Identity_SPN_MailboxAccess_Summary` | Service Principals with mailbox-level Microsoft Graph permissions (Mail.ReadWrite, Mail.Send, MailboxSettings.ReadWrite or equivalent). These permissions allow an app to read all email in the organisation or send as any user - a high-value target for data exfiltration and business email compromise (BEC). SPNs with mailbox access and no active usage are especially concerning. |
+| 85 | Identity | `Identity_SPN_Orphan_NoOwner_Detailed` | Per-identity detail view for SPN Orphan NoOwner Summary. |
+| 86 | Identity | `Identity_SPN_Orphan_NoOwner_Summary` | Service Principals with no registered owner. Ownerless SPNs have no accountability for credential rotation, permission review, or decommissioning. Privileged orphaned SPNs are critical: no one is responsible for monitoring or revoking access. |
+| 87 | Identity | `Identity_SPN_OverCredentialed_Detailed` | Per-identity detail view for SPN OverCredentialed Summary. |
+| 88 | Identity | `Identity_SPN_OverCredentialed_Summary` | Service Principals that have both a client secret AND a certificate registered. Over-credentialed SPNs increase the credential attack surface - two different authentication paths must both be managed and rotated. Often indicates legacy credentials were not cleaned up when the SPN was migrated to certificate auth. Severity: Medium (fixed). |
+| 89 | Identity | `Identity_SPN_PrivilegedAccessWrite_Detailed` | Per-identity detail view for SPN PrivilegedAccessWrite Summary. |
+| 90 | Identity | `Identity_SPN_PrivilegedAccessWrite_Summary` | Service Principals with PrivilegedAccess.ReadWrite.AzureAD permission. This allows the SPN to directly create, modify, or remove PIM role eligibility and assignment schedules. A compromised SPN with this permission can make any account permanently eligible for Global Administrator with no approval workflow, or remove existing PIM assignments to cover tracks. Severity: Very High (fixed) — direct PIM manipulation capability. |
+| 91 | Identity | `Identity_SPN_RoleManagementWrite_Detailed` | Per-identity detail view for SPN RoleManagementWrite Summary. |
+| 92 | Identity | `Identity_SPN_RoleManagementWrite_Summary` | Service Principals with the RoleManagement.ReadWrite.Directory Graph permission. This permission allows the SPN to assign ANY Entra ID role to ANY principal, including Global Administrator. A compromised SPN with this permission can immediately elevate any account to full tenant administrator — the equivalent of a skeleton key to the entire Entra ID tenant. This is arguably the most dangerous single Graph permission that exists. Severity: Very High (fixed). |
+| 93 | Identity | `Identity_SPN_UnverifiedPublisher_HighPermission_Detailed` | Per-identity detail view for SPN UnverifiedPublisher HighPermission Summary. |
+| 94 | Identity | `Identity_SPN_UnverifiedPublisher_HighPermission_Summary` | Service Principals with Tier 0/1 permissions whose publisher has not been verified by Microsoft. Unverified publishers are anonymous — there is no accountability for the code running in your tenant. High-privilege unverified apps represent a supply chain risk: the app developer could push malicious updates, and there is no way to validate the publisher's identity or intent. Severity: High (fixed). |
+| 95 | Identity | `Identity_StaleGuest_NoLogin90Days_Detailed` | Per-identity detail view for StaleGuest NoLogin90Days Summary. |
+| 96 | Identity | `Identity_StaleGuest_NoLogin90Days_Summary` | B2B guest/external collaborator accounts with no sign-in for 90+ days. Guests have a shorter stale threshold than internal users as they represent external access that should be regularly re-validated. Stale guest accounts are a common vector for supply chain and partner-related compromises. |
+| 97 | Identity | `Identity_StaleUser_NoLogin180Days_Detailed` | Per-user detail for enabled accounts with no sign-in for 180+ days. Excludes guest/B2B. Includes last sign-in dates, role details, and tier. |
+| 98 | Identity | `Identity_StaleUser_NoLogin180Days_Summary` | Enabled user accounts with no interactive or non-interactive sign-in for 180+ days. Excludes guest/B2B accounts (handled separately). Stale privileged accounts are particularly dangerous as they may be forgotten but still retain active permissions. |
+| 99 | Identity | `Identity_TooManyGlobalAdmins_Detailed` | Per-identity detail view for TooManyGlobalAdmins Summary. |
+| 100 | Identity | `Identity_TooManyGlobalAdmins_Summary` | Detects when the organisation has more than 5 active Global Administrator accounts. Microsoft recommends 2-5 Global Admins maximum. Each additional Global Admin increases the attack surface proportionally. Organisations with 10+ Global Admins typically have role assignment hygiene problems and lack a formal review process. Severity: High (fixed) - excessive Global Admin count is always a significant risk. |
+
+#### Risk Analysis — 2 Locked report templates (orchestrators)
+
+Templates bundle multiple reports into one launcher run (the Summary / Detailed flavours).
+
+| # | Template name | Includes | Purpose |
+|---:|---|---:|---|
+| 1 | `RiskAnalysis_Detailed_Bucket` | 50 | Detailed |
+| 2 | `RiskAnalysis_Summary_Bucket` | 50 | Overview |
+
+#### Critical Asset Tagging — Locked detection rules
+
+| # | Tag name | Tier | Purpose |
+|---:|---|---:|---|
+| 1 | `DomainControllerDNS--tier0--SI` | 0 | Auto-tag any onboarded server that ExposureGraph classifies as a Domain Controller or DNS server. Treated as Tier 0 — compromise = full environment compromise (forge Kerberos, replicate AD database, persist indefinitely). |
+| 2 | `ADCertificateService--tier0--SI` | 0 | Auto-tag servers running Active Directory Certificate Services (AD CS). Tier 0 — a compromised CA enables attacker-signed client auth certificates (ESC1–ESC8 abuse paths) that bypass virtually every auth control. |
+| 3 | `EntraSyncService--tier0--SI` | 0 | Auto-tag Entra Connect / Azure AD Connect / Entra Cloud Sync servers. Tier 0 — owns the hybrid identity sync bridge; compromise enables password-hash replication, seamless SSO ticket forgery, and directory-level changes that propagate to the cloud tenant. |
+
+
+
+</details>
+
+---
 <a id="video-walkthroughs"></a>
 
 </details>

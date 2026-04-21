@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.178
+## v2.1.179
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
 - docs(SI README): refresh teaser tier catalog with live numbers; Azure RBAC now populates (+873) (bb70f622)
 - fix(SI Layer 4 defaults): stop clobbering Layer 3 customer OpenAI / SMTP values (8f0decca)
 - fix(SI Build_Tier): diagnose NRE-on-every-retry (Azure OpenAI error envelope) (a691dbfa)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
 - feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
 - fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
-- docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
 
 ---
 
@@ -44,6 +44,11 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.179 — README: drop duplicate `# SecurityInsight` H1 + de-fade the teaser
+
+- 📚 **Removed the `# 🛡️ SecurityInsight` H1** at the top of the README. GitHub renders the repo name as a heading at the very top of the rendered page automatically, so the markdown H1 was producing a duplicate "SecurityInsight" title. File now starts with the badges + author line.
+- 📚 **Teaser no longer wrapped in a `>` blockquote.** GitHub renders `>` blockquotes in a lighter grey which looked faded against the surrounding full-contrast body text. The four teaser paragraphs are now plain paragraphs with the same bold / italic emphasis, so they read at full contrast. The strap line "🎯 Think like the hacker. Act like the defender. Fix what matters — first." promoted to an H3 so it stands on its own as a closing line.
 
 ### v2.1.178 — Teaser WOW table: Azure RBAC catalog now populates (+873 roles); grand total jumps to 2,297
 

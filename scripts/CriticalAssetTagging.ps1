@@ -1333,27 +1333,37 @@ if ($lockedExists -or $customExists) {
 
 # Merge: Custom wins on duplicate AssetTagName STEM (case-insensitive).
 #
-# Rule identity = everything BEFORE '--tier<N>--SI', combined with the '--SI'
-# suffix. The tier number between is treated as an OVERRIDABLE data field,
-# not part of the identity. This lets a customer change just the tier
-# (e.g. promote 'BackupOperators--tier1--SI' to 'BackupOperators--tier0--SI')
-# by dropping a same-stem entry into Custom.yaml -- no need to rewrite the
-# Locked query or disable it.
+# Rule identity = everything BEFORE '--tier<N>--SI' (or '--excluded--SI'),
+# combined with the '--SI' suffix. The tier number / 'excluded' marker between
+# is treated as an OVERRIDABLE data field, not part of the identity. This lets
+# a customer change just the tier (e.g. promote 'BackupOperators--tier1--SI'
+# to 'BackupOperators--tier0--SI') by dropping a same-stem entry into
+# Custom.yaml -- no need to rewrite the Locked query or disable it.
 #
 #   Locked : 'BackupOperators--tier1--SI'   -> key 'BACKUPOPERATORS--SI'
 #   Custom : 'BackupOperators--tier0--SI'   -> key 'BACKUPOPERATORS--SI'
 #   Merge result: Custom wins -> Backup Operators now tagged at tier 0.
 #
-# Every AssetTagName MUST match '<stem>--tier<N>--SI'. Malformed names throw
-# with a clear error pointing at the offending entry (no silent fallback;
-# that path was explicitly rejected for being ambiguous).
+# Two valid shapes for AssetTagName:
+#   <stem>--tier<N>--SI      -- standard tiering (N = 0|1|2|3)
+#   <stem>--excluded--SI     -- explicit exclusion marker. Used to tag
+#                               assets that should show up as "Excluded"
+#                               in the Defender portal filter -- typically
+#                               renamed / pre-decommission machines that
+#                               still linger in inventory. Treated as a
+#                               parallel identity class: an 'excluded'
+#                               entry shares its stem with any tier entry,
+#                               so Custom can still override Locked.
+#
+# Malformed names throw with a clear error pointing at the offending entry
+# (no silent fallback; that path was explicitly rejected for being ambiguous).
 function Get-AssetTagStemKey {
     param([string]$Name, [string]$Source)
     if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
     $trim = $Name.Trim()
-    $m = [regex]::Match($trim, '^(?<stem>.+?)--tier(?<tier>\d+)--SI$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $m = [regex]::Match($trim, '^(?<stem>.+?)--(?:tier(?<tier>\d+)|excluded)--SI$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if (-not $m.Success) {
-        throw ("AssetTagName '{0}' in {1} does not match the required '<stem>--tier<N>--SI' convention. Fix the YAML entry -- malformed tag names cannot participate in the Locked/Custom merge." -f $trim, $Source)
+        throw ("AssetTagName '{0}' in {1} does not match the required '<stem>--tier<N>--SI' or '<stem>--excluded--SI' convention. Fix the YAML entry -- malformed tag names cannot participate in the Locked/Custom merge." -f $trim, $Source)
     }
     return ($m.Groups['stem'].Value + '--SI').ToUpperInvariant()
 }

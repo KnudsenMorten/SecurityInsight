@@ -6,7 +6,7 @@
 [![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell)](https://learn.microsoft.com/powershell/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**Author**: [Morten Knudsen](https://mortenknudsen.net) — Microsoft MVP (Security · Azure · Security Copilot)
+**Author**: [Morten Knudsen](https://mortenknudsen.net) — Microsoft MVP
 **Support**: [GitHub Issues](https://github.com/KnudsenMorten/SecurityInsight/issues) · [mok@mortenknudsen.net](mailto:mok@mortenknudsen.net)
 **Watch**: [Video walkthroughs](#video-walkthroughs)
 
@@ -2494,6 +2494,6 @@ Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` 
 ---
 
 
-<sub>Developed by **Morten Knudsen** — Microsoft MVP (Security · Azure · Security Copilot). Licensed under MIT. PRs welcome.</sub>
+<sub>Developed by **Morten Knudsen** — Microsoft MVP. Licensed under MIT. PRs welcome.</sub>
 
 [⤴ Back to top](#top)

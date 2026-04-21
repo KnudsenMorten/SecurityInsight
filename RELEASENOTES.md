@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.180
+## v2.1.181
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
 - docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
 - docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
 - docs(SI README): refresh teaser tier catalog with live numbers; Azure RBAC now populates (+873) (bb70f622)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _lib Initialize-LauncherConfig): snapshot shows only values from the 5-6 layered files; simpler 2-section layout (5ab3ac42)
 - fix(SI _lib Initialize-LauncherConfig): write config snapshot to solution's DATA\LOGS, not repo-root (b7a3a08c)
 - feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
-- feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
 
 ---
 
@@ -44,6 +44,11 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.181 — Simplify `Microsoft MVP (Security · Azure · Security Copilot)` → `Microsoft MVP` everywhere
+
+- 📚 **Replaced 74 occurrences** across every README, script, launcher template, `LauncherConfig.defaults.ps1`, `LauncherConfig.sample.ps1`, and the Setup Configurator HTML. Both separator variants (`· ·` middle-dot and `, ,` comma) caught; zero remaining `Microsoft MVP (` matches.
+- Rationale: shorter, reads cleaner in the script-banner footer line and the README author line; the MVP competency list was repeated everywhere without adding signal. The MVP competencies are on [mortenknudsen.net](https://mortenknudsen.net) for anyone who wants them.
 
 ### v2.1.180 — README teaser copy tweaks
 

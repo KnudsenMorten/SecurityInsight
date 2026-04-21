@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Step 4 -- deploy (or refresh the deployment of) the SecurityInsight
@@ -99,7 +99,7 @@
 .NOTES
     Solution     : SecurityInsight
     File         : Step4_Deploy-SecurityInsight-PowerBI-Dashboard.ps1
-    Developed by : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by : Morten Knudsen, Microsoft MVP
     Prereqs      : See DOCS/PowerBI-Prerequisites.md for the one-time
                    tenant setup (Power BI SPN, API permissions, admin
                    tenant setting, workspace admin rights).

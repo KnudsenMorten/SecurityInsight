@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Quickstart customer config for Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.
@@ -21,7 +21,7 @@
 .NOTES
     Solution       : SecurityInsight
     Engine         : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by   : Morten Knudsen, Microsoft MVP
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : For public repos, open a GitHub Issue on that solution's repo.

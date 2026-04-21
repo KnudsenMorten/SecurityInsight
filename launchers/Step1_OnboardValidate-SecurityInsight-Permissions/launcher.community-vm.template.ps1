@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Community VM launcher for SecurityInsight\Step1_OnboardValidate-SecurityInsight-Permissions.
@@ -15,7 +15,7 @@
     Solution       : SecurityInsight
     Engine         : Step1_OnboardValidate-SecurityInsight-Permissions
     File           : launcher.community-vm.template.ps1
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by   : Morten Knudsen, Microsoft MVP
 #>
 [CmdletBinding()]
 param(

@@ -14,7 +14,7 @@
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
     Engine                : Build_Tier_Definitions_JSON_File
-    Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by          : Morten Knudsen, Microsoft MVP
 #>
 
 # ============================================================================

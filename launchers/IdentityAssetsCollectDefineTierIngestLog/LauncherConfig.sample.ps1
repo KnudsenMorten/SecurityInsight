@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Quickstart customer config for IdentityAssetsCollectDefineTierIngestLog.
@@ -31,7 +31,7 @@
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
     Engine                : IdentityAssetsCollectDefineTierIngestLog
-    Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by          : Morten Knudsen, Microsoft MVP
 #>
 
 # ============================================================================

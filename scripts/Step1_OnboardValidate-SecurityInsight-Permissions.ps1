@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 #Requires -Modules @{ ModuleName='Microsoft.Graph.Authentication'; ModuleVersion='2.0.0' }
 <#
 .SYNOPSIS
@@ -117,7 +117,7 @@
         entry (Graph / Defender / ATP).
       - For an Azure RBAC role: add a hashtable to $RequiredAzureRoles.
 
-    Developed by : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by : Morten Knudsen, Microsoft MVP
 #>
 
 [CmdletBinding()]

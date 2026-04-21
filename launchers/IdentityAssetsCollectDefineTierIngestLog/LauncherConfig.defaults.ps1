@@ -14,7 +14,7 @@
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
     Engine                : IdentityAssetsCollectDefineTierIngestLog
-    Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by          : Morten Knudsen, Microsoft MVP
 #>
 
 # ============================================================================

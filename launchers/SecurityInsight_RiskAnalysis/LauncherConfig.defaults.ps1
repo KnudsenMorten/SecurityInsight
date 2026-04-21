@@ -24,7 +24,7 @@
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
     Engine                : SecurityInsight_RiskAnalysis
-    Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by          : Morten Knudsen, Microsoft MVP
 #>
 
 # ============================================================================

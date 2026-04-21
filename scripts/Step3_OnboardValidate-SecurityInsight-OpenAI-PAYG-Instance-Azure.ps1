@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure - engine script in the SecurityInsight solution.
 
@@ -27,7 +27,7 @@ USAGE
 .NOTES
     Solution       : SecurityInsight
     File           : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by   : Morten Knudsen, Microsoft MVP
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : For public repos, open a GitHub Issue on that solution's repo.

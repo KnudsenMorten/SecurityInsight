@@ -37,7 +37,7 @@
 .NOTES
     Function     : Initialize-LauncherConfig
     Solution     : All
-    Developed by : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by : Morten Knudsen, Microsoft MVP
 #>
 
 function Initialize-LauncherConfig {

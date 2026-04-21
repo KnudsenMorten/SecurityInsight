@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.148
+## v2.1.149
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
 - refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
 - fix(SI LAUNCHERS): drop -RequireCustom on all community-vm templates (41e5f772)
 - fix(SI Initialize-LauncherConfig): Layer 1 (LauncherConfig.defaults.ps1) is now optional (3ff3203f)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - perf(SI _shared): skip Import-Module on meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) (314c8fe0)
 - perf(SI _shared): fast directory-first module probe (fixes 30s stall on meta-modules) (4d3f37eb)
 - fix(SI _shared): per-module '[MODULE] probing X ...' line so customers see which module is being checked (e8fbc177)
-- fix(SI _shared): detect modules installed in AllUsers + default Scope=Auto (b7277b76)
 
 ---
 
@@ -48,6 +48,12 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.149 — `SecurityInsight.custom.sample.ps1` rewritten as a complete Layer 3 template
+
+- 📚 **Solution-wide sample now shows the "auth once, inherited by every engine" pattern.** Sections added: SPN (4 methods: plaintext/cert/Key Vault/Managed Identity), Azure OpenAI, SMTP (with verified-sender note), DCR ingestion targets, cross-workspace Defender reads, subscription exclude patterns, Custom Security Attributes, AF-mode mail routing. Everything commented out with `xxxxx` placeholders so copy → edit → uncomment is a clean first-run workflow.
+- 📚 **Layer precedence diagram at the top** matches v2.1.148's actual load order (tenant → solution → engine, closer wins). Previous diagram had stale pre-v2.1.148 numbering. Explicit note on community (Layer 1 platform-defaults absent) vs internal (Layer 1 populated by AF bootstrap).
+- 🧰 **Recommended pattern for community VMs**: drop SPN + OpenAI + SMTP here (once), every engine's `LauncherConfig.custom.ps1` can stay empty or only carry engine-specific deltas (mail recipients, ReportTemplate override, etc.).
 
 ### v2.1.148 — Reorder config layers by scope: tenant → solution → engine, closer wins
 

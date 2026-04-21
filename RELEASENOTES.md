@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.164
+## v2.1.165
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
 - fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
 - docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
 - docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): Power BI 'Beta' + fill §5 What's-New gap from v2.1.113..v2.1.129 (544af373)
 - refactor(SI LAUNCHERS): silence Test-LauncherModule success line -- engine owns the 'module present' log (84e8a20d)
 - fix(SI CUSTOMDATA sample): use canonical 'dce-securityinsight' naming (was 'dce-si-identity') (4f535db4)
-- docs(SI README): real-world .custom.ps1 samples for Identity + Build_Tier engines (7dabefd0)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.165 — Drop duplicate module pre-install loop from IdentityAssetsCollect community-vm launcher
+
+- 🧰 **The community-vm launcher for `IdentityAssetsCollectDefineTierIngestLog` was pre-installing 5 engine-only modules** (`Az.Resources`, `Az.OperationalInsights`, `Az.Monitor`, `Az.Storage`, `AzLogDcrIngestPS`) before calling the engine. The engine's own `Ensure-SecurityInsightModules` call (at the top of the `.ps1`) already covers those, so customers saw the same module list printed **twice** — once as `[OK] module '...' present` from the launcher pre-install, and once as `[MODULE] ... present` from `Ensure-SecurityInsightModules` — with no functional purpose. Removed the 6-line `foreach` loop.
+- 🧰 **Launcher still checks the 3 auth modules it actually needs** (`Az.Accounts` required, `Az.KeyVault` optional, `Microsoft.Graph.Authentication` optional) because the launcher does `Connect-AzAccount` / `Connect-MgGraph` itself during auth-resolution, BEFORE the engine starts. Those 3 pre-flights are legitimate and stay.
+- 🧰 **None of the other 10 community-vm templates had this redundant loop** — the fix is scoped to the one file.
 
 ### v2.1.164 — Layer 3 `<Solution>.custom.ps1` now resolves correctly on community installs
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.145
+## v2.1.146
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Initialize-LauncherConfig): Layer 1 (LauncherConfig.defaults.ps1) is now optional (3ff3203f)
 - refactor(SI LAUNCHERS): unify all 44 launcher templates on Initialize-LauncherConfig (27ac39c5)
 - feat(SI CriticalAssetTagging): merge Locked+Custom by '<stem>--SI' key instead of full AssetTagName (be8136e0)
 - feat(SI Initialize-LauncherConfig): per-run DATA/LOGS/config-*.log snapshot with layer provenance + secret redaction + 7-day prune (072c0340)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _shared): detect modules installed in AllUsers + default Scope=Auto (b7277b76)
 - docs(SI): seed RELEASENOTES.md with curated human-friendly changelog (7caf0c6f)
 - fix(SI _shared): emit 'Checking N modules...' banner so customers don't think it hung (a463dd2b)
-- feat(SI): daily auto-refresh via scheduled Step 0 task (8c9a00f8)
 
 ---
 
@@ -48,6 +48,10 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.146 — Layer 1 (`LauncherConfig.defaults.ps1`) now optional
+
+- 🔧 **Initialize-LauncherConfig no longer throws when Layer 1 is absent.** The 6 engines migrated to the unified flow in v2.1.145 (CAT family, Setup-CSA, Step2/3) never shipped a per-engine `LauncherConfig.defaults.ps1` because Layer 0 shared-defaults + customer overrides already covered everything. Loader now logs `[INFO] absent ... skipping (engine has no shipped baseline; Layer 0 + customer overrides are sufficient)` and continues. Only reasonable requirement left: Layer 0 shared-defaults OR Layer 4 per-engine custom must exist, otherwise there's nothing to run.
 
 ### v2.1.145 — Every launcher flavour now uses the unified `Initialize-LauncherConfig` flow
 

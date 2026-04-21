@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.152
+## v2.1.153
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI _lib Initialize-LauncherConfig): write config snapshot to solution's DATA\LOGS, not repo-root (b7a3a08c)
 - feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
 - feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
 - fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): section 6.6 -- CriticalAssetTagging Mode/Scope workflow (124fc81e)
 - docs(SI README): require admin PowerShell for Step 0 bootstrap (a92b428e)
 - fix(SI _shared): default -Scope AllUsers + fail fast if non-elevated (0b263886)
-- perf(SI _shared): drop all Import-Module calls -- trust PowerShell auto-load (ff869fb6)
 
 ---
 
@@ -48,6 +48,11 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.153 — Config snapshot writes to the **solution's** `DATA\LOGS\` on internal-mode monorepo installs
+
+- 🔧 **Snapshot path now resolves to `<RepoRoot>\SOLUTIONS\<Solution>\DATA\LOGS\`** when the monorepo layout is detected, falling back to `<RepoRoot>\DATA\LOGS\` for community installs where `$InstallPath` IS the solution root.
+- **Problem this fixes:** on an internal-vm deploy running from `C:\SCRIPTS\AutomateIT\`, `$InstallPath` resolves to the monorepo root, so snapshots landed in `C:\SCRIPTS\AutomateIT\DATA\LOGS\` — alongside unrelated artifacts from other solutions — instead of `C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\DATA\LOGS\` next to the solution's other `DATA\` content. Community deploys already landed in the right place because for them `$InstallPath` == solution root. Both layouts now converge on the solution-scoped path.
 
 ### v2.1.152 — Config snapshot adds value-change history + aggregated summary + source file paths
 

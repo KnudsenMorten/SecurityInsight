@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.158
+## v2.1.159
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
 - docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
 - docs(SI README): move 'What's in the box' into section 3.5 as 'Solution component overview' (d5a83e17)
 - docs(SI README + custom.sample): document auth-method priority chain + cross-layer override gotcha (001c594e)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Build_Tier): drop dead 'AD_GroupMembership' key from tiering JSON (63cf116c)
 - docs(SI README): RSAT AD PowerShell prerequisite for Build_Tier_Definitions_JSON_File (4809b66d)
 - fix(SI Build_Tier): fail fast with RSAT install command when ActiveDirectory module is missing (6e7d1834)
-- refactor(SI): delete every duplicate module-check leftover from the v2.1.113 refactor (53343c56)
 
 ---
 
@@ -48,6 +48,11 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.159 — README teaser + expanded Introduction (session-abstract-derived copy)
+
+- 📚 **New teaser block at the very top** (right after the author/support/watch lines). Sets up the "attacker's target list vs. Defender dashboard" hook, introduces the four scoring dimensions + ExposureGraph + AI role classification in ~150 words, and ends with the strap line *"Think like the hacker. Act like the defender. Fix what matters — first."* Adapted from the MEM26 session abstract to read as doc prose, not pitch copy.
+- 📚 **§ 1 Introduction prose rewritten.** The old "Security teams are drowning / 3,000–10,000 recommendations" intro replaced with the expanded abstract — four dimensions as a bullet list, the ExposureGraph paragraph, the classification framework paragraph, and the Identity-collection paragraph (users/SPNs/MIs derived from actual permissions, new roles AI-classified automatically). Closes with a "What you'll get from this document" checklist. Risk Score formula + TIP + Outputs / Use-cases / Sample output tables kept in place.
 
 ### v2.1.158 — README overhaul: lighter § 3, stable anchors, "What's New" moved to the end
 

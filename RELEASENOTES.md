@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.171
+## v2.1.172
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README § 6.9): Locked catalog inventory -- name + purpose per report/rule (80432ca1)
 - docs(SI README): expand 'out of the box' WOW table with AI-classified tier catalog breakdown (7c6d2330)
 - docs(SI README): add 'what you get out of the box' count table under the teaser (7e5d44aa)
 - feat(SI CriticalAssetTagging): ship ~177 curated sample tagging rules in Mode: Test + README guidance (b2a2d58a)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - refactor(SI LAUNCHERS): unify all 44 launcher templates on Initialize-LauncherConfig (27ac39c5)
 - feat(SI CriticalAssetTagging): merge Locked+Custom by '<stem>--SI' key instead of full AssetTagName (be8136e0)
 - feat(SI Initialize-LauncherConfig): per-run DATA/LOGS/config-*.log snapshot with layer provenance + secret redaction + 7-day prune (072c0340)
-- feat(SI RiskAnalysis): append '--SI' source tag to every TraceName (9193d4d9)
 
 ---
 
@@ -44,6 +44,15 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.172 — Appendix § 6.9: Locked catalog — full query / rule inventory (name + purpose, each)
+
+- 🆕 **New § 6.9 "Locked catalog — full query / rule inventory"** at the end of the Appendix. Collapsed `<details>` block following the § 6 convention, containing three tables generated directly from the shipped `DATA/*_Locked.yaml`:
+  - **100 Risk Analysis reports** — `#`, `SecurityDomain`, `ReportName`, `ReportPurpose` (the one-line purpose that's already in each YAML entry), sorted by domain.
+  - **2 Risk Analysis report templates** — the Summary / Detailed orchestrators that bundle multiple individual reports into one launcher run.
+  - **3 Critical Asset Tagging Locked detection rules** — tag name, tier, hand-written short purpose (DomainControllerDNS, ADCertificateService, EntraSyncService).
+- 🔧 **Teaser WOW table corrected** — 102 → 100 Risk Analysis queries. The earlier count was a naïve grep that included the 2 `ReportTemplates` entries; those are orchestrators, not queries. Queries + orchestrators are both listed in the new § 6.9 so the distinction is clear.
+- 🧰 **TOC updated** to list § 6.9.
 
 ### v2.1.171 — README teaser: expand 'out of the box' table with AI-classified tier catalog breakdown
 

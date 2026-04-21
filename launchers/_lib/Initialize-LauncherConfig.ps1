@@ -121,19 +121,63 @@ function Initialize-LauncherConfig {
         try { return (([string]$a) -ne ([string]$b)) } catch { return $true }
     }
 
+    # AST-extract every '$global:Foo = ...' assignment in a layer file.
+    # Complements value-diff: catches literal assignments even when the value
+    # matches what an earlier layer already set (no effective change, but the
+    # layer did "touch" the variable -- relevant for troubleshooting
+    # "why did my Layer 5 override not take effect?" scenarios).
+    function _CfgExtractAssignedGlobalNames {
+        param([string]$Path)
+        if ([string]::IsNullOrWhiteSpace($Path))      { return @() }
+        if (-not (Test-Path -LiteralPath $Path))      { return @() }
+        try {
+            $errs = $null; $tokens = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errs)
+            if (-not $ast) { return @() }
+            $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+            foreach ($node in $ast.FindAll({
+                param($n)
+                if ($n -isnot [System.Management.Automation.Language.AssignmentStatementAst]) { return $false }
+                if ($n.Left -isnot [System.Management.Automation.Language.VariableExpressionAst]) { return $false }
+                return ($n.Left.VariablePath.UserPath -like 'global:*')
+            }, $true)) {
+                $u = $node.Left.VariablePath.UserPath
+                if ($u -match '^global:(.+)$') { [void]$names.Add($Matches[1]) }
+            }
+            return @($names)
+        } catch {
+            return @()
+        }
+    }
+
     function _CfgRecordLayer ([string]$LayerLabel, [string]$Path, [bool]$Loaded) {
         $status = if ($Loaded) { 'loaded' } else { 'absent' }
         $trailLine = ("{0,-40}  {1,-7}  {2}" -f $LayerLabel, $status, $Path)
         $script:_CfgLayerTrail.Add($trailLine) | Out-Null
         if (-not $Loaded) { return }
         $after = _CfgGatherGlobals
+
+        # Union: AST-assigned names (from the layer's .ps1 file) + value-diff
+        # names (from comparing snapshots before/after the layer's load).
+        # AST catches literal `$global:Foo = x` even if x equals the prior value;
+        # diff catches dynamic sets (Set-Variable, function side-effects).
+        $astAssigned = _CfgExtractAssignedGlobalNames -Path $Path
+        $touched = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($n in $astAssigned) { [void]$touched.Add($n) }
         foreach ($n in $after.Keys) {
-            $newVal = $after[$n]
             $hadBefore = $script:_CfgSnapBefore.ContainsKey($n)
             $oldVal = if ($hadBefore) { $script:_CfgSnapBefore[$n] } else { $null }
-            if (-not $hadBefore -or (_CfgValuesDiffer $oldVal $newVal)) {
-                $script:_CfgProvenance[$n] = [ordered]@{ Value = $newVal; Source = $LayerLabel }
+            if (-not $hadBefore -or (_CfgValuesDiffer $oldVal $after[$n])) {
+                [void]$touched.Add($n)
             }
+        }
+
+        foreach ($n in $touched) {
+            # Store the value the layer left this variable at (post-load
+            # snapshot). If the name was only in AST but never actually
+            # resolved (unlikely), fall back to $null.
+            $val = if ($after.ContainsKey($n)) { $after[$n] } else { $null }
+            $script:_CfgProvenance[$n] = [ordered]@{ Value = $val; Source = $LayerLabel }
         }
         $script:_CfgSnapBefore = $after
     }

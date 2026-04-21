@@ -411,6 +411,20 @@ $itemsJson
 
     $uri = "$($global:OpenAI_Endpoint)/openai/deployments/$($global:OpenAI_Deployment)/chat/completions?api-version=$($global:OpenAI_ApiVersion)"
 
+    # Fail fast if any of the three required OpenAI settings is missing. Previously
+    # a typo/empty in one of these silently produced a request that Azure OpenAI
+    # answered with an error body, which the response-parsing code then NRE'd on
+    # every retry with the cryptic 'Object reference not set to an instance of an
+    # object.' (v2.1.176 fix).
+    foreach ($pair in @(
+        @{ Name = 'OpenAI_ApiKey';     Value = $global:OpenAI_ApiKey },
+        @{ Name = 'OpenAI_Endpoint';   Value = $global:OpenAI_Endpoint },
+        @{ Name = 'OpenAI_Deployment'; Value = $global:OpenAI_Deployment })) {
+        if ([string]::IsNullOrWhiteSpace([string]$pair.Value)) {
+            throw ("[$label] `$global:$($pair.Name) is empty. Set it in SecurityInsight.custom.ps1 (Layer 3) or the engine's LauncherConfig.custom.ps1 (Layer 5). See README section 3.8 -- Step 4.")
+        }
+    }
+
     # Encode body as UTF-8 bytes  prevents PowerShell's default encoding from
     # producing malformed JSON when descriptions contain non-ASCII or special characters
     $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
@@ -421,7 +435,26 @@ $itemsJson
         try {
             Write-Log "  [$label] attempt $attempt/$maxRetries..." "INFO"
             $response = Invoke-RestMethod -Uri $uri -Method POST -Headers $headers -Body $bodyBytes -ErrorAction Stop
-            $content  = $response.choices[0].message.content.Trim()
+
+            # Defensive null-checks on the response shape. Azure OpenAI can return a
+            # 200-OK body that's an error envelope (content-filter trigger, token
+            # budget exceeded, invalid model deployment) rather than the expected
+            # {choices:[{message:{content:...}}]} shape. Before v2.1.176 the code
+            # dereferenced blindly and NRE'd 'Object reference not set to an instance
+            # of an object.' on every retry -- which looked like an AI flake but was
+            # really an always-fails configuration problem.
+            if ($null -eq $response) {
+                throw "response is `$null (Invoke-RestMethod returned nothing -- network blackhole or proxy)"
+            }
+            if ($null -eq $response.choices -or @($response.choices).Count -eq 0) {
+                $errBody = if ($response.error) { $response.error | ConvertTo-Json -Compress -Depth 5 } else { $response | ConvertTo-Json -Compress -Depth 5 }
+                throw "response has no 'choices' array -- API error envelope instead. Body: $errBody"
+            }
+            $msg = $response.choices[0].message
+            if ($null -eq $msg -or $null -eq $msg.content) {
+                throw "response.choices[0].message.content is `$null (content filter? finish_reason=$($response.choices[0].finish_reason))"
+            }
+            $content = ([string]$msg.content).Trim()
 
             # Strip markdown fences if model wrapped the response
             $content = $content -replace '(?s)```json\s*', '' -replace '(?s)```\s*', ''
@@ -436,7 +469,7 @@ $itemsJson
             return $parsed
         }
         catch {
-            Write-Log "  [$label] attempt $attempt failed: $_" "WARN"
+            Write-Log "  [$label] attempt $attempt failed: $($_.Exception.Message)" "WARN"
             if ($attempt -lt $maxRetries) {
                 Start-Sleep -Seconds 3
             }

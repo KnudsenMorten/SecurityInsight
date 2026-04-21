@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.175
+## v2.1.176
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Build_Tier): diagnose NRE-on-every-retry (Azure OpenAI error envelope) (a691dbfa)
 - fix(SI Build_Tier): populate Azure role catalog + EntraID_APIPermissions_Catalog (both were empty / null) (eb45c3b0)
 - feat(SI CriticalAssetTagging): promote 177 samples from Custom -> Locked; Custom becomes override scaffold (b70b40fd)
 - docs(SI README): 3-line intro under WOW table explaining graph-based detection (cfa9bd9c)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
 - refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
 - fix(SI LAUNCHERS): drop -RequireCustom on all community-vm templates (41e5f772)
-- fix(SI Initialize-LauncherConfig): Layer 1 (LauncherConfig.defaults.ps1) is now optional (3ff3203f)
 
 ---
 
@@ -44,6 +44,15 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.176 — Build_Tier AI retry: stop NRE'ing on unexpected Azure OpenAI response shapes
+
+- 🔧 **Bug.** `Build_Tier_Definitions_JSON_File.ps1` was retrying every chunk with the cryptic warning `attempt N failed: Object reference not set to an instance of an object.` on *every* attempt, then falling back to the Tier-99 "unclassified" bucket after exhausting retries. The underlying issue wasn't an AI flake — it was an always-fails configuration problem that the response-parsing code was masking.
+- 🔧 **Root cause.** After `Invoke-RestMethod` succeeded with a 200-OK body, the engine dereferenced `$response.choices[0].message.content.Trim()` with no null-check. When Azure OpenAI returns an **error envelope** instead of the expected completion — e.g. because the deployment name is wrong, the API key is revoked, a content-filter tripped, or the token budget was exceeded — the body shape is `{"error":{...}}` rather than `{"choices":[{...}]}`. Dereferencing the missing `.choices[0].message.content` on PS 5.1 throws `NullReferenceException`, surfaced as the familiar "Object reference not set to an instance of an object." line. Retrying doesn't help because the config / deployment issue is stable.
+- 🔧 **Fix.**
+  - **Fail-fast validation up front:** `$global:OpenAI_ApiKey` / `OpenAI_Endpoint` / `OpenAI_Deployment` are checked for non-empty *before* the first request. An empty value throws a clear error pointing at `SecurityInsight.custom.ps1` (Layer 3) / `LauncherConfig.custom.ps1` (Layer 5) + README § 3.8.
+  - **Three explicit response-shape guards** after each `Invoke-RestMethod`: `$response` not null → `$response.choices` is a non-empty array → `$response.choices[0].message.content` not null. Each guard throws a descriptive error naming what's missing. For the "no choices" case it includes the raw error body (or the full response) as JSON so the user sees exactly what Azure OpenAI returned.
+  - **WARN message now uses `$_.Exception.Message`** instead of the full `$_` — the message alone is what the user needs; the stack trace was adding noise.
 
 ### v2.1.175 — Build_Tier fixes: empty Azure role catalog + null EntraID_APIPermissions_Catalog
 

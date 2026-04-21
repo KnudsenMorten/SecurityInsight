@@ -79,19 +79,6 @@ The output is a ranked list — not 4,000 recommendations, but the small set of 
 > [!TIP]
 > **Talk track for execs**: SecurityInsight tells your CISO *"if we patch these 12 things this week, we cut the realistic blast radius of a successful phishing attack by 60%."* It does NOT add another portal — it consumes your existing Defender + Entra + Azure data via API.
 
-### What's in the box
-
-| Engine | Purpose |
-|---|---|
-| **SecurityInsight_RiskAnalysis** | The main analyzer. Pulls Defender vulnerabilities, exposure paths, configuration recommendations + Azure RBAC, scores them per the risk model, and produces ranked Excel + JSON + Log Analytics ingestion + email + AI executive summary. |
-| **CriticalAssetTagging** | Auto-tags every device / Azure resource with its **criticality tier** (0=critical, 1=high, 2=standard, 3=low). Drives the Criticality dimension of the risk score. |
-| **IdentityAssetsCollectDefineTierIngestLog** | Iterates every Entra user, SPN, MI; classifies their effective privilege tier; ingests into Log Analytics as `SI_IdentityAssets_CL`. |
-| **Step2_OnboardValidate-SecurityInsight-LogAnalytics** | One-shot setup. Provisions the Workspace + DCE + DCR + custom table the Identity engine ingests into. |
-| **Build_Tier_Definitions_JSON_File** | Uses Azure OpenAI to attacker-centrically classify Entra roles, Graph permissions, AD groups, and Azure built-in roles into Tier 0/1/2/3. Output is the catalog the rest of the engines consume. |
-| **Step1_OnboardValidate-SecurityInsight-Permissions** | Idempotent admin utility. Creates the Entra SPN, grants the API permissions and Azure RBAC the platform needs. Re-run = validation pass. |
-| **Setup-SecurityInsight-CustomSecurityAttributes** | One-time provisioning of the Custom Security Attribute schema used by the tagging pipeline. |
-| **Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure** | Optional helper to provision a PAYG Azure OpenAI account + model deployment for the AI summary feature. |
-
 ### Outputs
 
 The same ranked dataset is fan-out to multiple sinks so every stakeholder gets it in their preferred shape — ops in Excel, SOC in KQL, execs in Power BI, automation in JSON.
@@ -457,6 +444,31 @@ $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight-preview'
 ### 3.5 Pre-requisite configuration
 
 [⤴ Back to top](#top)
+
+#### Solution component overview
+
+Every component ships as its own launcher folder under `LAUNCHERS/`. Two groups: **Steps** (run once per tenant, in order, during onboarding) and **Engines** (run on a schedule after onboarding).
+
+**Onboarding Steps — one-time setup, run in order:**
+
+| Component | Purpose |
+|---|---|
+| **Step1_OnboardValidate-SecurityInsight-Permissions** | Idempotent admin utility. Creates the Entra SPN, grants API permissions and Azure RBAC the platform needs. Re-run = validation pass. |
+| **Step2_OnboardValidate-SecurityInsight-LogAnalytics** | Provisions the Workspace + DCE + DCR + custom tables the engines ingest into. |
+| **Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure** *(optional)* | Provisions a PAYG Azure OpenAI account + model deployment for the RiskAnalysis AI summary. |
+| **Step4_Deploy-SecurityInsight-PowerBI-Dashboard** *(optional)* | Publishes the RiskAnalysis `.pbix` management dashboard to the customer's Power BI tenant via REST API. |
+| **Setup-SecurityInsight-CustomSecurityAttributes** | One-time provisioning of the Entra Custom Security Attribute schema used by the tagging pipeline. |
+| **Build_Tier_Definitions_JSON_File** | Uses Azure OpenAI to attacker-centrically classify Entra roles, Graph permissions, AD groups and Azure built-in roles into Tier 0/1/2/3. Output is the catalog the rest of the engines consume. Re-run only when tier rules change. |
+
+**Ingestion engines — run on a schedule:**
+
+| Component | Purpose |
+|---|---|
+| **SecurityInsight_RiskAnalysis** | The main analyzer. Pulls Defender vulnerabilities, exposure paths, configuration recommendations + Azure RBAC, scores them per the risk model, and produces ranked Excel + JSON + Log Analytics ingest + email + AI executive summary. |
+| **IdentityAssetsCollectDefineTierIngestLog** | Iterates every Entra user, SPN and MI; classifies their effective privilege tier; ingests into Log Analytics as `SI_IdentityAssets_CL`. |
+| **CriticalAssetTagging** (+ `CriticalAssetTaggingMaintenance` + `CAT_FixConflictingTags` siblings) | Auto-tags every device / Azure resource with its **criticality tier** (0=critical, 1=high, 2=standard, 3=low). Drives the Criticality dimension of the risk score. |
+
+The table below adds "is config needed?" + file paths for each component — use it as the checklist before the first run.
 
 The solution ships four **Step** launchers that set a tenant up from zero, plus several **engines** that produce the actual reports / ingests. Run the Steps once per tenant (in order), then run the engines as often as you like.
 

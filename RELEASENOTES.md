@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.174
+## v2.1.175
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Build_Tier): populate Azure role catalog + EntraID_APIPermissions_Catalog (both were empty / null) (eb45c3b0)
 - feat(SI CriticalAssetTagging): promote 177 samples from Custom -> Locked; Custom becomes override scaffold (b70b40fd)
 - docs(SI README): 3-line intro under WOW table explaining graph-based detection (cfa9bd9c)
 - docs(SI README § 6.9): Locked catalog inventory -- name + purpose per report/rule (80432ca1)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
 - fix(SI LAUNCHERS): drop -RequireCustom on all community-vm templates (41e5f772)
 - fix(SI Initialize-LauncherConfig): Layer 1 (LauncherConfig.defaults.ps1) is now optional (3ff3203f)
-- refactor(SI LAUNCHERS): unify all 44 launcher templates on Initialize-LauncherConfig (27ac39c5)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.175 — Build_Tier fixes: empty Azure role catalog + null EntraID_APIPermissions_Catalog
+
+- 🔧 **Bug: `Azure_BuiltInRoles_Tier0..3` + `Azure_CustomRoles_Tier0..3` + `Azure_Roles_Catalog` came back empty in `DATA/SecurityInsight_IdentityTiering.json`.** Root cause: after `Connect-AzAccount -ServicePrincipal -TenantId <...>` the Az context had no default subscription selected, so `Get-AzRoleDefinition` (called with no `-Scope`) returned empty silently even when the SPN had `Reader` at tenant-root MG. The `Step1_OnboardValidate-SecurityInsight-Permissions` utility grants the right role; the engine just wasn't using it.
+- 🔧 **Fix.** `Connect-AzWithSPN` in `Build_Tier_Definitions_JSON_File.ps1` now calls `Get-AzSubscription` after connecting, `Set-AzContext`s to the first subscription the SPN can see, and logs which one was picked. If the SPN has zero subscription access, a `[WARN]` line is emitted up front pointing the reader at the `Reader` grant — no more silent empty output. The idempotent-reuse check at the top also now requires `$ctx.Subscription` to be set, so stale "connected but no sub" states don't get re-used.
+- 🔧 **Bug: `EntraID_APIPermissions_Catalog` + `Azure_Roles_Catalog` serialized as `[null]`.** Root cause: `Export-TieredJSON` has `-RawAPIPermissions` + `-RawAzureRoles` params, but the single caller site in `Main` never passed them — so both catalogs defaulted to empty arrays and the JSON output wrote `[null]`. The tiered arrays populated correctly because they're computed separately.
+- 🔧 **Fix.** The `Export-TieredJSON` call in `Main` now passes both raw catalogs (`$apiPermissions` + `$azureRoles`). Re-run `Build_Tier_Definitions_JSON_File` on a machine with the SPN onboarded and both catalog fields populate with the full ~800 Azure role definitions and the ~1,500 enabled Graph / API permissions.
+- 📚 **README § 6.1 Azure RBAC table updated** to flag the `Reader`-on-tenant-root-MG requirement explicitly for `Build_Tier_Definitions_JSON_File`, plus a NOTE explaining how to diagnose if the catalog fields still come back empty after the v2.1.175 fix.
 
 ### v2.1.174 — Promote 177 CAT samples: Custom → Locked; Locked catalog is now 180 rules
 

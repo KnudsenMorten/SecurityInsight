@@ -322,8 +322,8 @@ function Connect-AzWithSPN {
     # Idempotent: if an Az context already exists for our SPN, no-op.
     try {
         $ctx = Get-AzContext -ErrorAction SilentlyContinue
-        if ($ctx -and $ctx.Account.Id -eq $global:SpnClientId) {
-            Write-Log "Azure already connected as SPN $($global:SpnClientId)" "INFO"
+        if ($ctx -and $ctx.Account.Id -eq $global:SpnClientId -and $ctx.Subscription) {
+            Write-Log "Azure already connected as SPN $($global:SpnClientId) (subscription=$($ctx.Subscription.Name))" "INFO"
             Write-Log "Auth method (Azure)        : already connected (re-using existing session)" "INFO"
             return
         }
@@ -333,6 +333,26 @@ function Connect-AzWithSPN {
     Connect-AzAccount -ServicePrincipal -TenantId $global:SpnTenantId -Credential $credential -ErrorAction Stop | Out-Null
     Write-Log "Connected to Azure" "SUCCESS"
     Write-Log ("Auth method (Azure)        : SPN + Secret  (clientId={0}, tenant={1})" -f $global:SpnClientId, $global:SpnTenantId) "INFO"
+
+    # Pick a default subscription so Get-AzRoleDefinition has a scope to read against.
+    # Without a subscription selected, Get-AzRoleDefinition (no -Scope) returns an
+    # empty result silently even when the SPN has Reader at tenant-root MG -- which
+    # was why Azure_BuiltInRoles_Tier0..3 + Azure_Roles_Catalog were empty
+    # (reproducible repro in v2.1.174 and earlier; fixed in v2.1.175).
+    try {
+        $ctx = Get-AzContext -ErrorAction SilentlyContinue
+        if (-not $ctx -or -not $ctx.Subscription) {
+            $firstSub = Get-AzSubscription -TenantId $global:SpnTenantId -ErrorAction Stop | Select-Object -First 1
+            if ($firstSub) {
+                Set-AzContext -SubscriptionId $firstSub.Id -TenantId $global:SpnTenantId -ErrorAction Stop | Out-Null
+                Write-Log ("Default subscription set: {0} ({1})" -f $firstSub.Name, $firstSub.Id) "INFO"
+            } else {
+                Write-Log "SPN has no accessible subscriptions -- Get-AzRoleDefinition may return empty. Grant the SPN 'Reader' at tenant-root MG (or any subscription) and re-run." "WARN"
+            }
+        }
+    } catch {
+        Write-Log "Could not auto-select a subscription for the SPN: $_" "WARN"
+    }
 }
 
 # ============================================================
@@ -950,11 +970,18 @@ function Main {
         -AzureRoles        $azureRoles `
 
     # ---- Build and export JSON ----
+    # Pass the RAW catalogs through as well so the JSON's *_Catalog fields actually
+    # populate. Without these two arguments the Export-TieredJSON function's
+    # $RawAPIPermissions / $RawAzureRoles params defaulted to empty, and the JSON
+    # output carried [null] for EntraID_APIPermissions_Catalog + Azure_Roles_Catalog
+    # (fixed in v2.1.175).
     $outputPath = Export-TieredJSON `
         -TieredADGroups    $tiered.ADGroups `
         -TieredEntraRoles  $tiered.EntraRoles `
         -TieredAPIPerms    $tiered.APIPerms `
-        -TieredAzureRoles  $tiered.AzureRoles
+        -TieredAzureRoles  $tiered.AzureRoles `
+        -RawAPIPermissions $apiPermissions `
+        -RawAzureRoles     $azureRoles
 
     Write-Log "" "INFO"
     Write-Log "============================================" "SUCCESS"

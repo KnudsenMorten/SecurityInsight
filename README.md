@@ -1514,7 +1514,114 @@ $global:Scope = @('PROD','TEST')    # array, not a single string
 5. When fully confident, change the rule's `Mode:` from `Test` to `Prod` in Custom.yaml and revert `$global:Scope = @('PROD')` in the launcher.
 
 > [!TIP]
-> **Overriding a shipped Prod rule in Test first.** To experiment with modifications to an existing Locked rule (e.g. tightening the filter for `DomainControllerDNS--tier0--SI`), copy the rule into Custom.yaml **with the same `AssetTagName`** and set `Mode: Test`. Run `$global:Scope = @('TEST')`. When the tweaked KQL looks right, flip to `Mode: Prod` — Custom wins on same-name, so your override replaces the Locked version on subsequent `$global:Scope = @('PROD')` runs. Step 0 upgrades still never touch Custom.
+> **Overriding a shipped Prod rule in Test first.** To experiment with modifications to an existing Locked rule (e.g. tightening the filter for `DomainControllerDNS--tier0--SI`), copy the rule into Custom.yaml **with the same `AssetTagName` stem** and set `Mode: Test`. Run `$global:Scope = @('TEST')`. When the tweaked KQL looks right, flip to `Mode: Prod` — Custom wins on same-stem, so your override replaces the Locked version on subsequent `$global:Scope = @('PROD')` runs. Step 0 upgrades still never touch Custom.
+
+<a id="67-asset-tag-name-convention-and-stem-based-merge"></a>
+### 6.7 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
+
+[⤴ Back to top](#top)
+
+Every `AssetTagName` in both Locked and Custom YAML **must** match the convention:
+
+```
+<stem>--tier<N>--SI
+```
+
+Examples: `DomainControllerDNS--tier0--SI`, `BackupOperators--tier1--SI`, `AzHubPlatformManagementSub--tier0--SI`.
+
+- **`<stem>`** — a short, human-readable asset-class name (no spaces, no `--tier` / `--SI` inside).
+- **`<N>`** — integer 0..3, the CriticalityTierLevel the rule tags the asset with.
+- **`--SI`** — mandatory suffix identifying the tag as produced by this SecurityInsight solution. Downstream consumers (Defender queries, Power BI, aggregators) filter by `--SI` to isolate SI-produced tags from other tagging sources.
+
+**Merge semantics — identity = stem + `--SI`, tier = overridable data.**
+
+The engine normalises every `AssetTagName` to its stem+suffix (upper-cased) and uses THAT as the merge key. The tier integer between is a value the customer can change without disturbing the identity:
+
+```
+  Locked.yaml : 'BackupOperators--tier1--SI'   merge key -> BACKUPOPERATORS--SI
+  Custom.yaml : 'BackupOperators--tier0--SI'   merge key -> BACKUPOPERATORS--SI   (same!)
+  -> Custom wins. Backup Operators is tagged at tier 0 on the next run.
+```
+
+This means a customer can re-tier a shipped rule by dropping ONE Custom entry, without having to copy or re-author the Locked query. The Custom record replaces the Locked one wholesale (query included), so the customer can also change the KQL in the same drop-in.
+
+**Malformed `AssetTagName` throws.** A name that doesn't match `<stem>--tier<N>--SI` (e.g. missing `--SI` suffix, or missing tier segment) stops the engine at YAML merge time with:
+
+```
+AssetTagName 'MyBadName' in Custom.yaml does not match the required
+'<stem>--tier<N>--SI' convention. Fix the YAML entry -- malformed tag
+names cannot participate in the Locked/Custom merge.
+```
+
+No silent fallback to full-string matching — that path was intentionally rejected because it made collision behaviour hard to predict.
+
+<details>
+<summary>📖 <b>Use case 1 — promote an asset class from Tier 1 to Tier 0</b></summary>
+
+Shipped Locked entry:
+
+```yaml
+- AssetTagName: BackupOperators--tier1--SI
+  Mode: Prod
+  QueryEngine: DefenderGraph
+  Query:
+    - |
+      IdentityInfo
+      | where GroupMembership has "Backup Operators"
+      ...
+```
+
+Customer Custom.yaml override — **same stem, different tier**, query can be unchanged or modified:
+
+```yaml
+- AssetTagName: BackupOperators--tier0--SI    # tier bumped from 1 to 0
+  Mode: Prod
+  QueryEngine: DefenderGraph
+  Query:
+    - |
+      IdentityInfo
+      | where GroupMembership has "Backup Operators"
+      ...
+```
+
+Effective on next run: the Backup Operators asset class tags at tier 0. Step 0 upgrades never touch Custom.yaml, so the override persists.
+
+</details>
+
+<details>
+<summary>📖 <b>Use case 2 — force a full re-tag (drop the delta filter)</b></summary>
+
+Many shipped Locked queries end with a delta filter like:
+
+```kql
+| where isempty(Tag_AssetTier)
+    or (Tag_AssetTier != AssetTagName
+        and (isnull(ExistingTierNumber) or ExistingTierNumber > AssetTierLevel))
+```
+
+…so the rule only fires on assets whose current tag is missing / wrong / lower-tier. When you've changed the `AssetTierLevel` (or want to force every in-scope asset to be re-tagged once), drop the trailing `| where ...` from your Custom.yaml copy:
+
+```yaml
+- AssetTagName: AzHubPlatformManagementSub--tier0--SI
+  Mode: Prod
+  QueryEngine: AzureResourceGraph
+  Query:
+    - |
+      resourcecontainers
+      | where type == "microsoft.resources/subscriptions"
+      | where properties.managementGroupAncestorsChain has "mg-platform-management"
+      | extend AssetTagType = "AssetTier--SI",
+               AssetTag     = "AzHubPlatformManagementSub",
+               AssetTierLevel = 0
+      | extend AssetTagName = strcat(AssetTag, "--tier", tostring(AssetTierLevel), "--SI")
+      | project subscriptionId, subscriptionName = name, AssetTagType, AssetTag, AssetTierLevel, AssetTagName, id
+      | order by subscriptionId asc
+      # NO trailing '| where isempty(Tag_AssetTier) or ...' -- every in-scope asset is re-tagged this run.
+```
+
+Run with `$global:Scope = @('TEST')` first to confirm the row set, then flip to `$global:Scope = @('PROD')` for the real write. After a successful force re-tag, you can remove the Custom entry (next run picks Locked's delta-filtered query again, which is a no-op on already-correctly-tagged assets).
+
+</details>
 
 ---
 

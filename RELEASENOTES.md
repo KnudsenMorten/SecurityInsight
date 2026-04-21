@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.167
+## v2.1.168
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI CriticalAssetTagging): accept <stem>--excluded--SI alongside <stem>--tier<N>--SI (e7a351c8)
 - fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
 - docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
 - fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): byte-for-byte resync of sections 4.3 / 4.4 / 4.5 from c:\tmp\README.md (2cfa587a)
 - docs(SI RELEASENOTES): split MEM26 resync entry to v2.1.140 (v2.1.139 already used) (804836ed)
 - docs(SI README): resync sections 4.1-4.5 to verbatim text from MEM26 PDF (134fb73c)
-- docs(SI README): Power BI 'Beta' + fill §5 What's-New gap from v2.1.113..v2.1.129 (544af373)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.168 — CriticalAssetTagging: accept `<stem>--excluded--SI` alongside `<stem>--tier<N>--SI`
+
+- 🆕 **New valid AssetTagName shape: `<stem>--excluded--SI`.** Used to tag assets that should appear under the "Excluded" filter in the Defender portal — typically renamed / pre-decommission machines that still linger in inventory but shouldn't count toward any tier. `Get-AssetTagStemKey` regex widened to `^(?<stem>.+?)--(?:tier(?<tier>\d+)|excluded)--SI$`. The `excluded` marker is treated as a parallel identity class: its stem is extracted the same way the tier variants are, so Custom can still override Locked by stem.
+- 🔧 **Throw message updated** to name both valid shapes so future malformed entries get a clearer hint.
+- 🧰 **Backward compatible.** Every existing `--tier<N>--SI` entry still matches and still produces the same stem key, so no Custom.yaml on any customer needs rewriting.
 
 ### v2.1.167 — Publish workflow: CUSTOMDATA/CUSTOMSCRIPTS safety rail no longer over-strips community-vm templates
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.162
+## v2.1.163
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
 - docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
 - docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
 - docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI CUSTOMDATA sample): use canonical 'dce-securityinsight' naming (was 'dce-si-identity') (4f535db4)
 - docs(SI README): real-world .custom.ps1 samples for Identity + Build_Tier engines (7dabefd0)
 - fix(SI Build_Tier): restore visible SECTION A header so AD tiering isn't invisible (9f3c41aa)
-- refactor(SI Build_Tier): drop on-prem AD enumeration entirely (ff5a7cf7)
 
 ---
 
@@ -44,6 +44,19 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.163 — Collapse § 3.3 / 3.3.1 / 3.4 + all § 4.x and § 6.x subsections; add Step 1–5 markers
+
+- 🧰 **§ 3.3 Update, § 3.3.1 Automate daily update, § 3.4 Try preview** now collapsed — heading visible, full body under a "Show details (expand)" `<details>`. Matches the pattern used in § 3.2 Install.
+- 🧰 **All § 4.x and § 6.x subsections wrapped in `<details>`** so the reference chapters (4 Severity & Criticality Definitions, 6 Appendix) are scannable by heading; full content is one click away. 13 subsections total.
+- 🧰 **Step 1–5 markers added to the action sections** so the chapter-3 headings align with the Step numbering used in the § 3.1 onboarding flow:
+  - § 3.2 Step 1 — Install SecurityInsight (fresh machine)
+  - § 3.5.4 Step 2 — Connectivity: SPN or Managed Identity
+  - § 3.5.5 Step 3 — Identity infrastructure: Workspace + DCE + DCR
+  - § 3.5.6 Step 4 — Azure OpenAI (optional)
+  - § 3.8 Step 5a — Endpoint asset tagging
+  - § 3.9 Step 5b — Azure asset tagging
+- TOC updated to mirror every Step prefix.
 
 ### v2.1.162 — § 3 + § 4 readability pass: section numbers, reading order, Tier 0–3 drawing, mojibake fix
 

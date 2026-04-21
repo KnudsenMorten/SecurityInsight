@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Step 0 -- Install or update SecurityInsight from GitHub, preserving customer files.
@@ -57,7 +57,7 @@
 
 .NOTES
     Solution       : SecurityInsight
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by   : Morten Knudsen, Microsoft MVP
     Blog           : https://mortenknudsen.net   (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : GitHub Issues on https://github.com/KnudsenMorten/SecurityInsight

@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Community-edition customer configuration for Step2_OnboardValidate-SecurityInsight-LogAnalytics.
@@ -37,7 +37,7 @@
 .NOTES
     Solution       : SecurityInsight
     File           : LauncherConfig.sample.ps1
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by   : Morten Knudsen, Microsoft MVP
     Blog           : https://mortenknudsen.net   (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : For public repos, open a GitHub Issue on that solution's repo.

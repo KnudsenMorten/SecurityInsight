@@ -1,4 +1,4 @@
-﻿#Requires -Version 7.4
+#Requires -Version 7.4
 <#
 .SYNOPSIS
     Community Azure serverless launcher for SecurityInsight\Setup-SecurityInsight-CustomSecurityAttributes.
@@ -16,7 +16,7 @@
 .NOTES
     Solution       : SecurityInsight
     File           : launcher.community-azure.template.ps1
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by   : Morten Knudsen, Microsoft MVP
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : For public repos, open a GitHub Issue on that solution's repo.

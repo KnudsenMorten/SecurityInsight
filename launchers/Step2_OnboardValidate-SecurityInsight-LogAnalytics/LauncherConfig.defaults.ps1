@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Baseline defaults for Step2_OnboardValidate-SecurityInsight-LogAnalytics.
@@ -27,7 +27,7 @@
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
     Engine                : Step2_OnboardValidate-SecurityInsight-LogAnalytics
-    Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by          : Morten Knudsen, Microsoft MVP
 #>
 
 # ============================================================================

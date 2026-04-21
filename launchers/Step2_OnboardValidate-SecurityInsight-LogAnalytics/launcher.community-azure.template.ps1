@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 #Requires -Modules @{ ModuleName='Az.Accounts'; ModuleVersion='2.0.0' }
 <#
 .SYNOPSIS
@@ -11,7 +11,7 @@
 .NOTES
     Solution       : SecurityInsight
     File           : launcher.community-azure.template.ps1
-    Developed by   : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by   : Morten Knudsen, Microsoft MVP
     Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
     GitHub         : https://github.com/KnudsenMorten
     Support        : For public repos, open a GitHub Issue on that solution's repo.

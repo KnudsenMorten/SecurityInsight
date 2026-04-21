@@ -22,7 +22,7 @@
 .NOTES
     Function     : Get-PublishedVersion
     Solution     : All
-    Developed by : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by : Morten Knudsen, Microsoft MVP
 #>
 
 function Get-PublishedVersion {

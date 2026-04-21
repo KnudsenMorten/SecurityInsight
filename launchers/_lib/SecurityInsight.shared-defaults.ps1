@@ -30,7 +30,7 @@
 .NOTES
     File         : SecurityInsight.shared-defaults.ps1
     Solution     : SecurityInsight
-    Developed by : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by : Morten Knudsen, Microsoft MVP
 #>
 
 # --- Log Analytics workspace (shared by RiskAnalysis + Identity + Onboarding) ---

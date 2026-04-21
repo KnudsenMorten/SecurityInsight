@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Quickstart customer config for Step1_OnboardValidate-SecurityInsight-Permissions.
@@ -26,7 +26,7 @@
     LauncherConfigVersion : 1
     Solution              : SecurityInsight
     Engine                : Step1_OnboardValidate-SecurityInsight-Permissions
-    Developed by          : Morten Knudsen, Microsoft MVP (Security, Azure, Security Copilot)
+    Developed by          : Morten Knudsen, Microsoft MVP
 #>
 
 # ============================================================================

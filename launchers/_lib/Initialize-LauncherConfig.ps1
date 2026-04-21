@@ -219,10 +219,22 @@ function Initialize-LauncherConfig {
     function _CfgWriteSnapshotAndPrune {
         param(
             [Parameter(Mandatory)][string]$RepoRoot,
+            [Parameter(Mandatory)][string]$Solution,
             [Parameter(Mandatory)][string]$Engine,
             [int]$RetentionDays = 7
         )
-        $logDir = Join-Path $RepoRoot 'DATA\LOGS'
+        # Resolve the right DATA\LOGS folder:
+        #   Monorepo layout (internal deploys): $RepoRoot is C:\SCRIPTS\AutomateIT
+        #     and the solution DATA lives under SOLUTIONS\<Solution>\DATA.
+        #   Community layout: $RepoRoot IS the solution folder, so DATA lives
+        #     directly under $RepoRoot.
+        # Try solution-qualified path first; fall back to repo-root DATA.
+        $solutionData = Join-Path $RepoRoot (Join-Path 'SOLUTIONS' (Join-Path $Solution 'DATA'))
+        if (Test-Path -LiteralPath (Split-Path -Parent $solutionData)) {
+            $logDir = Join-Path $solutionData 'LOGS'
+        } else {
+            $logDir = Join-Path $RepoRoot 'DATA\LOGS'
+        }
         try {
             if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }
         } catch {
@@ -500,5 +512,5 @@ Copy $(Join-Path $LauncherDir 'LauncherConfig.sample.ps1') to LauncherConfig.cus
     _CfgRecordLayer 'Layer 6 - derived' '(initializer derivation step)' $true
 
     # ---- Write config snapshot log + prune old logs (7-day retention) --------
-    _CfgWriteSnapshotAndPrune -RepoRoot $RepoRoot -Engine $Engine -RetentionDays 7
+    _CfgWriteSnapshotAndPrune -RepoRoot $RepoRoot -Solution $Solution -Engine $Engine -RetentionDays 7
 }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.179
+## v2.1.180
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
 - docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
 - docs(SI README): refresh teaser tier catalog with live numbers; Azure RBAC now populates (+873) (bb70f622)
 - fix(SI Layer 4 defaults): stop clobbering Layer 3 customer OpenAI / SMTP values (8f0decca)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _lib Initialize-LauncherConfig): write config snapshot to solution's DATA\LOGS, not repo-root (b7a3a08c)
 - feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
 - feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
-- fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.180 — README teaser copy tweaks
+
+- 📚 **"Out of the box — shipped as `Locked` content..."** heading renamed to **"Included in SecurityInsight today"**. Lighter, less jargon.
+- 📚 **Table header "What"** changed to **"Detection queries + tagging rules"**. Self-describing, no duplicated subheader.
+- 📚 **Dropped the "Same data your SOC already pays for..."** sentence from the paragraph under Table 1. The graph-vs-list framing is already made in the first sentence; the trailing clause was repeating itself.
+- 📚 **"by the AI classifier; consumed by IdentityAssetsCollect..."** shortened to **"by the AI integration in SecurityInsight"**. The implementation detail about `IdentityAssetsCollect` belongs in § 3, not the teaser.
+- 📚 **Removed the "Counts come from DATA/..." meta-note** under Table 2. Implementation plumbing details belong in § 6 / § 7, not in the marketing teaser.
 
 ### v2.1.179 — README: drop duplicate `# SecurityInsight` H1 + de-fade the teaser
 

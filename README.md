@@ -22,6 +22,15 @@
 >
 > 🎯 **Think like the hacker. Act like the defender. Fix what matters — first.**
 
+**Out of the box — shipped as `Locked` content (force-refreshed on every release):**
+
+| 📦 What you get | Count |
+|---|---:|
+| 🎯 **Risk Analysis queries** — attacker-centric KQL covering Endpoint, Azure, Identity | **102** |
+| 🏷️ **Critical Asset detection rules** — ExposureGraph-powered auto-tagging for Tier-0 infrastructure | **3** |
+
+Plus **177 starter samples** in the Critical-Asset `Custom.yaml` you can opt-in to per rule, and an **AI-classified tier catalog** of ~69 AD groups, ~142 Entra roles, and ~1,200+ Graph API permissions — all ready to use on day one, all fully customizable.
+
 ---
 
 <a id="toc"></a>

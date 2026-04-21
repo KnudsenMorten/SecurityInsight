@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.169
+## v2.1.170
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): add 'what you get out of the box' count table under the teaser (7e5d44aa)
 - feat(SI CriticalAssetTagging): ship ~177 curated sample tagging rules in Mode: Test + README guidance (b2a2d58a)
 - feat(SI CriticalAssetTagging): accept <stem>--excluded--SI alongside <stem>--tier<N>--SI (e7a351c8)
 - fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI Initialize-LauncherConfig): per-run DATA/LOGS/config-*.log snapshot with layer provenance + secret redaction + 7-day prune (072c0340)
 - feat(SI RiskAnalysis): append '--SI' source tag to every TraceName (9193d4d9)
 - docs(SI README): byte-for-byte resync of sections 4.3 / 4.4 / 4.5 from c:\tmp\README.md (2cfa587a)
-- docs(SI RELEASENOTES): split MEM26 resync entry to v2.1.140 (v2.1.139 already used) (804836ed)
 
 ---
 
@@ -44,6 +44,11 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.170 — README teaser: at-a-glance "what you get out of the box" counts
+
+- 📚 **New 2-row table right under the teaser** showing what ships as `Locked` content (force-refreshed on every release): **102 Risk Analysis queries** + **3 Critical Asset detection rules**. One-glance signal of how much curated KQL / ExposureGraph logic lands the moment you install.
+- 📚 **Short follow-up line** mentions the 177 starter samples in CAT `Custom.yaml` (opt-in per rule via `Mode: Test` → `Prod` flip) and the AI-classified tier catalog (~69 AD groups, ~142 Entra roles, ~1,200 Graph API permissions). Context without cluttering the headline numbers.
 
 ### v2.1.169 — Ship ~177 curated sample tagging rules (all `Mode: Test`) + README guidance
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.151
+## v2.1.152
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
 - feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
 - fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
 - docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): require admin PowerShell for Step 0 bootstrap (a92b428e)
 - fix(SI _shared): default -Scope AllUsers + fail fast if non-elevated (0b263886)
 - perf(SI _shared): drop all Import-Module calls -- trust PowerShell auto-load (ff869fb6)
-- perf(SI _shared): skip Import-Module on meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) (314c8fe0)
 
 ---
 
@@ -48,6 +48,20 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.152 — Config snapshot adds value-change history + aggregated summary + source file paths
+
+- 🧰 **Per-layer section now lists the source file path** right under the layer header. Each layer's contributions are auditable without cross-referencing the trail at the top.
+- 🆕 **New "Value change history" section.** For every variable touched by more than one layer, shows the full chain:
+  ```
+  $global:DceName
+      [Layer 2 - shared-defaults]              = dce-securityinsight
+          file: C:\...\launchers\_lib\SecurityInsight.shared-defaults.ps1
+      [Layer 5 - LauncherConfig.custom]        = dce-securityinsight  [no-op: value unchanged by this layer]
+          file: C:\...\launchers\CriticalAssetTagging\LauncherConfig.custom.ps1
+  ```
+  The `[no-op: value unchanged by this layer]` marker flags the case where a later override wrote the same value — useful for diagnosing "why didn't my override do anything?" (because it set the same value that was already there).
+- 🆕 **New "Aggregated effective configuration (alphabetical)" section at the end.** Flat alphabetical list of every `$global:*` with its final effective value + winning layer + full path of the file that set it. The "what did the engine actually see" view customers ask for.
 
 ### v2.1.151 — Config snapshot lists every `$global:*` **assigned** per layer (AST-parsed)
 

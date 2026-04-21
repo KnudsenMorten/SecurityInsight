@@ -73,7 +73,8 @@ function Initialize-LauncherConfig {
     # layers and attribute each variable's final value to the layer that set
     # it. Names matching secret-bearing patterns are redacted in the log.
     $script:_CfgSnapBefore   = @{}
-    $script:_CfgProvenance   = [ordered]@{}    # name -> @{ Value; Source }
+    $script:_CfgProvenance   = [ordered]@{}    # name -> @{ Value; Source; Path }  (last-touching layer; displayed in per-layer section)
+    $script:_CfgHistory      = [ordered]@{}    # name -> List[{Layer;Value;Path}] (all touches; displayed in change history + aggregated summary)
     $script:_CfgLayerTrail   = [System.Collections.Generic.List[string]]::new()
 
     # Denylist of PS built-in / session globals we DON'T want in the snapshot.
@@ -177,7 +178,15 @@ function Initialize-LauncherConfig {
             # snapshot). If the name was only in AST but never actually
             # resolved (unlikely), fall back to $null.
             $val = if ($after.ContainsKey($n)) { $after[$n] } else { $null }
-            $script:_CfgProvenance[$n] = [ordered]@{ Value = $val; Source = $LayerLabel }
+            $script:_CfgProvenance[$n] = [ordered]@{ Value = $val; Source = $LayerLabel; Path = $Path }
+            if (-not $script:_CfgHistory.Contains($n)) {
+                $script:_CfgHistory[$n] = [System.Collections.Generic.List[object]]::new()
+            }
+            [void]$script:_CfgHistory[$n].Add([pscustomobject]@{
+                Layer = $LayerLabel
+                Value = $val
+                Path  = $Path
+            })
         }
         $script:_CfgSnapBefore = $after
     }
@@ -242,9 +251,10 @@ function Initialize-LauncherConfig {
         [void]$out.AppendLine(('Effective configuration ({0} variables, grouped by source layer):' -f $script:_CfgProvenance.Count))
         [void]$out.AppendLine(('-' * 100))
 
-        # Group by source layer in load order so reader can skim each layer's
-        # contribution to the final config. Keeps the ledger tight even on
-        # busy VMs with 100+ SI globals.
+        # SECTION 1 -- per-layer grouping: every variable the layer TOUCHED
+        # (assigned explicitly OR changed value), grouped under the last-
+        # touching layer. Shows what each layer contributed to the final
+        # effective config.
         $layerOrder = @(
             'Layer 0 - pre-existing (session / profile / prior run)',
             'Layer 1 - platform-defaults (internal)',
@@ -259,11 +269,60 @@ function Initialize-LauncherConfig {
             if ($keys.Count -eq 0) { continue }
             [void]$out.AppendLine('')
             [void]$out.AppendLine(('[{0}]   {1} variable(s)' -f $layer, $keys.Count))
+            $src = $script:_CfgProvenance[$keys[0]].Path
+            if (-not [string]::IsNullOrWhiteSpace($src)) {
+                [void]$out.AppendLine(('  (source: {0})' -f $src))
+            }
             foreach ($n in $keys) {
                 $formatted = _CfgFormatValue $n $script:_CfgProvenance[$n].Value
                 [void]$out.AppendLine(('  $global:{0,-45} = {1}' -f $n, $formatted))
             }
         }
+
+        # SECTION 2 -- value-change history: every variable touched by MORE
+        # than one layer, showing the full chain so the reader can see
+        # exactly which file changed the value (and when a later-layer
+        # override was a no-op because the value matched an earlier layer).
+        $changed = @($script:_CfgHistory.Keys | Where-Object { $script:_CfgHistory[$_].Count -gt 1 } | Sort-Object)
+        if ($changed.Count -gt 0) {
+            [void]$out.AppendLine('')
+            [void]$out.AppendLine(('=' * 100))
+            [void]$out.AppendLine(('Value change history ({0} variable(s) touched by more than one layer):' -f $changed.Count))
+            [void]$out.AppendLine(('-' * 100))
+            foreach ($n in $changed) {
+                $hist = $script:_CfgHistory[$n]
+                [void]$out.AppendLine('')
+                [void]$out.AppendLine(('  $global:{0}' -f $n))
+                for ($i = 0; $i -lt $hist.Count; $i++) {
+                    $step = $hist[$i]
+                    $prev = if ($i -gt 0) { $hist[$i-1].Value } else { $null }
+                    $changedMark = if ($i -gt 0 -and -not (_CfgValuesDiffer $prev $step.Value)) { '  [no-op: value unchanged by this layer]' } else { '' }
+                    $formatted = _CfgFormatValue $n $step.Value
+                    [void]$out.AppendLine(('    [{0}]  = {1}{2}' -f $step.Layer, $formatted, $changedMark))
+                    if (-not [string]::IsNullOrWhiteSpace($step.Path)) {
+                        [void]$out.AppendLine(('        file: {0}' -f $step.Path))
+                    }
+                }
+            }
+        }
+
+        # SECTION 3 -- aggregated effective configuration (alphabetical).
+        # Flat "what the engine actually sees" view: every variable, sorted
+        # by name, with final value + winning layer + source file path.
+        [void]$out.AppendLine('')
+        [void]$out.AppendLine(('=' * 100))
+        [void]$out.AppendLine(('Aggregated effective configuration ({0} variable(s), alphabetical):' -f $script:_CfgProvenance.Count))
+        [void]$out.AppendLine(('-' * 100))
+        foreach ($n in @($script:_CfgProvenance.Keys | Sort-Object)) {
+            $entry = $script:_CfgProvenance[$n]
+            $formatted = _CfgFormatValue $n $entry.Value
+            [void]$out.AppendLine(('  $global:{0,-45} = {1}' -f $n, $formatted))
+            [void]$out.AppendLine(('      from: {0}' -f $entry.Source))
+            if (-not [string]::IsNullOrWhiteSpace($entry.Path)) {
+                [void]$out.AppendLine(('      file: {0}' -f $entry.Path))
+            }
+        }
+
         [void]$out.AppendLine('')
         [void]$out.AppendLine(('=' * 100))
         [void]$out.AppendLine('(Values for variables whose names match secret-bearing patterns are redacted as [REDACTED (len=N)] so presence can still be verified.)')
@@ -311,9 +370,19 @@ function Initialize-LauncherConfig {
     $script:_CfgSnapBefore = @{}
     $__preExisting = _CfgGatherGlobals
     _CfgStep "Layer 0/5: pre-existing globals (inherited from session)"
+    $__preSrc = 'Layer 0 - pre-existing (session / profile / prior run)'
+    $__prePath = '(set before initializer ran -- check $PROFILE, prior launcher run, launcher.override.ps1, parent script)'
     if ($__preExisting.Count -gt 0) {
         foreach ($n in $__preExisting.Keys) {
-            $script:_CfgProvenance[$n] = [ordered]@{ Value = $__preExisting[$n]; Source = 'Layer 0 - pre-existing (session / profile / prior run)' }
+            $script:_CfgProvenance[$n] = [ordered]@{ Value = $__preExisting[$n]; Source = $__preSrc; Path = $__prePath }
+            if (-not $script:_CfgHistory.Contains($n)) {
+                $script:_CfgHistory[$n] = [System.Collections.Generic.List[object]]::new()
+            }
+            [void]$script:_CfgHistory[$n].Add([pscustomobject]@{
+                Layer = $__preSrc
+                Value = $__preExisting[$n]
+                Path  = $__prePath
+            })
         }
         $trailLine = ("{0,-40}  {1,-7}  {2}" -f 'Layer 0 - pre-existing', 'loaded', ("{0} globals inherited from session" -f $__preExisting.Count))
         $script:_CfgLayerTrail.Add($trailLine) | Out-Null

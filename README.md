@@ -1740,11 +1740,14 @@ The exact set the `Step1_OnboardValidate-SecurityInsight-Permissions.ps1` utilit
 
 | Role | Scope | Used by |
 |---|---|---|
-| `Reader` | every subscription you want analyzed | All engines (sub enumeration, Resource Graph) |
+| `Reader` | **tenant-root Management Group** (preferred) or every subscription | All engines — sub enumeration via Resource Graph; **`Build_Tier_Definitions_JSON_File` uses this to enumerate the ~800+ Azure built-in role definitions via `Get-AzRoleDefinition`** |
 | `Log Analytics Reader` | Defender / Sentinel workspace | Risk Analysis + IAC (cross-workspace IdentityInfo) |
 | `Monitoring Metrics Publisher` | each DCR (`dcr-si-identity-assets`, `dcr-si-risk-analysis-summary`, `dcr-si-risk-analysis-detailed`) | IAC + Risk Analysis (LA ingest) |
 | `Storage Blob Data Contributor` | Azure Storage container if `$global:ExportDestination` points to one | Risk Analysis (export upload) |
 | `Tag Contributor` | tenant root MG | CriticalAssetTagging |
+
+> [!NOTE]
+> **If `Azure_BuiltInRoles_Tier0..3` / `Azure_Roles_Catalog` come back empty in `SecurityInsight_IdentityTiering.json`:** the SPN has no subscription it can read. `Get-AzRoleDefinition` needs a subscription scope. Fix by granting **Reader at tenant-root MG** (preferred — `Step1_OnboardValidate-SecurityInsight-Permissions.ps1` already does this by default) or at least Reader on one subscription. The engine auto-selects the first subscription it can see after `Connect-AzAccount` (v2.1.175+); before that release the call silently returned empty when no subscription context was set.
 
 </details>
 

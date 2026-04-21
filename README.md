@@ -492,14 +492,25 @@ The solution ships four **Step** launchers that set a tenant up from zero, plus 
 > **Where does `LauncherConfig.custom.ps1` come from?** There's no template created for you. **Copy `LauncherConfig.sample.ps1` → `LauncherConfig.custom.ps1`** in the same folder, then edit. The `.custom.ps1` name is gitignored so the populated copy stays local. Use this file only for **per-engine** overrides; for shared auth use `SecurityInsight.custom.ps1` (see previous tip).
 > Some older solutions use the filename `LauncherConfig.ps1` (without `.custom.`) — both are recognized by the launcher; new work should prefer `.custom.ps1`.
 
-**Unattended (hands-off) operation** — Steps 2-4 and every engine launcher support the same four auth methods, so a pipeline / scheduled task can run the whole chain with one identity:
+**Unattended (hands-off) operation** — Steps 2-4 and every engine launcher support the same four auth methods, so a pipeline / scheduled task can run the whole chain with one identity. The launcher picks a method by **priority chain** (first row whose fields are populated wins, regardless of which config layer set them):
 
-| Auth method | Set in `LauncherConfig.custom.ps1` | Use when |
-|---|---|---|
-| Managed Identity | `$global:UseManagedIdentity = $true` + `$global:SpnTenantId` | Azure VM / Function / Logic App / Hybrid Runbook Worker |
-| SPN + secret in Key Vault | `$global:SpnKeyVaultName`, `$global:SpnSecretName`, `$global:SpnTenantId`, `$global:SpnClientId` | Production VM with MI that has Key Vault Secrets User |
-| SPN + certificate | `$global:SpnCertificateThumbprint`, `$global:SpnTenantId`, `$global:SpnClientId` | Production VM with cert in local store |
-| SPN + plaintext secret | `$global:SpnClientSecret`, `$global:SpnTenantId`, `$global:SpnClientId` | Lab / testing only |
+| # | Auth method | Set the following globals | Use when |
+|---|---|---|---|
+| 1 | Managed Identity | `$global:UseManagedIdentity = $true` + `$global:SpnTenantId` | Azure VM / Function / Logic App / Hybrid Runbook Worker |
+| 2 | SPN + secret in Key Vault | `$global:SpnKeyVaultName`, `$global:SpnSecretName`, `$global:SpnTenantId`, `$global:SpnClientId` | Production VM with MI that has Key Vault Secrets User |
+| 3 | SPN + certificate | `$global:SpnCertificateThumbprint`, `$global:SpnTenantId`, `$global:SpnClientId` | Production VM with cert in local store |
+| 4 | SPN + plaintext secret | `$global:SpnClientSecret`, `$global:SpnTenantId`, `$global:SpnClientId` | Lab / testing only |
+
+> [!IMPORTANT]
+> **Mixing methods across layers — the higher-priority method wins.** If your tenant-level `platform-defaults.ps1` (Layer 1) defines `$global:SpnCertificateThumbprint` and your `SecurityInsight.custom.ps1` (Layer 3) adds `$global:SpnClientSecret`, **certificate wins** — it's higher in the chain. "Closer layer wins" applies at the *variable* level (Layer 3 overrides TenantId/ClientId/etc. if different), but the *method* is chosen by the priority table above.
+> To force a lower-priority method, null out the higher-priority field in the closer layer:
+> ```powershell
+> # in SecurityInsight.custom.ps1 — force plaintext secret even though platform ships a cert
+> $global:UseManagedIdentity       = $false
+> $global:SpnKeyVaultName          = $null
+> $global:SpnCertificateThumbprint = $null
+> $global:SpnClientSecret          = '<your-secret>'
+> ```
 
 **Step 0** defaults to `Interactive` (browser sign-in by a human admin). To run it unattended, also set `$global:OnboardValidate_AuthMethod = 'SpnSecret'` (or `'SpnCertificate'` / `'ManagedIdentity'`). The SPN/MI needs **Privileged Role Administrator** (or **Global Administrator**) to create app registrations + grant admin consent.
 

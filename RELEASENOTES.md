@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.149
+## v2.1.150
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
 - docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
 - refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
 - fix(SI LAUNCHERS): drop -RequireCustom on all community-vm templates (41e5f772)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - perf(SI _shared): drop all Import-Module calls -- trust PowerShell auto-load (ff869fb6)
 - perf(SI _shared): skip Import-Module on meta-modules (Az, Microsoft.Graph, Microsoft.Graph.Beta) (314c8fe0)
 - perf(SI _shared): fast directory-first module probe (fixes 30s stall on meta-modules) (4d3f37eb)
-- fix(SI _shared): per-module '[MODULE] probing X ...' line so customers see which module is being checked (e8fbc177)
 
 ---
 
@@ -48,6 +48,12 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.150 — Config snapshot captures `Layer 0 — pre-existing` + widens variable coverage
+
+- 🧰 **`config-*.log` now answers "where is `$global:Foo` actually set?" even when the answer is "before the launcher ever ran".** A new `Layer 0 — pre-existing (session / profile / prior run)` bucket captures every relevant global that was already in the PS session when Initialize-LauncherConfig started — leaks from `$PROFILE`, a prior launcher invocation in the same session, `launcher.override.ps1`, or a parent script that set values before dot-sourcing the launcher. Previous versions only recorded what each layer changed, so pre-existing state was silently missing.
+- 🧰 **Variable coverage widened from name-pattern allowlist to a built-in denylist.** Every user-defined `$global:*` (except `$Host`, `$PSCulture`, preference variables, etc.) is now captured. The old allowlist missed anything the author didn't think to add — typical case: customer's custom variable names.
+- 🧰 Layer trail now opens with `Layer 0 - pre-existing   loaded   N globals inherited from session` (or `empty` / `(none)` on a clean session), making it obvious at a glance whether inherited state contributed to the effective config.
 
 ### v2.1.149 — `SecurityInsight.custom.sample.ps1` rewritten as a complete Layer 3 template
 

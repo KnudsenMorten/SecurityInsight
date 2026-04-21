@@ -76,13 +76,41 @@ function Initialize-LauncherConfig {
     $script:_CfgProvenance   = [ordered]@{}    # name -> @{ Value; Source }
     $script:_CfgLayerTrail   = [System.Collections.Generic.List[string]]::new()
 
+    # Denylist of PS built-in / session globals we DON'T want in the snapshot.
+    # Everything else is captured so the snapshot answers "where is $global:Foo
+    # actually set?" -- including values that leaked in from $PROFILE, a prior
+    # launcher invocation in the same session, launcher.override.ps1, or a
+    # parent script.
+    $script:_CfgBuiltinNames = [System.Collections.Generic.HashSet[string]]::new(
+        [string[]]@(
+            'Host','PSCulture','PSUICulture','PSCommandPath','PSScriptRoot',
+            'PSBoundParameters','PSCmdlet','PSItem','PSHome','PSVersionTable',
+            'PSDefaultParameterValues','PSEmailServer','PSSessionApplicationName',
+            'PSSessionConfigurationName','PSSessionOption','PSSenderInfo','PSStyle',
+            'PWD','HOME','true','false','null','Args','MyInvocation',
+            'ErrorActionPreference','DebugPreference','VerbosePreference',
+            'WarningPreference','InformationPreference','ConfirmPreference',
+            'WhatIfPreference','ProgressPreference','ErrorView',
+            'Error','LASTEXITCODE','Matches','foreach','switch','input','_',
+            'StackTrace','NestedPromptLevel','PID','Profile','ShellId',
+            'OutputEncoding','ExecutionContext','ConsoleFileName','OFS',
+            'EnabledExperimentalFeatures','FormatEnumerationLimit',
+            'MaximumAliasCount','MaximumDriveCount','MaximumErrorCount',
+            'MaximumFunctionCount','MaximumHistoryCount','MaximumVariableCount',
+            'IsCoreCLR','IsLinux','IsMacOS','IsWindows','true','false','null'
+        ),
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+
     function _CfgGatherGlobals {
         $out = @{}
-        # Broad pattern: capture any global whose name is plausibly an engine
-        # input. Keeps the log focused on SI config, not the whole session.
-        $pattern = '^(Spn|SMTP|SMTPFrom|Mail|Send|OpenAI|AI_|Dce|Dcr|Workspace|Subscription|Report|Risk|Asset|Critical|Identity|Defender|Sentinel|Tenant|Auth|Use|Pipeline|Build|Troubleshoot|Csa|Scope|Batch|TableName|TenantDomain|DceIngestionUri|MainLog|Platform|SI_|SecurityInsight|Automation|HighPriv|GlobalAdmin|BreakGlass|Target|TestObject|Subscription|Output|Export|Write|Trace|Settings|BucketCount|UseQueryBucketing|Placeholder|ChosenReportTemplate|ResetCache|AutoBucket)'
         foreach ($v in (Get-Variable -Scope Global -ErrorAction SilentlyContinue)) {
-            if ($v.Name -match $pattern) { $out[$v.Name] = $v.Value }
+            if ($script:_CfgBuiltinNames.Contains($v.Name)) { continue }
+            # Also skip the initializer's own private script-scope state.
+            if ($v.Name -like '_Cfg*')       { continue }
+            # Function items and scriptblocks leak into Get-Variable on older PS.
+            if ($v.Value -is [System.Management.Automation.ScriptBlock]) { continue }
+            $out[$v.Name] = $v.Value
         }
         return $out
     }
@@ -174,6 +202,7 @@ function Initialize-LauncherConfig {
         # contribution to the final config. Keeps the ledger tight even on
         # busy VMs with 100+ SI globals.
         $layerOrder = @(
+            'Layer 0 - pre-existing (session / profile / prior run)',
             'Layer 1 - platform-defaults (internal)',
             'Layer 2 - shared-defaults',
             'Layer 3 - SecurityInsight.custom',
@@ -231,7 +260,26 @@ function Initialize-LauncherConfig {
     # "Start from top, then closer wins" -- broadest tenant baseline first,
     # closest per-engine customer override last.
 
-    $script:_CfgSnapBefore = _CfgGatherGlobals
+    # ---- Layer 0: pre-existing globals (inherited from session, $PROFILE,
+    #              prior launcher run, launcher.override.ps1, parent script) -
+    # Captured BEFORE any layer loads so the snapshot answers "where is $X set?"
+    # even when the answer is "before the initializer ever ran".
+    $script:_CfgSnapBefore = @{}
+    $__preExisting = _CfgGatherGlobals
+    _CfgStep "Layer 0/5: pre-existing globals (inherited from session)"
+    if ($__preExisting.Count -gt 0) {
+        foreach ($n in $__preExisting.Keys) {
+            $script:_CfgProvenance[$n] = [ordered]@{ Value = $__preExisting[$n]; Source = 'Layer 0 - pre-existing (session / profile / prior run)' }
+        }
+        $trailLine = ("{0,-40}  {1,-7}  {2}" -f 'Layer 0 - pre-existing', 'loaded', ("{0} globals inherited from session" -f $__preExisting.Count))
+        $script:_CfgLayerTrail.Add($trailLine) | Out-Null
+        _CfgInfo ("{0} globals were already set before Layer 1 (captured in snapshot under 'Layer 0 - pre-existing')" -f $__preExisting.Count)
+    } else {
+        $trailLine = ("{0,-40}  {1,-7}  {2}" -f 'Layer 0 - pre-existing', 'empty', '(none)')
+        $script:_CfgLayerTrail.Add($trailLine) | Out-Null
+        _CfgInfo "no pre-existing globals at initializer entry -- session is clean"
+    }
+    $script:_CfgSnapBefore = $__preExisting
 
     # ---- Layer 1: platform-defaults.ps1 (tenant, internal mode only) ---------
     $platformPath = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1'

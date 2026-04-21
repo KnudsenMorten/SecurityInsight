@@ -234,15 +234,21 @@ function Initialize-LauncherConfig {
         _CfgRecordLayer 'Layer 0 - shared-defaults' $sharedPath $false
     }
 
-    # ---- Layer 1: defaults.ps1 (engine baseline, ours, must exist) -----------
+    # ---- Layer 1: defaults.ps1 (engine baseline, ours) -----------------------
+    # Optional. Some engines (CriticalAssetTagging family, Setup-CSA, Step2/3 etc.
+    # migrated from the legacy direct-dot-source flow in v2.1.145) don't ship a
+    # per-engine defaults file because shared-defaults (Layer 0) + customer
+    # overrides (Layers 3 + 4) cover everything they need. Absent = info, not error.
     $defaultsPath = Join-Path $LauncherDir 'LauncherConfig.defaults.ps1'
     _CfgStep "Layer 1/4: LauncherConfig.defaults.ps1 (engine baseline)"
-    if (-not (Test-Path -LiteralPath $defaultsPath)) {
-        throw "LauncherConfig.defaults.ps1 missing at $defaultsPath. This file ships with each release; reinstall the $Solution package to restore it."
+    if (Test-Path -LiteralPath $defaultsPath) {
+        . $defaultsPath
+        _CfgOk "loaded"
+        _CfgRecordLayer 'Layer 1 - LauncherConfig.defaults' $defaultsPath $true
+    } else {
+        _CfgInfo "absent ($defaultsPath) -- skipping (engine has no shipped baseline; Layer 0 + customer overrides are sufficient)"
+        _CfgRecordLayer 'Layer 1 - LauncherConfig.defaults' $defaultsPath $false
     }
-    . $defaultsPath
-    _CfgOk "loaded"
-    _CfgRecordLayer 'Layer 1 - LauncherConfig.defaults' $defaultsPath $true
 
     # ---- Layer 2: platform-defaults.ps1 (internal only) ----------------------
     if ($Mode -eq 'internal') {

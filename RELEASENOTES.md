@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.144
+## v2.1.145
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- refactor(SI LAUNCHERS): unify all 44 launcher templates on Initialize-LauncherConfig (27ac39c5)
 - feat(SI CriticalAssetTagging): merge Locked+Custom by '<stem>--SI' key instead of full AssetTagName (be8136e0)
 - feat(SI Initialize-LauncherConfig): per-run DATA/LOGS/config-*.log snapshot with layer provenance + secret redaction + 7-day prune (072c0340)
 - feat(SI RiskAnalysis): append '--SI' source tag to every TraceName (9193d4d9)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): seed RELEASENOTES.md with curated human-friendly changelog (7caf0c6f)
 - fix(SI _shared): emit 'Checking N modules...' banner so customers don't think it hung (a463dd2b)
 - feat(SI): daily auto-refresh via scheduled Step 0 task (8c9a00f8)
-- fix(SI _shared): suppress Ensure-SecurityInsightModules hashtable output (b6d75cea)
 
 ---
 
@@ -48,6 +48,14 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.145 — Every launcher flavour now uses the unified `Initialize-LauncherConfig` flow
+
+- 🧰 **All 44 launcher templates now use the same layered-config loader** regardless of community vs internal, vm vs azure. 24 templates were still on the older direct-dot-source pattern (or missing a config-load step entirely) — migrated in this release.
+  - **Consistency win #1: `.custom.ps1` works everywhere.** `LauncherConfig.custom.ps1` per engine + `SOLUTIONS/SecurityInsight/CUSTOMDATA/SecurityInsight.custom.ps1` solution-wide now override defaults on every engine × flavour combination, not just the 5 engines that already had the modern loader (RiskAnalysis, IdentityAssetsCollect, Build_Tier, Step1, Step4).
+  - **Consistency win #2: `DATA\LOGS\config-*.log` fires everywhere.** The layer-provenance snapshot (v2.1.143) now writes for every launcher invocation across every engine × flavour.
+  - **Consistency win #3: Same launcher flow for community + internal.** The ONLY difference between the two is the content of `SOLUTIONS/PlatformConfiguration/CUSTOMDATA/platform-defaults.ps1` (Layer 2) — populated for internal deployments, empty/absent for community. Launcher code is identical.
+- 🔧 **Strip stale `$SpnTenantId is required (set it in LauncherConfig.ps1)` guard** from the community-vm templates — `Initialize-LauncherConfig -RequireCustom` now owns the "file missing / required values absent" error path with a better message.
 
 ### v2.1.144 — CriticalAssetTagging Locked/Custom merge by `<stem>--SI` (tier is overridable data)
 

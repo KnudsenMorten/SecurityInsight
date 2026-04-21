@@ -131,15 +131,19 @@ foreach ($case in 'SCRIPTS','scripts') {
 if (-not $engine) { throw "Launcher: engine 'Setup-SecurityInsight-CustomSecurityAttributes.ps1' not found at $engineOwner\SCRIPTS or $engineOwner\scripts." }
 
 try {
-    Write-Step 'Loading LauncherConfig.ps1'
-    if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
-    if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {
-        throw "LauncherConfig.ps1 not found at $LauncherConfigPath. Copy LauncherConfig.sample.ps1 to LauncherConfig.ps1 and fill in SI_CSA_TenantId (and optionally SI_CSA_PipelinePrincipalId / SI_CSA_TestObjectId)."
-    }
-    . $LauncherConfigPath
-    Write-Ok 'LauncherConfig loaded'
+    # Layered config: defaults (ours) -> platform (internal only) ->
+    # solution-wide custom -> per-engine custom -> CLI args.
+    . (Join-Path $PSScriptRoot '..\_lib\Initialize-LauncherConfig.ps1')
+-LauncherConfig `
+        -Solution    'SecurityInsight' `
+        -Engine      'Setup-SecurityInsight-CustomSecurityAttributes' `
+        -LauncherDir $PSScriptRoot `
+        -RepoRoot    $InstallPath `
+        -Mode        'community' `
+        -CustomConfigPath $LauncherConfigPath
+        -RequireCustom
 } catch {
-    Write-Err2 "Failed to load LauncherConfig: $($_.Exception.Message)"
+    Write-Err2 "Failed to load layered config: $($_.Exception.Message)"
     throw
 }
 

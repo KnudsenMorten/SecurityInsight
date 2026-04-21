@@ -119,6 +119,23 @@ Write-Step "Resolving repo root"
 Write-Ok "repo root: $InstallPath"
 
 try {
+    # Layered config (unified flow -- community + internal share the same loader;
+    # only platform-defaults.ps1 content differs between the two modes).
+    # Mode=community:  Layers 0, 1, 3, 4     (no platform-defaults)
+    # Mode=internal :  Layers 0, 1, 2, 3, 4  (platform-defaults populated by AF bootstrap)
+    . (Join-Path $PSScriptRoot '..\_lib\Initialize-LauncherConfig.ps1')
+    Initialize-LauncherConfig `
+        -Solution    'SecurityInsight' `
+        -Engine      'CriticalAssetTaggingMaintenance' `
+        -LauncherDir $PSScriptRoot `
+        -RepoRoot    $InstallPath `
+        -Mode        'community' `
+        -CustomConfigPath $LauncherConfigPath
+} catch {
+    Write-Err2 "Failed to load layered config: $($_.Exception.Message)"
+    throw
+}
+try {
     Write-Step "Checking required modules (Az.Accounts, Az.KeyVault)"
     [void](Test-LauncherModule -Name 'Az.Accounts' -Required -AutoInstall)
     [void](Test-LauncherModule -Name 'Az.KeyVault' -Required -AutoInstall)

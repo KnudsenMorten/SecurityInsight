@@ -119,15 +119,19 @@ Write-Step "Resolving repo root"
 Write-Ok "repo root: $InstallPath"
 
 try {
-    Write-Step "Loading LauncherConfig.ps1"
-    if (-not $LauncherConfigPath) { $LauncherConfigPath = Join-Path $PSScriptRoot 'LauncherConfig.ps1' }
-    if (-not (Test-Path -LiteralPath $LauncherConfigPath)) {
-        throw "LauncherConfig.ps1 not found at $LauncherConfigPath. Copy LauncherConfig.sample.ps1 to LauncherConfig.ps1 and fill in the values for whichever auth method you want to use."
-    }
-    . $LauncherConfigPath
-    Write-Ok "LauncherConfig loaded"
+    # Layered config: defaults (ours) -> platform (internal only) ->
+    # solution-wide custom -> per-engine custom -> CLI args.
+    . (Join-Path $PSScriptRoot '..\_lib\Initialize-LauncherConfig.ps1')
+    Initialize-LauncherConfig `
+        -Solution    'SecurityInsight' `
+        -Engine      'CriticalAssetTaggingMaintenance_FixConflictingTags' `
+        -LauncherDir $PSScriptRoot `
+        -RepoRoot    $InstallPath `
+        -Mode        'community' `
+        -CustomConfigPath $LauncherConfigPath
+        -RequireCustom
 } catch {
-    Write-Err2 "Failed to load LauncherConfig: $($_.Exception.Message)"
+    Write-Err2 "Failed to load layered config: $($_.Exception.Message)"
     throw
 }
 

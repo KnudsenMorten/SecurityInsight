@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.177
+## v2.1.178
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): refresh teaser tier catalog with live numbers; Azure RBAC now populates (+873) (bb70f622)
 - fix(SI Layer 4 defaults): stop clobbering Layer 3 customer OpenAI / SMTP values (8f0decca)
 - fix(SI Build_Tier): diagnose NRE-on-every-retry (Azure OpenAI error envelope) (a691dbfa)
 - fix(SI Build_Tier): populate Azure role catalog + EntraID_APIPermissions_Catalog (both were empty / null) (eb45c3b0)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI _lib Initialize-LauncherConfig): AST-parse layer files for all $global:* assignments (b6e7719b)
 - fix(SI _lib Initialize-LauncherConfig): capture Layer 0 pre-existing globals + widen variable coverage (ca4aeca2)
 - docs(SI CUSTOMDATA sample): complete Layer 3 template with auth / OpenAI / SMTP sections (48b129eb)
-- refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
 
 ---
 
@@ -44,6 +44,16 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.178 — Teaser WOW table: Azure RBAC catalog now populates (+873 roles); grand total jumps to 2,297
+
+- 📚 **Refreshed the AI-classified tier catalog numbers in the README teaser** from a live Build_Tier run on the v2.1.175/176/177 fixes. Key changes from the previously-published table:
+  - 🆕 **Azure built-in roles row now populated** — 873 total (3 / 15 / 132 / 723 per Tier 0-3). Previously reported as "0 — classified at run-time" because the v2.1.174 engine was silently returning empty due to missing subscription context; v2.1.175 fixed that (`Set-AzContext` auto-selects the first subscription the SPN can read after `Connect-AzAccount`).
+  - **Entra built-in roles** 142 → **143** (one new role appeared in the catalog).
+  - **AD built-in groups** total unchanged at 69, but the AI re-tiered the distribution (9 / 8 / 1 / 51 instead of 10 / 5 / 3 / 51 — the classifier re-evaluates every run, and small tier shifts are normal).
+  - **Entra / Graph API permissions** total unchanged at 1,212, distribution shifted (2 / 80 / 117 / 1,013 instead of 4 / 84 / 94 / 1,030).
+  - **Grand total 1,423 → 2,297** (the Azure role catalog adding 873 entries accounts for virtually all of the jump).
+- 📚 **Removed the "Azure RBAC classified at run-time" note below the table** — no longer accurate now that the catalog populates at Build_Tier time. Replaced with a note pointing at the JSON source file + the two `*_Catalog` fields (`Azure_Roles_Catalog` = 873 raw entries, `EntraID_APIPermissions_Catalog` = 1,845 raw entries) so downstream consumers know they're available too.
 
 ### v2.1.177 — Layer 4 defaults no longer clobber Layer 3 customer values (OpenAI / SMTP)
 

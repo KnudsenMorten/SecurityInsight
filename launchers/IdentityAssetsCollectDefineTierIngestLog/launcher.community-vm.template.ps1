@@ -130,8 +130,7 @@ try {
         -LauncherDir $PSScriptRoot `
         -RepoRoot    $InstallPath `
         -Mode        'community' `
-        -CustomConfigPath $LauncherConfigPath `
-        -RequireCustom
+        -CustomConfigPath $LauncherConfigPath
 } catch {
     Write-Err2 "Failed to load layered config: $($_.Exception.Message)"
     throw

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.173
+## v2.1.174
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI CriticalAssetTagging): promote 177 samples from Custom -> Locked; Custom becomes override scaffold (b70b40fd)
 - docs(SI README): 3-line intro under WOW table explaining graph-based detection (cfa9bd9c)
 - docs(SI README § 6.9): Locked catalog inventory -- name + purpose per report/rule (80432ca1)
 - docs(SI README): expand 'out of the box' WOW table with AI-classified tier catalog breakdown (7c6d2330)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI LAUNCHERS): drop -RequireCustom on all community-vm templates (41e5f772)
 - fix(SI Initialize-LauncherConfig): Layer 1 (LauncherConfig.defaults.ps1) is now optional (3ff3203f)
 - refactor(SI LAUNCHERS): unify all 44 launcher templates on Initialize-LauncherConfig (27ac39c5)
-- feat(SI CriticalAssetTagging): merge Locked+Custom by '<stem>--SI' key instead of full AssetTagName (be8136e0)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.174 — Promote 177 CAT samples: Custom → Locked; Locked catalog is now 180 rules
+
+- 🆕 **All 177 Critical Asset Tagging starter samples promoted from `Custom.yaml` to `Locked.yaml`.** They now ship as part of the canonical detection catalog, force-refreshed on every Step 0 update. Total Locked CAT rules: **180** (3 original Tier-0 infra rules + 177 promoted samples across AD / Entra / Azure landing-zone / networking / workstation tiers / IoT / Azure PaaS + the `Temp-Client-Devices--excluded--SI` exclusion sample).
+- 🧰 **`Custom.yaml` is now an empty customer-override scaffold.** Header comments explain how to override a Locked rule by same-stem (Custom wins on stem collision) — add rules here only when you need to override shipped logic, not as a dumping ground for new samples.
+- 📚 **README teaser WOW table updated.** Dropped the "*Plus starter samples in Custom.yaml*" row; the Critical Asset detection rules count jumps from 3 → **180** to reflect the promoted content.
+- 📚 **§ 6.9 Appendix regenerated** to list all 180 Locked CAT rules with tier / mode / engine columns, plus the 100 Risk Analysis reports + 2 orchestrator templates (unchanged).
+- ℹ️ **Behavioural note:** the 177 promoted rules kept their original `Mode: Test` — Prod scheduled runs (`$global:Scope = @('PROD')`) still skip them silently. Customers adopt a rule by dropping a same-stem entry in `Custom.yaml` with `Mode: Prod`.
 
 ### v2.1.173 — 3-line "graph, not signatures" intro under the WOW table
 

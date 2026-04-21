@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.165
+## v2.1.166
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
 - fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
 - fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
 - docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): resync sections 4.1-4.5 to verbatim text from MEM26 PDF (134fb73c)
 - docs(SI README): Power BI 'Beta' + fill §5 What's-New gap from v2.1.113..v2.1.129 (544af373)
 - refactor(SI LAUNCHERS): silence Test-LauncherModule success line -- engine owns the 'module present' log (84e8a20d)
-- fix(SI CUSTOMDATA sample): use canonical 'dce-securityinsight' naming (was 'dce-si-identity') (4f535db4)
 
 ---
 
@@ -44,6 +44,21 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.166 — Promote Step 2 / 3 / 4 out of § 3.5.x into top-level subsections
+
+- 🧰 **Steps get their own § 3.x slot, not a nested § 3.5.x.** Before: "Step 2 Connectivity" was buried as § 3.5.4, "Step 3 Identity infrastructure" as § 3.5.5, "Step 4 Azure OpenAI" as § 3.5.6. In the rendered TOC that made critical action items look like minor reference bullets. Now:
+  - § 3.6 Step 2 — Connectivity: SPN or Managed Identity *(was § 3.5.4)*
+  - § 3.7 Step 3 — Identity infrastructure: Workspace + DCE + DCR *(was § 3.5.5)*
+  - § 3.8 Step 4 — Azure OpenAI (optional) *(was § 3.5.6)*
+- 🔄 **Cascade renumbering** for the sections that followed:
+  - § 3.9 Understand the LauncherConfig files *(was § 3.6)*
+  - § 3.10 Run the Risk Analysis *(was § 3.7)*
+  - § 3.11 Step 5a — Endpoint asset tagging *(was § 3.8)*
+  - § 3.12 Step 5b — Azure asset tagging *(was § 3.9)*
+  - § 3.13 Defender Criticality Level *(was § 3.10)*
+- 🧰 **§ 3.5 stays as the pre-requisite *reference* chapter** (config-file model primer + Setup Configurator + Solution component overview). All three remaining subsections are concepts/tools, not step actions, so keeping them as § 3.5.1/3.5.2/3.5.3 is consistent.
+- Anchors are clean-slug-aliased already, so no external links break from this renumber.
 
 ### v2.1.165 — Drop duplicate module pre-install loop from IdentityAssetsCollect community-vm launcher
 

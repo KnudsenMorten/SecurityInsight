@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.147
+## v2.1.148
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- refactor(SI Initialize-LauncherConfig): reorder layers by scope (tenant -> solution -> engine) (0c93e085)
 - fix(SI LAUNCHERS): drop -RequireCustom on all community-vm templates (41e5f772)
 - fix(SI Initialize-LauncherConfig): Layer 1 (LauncherConfig.defaults.ps1) is now optional (3ff3203f)
 - refactor(SI LAUNCHERS): unify all 44 launcher templates on Initialize-LauncherConfig (27ac39c5)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - perf(SI _shared): fast directory-first module probe (fixes 30s stall on meta-modules) (4d3f37eb)
 - fix(SI _shared): per-module '[MODULE] probing X ...' line so customers see which module is being checked (e8fbc177)
 - fix(SI _shared): detect modules installed in AllUsers + default Scope=Auto (b7277b76)
-- docs(SI): seed RELEASENOTES.md with curated human-friendly changelog (7caf0c6f)
 
 ---
 
@@ -48,6 +48,21 @@ Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠�
 ### v2.1.133 — Drop stale `AD_GroupMembership` key from tiering JSON output
 
 - 🧰 **`SecurityInsight_IdentityTiering.json` no longer carries the dead `AD_GroupMembership` key.** The consumer side in `IdentityAssetsCollectDefineTierIngestLog` was stripped earlier (see `# AD_GroupMembership JSON snapshot is no longer used.` comment on its line 1441) but the producer kept emitting it, leaving a `"AD_GroupMembership": [null]` stub in every regenerated catalog. The AI tiering prompt path that reads AD group membership (`-ADGroupMembership` param on the tiering function) is unchanged — members are still fed to the AI as classification context; we just don't persist the snapshot.
+
+### v2.1.148 — Reorder config layers by scope: tenant → solution → engine, closer wins
+
+- 🧰 **Layer precedence reordered to a strict scope hierarchy.** "Start from top, then closer wins" — broadest tenant baseline loads first, closest per-engine customer override loads last and wins. Within each scope, ours loads before customer's.
+
+  | New # | Layer | File | Scope |
+  |---|---|---|---|
+  | **1** | platform-defaults | `SOLUTIONS/PlatformConfiguration/CUSTOMDATA/platform-defaults.ps1` | **Tenant** (internal mode only) |
+  | **2** | shared-defaults | `LAUNCHERS/_lib/SecurityInsight.shared-defaults.ps1` | Solution (ours) |
+  | **3** | SecurityInsight.custom | `SOLUTIONS/SecurityInsight/CUSTOMDATA/SecurityInsight.custom.ps1` | Solution (customer) |
+  | **4** | LauncherConfig.defaults | `LAUNCHERS/<engine>/LauncherConfig.defaults.ps1` | Engine (ours) |
+  | **5** | LauncherConfig.custom | `LAUNCHERS/<engine>/LauncherConfig.custom.ps1` | **Engine (customer, closest — wins)** |
+
+- 📚 **Layer labels renumbered in `[STEP] Layer N/5: ...` output + the `config-*.log` snapshot's provenance section.** Previous numbering (Layer 0-4) had shared-defaults first — conceptually broken because `platform-defaults` is a tenant-wide layer that's broader than solution-wide. The new ordering makes the scope progression linear.
+- 🔧 Load-order change is the important bit — labels are just navigation. Before: shared-defaults loaded before platform-defaults, so an internal customer's tenant variables could be silently overridden by our solution-wide defaults. After: platform baseline wins over nothing, each narrower scope overrides everything broader.
 
 ### v2.1.147 — `LauncherConfig.custom.ps1` now truly optional (drop `-RequireCustom` on community-vm)
 

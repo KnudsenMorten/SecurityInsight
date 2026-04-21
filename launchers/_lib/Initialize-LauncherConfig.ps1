@@ -174,12 +174,12 @@ function Initialize-LauncherConfig {
         # contribution to the final config. Keeps the ledger tight even on
         # busy VMs with 100+ SI globals.
         $layerOrder = @(
-            'Layer 0 - shared-defaults',
-            'Layer 1 - LauncherConfig.defaults',
-            'Layer 2 - platform-defaults (internal)',
+            'Layer 1 - platform-defaults (internal)',
+            'Layer 2 - shared-defaults',
             'Layer 3 - SecurityInsight.custom',
-            'Layer 4 - LauncherConfig.custom',
-            'Layer 4b - derived'
+            'Layer 4 - LauncherConfig.defaults',
+            'Layer 5 - LauncherConfig.custom',
+            'Layer 6 - derived'
         )
         foreach ($layer in $layerOrder) {
             $keys = @($script:_CfgProvenance.Keys | Where-Object { $script:_CfgProvenance[$_].Source -eq $layer } | Sort-Object)
@@ -222,51 +222,49 @@ function Initialize-LauncherConfig {
     #   monorepo:  SOLUTIONS/<Solution>/LAUNCHERS/_lib/<Solution>.shared-defaults.ps1
     #   community: launchers/_lib/<Solution>.shared-defaults.ps1
     # Resolve it relative to $LauncherDir so both layouts work.
-    $sharedPath = Join-Path (Split-Path -Parent $LauncherDir) ("_lib\{0}.shared-defaults.ps1" -f $Solution)
-    _CfgStep "Layer 0/4: $Solution.shared-defaults.ps1 (solution-wide shared baseline)"
+    # Layered precedence (later loads override earlier; closest = highest):
+    #   Layer 1  platform-defaults        (tenant scope, internal mode only)
+    #   Layer 2  shared-defaults          (solution scope, ours)
+    #   Layer 3  <Solution>.custom        (solution scope, customer)
+    #   Layer 4  LauncherConfig.defaults  (engine scope, ours)
+    #   Layer 5  LauncherConfig.custom    (engine scope, customer, closest -- WINS)
+    # "Start from top, then closer wins" -- broadest tenant baseline first,
+    # closest per-engine customer override last.
+
     $script:_CfgSnapBefore = _CfgGatherGlobals
-    if (Test-Path -LiteralPath $sharedPath) {
-        . $sharedPath
-        _CfgOk "loaded ($sharedPath)"
-        _CfgRecordLayer 'Layer 0 - shared-defaults' $sharedPath $true
-    } else {
-        _CfgInfo "absent ($sharedPath) -- skipping"
-        _CfgRecordLayer 'Layer 0 - shared-defaults' $sharedPath $false
-    }
 
-    # ---- Layer 1: defaults.ps1 (engine baseline, ours) -----------------------
-    # Optional. Some engines (CriticalAssetTagging family, Setup-CSA, Step2/3 etc.
-    # migrated from the legacy direct-dot-source flow in v2.1.145) don't ship a
-    # per-engine defaults file because shared-defaults (Layer 0) + customer
-    # overrides (Layers 3 + 4) cover everything they need. Absent = info, not error.
-    $defaultsPath = Join-Path $LauncherDir 'LauncherConfig.defaults.ps1'
-    _CfgStep "Layer 1/4: LauncherConfig.defaults.ps1 (engine baseline)"
-    if (Test-Path -LiteralPath $defaultsPath) {
-        . $defaultsPath
-        _CfgOk "loaded"
-        _CfgRecordLayer 'Layer 1 - LauncherConfig.defaults' $defaultsPath $true
-    } else {
-        _CfgInfo "absent ($defaultsPath) -- skipping (engine has no shipped baseline; Layer 0 + customer overrides are sufficient)"
-        _CfgRecordLayer 'Layer 1 - LauncherConfig.defaults' $defaultsPath $false
-    }
-
-    # ---- Layer 2: platform-defaults.ps1 (internal only) ----------------------
+    # ---- Layer 1: platform-defaults.ps1 (tenant, internal mode only) ---------
+    $platformPath = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1'
+    _CfgStep "Layer 1/5: platform-defaults.ps1 (tenant -- internal mode only)"
     if ($Mode -eq 'internal') {
-        $platformPath = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1'
-        _CfgStep "Layer 2/4: platform-defaults.ps1 (shared platform vars)"
         if (Test-Path -LiteralPath $platformPath) {
             . $platformPath
             _CfgOk "loaded"
-            _CfgRecordLayer 'Layer 2 - platform-defaults (internal)' $platformPath $true
+            _CfgRecordLayer 'Layer 1 - platform-defaults (internal)' $platformPath $true
         } else {
             _CfgInfo "absent ($platformPath) -- skipping"
-            _CfgRecordLayer 'Layer 2 - platform-defaults (internal)' $platformPath $false
+            _CfgRecordLayer 'Layer 1 - platform-defaults (internal)' $platformPath $false
         }
+    } else {
+        _CfgInfo "skipped (community mode; platform-defaults only applies in internal / AF deployments)"
+        _CfgRecordLayer 'Layer 1 - platform-defaults (internal)' $platformPath $false
     }
 
-    # ---- Layer 3: <Solution>.custom.ps1 (solution-wide overrides) ------------
+    # ---- Layer 2: <Solution>.shared-defaults.ps1 (solution baseline, ours) ---
+    $sharedPath = Join-Path (Split-Path -Parent $LauncherDir) ("_lib\{0}.shared-defaults.ps1" -f $Solution)
+    _CfgStep "Layer 2/5: $Solution.shared-defaults.ps1 (solution baseline, ours)"
+    if (Test-Path -LiteralPath $sharedPath) {
+        . $sharedPath
+        _CfgOk "loaded ($sharedPath)"
+        _CfgRecordLayer 'Layer 2 - shared-defaults' $sharedPath $true
+    } else {
+        _CfgInfo "absent ($sharedPath) -- skipping"
+        _CfgRecordLayer 'Layer 2 - shared-defaults' $sharedPath $false
+    }
+
+    # ---- Layer 3: <Solution>.custom.ps1 (solution-wide customer overrides) ---
     $solutionCustomPath = Join-Path $RepoRoot ("SOLUTIONS\{0}\CUSTOMDATA\{0}.custom.ps1" -f $Solution)
-    _CfgStep "Layer 3/4: $Solution.custom.ps1 (solution-wide overrides)"
+    _CfgStep "Layer 3/5: $Solution.custom.ps1 (solution-wide customer overrides)"
     if (Test-Path -LiteralPath $solutionCustomPath) {
         _CfgUnblock $solutionCustomPath
         . $solutionCustomPath
@@ -277,8 +275,22 @@ function Initialize-LauncherConfig {
         _CfgRecordLayer 'Layer 3 - SecurityInsight.custom' $solutionCustomPath $false
     }
 
-    # ---- Layer 4: per-engine custom (LauncherConfig.custom.ps1 preferred,
-    #              LauncherConfig.ps1 legacy fallback) -----------------------
+    # ---- Layer 4: LauncherConfig.defaults.ps1 (engine baseline, ours) --------
+    # Optional. Some engines (CriticalAssetTagging family, Setup-CSA, Step2/3)
+    # don't ship a per-engine defaults file because Layers 1-3 + Layer 5
+    # customer overrides cover everything. Absent = info, not error.
+    $defaultsPath = Join-Path $LauncherDir 'LauncherConfig.defaults.ps1'
+    _CfgStep "Layer 4/5: LauncherConfig.defaults.ps1 (engine baseline, ours)"
+    if (Test-Path -LiteralPath $defaultsPath) {
+        . $defaultsPath
+        _CfgOk "loaded"
+        _CfgRecordLayer 'Layer 4 - LauncherConfig.defaults' $defaultsPath $true
+    } else {
+        _CfgInfo "absent ($defaultsPath) -- skipping (engine has no shipped baseline)"
+        _CfgRecordLayer 'Layer 4 - LauncherConfig.defaults' $defaultsPath $false
+    }
+
+    # ---- Layer 5: LauncherConfig.custom.ps1 (per-engine customer, CLOSEST) ---
     $explicit = -not [string]::IsNullOrWhiteSpace($CustomConfigPath)
     if ($explicit) {
         $customPath = $CustomConfigPath
@@ -293,12 +305,12 @@ function Initialize-LauncherConfig {
         }
     }
 
-    _CfgStep "Layer 4/4: per-engine customer overrides"
+    _CfgStep "Layer 5/5: LauncherConfig.custom.ps1 (per-engine customer, closest -- wins)"
     if (Test-Path -LiteralPath $customPath) {
         _CfgUnblock $customPath
         . $customPath
         _CfgOk "loaded ($customPath)"
-        _CfgRecordLayer 'Layer 4 - LauncherConfig.custom' $customPath $true
+        _CfgRecordLayer 'Layer 5 - LauncherConfig.custom' $customPath $true
     } elseif ($RequireCustom) {
         $expected = Join-Path $LauncherDir 'LauncherConfig.custom.ps1'
         throw @"
@@ -310,21 +322,21 @@ Copy $(Join-Path $LauncherDir 'LauncherConfig.sample.ps1') to LauncherConfig.cus
 "@
     } else {
         _CfgInfo "absent ($customPath) -- skipping (auth comes from elsewhere on this flavour)"
-        _CfgRecordLayer 'Layer 4 - LauncherConfig.custom' $customPath $false
+        _CfgRecordLayer 'Layer 5 - LauncherConfig.custom' $customPath $false
     }
 
-    # ---- Derived defaults: run AFTER all 4 layers so late-bound vars resolve ----
-    # Platform-defaults (Layer 2, internal only) sets $global:MainLogAnalyticsWorkspaceSubId
+    # ---- Derived defaults: run AFTER all 5 layers so late-bound vars resolve ----
+    # Platform-defaults (Layer 1, internal only) sets $global:MainLogAnalyticsWorkspaceSubId
     # but doesn't set $global:SubscriptionId. Derive it here so engines that read
     # $global:SubscriptionId don't have to duplicate the fallback logic.
-    $__before4b = _CfgGatherGlobals
+    $__beforeDerived = _CfgGatherGlobals
     if ([string]::IsNullOrWhiteSpace([string]$global:SubscriptionId) -and
         -not [string]::IsNullOrWhiteSpace([string]$global:MainLogAnalyticsWorkspaceSubId)) {
         $global:SubscriptionId = [string]$global:MainLogAnalyticsWorkspaceSubId
         _CfgInfo "derived `$global:SubscriptionId from `$global:MainLogAnalyticsWorkspaceSubId"
     }
-    $script:_CfgSnapBefore = $__before4b
-    _CfgRecordLayer 'Layer 4b - derived' '(initializer derivation step)' $true
+    $script:_CfgSnapBefore = $__beforeDerived
+    _CfgRecordLayer 'Layer 6 - derived' '(initializer derivation step)' $true
 
     # ---- Write config snapshot log + prune old logs (7-day retention) --------
     _CfgWriteSnapshotAndPrune -RepoRoot $RepoRoot -Engine $Engine -RetentionDays 7

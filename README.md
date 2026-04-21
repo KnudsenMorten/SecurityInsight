@@ -36,20 +36,20 @@
    - 2.5 [Outputs at a glance](#outputs-at-a-glance)
 3. [How to Implement (Quick Start)](#how-to-implement-quick-start)
    - 3.1 [High-level overview](#high-level-overview)
-   - 3.2 [Install (fresh machine)](#install-fresh-machine)
+   - 3.2 [Step 1 — Install SecurityInsight (fresh machine)](#install-fresh-machine)
    - 3.3 [Update an existing install](#update-an-existing-install)
    - 3.4 [Try out a preview release](#try-out-a-preview-release)
    - 3.5 [Pre-requisite configuration](#pre-requisite-configuration)
      - 3.5.1 [Config-file model — `.defaults.` vs `.custom.`](#config-file-model)
      - 3.5.2 [Setup Configurator](#setup-configurator)
      - 3.5.3 [Solution component overview](#solution-component-overview)
-     - 3.5.4 [Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
-     - 3.5.5 [Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
-     - 3.5.6 [Azure OpenAI](#azure-openai-optional)
+     - 3.5.4 [Step 2 — Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
+     - 3.5.5 [Step 3 — Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
+     - 3.5.6 [Step 4 — Azure OpenAI](#azure-openai-optional)
    - 3.7 [Run the Risk Analysis](#run-the-risk-analysis)
    - 3.6 [Understand the LauncherConfig files](#understand-the-launcherconfig-files)
-   - 3.8 [Endpoint asset tagging](#endpoint-asset-tagging)
-   - 3.9 [Azure asset tagging](#azure-asset-tagging)
+   - 3.8 [Step 5a — Endpoint asset tagging](#endpoint-asset-tagging)
+   - 3.9 [Step 5b — Azure asset tagging](#azure-asset-tagging)
    - 3.10 [Defender Criticality Level (optional)](#defender-criticality-level-optional)
 4. [Severity & Criticality Definitions](#severity--criticality-definitions)
    - 4.1 [Severity definitions](#severity-definitions)
@@ -318,7 +318,7 @@ flowchart TD
 **Cadence.** Steps 2–4 are once-per-tenant setup (run in order, then forget about them). Step 1 (Get / Update from GitHub) re-runs whenever you want to pull a newer release — the launcher preserves your `CUSTOMDATA/**` and `LauncherConfig.custom.ps1` files. Step 5 (`CriticalAssetTagging`) runs daily or hourly. Step 6 (`IdentityAssetsCollectDefineTierIngestLog`) runs daily. Step 7 (`SecurityInsight_RiskAnalysis`) runs daily / weekly / on-demand — whichever matches your review cadence.
 
 <a id="32-install-fresh-machine"></a><a id="install-fresh-machine"></a>
-### 📦 3.2 Install (fresh machine)
+### 📦 3.2 Step 1 — Install SecurityInsight (fresh machine)
 
 [⤴ Back to top](#top)
 
@@ -365,6 +365,9 @@ Next: [§ 3.5 Pre-requisite configuration](#pre-requisite-configuration).
 
 [⤴ Back to top](#top)
 
+<details>
+<summary><b>Show details (expand)</b></summary>
+
 Re-running Step 0 against the same path is idempotent: 🔒 **locked** files (ours) are refreshed; 🧷 **customer** files (`*.custom.ps1`, `*_Custom.yaml`, `CUSTOMDATA/**`) are never touched.
 
 ```powershell
@@ -396,8 +399,13 @@ Full file-by-file breakdown: [§ 7.2 Files deep-dive](#files-deep-dive).
 
 </details>
 
+</details>
+
 <a id="331-automate-daily-update"></a><a id="automate-daily-update"></a>
 #### ⏰ 3.3.1 Automate it — daily "auto-refresh from GitHub"
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 Register a Scheduled Task that runs Step 0 once a day as `SYSTEM`:
 
@@ -449,10 +457,15 @@ After update, the running version is stamped on every launcher banner:
 
 </details>
 
+</details>
+
 <a id="34-try-out-a-preview-release"></a><a id="try-out-a-preview-release"></a>
 ### 🧪 3.4 Try out a preview release
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 The `preview` channel tracks the HEAD of the `preview` branch — bleeding-edge features that haven't shipped in a tagged release. Use a **separate folder** from stable.
 
@@ -463,6 +476,8 @@ $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight-preview'
 
 > [!NOTE]
 > Preview = uncut, unrewindable. Bugs may exist that don't exist in `stable`. File issues at [KnudsenMorten/SecurityInsight](https://github.com/KnudsenMorten/SecurityInsight/issues). When a preview feature stabilizes it's cut to a new `stable` release — update via § 3.3.
+
+</details>
 
 <a id="35-pre-requisite-configuration"></a><a id="pre-requisite-configuration"></a>
 ### 🔧 3.5 Pre-requisite configuration
@@ -579,7 +594,7 @@ Every SI component ships as its own launcher folder under `LAUNCHERS/`. Two grou
 ---
 
 <a id="351-connectivity-spn-or-managed-identity"></a><a id="connectivity-spn-or-managed-identity"></a>
-#### 🔐 3.5.4 Connectivity: SPN or Managed Identity
+#### 🔐 3.5.4 Step 2 — Connectivity: SPN or Managed Identity
 
 [⤴ Back to top](#top)
 
@@ -628,7 +643,7 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > **Required permissions** are listed in [§ 7.1](#permissions-catalog).
 
 <a id="352-identity-infrastructure-workspace--dce--dcr"></a><a id="identity-infrastructure-workspace--dce--dcr"></a>
-#### 🏗️ 3.5.5 Identity infrastructure: Workspace + DCE + DCR
+#### 🏗️ 3.5.5 Step 3 — Identity infrastructure: Workspace + DCE + DCR
 
 [⤴ Back to top](#top)
 
@@ -673,7 +688,7 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 > **Which option do I need?** Run `Step1_OnboardValidate-SecurityInsight-Permissions` (§ 3.5.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
 <a id="353-azure-openai-optional"></a><a id="azure-openai-optional"></a>
-#### 🤖 3.5.6 Azure OpenAI (optional)
+#### 🤖 3.5.6 Step 4 — Azure OpenAI (optional)
 
 [⤴ Back to top](#top)
 
@@ -1098,7 +1113,7 @@ Two report templates ship out of the box:
 </details>
 
 <a id="38-endpoint-asset-tagging"></a><a id="endpoint-asset-tagging"></a>
-### 🖥️ 3.8 Endpoint asset tagging
+### 🖥️ 3.8 Step 5a — Endpoint asset tagging
 
 [⤴ Back to top](#top)
 
@@ -1159,7 +1174,7 @@ Two report templates ship out of the box:
 </details>
 
 <a id="39-azure-asset-tagging"></a><a id="azure-asset-tagging"></a>
-### ☁️ 3.9 Azure asset tagging
+### ☁️ 3.9 Step 5b — Azure asset tagging
 
 [⤴ Back to top](#top)
 
@@ -1204,6 +1219,9 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 
 [⤴ Back to top](#top)
 
+<details>
+<summary><b>Show details (expand)</b></summary>
+
 **Severity** comes from Defender / vendor scoring. SecurityInsight maps the canonical bands to the Consequence score:
 
 | Defender score | SI label | Attack impact |
@@ -1215,9 +1233,14 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **1–4** | **Low** | This control contributes to security hygiene and long-term posture improvement. Missing controls in this range are unlikely to be directly targeted but may marginally increase the cost or noise for an attacker operating in the environment. |
 
 <a id="42-criticality-definitions"></a><a id="criticality-definitions"></a>
+
+</details>
 ### 4.2 Criticality definitions
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 **Criticality** is set per-asset by `CriticalAssetTagging` and reflects "how bad it is if THIS asset is compromised":
 
@@ -1229,6 +1252,8 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **3** | **Low** | **Low blast radius, limited lateral movement potential.** Compromise of a standard employee workstation, guest PC, or read-only service account yields limited immediate value. An attacker gains a foothold for phishing, internal reconnaissance, or credential capture via keylogging, but cannot directly access sensitive systems or escalate without exploiting additional misconfigurations elsewhere in the environment. | Low - tier 3 | 3 |
 
 <a id="tier-0-3-at-a-glance"></a>
+
+</details>
 
 #### 4.2.1 Tier 0–3 at a glance
 
@@ -1253,6 +1278,9 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 [⤴ Back to top](#top)
 
 
+<details>
+<summary><b>Show details (expand)</b></summary>
+
 **Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
 
 | Criticality Level | Typical Assets |
@@ -1263,10 +1291,15 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 | **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Entra ID Roles (built-in) – users/managed identities:** Global Reader, Security Reader, Reports Reader, Message Center Reader, Usage Summary Reports Reader, Directory Readers, Guest User (default)<br/><br/>**Application Permissions (Graph / API) (list not complete):** User.Read (delegated), Mail.Read (delegated self), Calendars.Read (delegated), Directory.Read.All, AuditLog.Read.All (delegated), IdentityRiskEvent.Read.All<br/><br/>**Azure Built-in Roles (list not complete):** Reader (subscription or resource group), Billing Reader, Cost Management Reader, Tag Contributor, Azure DevOps Basic user (no pipeline access)<br /><br />**Azure Permissions (list not complete):** Storage Blob Data Reader (scoped, non-sensitive), Managed Identity with Reader only, Service principal with Reader on isolated resource group<br/><br/>**AD Built-in Groups:** Domain Users (default), Read-only DC (RODC)<br/><br/>**AD Permissions (list not complete):** Scoped helpdesk OU read, GenericRead on non-priv objects<br /><br />**Accounts (list not complete):** Standard user accounts, Guest accounts, Read-only service accounts, Managed identities with no RBAC assignments, Expired or disabled service principals |
 
 <a id="44-asset-classification-endpoint"></a><a id="asset-classification-endpoint"></a>
+
+</details>
 ### 4.4 Asset classification: Endpoint
 
 [⤴ Back to top](#top)
 
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 **Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
 
@@ -1278,10 +1311,15 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 | **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Server Roles:** Print servers, DHCP servers, Time servers (NTP), VoIP servers, Internal wiki / intranet servers, Archival / cold storage servers, Physical access control servers, Test / sandbox servers<br/><br/>**Management:** Network monitoring probes<br/><br/>**Network Equipment:** Unmanaged access switches, Consumer-grade wireless access points, Out-of-band console servers (isolated, read-only access), Standalone print servers (network-connected, no domain join)<br/><br/>**IoT / OT:** Smart lighting controllers (isolated network), Consumer IoT devices (isolated guest VLAN), Non-networked or air-gapped sensors, Vending machines / coffee machines with network connectivity, Digital signage players (isolated, read-only content), Wearables / smart badges (no domain integration), USB-only peripheral devices with firmware update capability<br/><br/>**Client Devices:** Standard employee workstations, Student workstations, Kiosk machines, Guest PCs, Shared classroom / library computers, Development workstations (non-privileged, isolated, no production access), Personally-owned BYOD devices, Retired / decommissioned machines |
 
 <a id="45-asset-classification-azure"></a><a id="asset-classification-azure"></a>
+
+</details>
 ### 4.5 Asset classification: Azure
 
 [⤴ Back to top](#top)
 
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 **Disclaimer:** The asset criticality classifications and attacker-centric tiering presented here are based on my own professional judgment and experience working with identity, endpoint, and cloud security environments. Actual tier assignments may vary depending on each organization's specific architecture, hybrid connectivity model, existing compensating controls, risk tolerance, regulatory requirements, and operational priorities. Classifications should be used as a strategic prioritization framework, not as a definitive or exhaustive measure of asset risk. List is not complete.
 
@@ -1295,6 +1333,8 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 ---
 
 <a id="6-the-yaml-concept-locked--custom"></a><a id="the-yaml-concept-locked--custom"></a>
+
+</details>
 ## 📜 5. The YAML Concept (Locked + Custom)
 
 [⤴ Back to top](#top)
@@ -1614,6 +1654,9 @@ Run with `$global:Scope = @('TEST')` first to confirm the row set, then flip to 
 
 [⤴ Back to top](#top)
 
+<details>
+<summary><b>Show details (expand)</b></summary>
+
 The exact set the `Step1_OnboardValidate-SecurityInsight-Permissions.ps1` utility grants (and validates on re-run):
 
 <details open>
@@ -1671,9 +1714,14 @@ The exact set the `Step1_OnboardValidate-SecurityInsight-Permissions.ps1` utilit
 </details>
 
 <a id="72-files-deep-dive"></a><a id="files-deep-dive"></a>
+
+</details>
 ### 6.2 Files deep-dive
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 <details>
 <summary><b>Folder layout (per solution)</b></summary>
@@ -1742,9 +1790,14 @@ SecurityInsight/
 </details>
 
 <a id="73-bucketing--beating-the-30k-row-ceiling"></a><a id="bucketing--beating-the-30k-row-ceiling"></a>
+
+</details>
 ### 6.3 Bucketing — beating the 30k row ceiling
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 <details>
 <summary><b>The problem</b></summary>
@@ -1803,9 +1856,14 @@ Manually guessing the right `BucketCount` for every query is brittle. The engine
 </details>
 
 <a id="74-output-destinations"></a><a id="output-destinations"></a>
+
+</details>
 ### 6.4 Output destinations
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 <details>
 <summary><b>Local files (always)</b></summary>
@@ -1862,9 +1920,14 @@ Per-template override: see [§ 7.5](#per-template-mail-recipient-override-yaml).
 </details>
 
 <a id="75-per-template-mail-recipient-override-yaml"></a><a id="per-template-mail-recipient-override-yaml"></a>
+
+</details>
 ### 6.5 Per-template mail recipient override (YAML)
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 In `SecurityInsight_RiskAnalysis_Queries_Custom.yaml` you can override mail recipients **per template**, independent of the global mail config. Useful for routing a specific report to specific stakeholders.
 
@@ -1885,18 +1948,28 @@ When present on the chosen template, `Mail_To` overrides `$global:Report_To` and
 ```
 
 <a id="76-cross-subscription-workspace-support"></a><a id="cross-subscription-workspace-support"></a>
+
+</details>
 ### 6.6 Cross-subscription workspace support
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 If your Defender / Sentinel workspace lives in a **different Azure subscription** than the one your SPN is currently authenticated against (typical when a Sentinel team owns its own sub), the engine handles it transparently. Set `$global:DefenderWorkspaceResourceId` to the full resource ID of the workspace; the engine uses ARM REST directly so the call works regardless of the SPN's current `Set-AzContext`.
 
 The SPN still needs `Log Analytics Reader` on the cross-sub workspace — granted automatically by `OnboardValidate-Permissions` when you pass `-DefenderWorkspaceResourceId`.
 
 <a id="77-layered-config-flow"></a><a id="layered-config-flow"></a>
+
+</details>
 ### 6.7 Layered config flow
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 How the 5 layers merge at engine startup:
 
@@ -1928,9 +2001,14 @@ flowchart TB
 Each layer only writes the values it cares about. If you don't set anything at Layer 4, Layer 3 values pass through. If you don't have Layer 3 either, Layer 1 defaults apply. This is why a working community install can be as small as a 3-line `LauncherConfig.custom.ps1` containing only the SPN auth.
 
 <a id="78-end-to-end-architecture"></a><a id="end-to-end-architecture"></a>
+
+</details>
 ### 6.8 End-to-end architecture
 
 [⤴ Back to top](#top)
+
+<details>
+<summary><b>Show details (expand)</b></summary>
 
 ```mermaid
 flowchart LR
@@ -1983,6 +2061,8 @@ flowchart LR
 ---
 
 <a id="video-walkthroughs"></a>
+
+</details>
 ## 📺 7. Video walkthroughs
 
 [⤴ Back to top](#top)

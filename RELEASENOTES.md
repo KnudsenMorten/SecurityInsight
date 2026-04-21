@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.182
+## v2.1.183
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
 - fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
 - docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
 - docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README + custom.sample): document auth-method priority chain + cross-layer override gotcha (001c594e)
 - fix(SI templates): better SpnTenantId-missing error + README recommends SecurityInsight.custom.ps1 for shared auth (3fe7a138)
 - fix(SI _lib Initialize-LauncherConfig): snapshot shows only values from the 5-6 layered files; simpler 2-section layout (5ab3ac42)
-- fix(SI _lib Initialize-LauncherConfig): write config snapshot to solution's DATA\LOGS, not repo-root (b7a3a08c)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.183 — Teaser tighten: collapse three lines into the detection-table header, drop the graph-traversals paragraph
+
+- 📚 **Removed** the `**Included in SecurityInsight today**` line and the `**📦 Detection queries + tagging rules**` subheader above Table 1.
+- 📚 **Renamed the table header** from "Detection queries + tagging rules" / "Count" to **"📦 Detection queries + tagging rules — Included in SecurityInsight today"** / **"Count"**. One header now does the work of three lines.
+- 📚 **Dropped the "These aren't signature-based detections..." paragraph** between Table 1 and Table 2 — the graph-traversals framing already appears in the § 1 Introduction, and the teaser reads tighter without it.
 
 ### v2.1.182 — Fix `###` rendering as literal text across § 4.x / § 5 / § 6.x (GFM `</details>` bug)
 

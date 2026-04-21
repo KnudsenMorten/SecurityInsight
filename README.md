@@ -20,16 +20,10 @@
 
 ### 🎯 Think like the hacker. Act like the defender. Fix what matters — first.
 
-**Included in SecurityInsight today**
-
-**📦 Detection queries + tagging rules**
-
-| Detection queries + tagging rules | Count |
+| 📦 Detection queries + tagging rules — Included in SecurityInsight today | Count |
 |---|---:|
 | 🎯 **Risk Analysis queries** — attacker-centric KQL across Endpoint, Azure, Identity | **100** |
 | 🏷️ **Critical Asset detection rules** — ExposureGraph / Azure Resource Graph auto-tagging across Identity, Endpoint, Azure PaaS | **180** |
-
-These aren't signature-based detections — they're **graph traversals** over Microsoft Defender **ExposureGraph** and **Azure Resource Graph**. Each query follows the relationships an attacker would actually exploit (endpoint → credential → lateral → Tier-0 asset), rather than alerting on isolated findings in isolation.
 
 **🤖 AI-classified tier catalog** — every role / permission slotted into Tier 0–3 by the AI integration in SecurityInsight:
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.168
+## v2.1.169
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI CriticalAssetTagging): ship ~177 curated sample tagging rules in Mode: Test + README guidance (b2a2d58a)
 - feat(SI CriticalAssetTagging): accept <stem>--excluded--SI alongside <stem>--tier<N>--SI (e7a351c8)
 - fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
 - docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI RiskAnalysis): append '--SI' source tag to every TraceName (9193d4d9)
 - docs(SI README): byte-for-byte resync of sections 4.3 / 4.4 / 4.5 from c:\tmp\README.md (2cfa587a)
 - docs(SI RELEASENOTES): split MEM26 resync entry to v2.1.140 (v2.1.139 already used) (804836ed)
-- docs(SI README): resync sections 4.1-4.5 to verbatim text from MEM26 PDF (134fb73c)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.169 — Ship ~177 curated sample tagging rules (all `Mode: Test`) + README guidance
+
+- 🆕 **`SecurityInsight_CriticalAssetTagging_Custom.yaml` gains ~177 curated sample rules** covering common environment patterns that didn't have shipped Locked counterparts: Azure landing-zone subscriptions (hub platform / security / datacenter), AD / Entra identity rules, network infrastructure (backbone, distribution, access switches, WLAN, NAC, VPN, firewalls), workstation + mobile + IoT tiers, Azure PaaS resources (AKS, APIM, App Service, Functions, storage, backup, KeyVault, front door, load balancer, private endpoint, etc.), and identity classifications (GA, break-glass, krbtgt, Entra-connect sync, DCSync rights, scoped SPNs, managed identities by RBAC scope). Also includes one `Temp-Client-Devices--excluded--SI` exclusion sample.
+- 🔧 **All samples ship in `Mode: Test`**, not `Prod` — every environment is different, and a sample rule that picks the right assets in tenant A may match the wrong set in tenant B. Customers are expected to evaluate each sample, tweak the KQL to fit their naming / resource conventions, then flip `Mode:` to `Prod` on the ones that belong in production. Rules they don't adopt stay on `Mode: Test` forever and are silently skipped by Prod scheduled runs (`[INFO] Skipping rule '<name>' (Mode=TEST) due to Scope filter`).
+- 📚 **README § 5.6 adds an IMPORTANT call-out** at the top of the CriticalAssetTagging Mode/Scope section walking the reader through the "adopt → tweak → promote" workflow, and makes explicit that Step 0 updates never touch Custom.yaml so customer-promoted rules survive upgrades.
 
 ### v2.1.168 — CriticalAssetTagging: accept `<stem>--excluded--SI` alongside `<stem>--tier<N>--SI`
 

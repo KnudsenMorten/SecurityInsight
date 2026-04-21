@@ -1478,6 +1478,18 @@ flowchart TB
 
 The **CriticalAssetTagging** engine has a two-stage "test before prod" workflow baked in, so you can develop new tagging rules against production data without tagging production assets until you're happy.
 
+> [!IMPORTANT]
+> **`SecurityInsight_CriticalAssetTagging_Custom.yaml` ships with ~177 curated sample rules — all in `Mode: Test`.** They cover common environment patterns: Azure landing-zone subscriptions (hub platform / security / datacenter), AD / Entra identity rules, network infrastructure (backbone, distribution, access switches), workstation tiers, IoT / OT, Azure PaaS resources (AKS, APIM, App Service, Functions, storage, backup, KeyVault, etc.), and identity classifications (GA, break-glass, managed identities by scope). They are **starting points, not production rules** — every environment is different, and a rule that reads correctly for tenant A may match the wrong assets in tenant B.
+>
+> **Customer workflow:**
+> 1. Open `DATA/SecurityInsight_CriticalAssetTagging_Custom.yaml`, scan the 177 samples.
+> 2. For each rule you want to adopt: run it with `$global:Scope = @('TEST')` to preview which assets would be tagged.
+> 3. Tweak the KQL in Custom.yaml to fit your naming / resource patterns.
+> 4. When a rule matches the right asset set, flip its `Mode:` from `Test` to `Prod` in Custom.yaml.
+> 5. Rules you never want (e.g. a sample for an on-prem network stack your cloud-only tenant doesn't have) can stay on `Mode: Test` forever — the Prod scheduled run will skip them with a `[INFO] Skipping rule '<name>' (Mode=TEST) due to Scope filter` line.
+>
+> Step 0 updates **never touch** Custom.yaml, so your Prod-flipped overrides survive every upgrade.
+
 **Stage 1 — tag each rule with a `Mode:`** in the YAML:
 
 ```yaml

@@ -24,12 +24,24 @@
 
 **Out of the box — shipped as `Locked` content (force-refreshed on every release):**
 
-| 📦 What you get | Count |
-|---|---:|
-| 🎯 **Risk Analysis queries** — attacker-centric KQL covering Endpoint, Azure, Identity | **102** |
-| 🏷️ **Critical Asset detection rules** — ExposureGraph-powered auto-tagging for Tier-0 infrastructure | **3** |
+**📦 Detection queries + tagging rules**
 
-Plus **177 starter samples** in the Critical-Asset `Custom.yaml` you can opt-in to per rule, and an **AI-classified tier catalog** of ~69 AD groups, ~142 Entra roles, and ~1,200+ Graph API permissions — all ready to use on day one, all fully customizable.
+| What | Count |
+|---|---:|
+| 🎯 **Risk Analysis queries** — attacker-centric KQL across Endpoint, Azure, Identity | **102** |
+| 🏷️ **Critical Asset detection rules** — ExposureGraph-powered auto-tagging for Tier-0 infrastructure | **3** |
+| 🏷️ *Plus starter samples in `CriticalAssetTagging_Custom.yaml` (all `Mode: Test`, opt-in per rule)* | *177* |
+
+**🤖 AI-classified tier catalog** — every role / permission slotted into Tier 0–3 by the AI classifier; consumed by `IdentityAssetsCollect` when deriving a user / SPN / MI's effective tier from its actual assignments:
+
+| Category | Tier 0 | Tier 1 | Tier 2 | Tier 3 | **Total** |
+|---|---:|---:|---:|---:|---:|
+| **AD built-in groups** | 10 | 5 | 3 | 51 | **69** |
+| **Entra built-in roles** | 3 | 32 | 26 | 81 | **142** |
+| **Entra / Graph API permissions** | 4 | 84 | 94 | 1,030 | **1,212** |
+| **All categories — grand total** | **17** | **121** | **123** | **1,162** | **1,423** |
+
+> Azure RBAC roles are classified **at run-time** against your actual role assignments (per subscription / RG / resource), not pre-baked in the catalog — so the tier for a given Azure role is only as high as the scope where it's actually bound.
 
 ---
 

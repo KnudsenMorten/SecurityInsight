@@ -43,14 +43,14 @@
      - 3.5.1 [Config-file model — `.defaults.` vs `.custom.`](#config-file-model)
      - 3.5.2 [Setup Configurator](#setup-configurator)
      - 3.5.3 [Solution component overview](#solution-component-overview)
-     - 3.5.4 [Step 2 — Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
-     - 3.5.5 [Step 3 — Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
-     - 3.5.6 [Step 4 — Azure OpenAI](#azure-openai-optional)
-   - 3.7 [Run the Risk Analysis](#run-the-risk-analysis)
-   - 3.6 [Understand the LauncherConfig files](#understand-the-launcherconfig-files)
-   - 3.8 [Step 5a — Endpoint asset tagging](#endpoint-asset-tagging)
-   - 3.9 [Step 5b — Azure asset tagging](#azure-asset-tagging)
-   - 3.10 [Defender Criticality Level (optional)](#defender-criticality-level-optional)
+   - 3.6 [Step 2 — Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
+   - 3.7 [Step 3 — Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
+   - 3.8 [Step 4 — Azure OpenAI](#azure-openai-optional)
+   - 3.9 [Understand the LauncherConfig files](#understand-the-launcherconfig-files)
+   - 3.10 [Run the Risk Analysis](#run-the-risk-analysis)
+   - 3.11 [Step 5a — Endpoint asset tagging](#endpoint-asset-tagging)
+   - 3.12 [Step 5b — Azure asset tagging](#azure-asset-tagging)
+   - 3.13 [Defender Criticality Level (optional)](#defender-criticality-level-optional)
 4. [Severity & Criticality Definitions](#severity--criticality-definitions)
    - 4.1 [Severity definitions](#severity-definitions)
    - 4.2 [Criticality definitions](#criticality-definitions)
@@ -594,7 +594,7 @@ Every SI component ships as its own launcher folder under `LAUNCHERS/`. Two grou
 ---
 
 <a id="351-connectivity-spn-or-managed-identity"></a><a id="connectivity-spn-or-managed-identity"></a>
-#### 🔐 3.5.4 Step 2 — Connectivity: SPN or Managed Identity
+### 🔐 3.6 Step 2 — Connectivity: SPN or Managed Identity
 
 [⤴ Back to top](#top)
 
@@ -643,7 +643,7 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > **Required permissions** are listed in [§ 7.1](#permissions-catalog).
 
 <a id="352-identity-infrastructure-workspace--dce--dcr"></a><a id="identity-infrastructure-workspace--dce--dcr"></a>
-#### 🏗️ 3.5.5 Step 3 — Identity infrastructure: Workspace + DCE + DCR
+### 🏗️ 3.7 Step 3 — Identity infrastructure: Workspace + DCE + DCR
 
 [⤴ Back to top](#top)
 
@@ -688,7 +688,7 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 > **Which option do I need?** Run `Step1_OnboardValidate-SecurityInsight-Permissions` (§ 3.5.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
 <a id="353-azure-openai-optional"></a><a id="azure-openai-optional"></a>
-#### 🤖 3.5.6 Step 4 — Azure OpenAI (optional)
+### 🤖 3.8 Step 4 — Azure OpenAI (optional)
 
 [⤴ Back to top](#top)
 
@@ -711,7 +711,7 @@ $global:OpenAI_apiKey     = '<your-azure-openai-key>'
 > AI summary is appended both to the **Excel report** (as a 'Summary' worksheet) and the **email body**. Token budget is configurable via `$global:OpenAI_MaxTokensPerRequest` (default 16384).
 
 <a id="37-understand-the-launcherconfig-files"></a><a id="understand-the-launcherconfig-files"></a>
-### 📂 3.6 Understand the LauncherConfig files
+### 📂 3.9 Understand the LauncherConfig files
 
 [⤴ Back to top](#top)
 
@@ -1059,7 +1059,7 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 </details>
 
 <a id="36-run-the-risk-analysis"></a><a id="run-the-risk-analysis"></a>
-### ▶️ 3.7 Run the Risk Analysis
+### ▶️ 3.10 Run the Risk Analysis
 
 [⤴ Back to top](#top)
 
@@ -1113,7 +1113,7 @@ Two report templates ship out of the box:
 </details>
 
 <a id="38-endpoint-asset-tagging"></a><a id="endpoint-asset-tagging"></a>
-### 🖥️ 3.8 Step 5a — Endpoint asset tagging
+### 🖥️ 3.11 Step 5a — Endpoint asset tagging
 
 [⤴ Back to top](#top)
 
@@ -1174,7 +1174,7 @@ Two report templates ship out of the box:
 </details>
 
 <a id="39-azure-asset-tagging"></a><a id="azure-asset-tagging"></a>
-### ☁️ 3.9 Step 5b — Azure asset tagging
+### ☁️ 3.12 Step 5b — Azure asset tagging
 
 [⤴ Back to top](#top)
 
@@ -1197,7 +1197,7 @@ Same engine, same YAML — just use `QueryEngine: AzureResourceGraph` for rules 
 The KQL is yours — query for the resources you consider critical and emit the four required columns. Inspiration lives in `DATA/_samples/SecurityInsight_CriticalAssetTagging_Custom.yaml`.
 
 <a id="310-defender-criticality-level-optional"></a><a id="defender-criticality-level-optional"></a>
-### 🎯 3.10 Defender Criticality Level (optional)
+### 🎯 3.13 Defender Criticality Level (optional)
 
 [⤴ Back to top](#top)
 

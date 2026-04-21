@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.181
+## v2.1.182
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
 - docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
 - docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
 - docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI templates): better SpnTenantId-missing error + README recommends SecurityInsight.custom.ps1 for shared auth (3fe7a138)
 - fix(SI _lib Initialize-LauncherConfig): snapshot shows only values from the 5-6 layered files; simpler 2-section layout (5ab3ac42)
 - fix(SI _lib Initialize-LauncherConfig): write config snapshot to solution's DATA\LOGS, not repo-root (b7a3a08c)
-- feat(SI _lib Initialize-LauncherConfig): snapshot adds value-change history + aggregated summary + source file paths (91464bc2)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.182 — Fix `###` rendering as literal text across § 4.x / § 5 / § 6.x (GFM `</details>` bug)
+
+- 🔧 **Markdown rendering bug hitting 12 headings** — every `</details>` closer from the v2.1.163 collapse script was immediately followed by the next section's `### 4.4 ...` / `## 5. ...` / `### 6.2 ...` heading with no blank line. GitHub Flavored Markdown requires a blank line between a closing raw-HTML tag and the next markdown construct; without it, the `###` is rendered as literal text. Fixed headings: § 4.4, § 4.5, § 5 (YAML Concept H2), § 6.2, § 6.3, § 6.4, § 6.5, § 6.6, § 6.7, § 6.8, § 6.9, § 9 (What's New H2).
+- 🔧 **Anchor placement corrected.** The back-compat `<a id="...">` tags for each of those sections were sitting INSIDE the previous `<details>` block (before the closer). They've been moved after `</details>` so they resolve against the new heading, not the tail of the previous section's collapsed body.
+- 📚 **§ 3.11 renamed** `Step 5a — Endpoint asset tagging` → `Step 5a — Endpoint & Azure asset tagging` (heading + TOC) — the engine handles both in the same run; the old name was misleading.
 
 ### v2.1.181 — Simplify `Microsoft MVP (Security · Azure · Security Copilot)` → `Microsoft MVP` everywhere
 

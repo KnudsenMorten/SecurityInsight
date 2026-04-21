@@ -67,7 +67,7 @@ These aren't signature-based detections — they're **graph traversals** over Mi
    - 3.8 [Step 4 — Azure OpenAI](#azure-openai-optional)
    - 3.9 [Understand the LauncherConfig files](#understand-the-launcherconfig-files)
    - 3.10 [Run the Risk Analysis](#run-the-risk-analysis)
-   - 3.11 [Step 5a — Endpoint asset tagging](#endpoint-asset-tagging)
+   - 3.11 [Step 5a — Endpoint & Azure asset tagging](#endpoint-asset-tagging)
    - 3.12 [Step 5b — Azure asset tagging](#azure-asset-tagging)
    - 3.13 [Defender Criticality Level (optional)](#defender-criticality-level-optional)
 4. [Severity & Criticality Definitions](#severity--criticality-definitions)
@@ -1133,7 +1133,7 @@ Two report templates ship out of the box:
 </details>
 
 <a id="38-endpoint-asset-tagging"></a><a id="endpoint-asset-tagging"></a>
-### 🖥️ 3.11 Step 5a — Endpoint asset tagging
+### 🖥️ 3.11 Step 5a — Endpoint & Azure asset tagging
 
 [⤴ Back to top](#top)
 
@@ -1252,9 +1252,10 @@ Toggle and tune via the Risk Index CSV — add a row mapping the MDC term you wa
 | **5–7** | **Medium** | This control reflects established security best practice and reduces exposure to known attack patterns. Exploitation is possible but less consistent, typically requiring specific environmental conditions or attacker patience. Prioritize after higher-severity items are addressed. |
 | **1–4** | **Low** | This control contributes to security hygiene and long-term posture improvement. Missing controls in this range are unlikely to be directly targeted but may marginally increase the cost or noise for an attacker operating in the environment. |
 
+</details>
+
 <a id="42-criticality-definitions"></a><a id="criticality-definitions"></a>
 
-</details>
 ### 4.2 Criticality definitions
 
 [⤴ Back to top](#top)
@@ -1310,9 +1311,10 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 | **Medium<br />(Tier-2)**<br /><br />Conditional Takeover (Needs Chaining / Misconfig) | **Entra ID Roles (built-in) – users/managed identities (list not complete):** User Administrator, Groups Administrator, Conditional Access Administrator, SharePoint Administrator, Teams Administrator, Lifecycle Workflows Administrator<br/><br/>**Application Permissions (Graph / API) (list not complete):** Mail.Read (app all users), Calendars.ReadWrite, Files.ReadWrite.All, AuditLog.Read.All, IdentityRiskyUser.ReadWrite.All, DeviceManagementConfiguration.ReadWrite.All<br/><br/>**Azure Built-in Roles (list not complete):** Network Contributor, Log Analytics Contributor, Automation Operator, Azure DevOps stakeholder, Azure Kubernetes Service Cluster User<br /><br />**Azure Permissions (list not complete):** Contributor (single non-sensitive resource group), Storage Blob Data Reader (scoped to non-sensitive storage), Log Analytics Reader, Monitoring Reader, Security Reader (Defender for Cloud), Managed Identity on low-privilege workload, Service principal scoped to single resource group<br/><br />**AD Built-in Groups:** DNS Admins<br/><br />**AD Permissions (list not complete):** OU-scoped write ACLs, LAPS read rights, Constrained delegation (msDS-AllowedToDelegateTo), RBCD write rights, Kerberoastable high-priv SAs<br/><br />**Accounts (list not complete):** High-privilege service principals scoped to workload, Admin-consented OAuth apps with scoped permissions, Automation accounts with limited RBAC, Azure DevOps service connections scoped to single subscription |
 | **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Entra ID Roles (built-in) – users/managed identities:** Global Reader, Security Reader, Reports Reader, Message Center Reader, Usage Summary Reports Reader, Directory Readers, Guest User (default)<br/><br/>**Application Permissions (Graph / API) (list not complete):** User.Read (delegated), Mail.Read (delegated self), Calendars.Read (delegated), Directory.Read.All, AuditLog.Read.All (delegated), IdentityRiskEvent.Read.All<br/><br/>**Azure Built-in Roles (list not complete):** Reader (subscription or resource group), Billing Reader, Cost Management Reader, Tag Contributor, Azure DevOps Basic user (no pipeline access)<br /><br />**Azure Permissions (list not complete):** Storage Blob Data Reader (scoped, non-sensitive), Managed Identity with Reader only, Service principal with Reader on isolated resource group<br/><br/>**AD Built-in Groups:** Domain Users (default), Read-only DC (RODC)<br/><br/>**AD Permissions (list not complete):** Scoped helpdesk OU read, GenericRead on non-priv objects<br /><br />**Accounts (list not complete):** Standard user accounts, Guest accounts, Read-only service accounts, Managed identities with no RBAC assignments, Expired or disabled service principals |
 
+</details>
+
 <a id="44-asset-classification-endpoint"></a><a id="asset-classification-endpoint"></a>
 
-</details>
 ### 4.4 Asset classification: Endpoint
 
 [⤴ Back to top](#top)
@@ -1330,9 +1332,10 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 | **Medium<br />(Tier-2)**<br /><br />Significant workload impact, conditional path to escalation | **Server Roles:** File servers, SharePoint servers, SQL servers hosting sensitive databases, Citrix / RDS session hosts, Web application servers with Entra integrated auth, API gateway servers, Collaboration servers (Teams on-prem, Skype for Business), HR and identity lifecycle management servers, Internal certificate registration authority (RA) servers, IT service management servers (ServiceNow, Jira)<br/><br/>**Management:** Log aggregation servers, DevOps / CI-CD build agents, Container orchestration nodes (Kubernetes worker nodes)<br/><br />**Hypervisor:** Hypervisor hosts running tier 2 guest VMs<br/><br/>**Network Equipment:** Access layer switches (user-facing VLANs), Wireless access points (managed), Network monitoring appliances (read-only), Standalone DHCP servers (non-domain integrated), Content filtering / web proxy appliances, VoIP / SIP gateways<br/><br/>**IoT / OT:** Smart meeting room devices (displays, conferencing systems), Environmental sensors (temperature, humidity — data center), Badge readers (non-domain integrated, isolated), Laboratory equipment with network interfaces, IP cameras (isolated VLAN, no domain integration), Industrial sensors (read-only, no control plane access), Retail / POS terminals (isolated network segment)<br/><br/>**Client Devices:** Production workstations, Lab workstations, Shared devices, Developer workstations, Power user workstations (finance, legal, HR) |
 | **Low<br />(Tier-3)**<br /><br />Low blast radius, limited lateral movement potential | **Server Roles:** Print servers, DHCP servers, Time servers (NTP), VoIP servers, Internal wiki / intranet servers, Archival / cold storage servers, Physical access control servers, Test / sandbox servers<br/><br/>**Management:** Network monitoring probes<br/><br/>**Network Equipment:** Unmanaged access switches, Consumer-grade wireless access points, Out-of-band console servers (isolated, read-only access), Standalone print servers (network-connected, no domain join)<br/><br/>**IoT / OT:** Smart lighting controllers (isolated network), Consumer IoT devices (isolated guest VLAN), Non-networked or air-gapped sensors, Vending machines / coffee machines with network connectivity, Digital signage players (isolated, read-only content), Wearables / smart badges (no domain integration), USB-only peripheral devices with firmware update capability<br/><br/>**Client Devices:** Standard employee workstations, Student workstations, Kiosk machines, Guest PCs, Shared classroom / library computers, Development workstations (non-privileged, isolated, no production access), Personally-owned BYOD devices, Retired / decommissioned machines |
 
+</details>
+
 <a id="45-asset-classification-azure"></a><a id="asset-classification-azure"></a>
 
-</details>
 ### 4.5 Asset classification: Azure
 
 [⤴ Back to top](#top)
@@ -1352,9 +1355,10 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 
 ---
 
+</details>
+
 <a id="6-the-yaml-concept-locked--custom"></a><a id="the-yaml-concept-locked--custom"></a>
 
-</details>
 ## 📜 5. The YAML Concept (Locked + Custom)
 
 [⤴ Back to top](#top)
@@ -1748,9 +1752,10 @@ The exact set the `Step1_OnboardValidate-SecurityInsight-Permissions.ps1` utilit
 
 </details>
 
+</details>
+
 <a id="72-files-deep-dive"></a><a id="files-deep-dive"></a>
 
-</details>
 ### 6.2 Files deep-dive
 
 [⤴ Back to top](#top)
@@ -1824,9 +1829,10 @@ SecurityInsight/
 
 </details>
 
+</details>
+
 <a id="73-bucketing--beating-the-30k-row-ceiling"></a><a id="bucketing--beating-the-30k-row-ceiling"></a>
 
-</details>
 ### 6.3 Bucketing — beating the 30k row ceiling
 
 [⤴ Back to top](#top)
@@ -1890,9 +1896,10 @@ Manually guessing the right `BucketCount` for every query is brittle. The engine
 
 </details>
 
+</details>
+
 <a id="74-output-destinations"></a><a id="output-destinations"></a>
 
-</details>
 ### 6.4 Output destinations
 
 [⤴ Back to top](#top)
@@ -1954,9 +1961,10 @@ Per-template override: see [§ 7.5](#per-template-mail-recipient-override-yaml).
 
 </details>
 
+</details>
+
 <a id="75-per-template-mail-recipient-override-yaml"></a><a id="per-template-mail-recipient-override-yaml"></a>
 
-</details>
 ### 6.5 Per-template mail recipient override (YAML)
 
 [⤴ Back to top](#top)
@@ -1982,9 +1990,10 @@ When present on the chosen template, `Mail_To` overrides `$global:Report_To` and
 [INFO] Mail recipients overridden by template 'RiskAnalysis_Detailed_Bucket': vuln-team@..., audit@...
 ```
 
+</details>
+
 <a id="76-cross-subscription-workspace-support"></a><a id="cross-subscription-workspace-support"></a>
 
-</details>
 ### 6.6 Cross-subscription workspace support
 
 [⤴ Back to top](#top)
@@ -1996,9 +2005,10 @@ If your Defender / Sentinel workspace lives in a **different Azure subscription*
 
 The SPN still needs `Log Analytics Reader` on the cross-sub workspace — granted automatically by `OnboardValidate-Permissions` when you pass `-DefenderWorkspaceResourceId`.
 
+</details>
+
 <a id="77-layered-config-flow"></a><a id="layered-config-flow"></a>
 
-</details>
 ### 6.7 Layered config flow
 
 [⤴ Back to top](#top)
@@ -2035,9 +2045,10 @@ flowchart TB
 
 Each layer only writes the values it cares about. If you don't set anything at Layer 4, Layer 3 values pass through. If you don't have Layer 3 either, Layer 1 defaults apply. This is why a working community install can be as small as a 3-line `LauncherConfig.custom.ps1` containing only the SPN auth.
 
+</details>
+
 <a id="78-end-to-end-architecture"></a><a id="end-to-end-architecture"></a>
 
-</details>
 ### 6.8 End-to-end architecture
 
 [⤴ Back to top](#top)
@@ -2412,9 +2423,10 @@ Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` 
 </details>
 
 ---
+</details>
+
 <a id="video-walkthroughs"></a>
 
-</details>
 ## 📺 7. Video walkthroughs
 
 [⤴ Back to top](#top)

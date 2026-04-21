@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.160
+## v2.1.161
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
 - docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
 - docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
 - docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Build_Tier): restore visible SECTION A header so AD tiering isn't invisible (9f3c41aa)
 - refactor(SI Build_Tier): drop on-prem AD enumeration entirely (ff5a7cf7)
 - fix(SI Build_Tier): drop dead 'AD_GroupMembership' key from tiering JSON (63cf116c)
-- docs(SI README): RSAT AD PowerShell prerequisite for Build_Tier_Definitions_JSON_File (4809b66d)
 
 ---
 
@@ -44,6 +44,10 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.161 — Drop the old one-line subtitle above the badges
+
+- 📚 **Removed the old tagline blockquote** (`"Risk-based security exposure prioritization... Replace 'we have 4,000 recommendations' with 'here are the 12 things that actually matter, ranked.'"`) that sat directly under the `# 🛡️ SecurityInsight` H1. The v2.1.159 teaser block — *"Your Defender dashboard and an attacker's target list look very different..."* — already does the same job, more vividly, and sits right below the author/support line. Having both left the opening feeling repetitive.
 
 ### v2.1.159 — README teaser + expanded Introduction (session-abstract-derived copy)
 

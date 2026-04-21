@@ -4,9 +4,6 @@
 
 # 🛡️ SecurityInsight
 
-> **Risk-based security exposure prioritization for Microsoft 365, Entra ID, Defender, and Azure.**
-> Replace "we have 4,000 recommendations" with "here are the 12 things that actually matter, ranked."
-
 [![Releases](https://img.shields.io/github/v/release/KnudsenMorten/SecurityInsight?label=latest%20release&color=blue)](https://github.com/KnudsenMorten/SecurityInsight/releases)
 [![PowerShell 5.1+](https://img.shields.io/badge/PowerShell-5.1%2B-5391FE?logo=powershell)](https://learn.microsoft.com/powershell/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.183
+## v2.1.184
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
 - docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
 - fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
 - docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): move 'What's in the box' into section 3.5 as 'Solution component overview' (d5a83e17)
 - docs(SI README + custom.sample): document auth-method priority chain + cross-layer override gotcha (001c594e)
 - fix(SI templates): better SpnTenantId-missing error + README recommends SecurityInsight.custom.ps1 for shared auth (3fe7a138)
-- fix(SI _lib Initialize-LauncherConfig): snapshot shows only values from the 5-6 layered files; simpler 2-section layout (5ab3ac42)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.184 — Teaser hook rephrased; verified detection counts are already accurate (no change to numbers)
+
+- 📚 **Teaser hook reworded.** *"Your Defender dashboard and an attacker's target list look very different."* → *"What you see on your Defender dashboard isn't what attackers see on their target list."* Same idea, more direct.
+- 🧰 **Verified the count claims by deduplicating across every shipped query source** — `DATA/SecurityInsight_RiskAnalysis_Queries_Locked.yaml`, `CUSTOMDATA/SecurityInsight_RiskAnalysis_Queries_Custom.sample.yaml`, `DATA/_samples/SecurityInsight_RiskAnalysis_Queries_Custom.yaml` for RA; the matching three files for CAT. Result:
+  - **RA reports — 100 unique** by `ReportName` (Locked=100, Samples=82 unique, **all 82 sample names already exist in Locked** → union=100).
+  - **CAT rules — 180 unique** by full `AssetTagName` (Locked=180, Samples=177 unique, **all 177 sample names already exist in Locked** → union=180).
+  - The teaser numbers were already correct. The v2.1.169 starter samples were promoted into Locked in v2.1.174, so the sample files now hold a strict subset.
 
 ### v2.1.183 — Teaser tighten: collapse three lines into the detection-table header, drop the graph-traversals paragraph
 

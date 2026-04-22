@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.188
+## v2.1.189
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
 - fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
 - fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
 - docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
 - docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
 - docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
-- docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
 
 ---
 
@@ -44,6 +44,16 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.189 — Layer-4 defaults no longer stomp Layer 3 values in 4 more engines (IdentityAssets / Step1 / Step2 / Step4)
+
+- 🧰 **Audit sweep** triggered by the v2.1.177 fix (which only covered Build_Tier + RiskAnalysis). Found 49 more unconditional `$global:X = <default>` assignments in the following `LauncherConfig.defaults.ps1` files, every one of them stomping a customer value that may have been set in `SecurityInsight.custom.ps1` (Layer 3):
+  - **`LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/LauncherConfig.defaults.ps1`** — 15 patches (`WorkspaceResourceId`, `DceIngestionUri`, `DcrName`, `TableName`, `Defender_WorkspaceNameResourceId`, `WriteJsonOutput`, `ExportDestination`, `CsaAttributeSet`, `BatchSize`, `SubscriptionNameExcludePatterns`, `TenantDomain`, `TroubleshootingMode`, `WhatIfMode`, `SuppressErrors`, `SuppressWarnings`)
+  - **`LAUNCHERS/Step1_OnboardValidate-SecurityInsight-Permissions/LauncherConfig.defaults.ps1`** — 12 patches (`OnboardValidate_SpnDisplayName`, `OnboardValidate_SpnAppId`, `OnboardValidate_AzureRbacScope`, `OnboardValidate_AzureSubscriptionIds`, `OnboardValidate_DefenderWorkspaceResourceId`, `OnboardValidate_DcrResourceId`, `OnboardValidate_AuthMethod`, `OnboardValidate_AuthTenantId`, `_AuthClientId`, `_AuthClientSecret`, `_AuthCertificateThumbprint`, `OnboardValidate_WhatIfMode`)
+  - **`LAUNCHERS/Step2_OnboardValidate-SecurityInsight-LogAnalytics/LauncherConfig.defaults.ps1`** — 6 patches (`DcrName`, `TableName`, `WorkspaceRetentionDays`, `WhatIfMode`, `SuppressErrors`, `SuppressWarnings`)
+  - **`LAUNCHERS/Step4_Deploy-SecurityInsight-PowerBI-Dashboard/LauncherConfig.defaults.ps1`** — 16 patches (Power BI workspace / report name, `.pbix` path, LA workspace ID, tenant ID, staleness-day thresholds, top-N, access group object ID, access group role, initial refresh toggle, Step4 auth method + credentials, WhatIfMode)
+- 🔧 **All 49 assignments converted** to the `if (-not (Test-Path variable:global:X)) { $global:X = <default> }` pattern consistent with v2.1.177's fix.
+- 🧰 **Completed the audit sweep triggered by v2.1.177** — Pattern A (launcher-template stomps) and Pattern C (launcher-local vars not re-read from globals) both came back clean across the remaining 10 engines; this was the last outstanding tranche of the bug class.
 
 ### v2.1.188 — RiskAnalysis launchers now honor customer `$global:RiskAnalysis_Summary_Override` / `_Detailed_Override` (Summary ↔ Detailed flip)
 

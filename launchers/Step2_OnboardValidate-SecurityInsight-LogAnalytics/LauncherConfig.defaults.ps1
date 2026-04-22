@@ -34,8 +34,8 @@
 #  ENGINE-SPECIFIC RESOURCE NAMES
 # ============================================================================
 # DCR + table are engine-specific (SI_IdentityAssets schema).
-$global:DcrName       = 'dcr-si-identity-assets'
-$global:TableName     = 'SI_IdentityAssets'
+if (-not (Test-Path variable:global:DcrName)) { $global:DcrName = 'dcr-si-identity-assets' }
+if (-not (Test-Path variable:global:TableName)) { $global:TableName = 'SI_IdentityAssets' }
 
 
 # ============================================================================
@@ -43,7 +43,7 @@ $global:TableName     = 'SI_IdentityAssets'
 # ============================================================================
 # How long the Log Analytics workspace keeps SI_IdentityAssets_CL rows.
 # Common choices: 30 / 90 / 180 / 365. Compliance/cost tradeoff.
-$global:WorkspaceRetentionDays = 90
+if (-not (Test-Path variable:global:WorkspaceRetentionDays)) { $global:WorkspaceRetentionDays = 90 }
 
 
 # ============================================================================
@@ -63,6 +63,6 @@ $global:WorkspaceRetentionDays = 90
 # ============================================================================
 #  RUNTIME FLAGS
 # ============================================================================
-$global:WhatIfMode       = $false   # $true = dry run, no Azure writes
-$global:SuppressErrors   = $false
-$global:SuppressWarnings = $false
+if (-not (Test-Path variable:global:WhatIfMode)) { $global:WhatIfMode = $false }   # $true = dry run, no Azure writes
+if (-not (Test-Path variable:global:SuppressErrors)) { $global:SuppressErrors = $false }
+if (-not (Test-Path variable:global:SuppressWarnings)) { $global:SuppressWarnings = $false }

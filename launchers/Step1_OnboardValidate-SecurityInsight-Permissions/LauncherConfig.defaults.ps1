@@ -25,10 +25,10 @@
 # ============================================================================
 # Display name. The script looks up an existing SPN by this name; if none is
 # found it creates a new app registration + service principal.
-$global:OnboardValidate_SpnDisplayName = 'sp-securityinsight'
+if (-not (Test-Path variable:global:OnboardValidate_SpnDisplayName)) { $global:OnboardValidate_SpnDisplayName = 'sp-securityinsight' }
 
 # OR existing SPN by AppId. When set, displayName lookup is skipped.
-$global:OnboardValidate_SpnAppId = $null
+if (-not (Test-Path variable:global:OnboardValidate_SpnAppId)) { $global:OnboardValidate_SpnAppId = $null }
 
 
 # ============================================================================
@@ -40,21 +40,21 @@ $global:OnboardValidate_SpnAppId = $null
 # PerSubscription = legacy. Granted per sub in AzureSubscriptionIds (or every
 #                   enabled sub the caller can see).
 # If TenantRoot fails at runtime the engine auto-falls-back to PerSubscription.
-$global:OnboardValidate_AzureRbacScope = 'TenantRoot'
+if (-not (Test-Path variable:global:OnboardValidate_AzureRbacScope)) { $global:OnboardValidate_AzureRbacScope = 'TenantRoot' }
 
 # Only used when AzureRbacScope = 'PerSubscription'.
 # Empty array = enumerate every enabled subscription the operator can see.
 # Set to a specific list to limit blast radius.
-$global:OnboardValidate_AzureSubscriptionIds = @()
+if (-not (Test-Path variable:global:OnboardValidate_AzureSubscriptionIds)) { $global:OnboardValidate_AzureSubscriptionIds = @() }
 
 # Optional. Full resource id of the Defender/Sentinel Log Analytics workspace.
 # When set, the script grants 'Log Analytics Reader' to the SPN at this scope
 # so cross-workspace IdentityInfo / SPN sign-in queries succeed.
-$global:OnboardValidate_DefenderWorkspaceResourceId = $null
+if (-not (Test-Path variable:global:OnboardValidate_DefenderWorkspaceResourceId)) { $global:OnboardValidate_DefenderWorkspaceResourceId = $null }
 
 # Optional. Full resource id of the DCR that ingests SI_IdentityAssets_CL.
 # When set, the script grants 'Monitoring Metrics Publisher' to the SPN here.
-$global:OnboardValidate_DcrResourceId = $null
+if (-not (Test-Path variable:global:OnboardValidate_DcrResourceId)) { $global:OnboardValidate_DcrResourceId = $null }
 
 
 # ============================================================================
@@ -71,14 +71,14 @@ $global:OnboardValidate_DcrResourceId = $null
 # Whichever identity you authenticate as MUST have:
 #   Entra : Privileged Role Administrator OR Application Administrator
 #   Azure : Owner or User Access Administrator at each subscription / scope
-$global:OnboardValidate_AuthMethod = $null
+if (-not (Test-Path variable:global:OnboardValidate_AuthMethod)) { $global:OnboardValidate_AuthMethod = $null }
 
 # Required for non-interactive methods (filled in by the customer's
 # LauncherConfig.custom.ps1, NOT here).
-$global:OnboardValidate_AuthTenantId             = $null
-$global:OnboardValidate_AuthClientId             = $null
-$global:OnboardValidate_AuthClientSecret         = $null
-$global:OnboardValidate_AuthCertificateThumbprint = $null
+if (-not (Test-Path variable:global:OnboardValidate_AuthTenantId)) { $global:OnboardValidate_AuthTenantId = $null }
+if (-not (Test-Path variable:global:OnboardValidate_AuthClientId)) { $global:OnboardValidate_AuthClientId = $null }
+if (-not (Test-Path variable:global:OnboardValidate_AuthClientSecret)) { $global:OnboardValidate_AuthClientSecret = $null }
+if (-not (Test-Path variable:global:OnboardValidate_AuthCertificateThumbprint)) { $global:OnboardValidate_AuthCertificateThumbprint = $null }
 
 
 # ============================================================================
@@ -86,4 +86,4 @@ $global:OnboardValidate_AuthCertificateThumbprint = $null
 # ============================================================================
 # Dry run -- script walks the catalog and prints what it WOULD do but
 # does not create the SPN, grant any permission, or assign any RBAC role.
-$global:OnboardValidate_WhatIfMode = $false
+if (-not (Test-Path variable:global:OnboardValidate_WhatIfMode)) { $global:OnboardValidate_WhatIfMode = $false }

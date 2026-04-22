@@ -29,12 +29,12 @@
 # (solution-wide) or LauncherConfig.custom.ps1 (this launcher only).
 #
 # Only engine-specific values belong in this file.
-$global:WorkspaceResourceId       = $null                       # overrides WorkspaceName when set (cross-sub supported)
-$global:DceIngestionUri           = $null                       # auto-resolved from DceName via Get-AzDceListAll
+if (-not (Test-Path variable:global:WorkspaceResourceId)) { $global:WorkspaceResourceId = $null }                       # overrides WorkspaceName when set (cross-sub supported)
+if (-not (Test-Path variable:global:DceIngestionUri)) { $global:DceIngestionUri = $null }                       # auto-resolved from DceName via Get-AzDceListAll
 
 # DCR name + table name are engine-specific (SI_IdentityAssets schema)
-$global:DcrName                   = 'dcr-si-identity-assets'
-$global:TableName                 = 'SI_IdentityAssets'
+if (-not (Test-Path variable:global:DcrName)) { $global:DcrName = 'dcr-si-identity-assets' }
+if (-not (Test-Path variable:global:TableName)) { $global:TableName = 'SI_IdentityAssets' }
 
 
 # ============================================================================
@@ -46,7 +46,7 @@ $global:TableName                 = 'SI_IdentityAssets'
 # Canonical name is $global:Defender_WorkspaceNameResourceId; the engine also
 # accepts the legacy $global:DefenderWorkspaceResourceId and
 # $global:SecurityInsight_Defender_WorkspaceResourceId.
-$global:Defender_WorkspaceNameResourceId = $null
+if (-not (Test-Path variable:global:Defender_WorkspaceNameResourceId)) { $global:Defender_WorkspaceNameResourceId = $null }
 
 
 # ============================================================================
@@ -61,15 +61,15 @@ $global:Defender_WorkspaceNameResourceId = $null
 # Destination type is AUTO-DETECTED from the value's prefix:
 #   '\\server\share\path\'                              -> UNC share
 #   'https://<acct>.blob.core.windows.net/<container>/' -> Azure Storage blob
-$global:WriteJsonOutput    = $true
-$global:ExportDestination  = $null
+if (-not (Test-Path variable:global:WriteJsonOutput)) { $global:WriteJsonOutput = $true }
+if (-not (Test-Path variable:global:ExportDestination)) { $global:ExportDestination = $null }
 
 
 # ============================================================================
 #  CUSTOM SECURITY ATTRIBUTES + INGESTION TUNING
 # ============================================================================
-$global:CsaAttributeSet = 'SecurityInsight'
-$global:BatchSize       = 300
+if (-not (Test-Path variable:global:CsaAttributeSet)) { $global:CsaAttributeSet = 'SecurityInsight' }
+if (-not (Test-Path variable:global:BatchSize)) { $global:BatchSize = 300 }
 
 
 # ============================================================================
@@ -78,7 +78,7 @@ $global:BatchSize       = 300
 # Wildcard patterns of subscription NAMES to skip during the Azure-side
 # enumeration (Get-AzSubscription). Patterns are PowerShell -like wildcards.
 # Empty / unset = scan all enabled subs.
-$global:SubscriptionNameExcludePatterns = @()
+if (-not (Test-Path variable:global:SubscriptionNameExcludePatterns)) { $global:SubscriptionNameExcludePatterns = @() }
 
 
 # ============================================================================
@@ -86,13 +86,13 @@ $global:SubscriptionNameExcludePatterns = @()
 # ============================================================================
 # Tenant primary domain (used in some output column values; engine falls back
 # to the authenticating SPN's tenant if not set)
-$global:TenantDomain = $null
+if (-not (Test-Path variable:global:TenantDomain)) { $global:TenantDomain = $null }
 
 
 # ============================================================================
 #  TROUBLESHOOTING / WHATIF
 # ============================================================================
-$global:TroubleshootingMode = $false      # $true = process only first 10 rows
-$global:WhatIfMode          = $false      # $true = dry run, no DCR ingestion
-$global:SuppressErrors      = $false
-$global:SuppressWarnings    = $false
+if (-not (Test-Path variable:global:TroubleshootingMode)) { $global:TroubleshootingMode = $false }      # $true = process only first 10 rows
+if (-not (Test-Path variable:global:WhatIfMode)) { $global:WhatIfMode = $false }      # $true = dry run, no DCR ingestion
+if (-not (Test-Path variable:global:SuppressErrors)) { $global:SuppressErrors = $false }
+if (-not (Test-Path variable:global:SuppressWarnings)) { $global:SuppressWarnings = $false }

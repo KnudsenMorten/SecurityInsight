@@ -342,6 +342,18 @@ function Resolve-RunMode {
 $global:AutomationFramework = $AutomationFramework_Default
 if (-not (Test-Path variable:global:OverwriteXlsx)) { $global:OverwriteXlsx = [bool]$OverwriteXlsx_Default }
 
+# Honor customer's $global:RiskAnalysis_*_Override (set in Layer 3 / Layer 5).
+# Without this step, the launcher's hardcoded local $Summary_Override / $Detailed_Override
+# win regardless of what the customer put in SecurityInsight.custom.ps1 or
+# LauncherConfig.custom.ps1 -- which defeats the whole layered-config model.
+# If EITHER global override is set, reset both locals from the customer values
+# (null where the customer didn't set anything) so we never end up with two
+# hardcoded $true values that trip Resolve-RunMode's 'both true' throw.
+if ($null -ne $global:RiskAnalysis_Summary_Override -or $null -ne $global:RiskAnalysis_Detailed_Override) {
+    $Summary_Override  = if ($null -ne $global:RiskAnalysis_Summary_Override)  { [bool]$global:RiskAnalysis_Summary_Override }  else { $null }
+    $Detailed_Override = if ($null -ne $global:RiskAnalysis_Detailed_Override) { [bool]$global:RiskAnalysis_Detailed_Override } else { $null }
+}
+
 $mode = Resolve-RunMode `
     -Bound $cliBound `
     -DefaultMode $RunMode_Default `

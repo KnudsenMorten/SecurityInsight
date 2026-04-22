@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.187
+## v2.1.188
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
 - fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
 - docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
 - docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
 - docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
 - docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
-- docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
 
 ---
 
@@ -44,6 +44,13 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.188 — RiskAnalysis launchers now honor customer `$global:RiskAnalysis_Summary_Override` / `_Detailed_Override` (Summary ↔ Detailed flip)
+
+- 🔧 **Bug.** A customer who set `$global:RiskAnalysis_Detailed_Override = $true` (+ optionally `_Summary_Override = $false`) in Layer 3 / Layer 5 to flip the default Summary mode to Detailed was silently ignored. The launcher ran Summary mode anyway and wrote `RiskAnalysis_Summary_Bucket.xlsx` instead of the Detailed report.
+- 🔧 **Root cause.** Each RiskAnalysis launcher template hardcodes **local** PowerShell variables `$Summary_Override = $true` and `$Detailed_Override = $null` at the top of the file. `Resolve-RunMode` reads those local vars — not the `$global:RiskAnalysis_*_Override` globals the engine itself honors at lines 96–97. So customer intent loaded by `Initialize-LauncherConfig` never made it into the launcher's mode decision. By the time the engine's global-override safety-net ran (`if ([bool]$global:RiskAnalysis_Detailed_Override) { $global:Detailed = $true }`), the launcher had already locked `$global:ReportTemplate` to `RiskAnalysis_Summary_Bucket`, so the wrong bundle still ran.
+- 🔧 **Fix.** Inserted a re-eval block between `Initialize-LauncherConfig` and `Resolve-RunMode` in all 4 flavours. If either `$global:RiskAnalysis_Summary_Override` or `$global:RiskAnalysis_Detailed_Override` is non-null, **both** local `$Summary_Override` / `$Detailed_Override` variables are rewritten from the customer globals (`$null` where the customer didn't set anything). This both (a) honors customer intent, and (b) avoids ending up with two hardcoded `$true` values that trip Resolve-RunMode's `'both true'` throw.
+- 📋 **Precedence now:** `-Summary` / `-Detailed` CLI arg > customer `$global:RiskAnalysis_*_Override` (Layer 3 / Layer 5) > launcher-template local override default > `$RunMode_Default` > `AutomationFramework ? Summary : neither`.
 
 ### v2.1.187 — RiskAnalysis launcher templates no longer stomp Layer 3 customer values for feature toggles
 

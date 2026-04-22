@@ -253,7 +253,7 @@ function Resolve-RunMode {
 }
 
 $global:AutomationFramework = $AutomationFramework_Default
-$global:OverwriteXlsx       = [bool]$OverwriteXlsx_Default
+if (-not (Test-Path variable:global:OverwriteXlsx)) { $global:OverwriteXlsx = [bool]$OverwriteXlsx_Default }
 
 $mode = Resolve-RunMode `
     -Bound $cliBound `
@@ -264,19 +264,19 @@ $mode = Resolve-RunMode `
 $global:Summary  = [bool]$mode.Summary
 $global:Detailed = [bool]$mode.Detailed
 
-$global:BuildSummaryByAI = $BuildSummaryByAI_Default
+if (-not (Test-Path variable:global:BuildSummaryByAI)) { $global:BuildSummaryByAI = $BuildSummaryByAI_Default }
 if ($cliBound.ContainsKey('BuildSummaryByAI')) { $global:BuildSummaryByAI = [bool]$cliBound['BuildSummaryByAI'] }
 
-$global:AutoBucketCount = $AutoBucketCount_Default
+if (-not (Test-Path variable:global:AutoBucketCount)) { $global:AutoBucketCount = $AutoBucketCount_Default }
 if ($cliBound.ContainsKey('AutoBucketCount')) { $global:AutoBucketCount = [bool]$cliBound['AutoBucketCount'] }
 
-$global:AutoBucketCache = $AutoBucketCache_Default
+if (-not (Test-Path variable:global:AutoBucketCache)) { $global:AutoBucketCache = $AutoBucketCache_Default }
 if ($cliBound.ContainsKey('AutoBucketCache')) { $global:AutoBucketCache = [bool]$cliBound['AutoBucketCache'] }
 
-$global:ShowConfig = $ShowConfig_Default
+if (-not (Test-Path variable:global:ShowConfig)) { if (-not (Test-Path variable:global:ShowConfig)) { $global:ShowConfig = $ShowConfig_Default } }
 if ($cliBound.ContainsKey('ShowConfig')) { $global:ShowConfig = [bool]$cliBound['ShowConfig'] }
 
-$global:DebugQueryHash = $DebugQueryHash_Default
+if (-not (Test-Path variable:global:DebugQueryHash)) { if (-not (Test-Path variable:global:DebugQueryHash)) { $global:DebugQueryHash = $DebugQueryHash_Default } }
 if ($cliBound.ContainsKey('DebugQueryHash')) { $global:DebugQueryHash = [bool]$cliBound['DebugQueryHash'] }
 
 $global:ResetCache = $ResetCache_Default

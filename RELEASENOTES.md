@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.189
+## v2.1.190
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI _samples): refresh Sample - RiskAnalysis_{Summary,Detailed}_Bucket.xlsx from a recent run (1d68d1f5)
 - fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
 - fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
 - fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
 - docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
 - docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
-- docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
 
 ---
 
@@ -44,6 +44,10 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.190 — Refresh sample XLSX files in `DATA/_samples/`
+
+- 📚 **Refreshed `Sample - RiskAnalysis_Summary_Bucket.xlsx` + `Sample - RiskAnalysis_Detailed_Bucket.xlsx`** from a recent live run. The README "Sample output" table links land on these files; previous copies pre-dated the v2.1.158-onward column / TraceName / TraceID changes and the v2.1.175 Azure RBAC catalog populating fix. Net delta is shape, not content semantics — same model, just a current-shape preview.
 
 ### v2.1.189 — Layer-4 defaults no longer stomp Layer 3 values in 4 more engines (IdentityAssets / Step1 / Step2 / Step4)
 

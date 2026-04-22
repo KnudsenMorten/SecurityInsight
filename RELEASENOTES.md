@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.186
+## v2.1.187
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
 - docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
 - docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
 - docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI RELEASENOTES): clean up curated highlights ordering + drop duplicate v2.1.158 entry (18b895c9)
 - docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
 - docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
-- docs(SI README): move 'What's in the box' into section 3.5 as 'Solution component overview' (d5a83e17)
 
 ---
 
@@ -44,6 +44,22 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.187 — RiskAnalysis launcher templates no longer stomp Layer 3 customer values for feature toggles
+
+- 🔧 **Same bug class as v2.1.177, found in the launcher templates themselves.** After `Initialize-LauncherConfig` loads Layers 1–5 (including customer's Layer 3 `SecurityInsight.custom.ps1`), the 4 RiskAnalysis launcher templates were running a block like:
+  ```powershell
+  $global:BuildSummaryByAI = $BuildSummaryByAI_Default
+  if ($cliBound.ContainsKey('BuildSummaryByAI')) { $global:BuildSummaryByAI = [bool]$cliBound['BuildSummaryByAI'] }
+  ```
+  which unconditionally overwrote `$global:BuildSummaryByAI = $BuildSummaryByAI_Default` — stomping whatever Layer 3 set. On `community-vm` / `community-azure` the default is `$false`, so a customer who wrote `$global:BuildSummaryByAI = $true` in `SecurityInsight.custom.ps1` saw it silently reset to `$false` before the engine got to read it. The AI summary was therefore never built.
+- 🔧 **Fix** (applied to all 4 flavours: community-vm / community-azure / internal-vm / internal-azure). Each feature-toggle global now uses a conditional-assignment pattern that honors any higher-priority layer's value and still lets a CLI arg win last:
+  ```powershell
+  if (-not (Test-Path variable:global:BuildSummaryByAI)) { $global:BuildSummaryByAI = $BuildSummaryByAI_Default }
+  if ($cliBound.ContainsKey('BuildSummaryByAI')) { $global:BuildSummaryByAI = [bool]$cliBound['BuildSummaryByAI'] }
+  ```
+- 🔧 **Scope — 6 feature-toggle globals per template × 4 templates = 24 patches.** Affected names: `OverwriteXlsx`, `BuildSummaryByAI`, `AutoBucketCount`, `AutoBucketCache`, `ShowConfig`, `DebugQueryHash`. Left unchanged (these are launcher-flavour-owned and shouldn't be customer-set in Layer 3): `AutomationFramework`, `Summary` / `Detailed` (derived by `Resolve-RunMode`), `ReportTemplate` (already uses CLI > Override > Default chain), `AutoBucketMax` (already uses CLI-or-default), `ResetCache` (already has Override slot).
+- 📚 **Precedence chain going forward:** CLI arg > Layer 5 per-engine custom > Layer 3 solution custom > launcher Default. The same bug class could lurk in other engines' launcher templates — if you hit it, the repro is a layer-snapshot log showing the customer value at L3 and the stomped default at the assignment line.
 
 ### v2.1.186 — TOC: list § 1 Introduction subsections (Outputs / Use-cases / 🤖 Agents / Sample output)
 

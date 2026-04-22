@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.185
+## v2.1.186
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
 - docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
 - docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
 - docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): add abstract-derived teaser at top + rewrite § 1 Introduction (05e0c591)
 - docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
 - docs(SI README): move 'What's in the box' into section 3.5 as 'Solution component overview' (d5a83e17)
-- docs(SI README + custom.sample): document auth-method priority chain + cross-layer override gotcha (001c594e)
 
 ---
 
@@ -44,6 +44,11 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.186 — TOC: list § 1 Introduction subsections (Outputs / Use-cases / 🤖 Agents / Sample output)
+
+- 📚 **TOC now lists the four § 1 H3 subsections** under "1. Introduction" — `Outputs`, `Use-cases`, `🤖 SecurityInsight Agents (work in progress)`, `Sample output`. Previously these were rendered in the body but had no TOC entry, so readers couldn't jump straight to (e.g.) the new Agents roadmap from the top.
+- 🧰 **Explicit `<a id>` anchors added** to each of the four headings (`outputs`, `use-cases`, `securityinsight-agents`, `sample-output`) so the TOC links resolve to predictable slugs rather than GitHub's auto-generated ones (which mangle the emoji + parens in the Agents heading to `#-securityinsight-agents-work-in-progress`).
 
 ### v2.1.185 — README: roadmap section "🤖 SecurityInsight Agents (work in progress)" after Use-cases
 

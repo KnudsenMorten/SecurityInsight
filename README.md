@@ -41,6 +41,10 @@
 ## 📑 Table of Contents
 
 1. [Introduction](#introduction)
+   - [Outputs](#outputs)
+   - [Use-cases](#use-cases)
+   - 🤖 [SecurityInsight Agents (work in progress)](#securityinsight-agents)
+   - [Sample output](#sample-output)
 2. [Understanding the Framework](#understanding-the-framework)
    - 2.1 [Why a graph, not a list](#why-a-graph-not-a-list)
    - 2.2 [Risk Score model](#risk-score-model)
@@ -127,6 +131,8 @@ The output is a ranked list — not 4,000 recommendations, but the small set of 
 > [!TIP]
 > **Talk track for execs**: SecurityInsight tells your CISO *"if we patch these 12 things this week, we cut the realistic blast radius of a successful phishing attack by 60%."* It does NOT add another portal — it consumes your existing Defender + Entra + Azure data via API.
 
+<a id="outputs"></a>
+
 ### Outputs
 
 The same ranked dataset is fan-out to multiple sinks so every stakeholder gets it in their preferred shape — ops in Excel, SOC in KQL, execs in Power BI, automation in JSON.
@@ -139,6 +145,8 @@ The same ranked dataset is fan-out to multiple sinks so every stakeholder gets i
 | **JSON upload to Azure Storage blob** | Automatic publish to `https://<acct>.blob.core.windows.net/<container>/`. Container auto-created + RBAC granted; ideal for cross-tenant reporting or Logic Apps / Power Automate pickup. | **Available** |
 | **Power BI management dashboard** | `.pbix` pushed into the customer's Power BI tenant via REST API. Trend line, stacked domain chart, top-N, stale findings, velocity. Per-run dataset refresh via `$global:SendToPowerBI`. See [§ 3.5](#pre-requisite-configuration) Step 4 + [`DOCS/PowerBI-Prerequisites.md`](DOCS/PowerBI-Prerequisites.md). | **Beta** |
 | **Azure Workbooks** | Native Azure Monitor workbook over `SI_RiskAnalysis_*_CL` + `SI_IdentityAssets_CL` — 8 pills (time range, latest-run toggle, domain, severity, tier, subcategory, search, Top-N) + KPI tiles + trend / domain / tier charts + velocity + Top-N + stale + identity inventory. Import from `TOOLS/AzureWorkbook/SecurityInsight-RiskAnalysis.workbook.json` via Portal → Azure Monitor → Workbooks → Advanced Editor; full guide in [`DOCS/AzureWorkbook-Import.md`](DOCS/AzureWorkbook-Import.md). | **Available** |
+
+<a id="use-cases"></a>
 
 ### Use-cases
 
@@ -154,6 +162,8 @@ Real-world patterns customers run this against. Every one of them is cheap to li
 | **Baseline new security + Just-In-Time delegations** | First-time scan establishes the baseline tier for every identity + resource. Anything spikier on a later run is JIT-flagged for review. |
 | **Disable / clean up legacy identity assets** | `SI_IdentityAssets_CL | where IsStale == true and ObjectType in ('ServicePrincipal','ManagedIdentity')` surfaces orphan / unused SPNs + MIs for bulk deprovisioning. |
 | **Detect Shadow IT delegations** | Cross-tenant SPNs, unverified publishers, high-permission grants flagged on first appearance in `SI_IdentityAssets_CL` — catches delegations business units stood up without IT's knowledge. |
+
+<a id="securityinsight-agents"></a>
 
 ### 🤖 SecurityInsight Agents (work in progress)
 
@@ -210,6 +220,8 @@ The next layer of value — a roster of small, focused **agents** that turn the 
 
 > [!NOTE]
 > Status: **work in progress.** Order, names, and scope may change. If any of these would be valuable to you sooner, open a [GitHub Issue](https://github.com/KnudsenMorten/SecurityInsight/issues) — community demand drives the queue.
+
+<a id="sample-output"></a>
 
 ### Sample output
 

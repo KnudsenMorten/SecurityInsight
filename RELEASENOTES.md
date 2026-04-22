@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.184
+## v2.1.185
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
 - docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
 - docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
 - fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): major § 3 readability pass + stable anchors + What's New moved to end (c16954aa)
 - docs(SI README): move 'What's in the box' into section 3.5 as 'Solution component overview' (d5a83e17)
 - docs(SI README + custom.sample): document auth-method priority chain + cross-layer override gotcha (001c594e)
-- fix(SI templates): better SpnTenantId-missing error + README recommends SecurityInsight.custom.ps1 for shared auth (3fe7a138)
 
 ---
 
@@ -44,6 +44,17 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.185 — README: roadmap section "🤖 SecurityInsight Agents (work in progress)" after Use-cases
+
+- 🆕 **New "🤖 SecurityInsight Agents (work in progress)" section** inserted between Use-cases and Sample output. 19 planned agents grouped into 6 themes:
+  - **Context + enrichment** (Asset Owner Resolver, Remediation Playbook Linker, Blast-Radius Narrator, Exploit Intel Enricher)
+  - **Ticketing + change management** (Ticket Bridge, Change-Window Scheduler, Approval Routing)
+  - **Remediation authoring** (Fix-Script Drafter, Rollback Plan Generator)
+  - **Tracking + escalation** (Progress Tracker, Burn-Down Dashboard, SLA Breach Detector, False-Positive Feedback Loop, Attestation)
+  - **Reporting + communications** (Per-Team Digest, Executive Briefing)
+  - **Compliance + correlation** (NIS2 / CIS Mapper, Incident-to-Finding Correlator, Community Query Harvester)
+- 📚 **Explicit "work in progress" disclaimer** at the bottom of the section pointing readers at GitHub Issues to influence priority order — nothing in the list ships yet.
 
 ### v2.1.184 — Teaser hook rephrased; verified detection counts are already accurate (no change to numbers)
 

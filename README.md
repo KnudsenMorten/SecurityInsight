@@ -155,6 +155,62 @@ Real-world patterns customers run this against. Every one of them is cheap to li
 | **Disable / clean up legacy identity assets** | `SI_IdentityAssets_CL | where IsStale == true and ObjectType in ('ServicePrincipal','ManagedIdentity')` surfaces orphan / unused SPNs + MIs for bulk deprovisioning. |
 | **Detect Shadow IT delegations** | Cross-tenant SPNs, unverified publishers, high-permission grants flagged on first appearance in `SI_IdentityAssets_CL` — catches delegations business units stood up without IT's knowledge. |
 
+### 🤖 SecurityInsight Agents (work in progress)
+
+The next layer of value — a roster of small, focused **agents** that turn the ranked findings into action: route tickets, draft fixes, schedule changes, escalate misses, and feed exec briefings. All in active design / build; nothing in this list is shipped yet, but it's where the project is going. Roughly grouped by what they do for the operator:
+
+**🔍 Context + enrichment**
+
+| Agent | What it does |
+|---|---|
+| **Asset Owner Resolver** | Turns *"this DC is at risk"* into *"email Sarah."* — maps every finding to a named owner. |
+| **Remediation Playbook Linker** | Adds a *"How to fix"* link to every finding. |
+| **Blast-Radius Narrator** | One sentence on what's reachable if this asset falls. |
+| **Exploit Intel Enricher** | Live CVE context (KEV, EPSS, PoC) adjusts probability. |
+
+**🎫 Ticketing + change management**
+
+| Agent | What it does |
+|---|---|
+| **Ticket Bridge Agent** | Top findings land in ServiceNow / Jira / ADO, deduped. |
+| **Change-Window Scheduler** | Maps fixes to maintenance windows per team. |
+| **Approval Routing Agent** | Sends Tier-0 fixes to the right approver automatically. |
+
+**🔧 Remediation authoring**
+
+| Agent | What it does |
+|---|---|
+| **Fix-Script Drafter** | Generates safe `-WhatIf` remediation snippets. |
+| **Rollback Plan Generator** | Every fix ships with its undo script. |
+
+**📊 Tracking + escalation**
+
+| Agent | What it does |
+|---|---|
+| **Remediation Progress Tracker** | Closed, reopened, new, and MTTR per tier. |
+| **Burn-Down Dashboard Agent** | Live risk-score trend after every run. |
+| **SLA Breach Detector** | Escalates findings past their tier deadline. |
+| **False-Positive Feedback Loop** | Turns *"not a real issue"* into a rule. |
+| **Attestation Agent** | Tracks accepted-risk approvals and re-prompts on expiry. |
+
+**📧 Reporting + communications**
+
+| Agent | What it does |
+|---|---|
+| **Per-Team Digest Agent** | Splits the Excel into team-scoped emails. |
+| **Executive Briefing Agent** | Monthly CISO one-slide, AI-generated. |
+
+**📚 Compliance + correlation**
+
+| Agent | What it does |
+|---|---|
+| **NIS2 / CIS Mapper** | Tags findings to controls for auditor conversations. |
+| **Incident-to-Finding Correlator** | Links live alerts to open risk items. |
+| **Community Query Harvester** | Safety-checks shared YAMLs from GitHub Discussions. |
+
+> [!NOTE]
+> Status: **work in progress.** Order, names, and scope may change. If any of these would be valuable to you sooner, open a [GitHub Issue](https://github.com/KnudsenMorten/SecurityInsight/issues) — community demand drives the queue.
+
 ### Sample output
 
 | File | Link |

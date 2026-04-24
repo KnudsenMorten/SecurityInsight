@@ -417,7 +417,12 @@ function Invoke-LogAnalyticsKqlQuery {
     $custId = Resolve-WorkspaceCustomerId -WorkspaceResourceId $WorkspaceResourceId
     $resp   = Invoke-AzOperationalInsightsQuery -WorkspaceId $custId -Query $Query -Wait $TimeoutSec -ErrorAction Stop
 
-    if (-not $resp -or -not $resp.Results) { return @() }
+    # Comma-protect so PowerShell emits the rows array as a SINGLE value to the
+    # pipeline (preserving array shape across function-output unwrap). Caller
+    # MUST use plain assignment, NOT @() wrap -- @(call) re-wraps the single
+    # comma-protected value into [Object[1] of Object[N]], which broke the
+    # downstream foreach in v2.1.199 / v2.1.202 / v2.1.203.
+    if (-not $resp -or -not $resp.Results) { return ,@() }
     return ,@($resp.Results)
 }
 
@@ -727,7 +732,15 @@ function Invoke-GraphHuntingQuery {
 
             if (-not $hasXdrTables) {
                 Write-Info "Query touches only Log Analytics tables (no Defender XDR tables); routing entire query directly to LA workspace -- no let-block, no advanced-hunting round trip, no body-size limit."
-                $rows = @(Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $wsResId -Query $Query)
+                # NO @() wrap here. Invoke-LogAnalyticsKqlQuery returns the rows array via
+                # `,@($resp.Results)` (comma-protected so PowerShell emits it as ONE value).
+                # `@(call)` would re-wrap that single value into a [Object[1] of Object[N]],
+                # then the foreach below iterated ONCE with $r = the inner array, and
+                # Calculate-RiskScore later read $r.PSObject.Properties = System.Array's
+                # native props (Count/Length/SyncRoot/...). Plain assignment captures the
+                # inner rows array directly. v2.1.204 fix.
+                $rows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $wsResId -Query $Query
+                if ($null -eq $rows) { $rows = @() }
                 # Bypass the Microsoft Graph response shape entirely. v2.1.199 tried to mock
                 # it by wrapping each row's data in an AdditionalProperties hashtable and
                 # returning a 1-element Results array -- but PowerShell's property broadcast

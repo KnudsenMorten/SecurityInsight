@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.193
+## v2.1.194
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Step3 OpenAI): ship the missing LauncherConfig.defaults.ps1 (1dbf4209)
 - docs(SI): replace stale 'LauncherConfig.ps1' user-facing references with 'LauncherConfig.custom.ps1' (37 hits / 19 files) (0ae16e21)
 - fix(SI Step1 + Step4 launchers): auth fields fall back to runtime \$global:Spn* when Step-specific names aren't set (33f757a2)
 - fix(SI Step1 Permissions): drop device-code fallback + add -Force to clear stale Az context on Interactive sign-in (ba36ae3f)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
 - docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
 - fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
-- fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.194 — Step3 OpenAI: ship the missing `LauncherConfig.defaults.ps1`
+
+- 🔧 **Bug.** `Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure` was the only Step engine without a Layer-4 `LauncherConfig.defaults.ps1`. Customers who ran it without setting every optional global hit `The variable '$global:ModelVersion' cannot be retrieved because it has not been set.` — `Set-StrictMode` in the engine fires `VariableIsUndefined` the moment it touches an unset name, even inside an `if ($global:ModelVersion)` existence check.
+- 🔧 **Fix.** New `LAUNCHERS/Step3_*/LauncherConfig.defaults.ps1` declares all 12 customer-tunable globals up front using the conditional pattern `if (-not (Test-Path variable:global:X)) { $global:X = <default> }`. Every engine read now resolves to a real (possibly `$null`) variable. Customer values from Layer 3 / 5 still win — verified via smoke test (set `$global:ModelVersion = '2024-08-06'` + `$global:Capacity = 50` before dot-sourcing → both survive).
+- 🧰 **Globals declared:** `SubscriptionId` / `ResourceGroupName` / `Location` / `AccountName` / `DeploymentName` (no safe default — pre-declared `$null`, engine has its own fail-fast); `ModelName` (`gpt-4.1-mini`); `ModelVersion` (`latest`); `Capacity` (100); `PublicNetworkAccess` (`Enabled`); `WaitForAccountReady` (`$true`); `DeploymentSkuOrder` (`@('GlobalStandard')`); `WriteModelDumps` (`$true`).
 
 ### v2.1.193 — Replace stale user-facing `LauncherConfig.ps1` references with `LauncherConfig.custom.ps1` (37 hits across 19 files)
 

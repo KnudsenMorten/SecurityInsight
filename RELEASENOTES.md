@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.206
+## v2.1.207
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI sample): expand SecurityInsight.custom.sample.ps1 for the upcoming Initial Setup Wizard (4b637522)
 - fix(SI RiskAnalysis Excel): defensive XLSX-safe sanitizer to kill the 'Repaired Records: sharedStrings.xml' open warning (3fab7506)
 - feat(SI YAML): Identity_AnyUser_NoMFA_Summary excludes external/B2B + fix typo in PrivilegedUser NoMFA Detailed scope (ba90f139)
 - fix(SI RiskAnalysis): drop @() wrap at the pure-LA Invoke-LogAnalyticsKqlQuery caller (02beb56d)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
 - docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
 - docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
-- fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.207 — `CUSTOMDATA/SecurityInsight.custom.sample.ps1` refreshed with every wizard-relevant global (prep for the new Initial Setup Wizard)
+
+- 🧰 **Added `$global:BuildSummaryByAI = $true`** to section 2 (Azure OpenAI) with an explicit comment that it's the MASTER ON/OFF toggle. Without it the engine silently skips the AI summary even when the 5 `OpenAI_*` values are perfect — this was a recurring customer confusion.
+- 🧰 **Expanded section 4 (DCR INGESTION TARGETS)** with `$global:SendToLogAnalytics`, `$global:BatchSize`, `$global:TableName` — the missing master-toggle + IdentityAssetsCollect tuning knobs.
+- 🧰 **Overhauled section 8 (RiskAnalysis)** — previously AF-only, now covers the full per-mode config surface: `RiskAnalysis_Summary_Override` / `_Detailed_Override`, `ReportTemplate_Default_Summary` / `_Detailed`, both community-mode (`RiskAnalysis_Summary_SendMail` / `_To`) and AF-mode (`Mail_SecurityInsight_Summary_SendMail` / `_To`) mail routing, JSON sibling + blob upload (`WriteJsonOutput`, `ExportDestination`), and Power BI refresh (`SendToPowerBI`, `PowerBI_WorkspaceName`, `PowerBI_DatasetName`).
+- 🧰 **Every line still commented out by default** — the sample is a reference-pattern + checklist, not an active config. Customer copies it to `SecurityInsight.custom.ps1` (gitignored) and uncomments what they need.
+- 📚 **Lays the foundation for v2.1.208's Initial Setup Wizard** — the wizard emits `SecurityInsight.custom.ps1` into this folder, and the sample is the canonical reference for what every wizard-emitted global means and where it goes.
 
 ### v2.1.206 — RiskAnalysis Excel: defensive XLSX-safe sanitizer (kills the `Repaired Records: String properties from sharedStrings.xml` Excel-open warning)
 

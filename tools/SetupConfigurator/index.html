@@ -737,14 +737,18 @@
       <div class="target-path" id="target-path">CUSTOMDATA\SecurityInsight.custom.ps1</div>
       <pre class="preview" id="preview">// select a tab on the left</pre>
       <div class="preview-actions">
-        <button class="btn primary" id="btn-copy" type="button">📋 Copy to clipboard</button>
+        <button class="btn primary" id="btn-save-direct" type="button" title="Chrome/Edge only -- pick your CUSTOMDATA folder, save directly with the proper .ps1 extension">💾 Save directly (Chrome/Edge)</button>
         <button class="btn" id="btn-download" type="button">⬇ Download as .ps1.txt</button>
+        <button class="btn" id="btn-copy" type="button">📋 Copy to clipboard</button>
+        <button class="btn" id="btn-copy-install" type="button" title="Copy a single PowerShell line that moves the just-downloaded .txt file to CUSTOMDATA, renamed to .ps1">📋 Copy install one-liner</button>
       </div>
       <div class="ok-msg" id="ok-msg">Copied to clipboard!</div>
       <div class="hint" style="margin-top:6px;font-size:12px;line-height:1.4;">
-        <strong>📋 Copy to clipboard</strong> is the recommended workflow — paste into your editor (VS Code / Notepad++) and save as <code>LauncherConfig.custom.ps1</code> in the target folder.
+        <strong>💾 Save directly</strong> (Chrome / Edge) — pops a Save-As dialog so you can drop the file straight into <code>CUSTOMDATA/</code> with the correct <code>.ps1</code> name. Falls back to <strong>⬇ Download</strong> on browsers without the File System Access API.
         <br/>
-        <strong>⬇ Download</strong> saves as <code>.ps1.txt</code> because Windows' Mark-of-the-Web blocks opening browser-downloaded <code>.ps1</code> files. Rename to <code>.ps1</code> after saving, or right-click the file → Properties → <em>Unblock</em>.
+        <strong>⬇ Download</strong> saves as <code>.ps1.txt</code> because Windows' Mark-of-the-Web blocks opening browser-downloaded <code>.ps1</code> files. Use the <strong>📋 Copy install one-liner</strong> button to get a PowerShell command that moves it from <code>Downloads\</code> into <code>CUSTOMDATA\</code> and renames it to <code>.ps1</code> in one go.
+        <br/>
+        <strong>📋 Copy to clipboard</strong> — paste the full file content into VS Code / Notepad and save manually.
       </div>
 
       <div class="panel-block" style="margin-top:12px;background:var(--ok-bg);border-left-color:var(--ok);">
@@ -1392,12 +1396,21 @@ function render() {
 document.getElementById('wiz-next').addEventListener('click',   () => { setWizStep(wizardStep + 1); });
 document.getElementById('wiz-back').addEventListener('click',   () => { setWizStep(wizardStep - 1); });
 document.getElementById('wiz-finish').addEventListener('click', () => {
-  // Scroll preview into view + flash highlight
-  const previewEl = document.getElementById('preview');
-  previewEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  previewEl.style.transition = 'background 0.4s';
-  previewEl.style.background = '#1a4a1a';
-  setTimeout(() => { previewEl.style.background = 'var(--code-bg)'; }, 600);
+  // (c) Prominent visual confirmation when the user clicks Finish.
+  // Flash the install panel (the one with .\InitialDeployment...ps1) and scroll to it.
+  const installPanel = document.getElementById('next-launcher-cmd').closest('.panel-block');
+  if (installPanel) {
+    installPanel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    installPanel.style.transition = 'box-shadow 0.4s, background 0.4s';
+    installPanel.style.boxShadow = '0 0 0 4px var(--ok)';
+    installPanel.style.background = '#d4ffd4';
+    setTimeout(() => { installPanel.style.boxShadow = 'none'; installPanel.style.background = 'var(--ok-bg)'; }, 1800);
+  }
+  const ok = document.getElementById('ok-msg');
+  ok.textContent = '✅ Configuration ready. Save the file (button above) + run InitialDeployment (button below).';
+  ok.classList.add('show');
+  clearTimeout(window.__siFinishTimeout);
+  window.__siFinishTimeout = setTimeout(() => { ok.classList.remove('show'); ok.textContent = 'Copied to clipboard!'; }, 8000);
 });
 setWizStep(1);
 syncWizardVisibility();
@@ -1443,6 +1456,63 @@ document.getElementById('btn-download').addEventListener('click', () => {
   a.download = (currentTab === 'wizard') ? 'SecurityInsight.custom.ps1.txt' : 'LauncherConfig.custom.ps1.txt';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
+});
+
+// (a) "Save directly" via File System Access API (Chrome / Edge). Lets the user
+// pick the CUSTOMDATA folder and save with the proper .ps1 extension in one shot.
+// Falls back to the standard download flow if the API isn't available (Firefox /
+// Safari / older browsers / file:// in some configurations).
+document.getElementById('btn-save-direct').addEventListener('click', async () => {
+  const text = document.getElementById('preview').textContent;
+  const wizardName = (currentTab === 'wizard') ? 'SecurityInsight.custom.ps1' : 'LauncherConfig.custom.ps1';
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: wizardName,
+        types: [{ description: 'PowerShell script', accept: { 'text/plain': ['.ps1'] } }]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(text);
+      await writable.close();
+      const ok = document.getElementById('ok-msg');
+      ok.textContent = '✅ Saved directly. Now run InitialDeployment.';
+      ok.classList.add('show');
+      clearTimeout(window.__siSavedTimeout);
+      window.__siSavedTimeout = setTimeout(() => { ok.classList.remove('show'); ok.textContent = 'Copied to clipboard!'; }, 5000);
+    } catch (e) {
+      // User cancelled the picker -- silent. Other errors -> fall through to download.
+      if (e && e.name !== 'AbortError') {
+        document.getElementById('btn-download').click();
+      }
+    }
+  } else {
+    // Browser doesn't support showSaveFilePicker -- fall back to the .txt download.
+    document.getElementById('btn-download').click();
+  }
+});
+
+// (b) "Copy install one-liner" -- copies a single PowerShell command that moves
+// the just-downloaded .txt file from Downloads/ into CUSTOMDATA/ and renames it
+// to .ps1 in one go. User pastes into PS, hits Enter, done.
+document.getElementById('btn-copy-install').addEventListener('click', async () => {
+  let oneLiner;
+  if (currentTab === 'wizard') {
+    oneLiner = "Move-Item -Path \"$env:USERPROFILE\\Downloads\\SecurityInsight.custom.ps1.txt\" -Destination \".\\CUSTOMDATA\\SecurityInsight.custom.ps1\" -Force ; Unblock-File -LiteralPath \".\\CUSTOMDATA\\SecurityInsight.custom.ps1\"";
+  } else {
+    const dest = (targetPaths[currentTab] || 'LAUNCHERS\\<engine>\\LauncherConfig.custom.ps1');
+    oneLiner = "Move-Item -Path \"$env:USERPROFILE\\Downloads\\LauncherConfig.custom.ps1.txt\" -Destination \".\\" + dest + "\" -Force ; Unblock-File -LiteralPath \".\\" + dest + "\"";
+  }
+  try { await navigator.clipboard.writeText(oneLiner); }
+  catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = oneLiner; document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+  }
+  const ok = document.getElementById('ok-msg');
+  ok.textContent = '✅ Install one-liner copied -- paste into PowerShell from your SI install root.';
+  ok.classList.add('show');
+  clearTimeout(window.__siInstallTimeout);
+  window.__siInstallTimeout = setTimeout(() => { ok.classList.remove('show'); ok.textContent = 'Copied to clipboard!'; }, 6000);
 });
 
 // ---------- wire up all inputs to re-render ----------

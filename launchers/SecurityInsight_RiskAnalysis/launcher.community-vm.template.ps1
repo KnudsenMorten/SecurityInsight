@@ -34,7 +34,7 @@ param(
     # Adaptive bucketing
     [switch]$AutoBucketCount,
     [switch]$AutoBucketCache,
-    [ValidateRange(1,512)][int]$AutoBucketMax,
+    [ValidateRange(1,2048)][int]$AutoBucketMax,
     [Alias('ResetCache')][switch]$ResetCacheSwitch,
 
     # Other engine knobs
@@ -75,7 +75,7 @@ $ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_Bucket'
 # Adaptive bucketing baseline (engine reads these globals).
 $AutoBucketCount_Default = $true
 $AutoBucketCache_Default = $true
-$AutoBucketMax_Default   = 512
+$AutoBucketMax_Default   = 1024
 
 # Cache + diagnostics
 $ResetCache_Default      = $false
@@ -388,10 +388,12 @@ if ($cliBound.ContainsKey('ResetCacheSwitch')) {
 }
 
 # Int (no Override slot exposed, just CLI > Default)
+# Layered: CLI > existing layered global (Layer 4 / Layer 5) > template fallback default.
+if (-not (Test-Path variable:global:AutoBucketMax) -or $null -eq $global:AutoBucketMax) {
+    $global:AutoBucketMax = [int]$AutoBucketMax_Default
+}
 if ($cliBound.ContainsKey('AutoBucketMax')) {
     $global:AutoBucketMax = [int]$cliBound['AutoBucketMax']
-} else {
-    $global:AutoBucketMax = [int]$AutoBucketMax_Default
 }
 
 # ReportTemplate: -ReportTemplate wins, then $ReportTemplate_Default,

@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.1.198
+## v2.1.199
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis launchers): AutoBucketMax layered-config + widen ValidateRange to 2048 (ddff8ebf)
+- chore(SI RiskAnalysis defaults): WriteJsonOutput=$false + AutoBucketMax=1024 (585da7d4)
+- fix(SI RiskAnalysis): route pure-LA queries direct to Log Analytics, avoiding nginx 413 on the let-block bridge (240cbc19)
 - docs(SI README): add Sec 3.5.4 Defender XDR licensing & onboarding requirements (312c404c)
 - feat(SI RiskAnalysis): no-retry on schema errors + Defender service classification (aa668516)
 - fix(SI IdentityAssetsCollect): bulk userRegistrationDetails MFA fetch + log silent catch (fb4baabe)
@@ -31,9 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Build_Tier): diagnose NRE-on-every-retry (Azure OpenAI error envelope) (a691dbfa)
 - fix(SI Build_Tier): populate Azure role catalog + EntraID_APIPermissions_Catalog (both were empty / null) (eb45c3b0)
 - feat(SI CriticalAssetTagging): promote 177 samples from Custom -> Locked; Custom becomes override scaffold (b70b40fd)
-- docs(SI README): 3-line intro under WOW table explaining graph-based detection (cfa9bd9c)
-- docs(SI README § 6.9): Locked catalog inventory -- name + purpose per report/rule (80432ca1)
-- docs(SI README): expand 'out of the box' WOW table with AI-classified tier catalog breakdown (7c6d2330)
 
 ---
 
@@ -44,6 +44,18 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.199 — RiskAnalysis: route pure-LA queries directly to Log Analytics (avoids 413) · `WriteJsonOutput` default OFF · `AutoBucketMax` default raised to 1024
+
+- 🔧 **Bug — `413 Request Entity Too Large` from nginx in front of advanced hunting.** v2.1.197's `SI_IdentityAssets_CL` bridge prepended a `let SI_IdentityAssets_CL = datatable(...) [...];` block in front of every query that referenced the table. For tenants with non-trivial estates (a few thousand users × wide columns like `CSA` JSON / `TierSources` / `Workload_Credentials` at 1–5 KB per row), the let-block exceeded **the nginx body cap that sits in front of `graph.microsoft.com/security/runHuntingQuery`** (the request never reaches the hunting backend — nginx returns raw HTML 413). My v2.1.197 size warning fired at 700 KB based on a guess; reality is the cap is hit somewhere lower for some customer payloads.
+- 🔧 **Fix — split routing by query shape.** The bridge now inspects the customer's KQL *before* deciding how to submit:
+  - **Pure-LA queries** (touch only `*_CL` tables — the case for the majority of identity-only reports): submit the **whole** query directly to `Invoke-AzOperationalInsightsQuery`. **No let-block. No advanced-hunting round trip. No nginx 413 risk.** Body becomes just the customer's report KQL (a few KB). Result-set cap is LA's native ~64 MB / 500k rows.
+  - **Mixed queries** (joining `SI_IdentityAssets_CL` with `Device*` / `Identity*` / `ExposureGraph*` etc.): same let-block bridge as v2.1.197 — only viable path. Still subject to the nginx body cap. Recommendation in the warning: enable Sentinel data lake + table mirroring to make `SI_IdentityAssets_CL` natively visible in advanced hunting (engine probe then bypasses the bridge entirely).
+  - **Mocked Microsoft Graph response shape** for the LA-direct path so the engine's downstream consumers (`$resp.Results.AdditionalProperties` access pattern) don't need to change.
+- 🧰 **XDR-table detection regex** classifies queries by referenced-table prefix: `Device(?!Tvm)\w*`, `DeviceTvm\w*`, `Identity(?!Assets)\w*`, `ExposureGraph\w*`, `Email\w*`, `Message\w*`, `UrlClickEvents`, `CloudApp\w*`, `AppFile\w*`, `Cloud(?:Audit|Dns|Process|Storage)\w*`, `Alert(?:Evidence|Info)`, `Behavior(?:Entities|Info)`, `AAD\w*SignIn\w*`, `EntraId\w*SignIn\w*`, `GraphAPIAuditEvents`. `\b` word-boundaries on both sides ensure `SI_IdentityAssets_CL` never trips the `Identity*` branch (no word boundary between `_` and `I`).
+- 🔧 **Default change — `$global:WriteJsonOutput` flipped from `$true` to `$false`.** The XLSX already covers reporting + Power BI ingestion; the JSON sibling exists only for customers wiring an external machine-readable pipeline. Defaulting it ON wrote a duplicate file every run for no benefit. Enable in `LauncherConfig.custom.ps1` if you need it. `LauncherConfig.sample.ps1` updated to match the new default.
+- 🔧 **Default change — `$global:AutoBucketMax` raised from `64` to `1024`.** AutoBucket only escalates when needed (small tenants still run at low counts); the previous cap of 64 was too low for large estates where some reports legitimately need 100s of buckets to stay under the 30k-row hunting ceiling. CLI `[ValidateRange]` widened from `(1,512)` to `(1,2048)` across all 4 launcher templates so the new default is acceptable from the command line, and the launcher templates' own `$AutoBucketMax_Default` fallback raised from 512 to 1024 to match.
+- 🔧 **Layered-config bug fix in launcher templates.** All 4 RiskAnalysis launcher templates had the unsafe pattern `if ($cliBound.ContainsKey('AutoBucketMax')) { ... } else { $global:AutoBucketMax = $AutoBucketMax_Default }` — the bare `else` **stomped** any value set in Layer 4 (`LauncherConfig.defaults.ps1`) or Layer 5 (`LauncherConfig.custom.ps1`) when no CLI arg was passed. Converted to the safe layered pattern (CLI > existing layered global > template fallback default), matching the v2.1.187 / v2.1.189 sweep.
 
 ### v2.1.198 — IdentityAssetsCollect bulk MFA fix · RiskAnalysis no-retry on schema errors · README Defender XDR licensing section
 

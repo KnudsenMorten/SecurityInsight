@@ -29,7 +29,13 @@
 # (solution-wide) or LauncherConfig.custom.ps1 (this launcher only).
 #
 # Only engine-specific values belong in this file.
-if (-not (Test-Path variable:global:WorkspaceResourceId)) { $global:WorkspaceResourceId = $null }                       # overrides WorkspaceName when set (cross-sub supported)
+#
+# $global:WorkspaceResourceId and $global:ExportDestination are intentionally
+# NOT pre-declared here. Both are off by default and tenant-specific; the
+# customer sets them in CUSTOMDATA\SecurityInsight.custom.ps1 (Layer 3) or
+# this engine's LauncherConfig.custom.ps1 (Layer 5). The engine reads them
+# safely via [string]::IsNullOrWhiteSpace so an unset variable just means
+# "feature off" -- no Set-StrictMode error (the engine runs Set-StrictMode -Off).
 if (-not (Test-Path variable:global:DceIngestionUri)) { $global:DceIngestionUri = $null }                       # auto-resolved from DceName via Get-AzDceListAll
 
 # DCR name + table name are engine-specific (SI_IdentityAssets schema)
@@ -62,7 +68,7 @@ if (-not (Test-Path variable:global:Defender_WorkspaceNameResourceId)) { $global
 #   '\\server\share\path\'                              -> UNC share
 #   'https://<acct>.blob.core.windows.net/<container>/' -> Azure Storage blob
 if (-not (Test-Path variable:global:WriteJsonOutput)) { $global:WriteJsonOutput = $true }
-if (-not (Test-Path variable:global:ExportDestination)) { $global:ExportDestination = $null }
+# $global:ExportDestination intentionally NOT pre-declared -- see comment block at top of file.
 
 
 # ============================================================================

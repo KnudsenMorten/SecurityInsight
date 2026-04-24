@@ -189,7 +189,11 @@
             <div class="field required"><label for="w_cert_thumb">Certificate thumbprint (hex, no spaces)</label><input type="text" id="w_cert_thumb" placeholder="A1B2C3D4..." /></div>
           </div>
           <div class="w-cert-new" hidden>
-            <div class="panel-block warn">The deployment orchestrator will generate a self-signed cert, upload it to the SPN, and store the thumbprint here.</div>
+            <div class="field required">
+              <label for="w_cert_name">Certificate display name (will be created in CurrentUser\My)</label>
+              <input type="text" id="w_cert_name" placeholder="cert-securityinsight" value="cert-securityinsight" />
+            </div>
+            <div class="panel-block warn">The deployment orchestrator will generate a self-signed cert with this name, upload it to the SPN, and store the thumbprint here automatically after Phase 1.</div>
           </div>
         </div>
 
@@ -1246,29 +1250,36 @@ function setWizStep(n) {
   document.getElementById('wiz-next').hidden    = (wizardStep === WIZ_TOTAL);
   document.getElementById('wiz-finish').hidden  = (wizardStep !== WIZ_TOTAL);
 }
+// Wizard sub-blocks have the HTML `hidden` attribute set initially (so the page
+// renders cleanly before JS runs). `toggleClass` only changes `style.display`
+// which can't override the `hidden` attribute -- have to manipulate `el.hidden`
+// directly. v2.1.212 fix.
+function setWizVisible(selector, show) {
+  document.querySelectorAll(selector).forEach(el => { el.hidden = !show; });
+}
 function syncWizardVisibility() {
   const am = val('w_auth_method');
-  toggleClass('.w-spn-secret', am === 'SpnSecret');
-  toggleClass('.w-spn-cert',   am === 'SpnCertificate');
-  toggleClass('.w-mi',         am === 'ManagedIdentity');
+  setWizVisible('.w-spn-secret', am === 'SpnSecret');
+  setWizVisible('.w-spn-cert',   am === 'SpnCertificate');
+  setWizVisible('.w-mi',         am === 'ManagedIdentity');
   const spnState = (document.querySelector('input[name="w_spn_state"]:checked')||{}).value || 'existing';
-  toggleClass('.w-spn-existing', spnState === 'existing');
-  toggleClass('.w-spn-new',      spnState === 'new');
+  setWizVisible('.w-spn-existing', spnState === 'existing');
+  setWizVisible('.w-spn-new',      spnState === 'new');
   const certState = (document.querySelector('input[name="w_cert_state"]:checked')||{}).value || 'existing';
-  toggleClass('.w-cert-existing', certState === 'existing');
-  toggleClass('.w-cert-new',      certState === 'new');
+  setWizVisible('.w-cert-existing', certState === 'existing');
+  setWizVisible('.w-cert-new',      certState === 'new');
   const aiEnabled = ((document.querySelector('input[name="w_ai_enabled"]:checked')||{}).value || 'true') === 'true';
-  toggleClass('.w-ai-fields', aiEnabled);
+  setWizVisible('.w-ai-fields', aiEnabled);
   const mailEnabled = ((document.querySelector('input[name="w_mail_enabled"]:checked')||{}).value || 'false') === 'true';
-  toggleClass('.w-mail-fields', mailEnabled);
+  setWizVisible('.w-mail-fields', mailEnabled);
   const smtpAuth = (document.querySelector('input[name="w_smtp_auth"]:checked')||{}).value || 'authenticated';
-  toggleClass('.w-smtp-auth-fields', smtpAuth === 'authenticated');
+  setWizVisible('.w-smtp-auth-fields', smtpAuth === 'authenticated');
   const summaryOn = ((document.querySelector('input[name="w_mail_summary"]:checked')||{}).value || 'true') === 'true';
-  toggleClass('.w-mail-summary-to', summaryOn);
+  setWizVisible('.w-mail-summary-to', summaryOn);
   const detailedOn = ((document.querySelector('input[name="w_mail_detailed"]:checked')||{}).value || 'true') === 'true';
-  toggleClass('.w-mail-detailed-to', detailedOn);
+  setWizVisible('.w-mail-detailed-to', detailedOn);
   const uploadEnabled = ((document.querySelector('input[name="w_upload_enabled"]:checked')||{}).value || 'false') === 'true';
-  toggleClass('.w-upload-fields', uploadEnabled);
+  setWizVisible('.w-upload-fields', uploadEnabled);
 }
 function csvList(s) {
   if (!s) return '';
@@ -1303,8 +1314,10 @@ function buildWizard() {
     if (certState === 'existing') {
       const th = line('SpnCertificateThumbprint', val('w_cert_thumb'));   if (th) out.push(th);
     } else {
-      out.push('# $global:SpnCertificateThumbprint will be set by InitialDeployment Step 1');
-      out.push('# (self-signed cert generation + upload to the SPN).');
+      const cn = line('OnboardValidate_CertificateDisplayName', val('w_cert_name')); if (cn) out.push(cn);
+      out.push('# Self-signed certificate will be generated with the display name above by');
+      out.push('# InitialDeployment Phase 1, then uploaded to the SPN. The resulting');
+      out.push('# $global:SpnCertificateThumbprint is auto-written back here.');
     }
   } else if (am === 'ManagedIdentity') {
     out.push(line('UseManagedIdentity', '$true', false));

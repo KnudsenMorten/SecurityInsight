@@ -569,6 +569,64 @@ function Get-IdentityAssetsLetBlock {
     return $block
 }
 
+function Get-DefenderTableOwner {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$TableName)
+
+    # Map a missing-table name to a customer-friendly explanation of which Defender service
+    # owns the table and what licence / onboarding is required to make it appear in advanced
+    # hunting. Used by the schema-error short-circuit in Invoke-GraphHuntingQuery so the log
+    # line tells the customer exactly what to fix instead of just 'table not found'.
+    switch -Regex ($TableName) {
+        '_CL$' {
+            return ("Custom Log Analytics table -- ingestion engine has not yet written to it, " +
+                    "or the workspace is wrong. Check `$global:WorkspaceResourceId and run the " +
+                    "matching SI ingestion engine (e.g. IdentityAssetsCollect for SI_IdentityAssets_CL).")
+        }
+        '^Device(?!Tvm)' {
+            return ("Owned by Microsoft Defender for Endpoint (MDE Plan 2 / M365 E5 Security / M365 E5). " +
+                    "Devices may already be onboarded for inventory + risk + exposure (Defender for Business / " +
+                    "MDE Plan 1 also support those), but the EDR advanced-hunting schema (Device*, DeviceInfo, " +
+                    "DeviceProcessEvents, DeviceLogonEvents, etc.) requires Plan 2. Newly upgraded tenants " +
+                    "typically see the tables appear within minutes to ~24h while the backend re-provisions.")
+        }
+        '^DeviceTvm' {
+            return ("Owned by Microsoft Defender Vulnerability Management (MDVM standalone add-on, or bundled " +
+                    "in MDE Plan 2 / M365 E5). DeviceTvm* tables require either license + device onboarding.")
+        }
+        '^Identity' {
+            return ("Owned by Microsoft Defender for Identity (MDI / EMS E5 / M365 E5). Requires the MDI sensor " +
+                    "deployed on AD domain controllers and / or AD FS / Entra Connect servers.")
+        }
+        '^(AADSignInEvents|EntraIdSignInEvents|AADSpnSignInEvents|EntraIdSpnSignInEvents|GraphAPIAuditEvents|IdentityAccountInfo)' {
+            return ("Owned by Microsoft Entra (Defender XDR pulls Entra sign-in / audit logs into advanced hunting). " +
+                    "Requires Entra ID P1 / P2 with diagnostic-settings forwarding enabled.")
+        }
+        '^ExposureGraph' {
+            return ("Owned by Microsoft Security Exposure Management (MDEM -- bundled in M365 E5 Security / " +
+                    "M365 E5 / standalone Exposure Management SKU).")
+        }
+        '^Email|^Message|^UrlClickEvents' {
+            return ("Owned by Microsoft Defender for Office 365 Plan 2 (MDO P2 -- bundled in M365 E5 / E5 Security / " +
+                    "MDO P2 standalone).")
+        }
+        '^CloudApp|^AppFile' {
+            return ("Owned by Microsoft Defender for Cloud Apps (MDA -- bundled in M365 E5 / EMS E5 / MDA standalone).")
+        }
+        '^Cloud(Audit|Dns|Process|Storage)' {
+            return ("Owned by Microsoft Defender for Cloud (workload protection plans for Servers / Storage / DNS).")
+        }
+        '^(Alert|Behavior)' {
+            return ("Owned by Microsoft Defender XDR (alerts + behaviors aggregated across all Defender services). " +
+                    "Requires at least one Defender plan generating alerts.")
+        }
+        default {
+            return ("Owner unknown -- check the Defender XDR advanced-hunting schema browser for which service " +
+                    "exposes this table and confirm the corresponding licence / onboarding is in place.")
+        }
+    }
+}
+
 function Test-AdvancedHuntingHasIdentityAssets {
     [CmdletBinding()]
     param()
@@ -631,16 +689,34 @@ function Invoke-GraphHuntingQuery {
             $looksAuth      = ($msg -match 'InvalidAuthenticationToken|Access token|Authentication|Unauthorized|401')
             $looksThrottle  = ($msg -match 'Too Many Requests|429|throttl|temporar')
 
-            
+
             $looksOverflow  = (Test-IsBucketOverflowError -Err $_) -or ($msg -match 'exceeded the allowed result size|exceeded the allowed limits|preempted')
+
+            # Schema error: missing table or column. Deterministic -- retrying cannot help.
+            # Capture the table name and classify it by Defender service so the log line tells
+            # the customer WHICH service / SKU they're missing.
+            $looksSchemaError = $false
+            $missingTable     = $null
+            if ($msg -match "Failed to resolve (?:table or column )?expression named '([^']+)'") {
+                $looksSchemaError = $true
+                $missingTable     = $matches[1]
+            }
+
 if ($looksAuth) {
                 Write-Warn2 "Graph auth issue detected. Reconnecting and retrying..."
                 try { Connect-GraphHighPriv } catch { Write-Err2 "Graph reconnect failed: $($_.Exception.Message)"; throw }
             }
 
-            
+
             if ($looksOverflow) {
                 Write-Warn2 "Query exceeded allowed limits/result size; not retrying (deterministic failure)."
+                throw
+            }
+
+            if ($looksSchemaError) {
+                $owner = Get-DefenderTableOwner -TableName $missingTable
+                Write-Warn2 ("Table '{0}' not present in this tenant's advanced hunting schema. {1}" -f $missingTable, $owner)
+                Write-Warn2 "Not retrying (deterministic schema failure -- retries cannot conjure a missing table)."
                 throw
             }
 

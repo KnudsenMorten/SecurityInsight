@@ -2541,6 +2541,35 @@ $userSelect = "id,displayName,userPrincipalName,userType,accountEnabled," +
 $allUsers = Get-AllPages -Uri "$GRAPH_BASE/users?`$select=$userSelect"
 Write-Ok "Found $($allUsers.Count) users"
 
+# ---------------------------------------------------------------------------------
+# Bulk MFA registration fetch -- ONE paged call against
+#   /reports/authenticationMethods/userRegistrationDetails
+# (the same endpoint that powers the Entra portal's "Authentication methods
+# activity" page). Cached by user ObjectId. Per-user enrichment below looks this
+# up first and only falls back to the per-user /authentication/methods call when
+# bulk lookup misses (e.g. brand-new users not yet in the report -- can take ~24h).
+#
+# Why this matters: the previous per-user-only path silently produced
+# MFAMethodCount=0 / MFARegistered=false whenever the per-user call threw (the
+# catch was empty), making the entire MFA report unreliable when a single
+# transient Graph error occurred. The bulk endpoint is also orders of magnitude
+# faster on big tenants and far less throttle-prone.
+#
+# Permission: UserAuthenticationMethod.Read.All (already required by Step1; same
+# scope covers both the bulk and per-user endpoints).
+# ---------------------------------------------------------------------------------
+$script:_MfaRegByObjectId = @{}
+try {
+    $regs = Get-AllPages -Uri "$GRAPH_BASE/reports/authenticationMethods/userRegistrationDetails?`$top=999"
+    foreach ($reg in $regs) {
+        if ($reg -and $reg.id) { $script:_MfaRegByObjectId[[string]$reg.id] = $reg }
+    }
+    Write-Ok ("Fetched MFA registration details for {0} users from /reports/authenticationMethods/userRegistrationDetails" -f $script:_MfaRegByObjectId.Count)
+} catch {
+    Write-Warn ("Bulk MFA registration fetch failed: {0}. Falling back to per-user calls (slower; see per-user warnings below if this user count is large)." -f $_.Exception.Message)
+    $script:_MfaRegByObjectId = $null
+}
+
 if ($TroubleshootingMode) {
     $allUsers = @($allUsers | Select-Object -First $TroubleshootingLimit)
     Write-Warn "TROUBLESHOOTING MODE - limited to $TroubleshootingLimit users"
@@ -2652,23 +2681,48 @@ foreach ($user in $allUsers) {
     $passwordless= $false
     $needsMFACheck = ($user.accountEnabled -eq $true) -and ($user.userType -ne 'Guest') -and (-not $isExternal)
     if ($needsMFACheck) {
-        try {
-            $authMethods = Get-AllPages -Uri "$GRAPH_BASE/users/$($user.id)/authentication/methods"
-            $mfaMethods  = @($authMethods | ForEach-Object {
-                                $odataType = $null
-                                if ($_ -is [System.Collections.IDictionary]) {
-                                    if ($_.ContainsKey('@odata.type')) { $odataType = [string]$_['@odata.type'] }
-                                } else {
-                                    $p = $_.PSObject.Properties['@odata.type']
-                                    if ($p -and $p.Value) { $odataType = [string]$p.Value }
-                                }
-                                if ($odataType -and $odataType -ne '') { $odataType -replace '#microsoft.graph.','' }
-                            } | Where-Object { $_ -and $_.Trim() -ne '' -and $_ -ne 'passwordAuthenticationMethod' })
-            $mfaCount    = $mfaMethods.Count
-            $mfaReg      = $mfaCount -gt 0
-            $passwordless= ($mfaMethods | Where-Object { $_ -in @('fido2AuthenticationMethod','windowsHelloForBusinessAuthenticationMethod') }).Count -gt 0 -and
-                           ($mfaMethods | Where-Object { $_ -eq 'passwordAuthenticationMethod' }).Count -eq 0
-        } catch {}
+
+        # Primary path: bulk userRegistrationDetails cache (fetched once at startup).
+        $reg = $null
+        if ($script:_MfaRegByObjectId) { $reg = $script:_MfaRegByObjectId[[string]$user.id] }
+
+        if ($reg) {
+            $mfaReg     = [bool]$reg.isMfaRegistered
+            $methodsRaw = @()
+            if ($reg.PSObject.Properties['methodsRegistered'] -and $reg.methodsRegistered) {
+                $methodsRaw = @($reg.methodsRegistered)
+            }
+            # Drop 'password' if present -- holding a password isn't MFA on its own.
+            $mfaMethods   = @($methodsRaw | Where-Object { $_ -and $_ -ne 'password' })
+            $mfaCount     = $mfaMethods.Count
+            $passwordless = $false
+            if ($reg.PSObject.Properties['isPasswordlessCapable']) { $passwordless = [bool]$reg.isPasswordlessCapable }
+        }
+        else {
+            # Fallback path: per-user /authentication/methods. Used when the bulk fetch failed,
+            # or when a brand-new user isn't in userRegistrationDetails yet (~24h propagation).
+            # NOTE: previously this had an empty `catch {}` which silently produced MFA=false
+            # for every user the per-user call threw on. Now logged so the failure is visible.
+            try {
+                $authMethods = Get-AllPages -Uri "$GRAPH_BASE/users/$($user.id)/authentication/methods"
+                $mfaMethods  = @($authMethods | ForEach-Object {
+                                    $odataType = $null
+                                    if ($_ -is [System.Collections.IDictionary]) {
+                                        if ($_.ContainsKey('@odata.type')) { $odataType = [string]$_['@odata.type'] }
+                                    } else {
+                                        $p = $_.PSObject.Properties['@odata.type']
+                                        if ($p -and $p.Value) { $odataType = [string]$p.Value }
+                                    }
+                                    if ($odataType -and $odataType -ne '') { $odataType -replace '#microsoft.graph.','' }
+                                } | Where-Object { $_ -and $_.Trim() -ne '' -and $_ -ne 'passwordAuthenticationMethod' })
+                $mfaCount    = $mfaMethods.Count
+                $mfaReg      = $mfaCount -gt 0
+                $passwordless= ($mfaMethods | Where-Object { $_ -in @('fido2AuthenticationMethod','windowsHelloForBusinessAuthenticationMethod') }).Count -gt 0 -and
+                               ($mfaMethods | Where-Object { $_ -eq 'passwordAuthenticationMethod' }).Count -eq 0
+            } catch {
+                Write-Warn ("MFA fetch failed for {0} ({1}): {2}" -f $upn, $user.id, $_.Exception.Message)
+            }
+        }
     }
 
     # ExtensionAttributes JSON - non-empty only

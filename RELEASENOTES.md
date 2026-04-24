@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.212
+## v2.1.213
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI Setup Configurator): strip to wizard-only (remove Step1/Step2/Step3/Step4/Engines tabs) (1268dc30)
 - fix(SI Setup Configurator wizard): conditional-visibility (hidden-attr clobber) + add missing cert display-name input (d02a08b5)
 - feat(SI Setup Configurator): 3 novice-friendly tweaks (Save-direct + install one-liner + Finish callout) (08d00d15)
 - fix(SI Step3 + InitialDeployment): auto-capture OpenAI values into customdata (no copy/paste) (c70f0797)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Step1 Permissions): drop device-code fallback + add -Force to clear stale Az context on Interactive sign-in (ba36ae3f)
 - docs(SI _samples): refresh Sample - RiskAnalysis_{Summary,Detailed}_Bucket.xlsx from a recent run (1d68d1f5)
 - fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
-- fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
 
 ---
 
@@ -44,6 +44,17 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.213 — Setup Configurator: strip to wizard-only (remove Step1/Step2/Step3/Step4/Engines tabs)
+
+- 🧰 **Customer feedback:** the 5 per-engine tabs alongside the wizard were confusing novices — "am I supposed to fill out all of them?" The wizard alone generates the solution-wide `CUSTOMDATA/SecurityInsight.custom.ps1` that every engine inherits from; the per-engine Layer-5 `LauncherConfig.custom.ps1` tabs were advanced tuning that most customers never needed. Removing them.
+- 🗑️ **Deleted** from `TOOLS/SetupConfigurator/index.html`:
+  - The 6-tab navigation bar at the top
+  - All 5 per-engine `<section>` blocks (`tab-step1` / `tab-step2` / `tab-step3` / `tab-step5` / `tab-engines`)
+  - Supporting JS: `buildStep1` / `buildStep2` / `buildStep3` / `buildStep5` / `buildEngines` / `syncAuthVisibility` functions, tab-click handlers, multi-tab dispatch in `render()`, multi-target `targetPaths` / `launcherCmds` maps
+- 🧰 **Result:** page drops from 1565 → 778 lines. Single-purpose wizard. Header renamed from *"Setup Configurator"* to *"Initial Setup Wizard"*. Subtitle explicitly directs the user: *"Answer 5 short questions → save the generated `SecurityInsight.custom.ps1` into `CUSTOMDATA/` → run `InitialDeployment_Latest_Version_SecurityInsight.ps1` from your install root. Done."*
+- 🧰 **No behaviour change** for customers who were already using the wizard — same 5-step flow, same output, same save buttons (`💾 Save directly` / `⬇ Download` / `📋 Copy to clipboard` / `📋 Copy install one-liner`). Only the other tabs are gone.
+- 🧰 **Advanced per-engine tuning** is still available — customers can still edit `LAUNCHERS/<engine>/LauncherConfig.custom.ps1` files by hand when they need engine-specific overrides. Just no longer surfaced in the setup tool (which is now strictly first-install).
 
 ### v2.1.212 — Setup Configurator wizard: fix conditional-visibility (hidden-attribute clobber) + add missing certificate display-name input
 

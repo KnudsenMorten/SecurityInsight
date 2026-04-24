@@ -4,7 +4,7 @@
     Community VM launcher for SecurityInsight\IdentityAssetsCollectDefineTierIngestLog.
 .DESCRIPTION
     Runs the IdentityAssetsCollectDefineTierIngestLog engine on a Windows box in the customer's own tenant.
-    Reads credentials from LauncherConfig.ps1 (.gitignore'd). Supports 4 auth
+    Reads credentials from LauncherConfig.custom.ps1 (.gitignore'd). Supports 4 auth
     methods (MI, SPN+KV, SPN+cert, SPN+plaintext). See LauncherConfig.sample.ps1.
 
 .NOTES
@@ -222,7 +222,7 @@ try {
     }
     else {
         throw @"
-No authentication method configured in LauncherConfig.ps1.
+No authentication method configured in LauncherConfig.custom.ps1.
 Populate ONE of (see LauncherConfig.sample.ps1 for copy-pasteable blocks):
   1. `$global:UseManagedIdentity = `$true  (Managed Identity)
   2. `$global:SpnKeyVaultName + `$global:SpnSecretName + SpnClientId  (SPN + KV secret)

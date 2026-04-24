@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Downloads the latest SecurityInsight release ZIP from GitHub, extracts it into
-    the target folder, and MERGES -- customer-owned files (LauncherConfig.ps1,
+    the target folder, and MERGES -- customer-owned files (LauncherConfig.custom.ps1,
     launcher.override.ps1, CUSTOMDATA\*, *_Custom.yaml, etc.) are NEVER overwritten.
 
     Safe to run on a fresh VM (first install) or an existing VM (update in place).

@@ -17,7 +17,7 @@
          later run the IdentityAssetsCollectDefineTierIngestLog engine
 
     The engine prints, at the end of its run, the exact globals to copy
-    into LauncherConfig.ps1 of the IdentityAssetsCollectDefineTierIngestLog
+    into LauncherConfig.custom.ps1 of the IdentityAssetsCollectDefineTierIngestLog
     launcher (WorkspaceResourceId / DcrResourceGroup / DcrName / DceName /
     TableName). DceIngestionUri is no longer needed -- the ingestion engine
     resolves it from the DCE name at run time via Get-AzDceListAll.
@@ -77,7 +77,7 @@
 # ----- METHOD 4: SPN + plaintext secret  *** TESTING ONLY *** ------------------
 # WARNING: a plaintext client secret in a .ps1 file is acceptable for a
 # short-lived TEST/LAB only. For production, use Method 1, 2, or 3.
-# LauncherConfig.ps1 is .gitignore'd so it won't accidentally land in a commit
+# LauncherConfig.custom.ps1 is .gitignore'd so it won't accidentally land in a commit
 # -- but the secret is still cleartext on disk, on backups, in snapshots, and
 # in whatever process the script runs under. Rotate frequently if you leave it
 # here.

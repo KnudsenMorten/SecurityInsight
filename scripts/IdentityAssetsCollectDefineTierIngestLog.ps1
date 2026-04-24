@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     SecurityInsight - Identity Assets: Collect, Define Tier, Ingest, Log
 
@@ -1261,7 +1261,7 @@ if ($missing.Count -gt 0) {
     $hint = if ($AutomationFramework) {
         ""
     } else {
-        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.ps1."
+        "`n`nThese values come from the SecurityInsight Log Analytics infrastructure (Workspace + DCE + DCR + SI_IdentityAssets_CL table). If you have not provisioned it yet, run the onboarding launcher first:`n  LAUNCHERS\Step2_OnboardValidate-SecurityInsight-LogAnalytics\launcher.community-vm.template.ps1`nIts output prints the exact values to copy into LauncherConfig.custom.ps1."
     }
     throw ("The following required values are not set ($src):`n  " + ($missing -join "`n  ") + $hint)
 }

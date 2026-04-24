@@ -46,10 +46,17 @@
 
   .field { margin-bottom: 12px; }
   .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
-  .field .hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .field .hint { font-size: 12px; color: var(--muted); margin-top: 4px; font-family: "Consolas", "SF Mono", monospace; }
+  .field .hint::before { content: "e.g. "; color: var(--accent); font-weight: 600; font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }
   .field input[type="text"], .field input[type="password"], .field select, .field textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--panel-border); border-radius: 4px; font-size: 14px; font-family: "Consolas", "SF Mono", monospace; }
-  .field input[type="text"]:focus, .field input[type="password"]:focus, .field select:focus { outline: 2px solid var(--accent); border-color: var(--accent); }
-  .field.required label::after { content: " *"; color: var(--danger); }
+  /* Darker placeholder + italic so the example value is readable BEFORE the user starts typing. */
+  .field input::placeholder { color: #9aa3ad; opacity: 1; font-style: italic; }
+  /* Visual feedback once the field has a value (any non-empty input). */
+  .field input[type="text"]:not(:placeholder-shown), .field input[type="password"]:not(:placeholder-shown) { border-color: var(--ok); background: #f6fff6; }
+  .field input[type="text"]:focus, .field input[type="password"]:focus, .field select:focus { outline: 2px solid var(--accent); border-color: var(--accent); background: var(--panel); }
+  /* Required-field marker (set class="field required" on mandatory ones) + soft amber border on empty required inputs. */
+  .field.required label::after { content: " *"; color: var(--danger); font-weight: 700; }
+  .field.required input[type="text"]:placeholder-shown, .field.required input[type="password"]:placeholder-shown { border-color: var(--warn); background: var(--warn-bg); }
 
   .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   @media (max-width: 920px) { .row { grid-template-columns: 1fr; } }
@@ -69,6 +76,22 @@
   .layer-note { display: flex; gap: 10px; font-size: 12px; color: var(--muted); margin: 10px 0; padding: 8px 10px; background: var(--bg); border-radius: 4px; }
   .layer-note strong { color: var(--text); }
   .layer-pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: 600; background: var(--accent-bg); color: var(--accent); margin-right: 4px; }
+
+  /* Wizard styling (v2.1.208 Initial Setup Wizard) */
+  .wiz-stepper { display: flex; gap: 6px; margin: 0 0 18px; flex-wrap: wrap; }
+  .wiz-step-pill { flex: 1; min-width: 100px; padding: 8px 6px; text-align: center; font-size: 12px; background: #f0f2f5; color: var(--muted); border-radius: 4px; border: 1px solid var(--panel-border); }
+  .wiz-step-pill.active { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .wiz-step-pill.done { background: var(--ok-bg); color: var(--ok); border-color: var(--ok); }
+  .wiz-step-content h3 { margin: 0 0 4px; font-size: 16px; color: var(--accent); }
+  .wiz-step-content .wiz-hint { color: var(--muted); font-size: 13px; margin-bottom: 14px; }
+  .wiz-nav { display: flex; justify-content: space-between; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--panel-border); }
+  .wiz-nav .btn-group-right { display: flex; gap: 8px; }
+  .wiz-choice { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .wiz-choice label { flex: 1; min-width: 140px; padding: 10px 12px; border: 2px solid var(--panel-border); border-radius: 6px; cursor: pointer; background: var(--panel); font-size: 13px; font-weight: 600; text-align: center; }
+  .wiz-choice label:hover { border-color: var(--accent); background: var(--accent-bg); }
+  .wiz-choice input[type="radio"] { display: none; }
+  .wiz-choice input[type="radio"]:checked + span { color: var(--accent); }
+  .wiz-choice label:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
 
   .ok-msg { display: none; padding: 8px 12px; background: var(--ok-bg); color: var(--ok); border-radius: 4px; font-size: 13px; margin-top: 10px; }
   .ok-msg.show { display: block; }
@@ -95,15 +118,230 @@
   <!-- LEFT: inputs -->
   <div>
     <div class="tabs" role="tablist">
-      <button data-tab="step1" class="active" type="button">Step 1 — Permissions</button>
+      <button data-tab="wizard" class="active" type="button" style="background:var(--accent-bg);">🚀 Initial Setup Wizard</button>
+      <button data-tab="step1" type="button">Step 1 — Permissions</button>
       <button data-tab="step2" type="button">Step 2 — Log Analytics</button>
       <button data-tab="step3" type="button">Step 3 — Azure OpenAI</button>
       <button data-tab="step5" type="button">Step 4 — Power BI (BETA)</button>
       <button data-tab="engines" type="button">Ingestion engines</button>
     </div>
 
+    <!-- WIZARD -->
+    <section id="tab-wizard" class="panel">
+      <h2>🚀 Initial Setup Wizard</h2>
+      <div class="panel-sub">First-time install. Fills in every parameter every engine needs, in one go. Output: <code>CUSTOMDATA/SecurityInsight.custom.ps1</code> (the solution-wide Layer 3 config — every engine inherits from here). After saving the file, run <code>InitialDeployment_Latest_Version_SecurityInsight.ps1</code> at the repo root to deploy everything in one shot.</div>
+
+      <div class="wiz-stepper">
+        <div class="wiz-step-pill active" data-wiz-pill="1">1. Auth</div>
+        <div class="wiz-step-pill" data-wiz-pill="2">2. Log Analytics</div>
+        <div class="wiz-step-pill" data-wiz-pill="3">3. OpenAI</div>
+        <div class="wiz-step-pill" data-wiz-pill="4">4. Mail</div>
+        <div class="wiz-step-pill" data-wiz-pill="5">5. Output</div>
+      </div>
+
+      <!-- Wizard Step 1: Authentication -->
+      <div class="wiz-step-content" data-wiz-step="1">
+        <h3>Step 1 — Authentication</h3>
+        <div class="wiz-hint">Pick how SecurityInsight engines will authenticate to Entra + Azure. Every engine inherits this — you only configure it once.</div>
+
+        <div class="field">
+          <label for="w_auth_method">Authentication method</label>
+          <select id="w_auth_method">
+            <option value="SpnSecret">SPN + client secret (simplest for community / lab)</option>
+            <option value="SpnCertificate">SPN + certificate (recommended for production)</option>
+            <option value="ManagedIdentity">Managed Identity (Azure VM / Function App)</option>
+          </select>
+        </div>
+
+        <!-- SPN + secret -->
+        <div class="w-auth w-spn-secret">
+          <div class="field">
+            <label>SPN state</label>
+            <div class="wiz-choice">
+              <label><input type="radio" name="w_spn_state" value="existing" checked /><span>Use existing SPN</span></label>
+              <label><input type="radio" name="w_spn_state" value="new" /><span>Create new SPN during deployment</span></label>
+            </div>
+          </div>
+          <div class="w-spn-existing">
+            <div class="field required"><label for="w_spn_tenant">Tenant ID</label><input type="text" id="w_spn_tenant" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+            <div class="field required"><label for="w_spn_client">SPN client (application) ID</label><input type="text" id="w_spn_client" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+            <div class="field required"><label for="w_spn_secret">SPN client secret</label><input type="password" id="w_spn_secret" placeholder="paste the secret value" /></div>
+          </div>
+          <div class="w-spn-new" hidden>
+            <div class="field required"><label for="w_spn_dn">SPN display name</label><input type="text" id="w_spn_dn" placeholder="sp-securityinsight" value="sp-securityinsight" /></div>
+            <div class="field required"><label for="w_spn_tenant_new">Tenant ID (where to create the SPN)</label><input type="text" id="w_spn_tenant_new" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+            <div class="panel-block warn">The deployment orchestrator will create this SPN during its Step 1 run. You'll sign in interactively as a <strong>Privileged Role Administrator</strong> (or Global Admin) to approve the app + grant admin consent. The resulting client ID + secret will be printed at the end of Step 1 — save them to this file afterward.</div>
+          </div>
+        </div>
+
+        <!-- SPN + certificate -->
+        <div class="w-auth w-spn-cert" hidden>
+          <div class="field">
+            <label>Certificate state</label>
+            <div class="wiz-choice">
+              <label><input type="radio" name="w_cert_state" value="existing" checked /><span>Use existing certificate</span></label>
+              <label><input type="radio" name="w_cert_state" value="new" /><span>Generate new self-signed during deployment</span></label>
+            </div>
+          </div>
+          <div class="field required"><label for="w_cert_tenant">Tenant ID</label><input type="text" id="w_cert_tenant" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+          <div class="field required"><label for="w_cert_client">SPN client (application) ID</label><input type="text" id="w_cert_client" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+          <div class="w-cert-existing">
+            <div class="field required"><label for="w_cert_thumb">Certificate thumbprint (hex, no spaces)</label><input type="text" id="w_cert_thumb" placeholder="A1B2C3D4..." /></div>
+          </div>
+          <div class="w-cert-new" hidden>
+            <div class="panel-block warn">The deployment orchestrator will generate a self-signed cert, upload it to the SPN, and store the thumbprint here.</div>
+          </div>
+        </div>
+
+        <!-- Managed Identity -->
+        <div class="w-auth w-mi" hidden>
+          <div class="field required"><label for="w_mi_tenant">Tenant ID</label><input type="text" id="w_mi_tenant" placeholder="00000000-0000-0000-0000-000000000000" /></div>
+          <div class="panel-block">The managed identity of the host (VM / Function App) is used automatically. Just fill in your tenant ID.</div>
+        </div>
+      </div>
+
+      <!-- Wizard Step 2: Log Analytics -->
+      <div class="wiz-step-content" data-wiz-step="2" hidden>
+        <h3>Step 2 — Log Analytics</h3>
+        <div class="wiz-hint">Where the SI_IdentityAssets_CL + SI_RiskAnalysis_*_CL tables live. Required for identity risk analytics. The deployment orchestrator auto-creates the workspace, DCE, and DCR if they don't exist.</div>
+
+        <div class="field required">
+          <label for="w_la_sub">Log Analytics subscription ID</label>
+          <input type="text" id="w_la_sub" placeholder="00000000-0000-0000-0000-000000000000" />
+          <div class="hint">The engine auto-creates workspace <code>log-platform-management-securityinsight</code>, DCE <code>dce-securityinsight</code>, DCR resource group <code>rg-dcr-securityinsight</code> in the subscription you set here (override the names in the Advanced per-engine tabs if needed).</div>
+        </div>
+
+        <div class="field">
+          <label for="w_la_wsname">Workspace name (optional override)</label>
+          <input type="text" id="w_la_wsname" placeholder="log-platform-management-securityinsight" />
+        </div>
+      </div>
+
+      <!-- Wizard Step 3: OpenAI -->
+      <div class="wiz-step-content" data-wiz-step="3" hidden>
+        <h3>Step 3 — Azure OpenAI integration</h3>
+        <div class="wiz-hint">Enables the AI-generated executive summary on every RiskAnalysis run. Recommended. Cost is typically pennies per run at gpt-4o-mini / gpt-4.1-mini pricing.</div>
+
+        <div class="field">
+          <label>Enable AI summary?</label>
+          <div class="wiz-choice">
+            <label><input type="radio" name="w_ai_enabled" value="true" checked /><span>✅ Yes (recommended)</span></label>
+            <label><input type="radio" name="w_ai_enabled" value="false" /><span>Skip</span></label>
+          </div>
+        </div>
+
+        <div class="w-ai-fields">
+          <div class="field">
+            <label for="w_ai_sub">Azure OpenAI subscription ID</label>
+            <input type="text" id="w_ai_sub" placeholder="leave blank to reuse the Log Analytics subscription" />
+            <div class="hint">If blank, the deployment orchestrator will create the OpenAI account in the same subscription as Log Analytics. Fill this in only if OpenAI lives elsewhere.</div>
+          </div>
+          <div class="panel-block">The deployment orchestrator's Step 3 provisions the OpenAI account + model deployment (default: <code>gpt-4o-mini</code>) and prints the API key + endpoint at the end. You paste those 5 values into this file AFTER Step 3 completes — this wizard only sets the master toggle.</div>
+        </div>
+      </div>
+
+      <!-- Wizard Step 4: Mail -->
+      <div class="wiz-step-content" data-wiz-step="4" hidden>
+        <h3>Step 4 — Mail notifications</h3>
+        <div class="wiz-hint">Optional. Sends the Excel report (+ AI summary) as email after each RiskAnalysis run.</div>
+
+        <div class="field">
+          <label>Send mail?</label>
+          <div class="wiz-choice">
+            <label><input type="radio" name="w_mail_enabled" value="true" /><span>Yes</span></label>
+            <label><input type="radio" name="w_mail_enabled" value="false" checked /><span>No (skip mail)</span></label>
+          </div>
+        </div>
+
+        <div class="w-mail-fields" hidden>
+          <div class="field required"><label for="w_mail_from">From address (verified sender)</label><input type="text" id="w_mail_from" placeholder="svc-automation@yourdomain.com" /></div>
+          <div class="field required"><label for="w_mail_to">Fallback To (comma-separated)</label><input type="text" id="w_mail_to" placeholder="soc@yourdomain.com, exec@yourdomain.com" /></div>
+
+          <div class="row">
+            <div class="field required"><label for="w_smtp_server">SMTP server</label><input type="text" id="w_smtp_server" placeholder="smtp-relay.brevo.com" value="smtp-relay.brevo.com" /></div>
+            <div class="field required"><label for="w_smtp_port">Port</label><input type="text" id="w_smtp_port" placeholder="587" value="587" /></div>
+          </div>
+
+          <div class="field">
+            <label>Authentication</label>
+            <div class="wiz-choice">
+              <label><input type="radio" name="w_smtp_auth" value="authenticated" checked /><span>Authenticated (user + password)</span></label>
+              <label><input type="radio" name="w_smtp_auth" value="anonymous" /><span>Anonymous</span></label>
+            </div>
+          </div>
+          <div class="w-smtp-auth-fields">
+            <div class="field required"><label for="w_smtp_user">SMTP user</label><input type="text" id="w_smtp_user" placeholder="NNNNN@smtp-brevo.com" /></div>
+            <div class="field required"><label for="w_smtp_pass">SMTP password</label><input type="password" id="w_smtp_pass" /></div>
+          </div>
+
+          <h3 style="font-size:14px;margin-top:18px;">Per-report routing</h3>
+          <div class="field">
+            <label>Summary report</label>
+            <div class="wiz-choice">
+              <label><input type="radio" name="w_mail_summary" value="true" checked /><span>✅ Send</span></label>
+              <label><input type="radio" name="w_mail_summary" value="false" /><span>Skip</span></label>
+            </div>
+          </div>
+          <div class="field w-mail-summary-to"><label for="w_mail_summary_to">Summary recipients (comma-separated)</label><input type="text" id="w_mail_summary_to" placeholder="exec-summary@yourdomain.com" /></div>
+
+          <div class="field">
+            <label>Detailed report</label>
+            <div class="wiz-choice">
+              <label><input type="radio" name="w_mail_detailed" value="true" checked /><span>✅ Send</span></label>
+              <label><input type="radio" name="w_mail_detailed" value="false" /><span>Skip</span></label>
+            </div>
+          </div>
+          <div class="field w-mail-detailed-to"><label for="w_mail_detailed_to">Detailed recipients (comma-separated)</label><input type="text" id="w_mail_detailed_to" placeholder="soc@yourdomain.com" /></div>
+        </div>
+      </div>
+
+      <!-- Wizard Step 5: Output -->
+      <div class="wiz-step-content" data-wiz-step="5" hidden>
+        <h3>Step 5 — Report output destination</h3>
+        <div class="wiz-hint">Optional. Uploads the generated <code>.xlsx</code> (+ optionally <code>.json</code>) to a shared location after each RiskAnalysis run — UNC share or Azure Storage blob.</div>
+
+        <div class="field">
+          <label>Upload report to storage?</label>
+          <div class="wiz-choice">
+            <label><input type="radio" name="w_upload_enabled" value="true" /><span>Yes</span></label>
+            <label><input type="radio" name="w_upload_enabled" value="false" checked /><span>No (keep on disk only)</span></label>
+          </div>
+        </div>
+
+        <div class="w-upload-fields" hidden>
+          <div class="field">
+            <label for="w_upload_type">Storage type</label>
+            <select id="w_upload_type">
+              <option value="blob">Azure Storage blob (HTTPS)</option>
+              <option value="unc">UNC share (\\server\share\path\)</option>
+            </select>
+          </div>
+          <div class="field required">
+            <label for="w_upload_path">Destination path</label>
+            <input type="text" id="w_upload_path" placeholder="https://<acct>.blob.core.windows.net/<container>/" />
+            <div class="hint">For blob: <code>https://&lt;storacct&gt;.blob.core.windows.net/&lt;container&gt;/</code>. For UNC: <code>\\fileserver\reports\SecurityInsight\</code>. Container / share auto-created.</div>
+          </div>
+          <div class="field">
+            <label>Also write .json sibling?</label>
+            <div class="wiz-choice">
+              <label><input type="radio" name="w_write_json" value="false" checked /><span>No (XLSX only — default)</span></label>
+              <label><input type="radio" name="w_write_json" value="true" /><span>Yes (for external pipelines)</span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="wiz-nav">
+        <button class="btn" id="wiz-back" type="button" disabled>← Back</button>
+        <div class="btn-group-right">
+          <button class="btn primary" id="wiz-next" type="button">Next →</button>
+          <button class="btn primary" id="wiz-finish" type="button" hidden>✅ Finish & Generate</button>
+        </div>
+      </div>
+    </section>
+
     <!-- STEP 1 -->
-    <section id="tab-step1" class="panel">
+    <section id="tab-step1" class="panel" hidden>
       <h2>Step 1 — OnboardValidate Permissions</h2>
       <div class="panel-sub">Creates the <code>sp-securityinsight</code> SPN + grants API perms + Azure <code>Reader</code>. Default is interactive sign-in. <strong>If that's all you want, skip this tab — no file needed.</strong></div>
 
@@ -495,8 +733,8 @@
   <!-- RIGHT: preview -->
   <div>
     <div class="preview-wrap">
-      <h3 style="margin:0 0 6px;font-size:14px;">Generated <code>LauncherConfig.custom.ps1</code></h3>
-      <div class="target-path" id="target-path">LAUNCHERS\Step1_OnboardValidate-SecurityInsight-Permissions\LauncherConfig.custom.ps1</div>
+      <h3 style="margin:0 0 6px;font-size:14px;">Generated <code id="preview-filename">SecurityInsight.custom.ps1</code></h3>
+      <div class="target-path" id="target-path">CUSTOMDATA\SecurityInsight.custom.ps1</div>
       <pre class="preview" id="preview">// select a tab on the left</pre>
       <div class="preview-actions">
         <button class="btn primary" id="btn-copy" type="button">📋 Copy to clipboard</button>
@@ -546,6 +784,7 @@
 // ---------- tab switching ----------
 const tabs = document.querySelectorAll('.tabs button');
 const sections = {
+  wizard: document.getElementById('tab-wizard'),
   step1:  document.getElementById('tab-step1'),
   step2:  document.getElementById('tab-step2'),
   step3:  document.getElementById('tab-step3'),
@@ -553,6 +792,7 @@ const sections = {
   engines:document.getElementById('tab-engines'),
 };
 const targetPaths = {
+  wizard: 'CUSTOMDATA\\SecurityInsight.custom.ps1',
   step1:  'LAUNCHERS\\Step1_OnboardValidate-SecurityInsight-Permissions\\LauncherConfig.custom.ps1',
   step2:  'LAUNCHERS\\Step2_OnboardValidate-SecurityInsight-LogAnalytics\\LauncherConfig.custom.ps1',
   step3:  'LAUNCHERS\\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\\LauncherConfig.custom.ps1',
@@ -560,6 +800,7 @@ const targetPaths = {
   engines:'LAUNCHERS\\<engine folder>\\LauncherConfig.custom.ps1',
 };
 const launcherCmds = {
+  wizard:  { cmd: '.\\InitialDeployment_Latest_Version_SecurityInsight.ps1',                                                       note: 'Runs Step1 (Permissions) → Step2 (Log Analytics) → Step3 (OpenAI, if BuildSummaryByAI=$true) → IdentityAssetsCollect first run → RiskAnalysis first run → Step4 (Power BI, if SendToPowerBI=$true) in sequence. Idempotent — re-run to validate/update.' },
   step1:   { cmd: '.\\LAUNCHERS\\Step1_OnboardValidate-SecurityInsight-Permissions\\launcher.community-vm.template.ps1',           note: 'Interactive browser sign-in by a Privileged Role Admin with tenant-root UAA. The engine creates the SPN, grants API perms, and assigns Reader + Tag Contributor at the tenant-root MG.' },
   step2:   { cmd: '.\\LAUNCHERS\\Step2_OnboardValidate-SecurityInsight-LogAnalytics\\launcher.community-vm.template.ps1',           note: 'Provisions the Log Analytics workspace + DCE + DCR + SI_IdentityAssets_CL table + RBAC for the SPN. Idempotent — re-run any time to validate drift.' },
   step3:   { cmd: '.\\LAUNCHERS\\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\\launcher.community-vm.template.ps1', note: 'Provisions the pay-as-you-go Azure OpenAI account + model deployment. Skip this tab if you don\'t need -BuildSummaryByAI on RiskAnalysis.' },
@@ -579,7 +820,7 @@ function updateNextLauncher() {
   cmdEl.textContent  = info.cmd;
   noteEl.textContent = info.note;
 }
-let currentTab = 'step1';
+let currentTab = 'wizard';
 tabs.forEach(btn => {
   btn.addEventListener('click', () => {
     tabs.forEach(b => b.classList.remove('active'));
@@ -972,21 +1213,169 @@ function buildEngines() {
 // ---------- wrapping + rendering ----------
 function wrap(bodies, stepName) {
   if (!bodies || bodies.trim() === '' || /^# \w/.test(bodies.trim())) return bodies;
+  const targetFile = (stepName === 'wizard') ? 'SecurityInsight.custom.ps1' : 'LauncherConfig.custom.ps1';
   const header =
     '#Requires -Version 5.1\n' +
     '<#\n' +
     '  GENERATED by SecurityInsight Setup Configurator.\n' +
     '  Target file  : ' + targetPaths[stepName] + '\n' +
-    '  Review, then save AS LauncherConfig.custom.ps1 (filename matters).\n' +
+    '  Review, then save AS ' + targetFile + ' (filename matters).\n' +
     '  All secrets in this file are stored in clear text -- rotate if exposed.\n' +
     '#>\n\n';
   return header + bodies;
+}
+
+// ---------- WIZARD (v2.1.208) ----------
+let wizardStep = 1;
+const WIZ_TOTAL = 5;
+function setWizStep(n) {
+  wizardStep = Math.max(1, Math.min(WIZ_TOTAL, n));
+  document.querySelectorAll('.wiz-step-content').forEach(el => {
+    el.hidden = (parseInt(el.dataset.wizStep, 10) !== wizardStep);
+  });
+  document.querySelectorAll('.wiz-step-pill').forEach(el => {
+    const s = parseInt(el.dataset.wizPill, 10);
+    el.classList.toggle('active', s === wizardStep);
+    el.classList.toggle('done', s < wizardStep);
+  });
+  document.getElementById('wiz-back').disabled = (wizardStep === 1);
+  document.getElementById('wiz-next').hidden    = (wizardStep === WIZ_TOTAL);
+  document.getElementById('wiz-finish').hidden  = (wizardStep !== WIZ_TOTAL);
+}
+function syncWizardVisibility() {
+  const am = val('w_auth_method');
+  toggleClass('.w-spn-secret', am === 'SpnSecret');
+  toggleClass('.w-spn-cert',   am === 'SpnCertificate');
+  toggleClass('.w-mi',         am === 'ManagedIdentity');
+  const spnState = (document.querySelector('input[name="w_spn_state"]:checked')||{}).value || 'existing';
+  toggleClass('.w-spn-existing', spnState === 'existing');
+  toggleClass('.w-spn-new',      spnState === 'new');
+  const certState = (document.querySelector('input[name="w_cert_state"]:checked')||{}).value || 'existing';
+  toggleClass('.w-cert-existing', certState === 'existing');
+  toggleClass('.w-cert-new',      certState === 'new');
+  const aiEnabled = ((document.querySelector('input[name="w_ai_enabled"]:checked')||{}).value || 'true') === 'true';
+  toggleClass('.w-ai-fields', aiEnabled);
+  const mailEnabled = ((document.querySelector('input[name="w_mail_enabled"]:checked')||{}).value || 'false') === 'true';
+  toggleClass('.w-mail-fields', mailEnabled);
+  const smtpAuth = (document.querySelector('input[name="w_smtp_auth"]:checked')||{}).value || 'authenticated';
+  toggleClass('.w-smtp-auth-fields', smtpAuth === 'authenticated');
+  const summaryOn = ((document.querySelector('input[name="w_mail_summary"]:checked')||{}).value || 'true') === 'true';
+  toggleClass('.w-mail-summary-to', summaryOn);
+  const detailedOn = ((document.querySelector('input[name="w_mail_detailed"]:checked')||{}).value || 'true') === 'true';
+  toggleClass('.w-mail-detailed-to', detailedOn);
+  const uploadEnabled = ((document.querySelector('input[name="w_upload_enabled"]:checked')||{}).value || 'false') === 'true';
+  toggleClass('.w-upload-fields', uploadEnabled);
+}
+function csvList(s) {
+  if (!s) return '';
+  const items = s.split(',').map(x => x.trim()).filter(Boolean).map(x => "'" + x.replace(/'/g, "''") + "'");
+  return '@(' + items.join(', ') + ')';
+}
+function buildWizard() {
+  syncWizardVisibility();
+  const out = [];
+  out.push('# ================================');
+  out.push('#  1. AUTHENTICATION');
+  out.push('# ================================');
+  const am = val('w_auth_method');
+  if (am === 'SpnSecret') {
+    const spnState = (document.querySelector('input[name="w_spn_state"]:checked')||{}).value || 'existing';
+    if (spnState === 'existing') {
+      const t = line('SpnTenantId',     val('w_spn_tenant'));   if (t) out.push(t);
+      const c = line('SpnClientId',     val('w_spn_client'));   if (c) out.push(c);
+      const s = line('SpnClientSecret', val('w_spn_secret'));   if (s) out.push(s);
+    } else {
+      const t = line('SpnTenantId', val('w_spn_tenant_new'));   if (t) out.push(t);
+      out.push('# SPN will be created during InitialDeployment Step 1.');
+      out.push('# After Step 1 completes, paste the printed ClientId + Secret below:');
+      out.push('# $global:SpnClientId     = "<from Step 1 output>"');
+      out.push('# $global:SpnClientSecret = "<from Step 1 output>"');
+      const dn = line('OnboardValidate_SpnDisplayName', val('w_spn_dn'));   if (dn) out.push(dn);
+    }
+  } else if (am === 'SpnCertificate') {
+    const t = line('SpnTenantId', val('w_cert_tenant'));   if (t) out.push(t);
+    const c = line('SpnClientId', val('w_cert_client'));   if (c) out.push(c);
+    const certState = (document.querySelector('input[name="w_cert_state"]:checked')||{}).value || 'existing';
+    if (certState === 'existing') {
+      const th = line('SpnCertificateThumbprint', val('w_cert_thumb'));   if (th) out.push(th);
+    } else {
+      out.push('# $global:SpnCertificateThumbprint will be set by InitialDeployment Step 1');
+      out.push('# (self-signed cert generation + upload to the SPN).');
+    }
+  } else if (am === 'ManagedIdentity') {
+    out.push(line('UseManagedIdentity', '$true', false));
+    const t = line('SpnTenantId', val('w_mi_tenant'));   if (t) out.push(t);
+  }
+  out.push('');
+  out.push('# ================================');
+  out.push('#  2. LOG ANALYTICS');
+  out.push('# ================================');
+  out.push(line('SendToLogAnalytics', '$true', false));
+  const laSub = val('w_la_sub');     if (laSub) out.push(line('SubscriptionId', laSub));
+  const wsName = val('w_la_wsname'); if (wsName) out.push(line('WorkspaceName', wsName));
+  out.push('');
+  out.push('# ================================');
+  out.push('#  3. AZURE OPENAI  (AI summary master toggle)');
+  out.push('# ================================');
+  const aiEnabled = ((document.querySelector('input[name="w_ai_enabled"]:checked')||{}).value || 'true') === 'true';
+  out.push(line('BuildSummaryByAI', aiEnabled ? '$true' : '$false', false));
+  if (aiEnabled) {
+    const aiSub = val('w_ai_sub');
+    if (aiSub) out.push(line('Step3_SubscriptionId', aiSub));
+    out.push('# The 5 OpenAI_* values below will be set by InitialDeployment Step 3:');
+    out.push('# $global:OpenAI_apiKey              = "<filled by Step 3>"');
+    out.push('# $global:OpenAI_endpoint            = "<filled by Step 3>"');
+    out.push('# $global:OpenAI_deployment          = "<filled by Step 3>"');
+    out.push('# $global:OpenAI_apiVersion          = "2025-01-01-preview"');
+    out.push('# $global:OpenAI_MaxTokensPerRequest = 16384');
+  }
+  out.push('');
+  out.push('# ================================');
+  out.push('#  4. MAIL NOTIFICATIONS');
+  out.push('# ================================');
+  const mailEnabled = ((document.querySelector('input[name="w_mail_enabled"]:checked')||{}).value || 'false') === 'true';
+  out.push(line('SendMail', mailEnabled ? '$true' : '$false', false));
+  if (mailEnabled) {
+    const mFrom = val('w_mail_from');     if (mFrom) out.push(line('SMTPFrom', mFrom));
+    const mTo   = val('w_mail_to');       if (mTo)   out.push('$global:MailTo          = ' + csvList(mTo));
+    const sSrv  = val('w_smtp_server');   if (sSrv)  out.push(line('SmtpServer', sSrv));
+    const sPort = val('w_smtp_port');     if (sPort) out.push(line('SmtpPort', sPort, false));
+    out.push(line('SMTP_UseSSL', '$true', false));
+    const smtpAuth = (document.querySelector('input[name="w_smtp_auth"]:checked')||{}).value || 'authenticated';
+    if (smtpAuth === 'authenticated') {
+      const u = val('w_smtp_user');   if (u) out.push(line('SMTPUser', u));
+      const p = val('w_smtp_pass');   if (p) out.push(line('SMTPPassword', p));
+    }
+    out.push('');
+    out.push('# Per-mode routing');
+    const sumOn = ((document.querySelector('input[name="w_mail_summary"]:checked')||{}).value || 'true') === 'true';
+    out.push(line('RiskAnalysis_Summary_SendMail', sumOn ? '$true' : '$false', false));
+    if (sumOn) { const sTo = val('w_mail_summary_to'); if (sTo) out.push('$global:RiskAnalysis_Summary_To        = ' + csvList(sTo)); }
+    const detOn = ((document.querySelector('input[name="w_mail_detailed"]:checked')||{}).value || 'true') === 'true';
+    out.push(line('RiskAnalysis_Detailed_SendMail', detOn ? '$true' : '$false', false));
+    if (detOn) { const dTo = val('w_mail_detailed_to'); if (dTo) out.push('$global:RiskAnalysis_Detailed_To       = ' + csvList(dTo)); }
+  }
+  out.push('');
+  out.push('# ================================');
+  out.push('#  5. REPORT OUTPUT  (XLSX always written to OUTPUT/; this controls upload + JSON sibling)');
+  out.push('# ================================');
+  const uploadEnabled = ((document.querySelector('input[name="w_upload_enabled"]:checked')||{}).value || 'false') === 'true';
+  if (uploadEnabled) {
+    const uPath = val('w_upload_path');   if (uPath) out.push(line('ExportDestination', uPath));
+    const wj = ((document.querySelector('input[name="w_write_json"]:checked')||{}).value || 'false') === 'true';
+    out.push(line('WriteJsonOutput', wj ? '$true' : '$false', false));
+  } else {
+    out.push(line('WriteJsonOutput', '$false', false));
+    out.push('# $global:ExportDestination not set -- xlsx stays in OUTPUT/ on this host');
+  }
+  return out.filter(x => x != null && x !== undefined).join('\n').trim() + '\n';
 }
 
 function render() {
   syncAuthVisibility();
   let body = '';
   switch (currentTab) {
+    case 'wizard':  body = buildWizard();  break;
     case 'step1':   body = buildStep1();   break;
     case 'step2':   body = buildStep2();   break;
     case 'step3':   body = buildStep3();   break;
@@ -994,8 +1383,24 @@ function render() {
     case 'engines': body = buildEngines(); break;
   }
   document.getElementById('preview').textContent = wrap(body, currentTab);
+  const fnEl = document.getElementById('preview-filename');
+  if (fnEl) fnEl.textContent = (currentTab === 'wizard') ? 'SecurityInsight.custom.ps1' : 'LauncherConfig.custom.ps1';
   updateNextLauncher();
 }
+
+// Wizard nav buttons
+document.getElementById('wiz-next').addEventListener('click',   () => { setWizStep(wizardStep + 1); });
+document.getElementById('wiz-back').addEventListener('click',   () => { setWizStep(wizardStep - 1); });
+document.getElementById('wiz-finish').addEventListener('click', () => {
+  // Scroll preview into view + flash highlight
+  const previewEl = document.getElementById('preview');
+  previewEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  previewEl.style.transition = 'background 0.4s';
+  previewEl.style.background = '#1a4a1a';
+  setTimeout(() => { previewEl.style.background = 'var(--code-bg)'; }, 600);
+});
+setWizStep(1);
+syncWizardVisibility();
 
 // ---------- copy + download ----------
 document.getElementById('btn-copy').addEventListener('click', async () => {
@@ -1033,7 +1438,9 @@ document.getElementById('btn-download').addEventListener('click', () => {
   const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = url; a.download = 'LauncherConfig.custom.ps1.txt';
+  a.href = url;
+  // Wizard emits the solution-wide Layer 3 file; all other tabs emit per-engine Layer 5 files.
+  a.download = (currentTab === 'wizard') ? 'SecurityInsight.custom.ps1.txt' : 'LauncherConfig.custom.ps1.txt';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   URL.revokeObjectURL(url);
 });
@@ -1045,6 +1452,30 @@ document.querySelectorAll('input, select, textarea').forEach(el => {
 });
 
 render();
+
+// ----------------------------------------------------------------------------
+// Persistent placeholder hints
+// ----------------------------------------------------------------------------
+// HTML's native `placeholder` attribute disappears the moment the user starts
+// typing -- which makes the example value useless once you've actually clicked
+// the field. For every <input placeholder="..."> that doesn't already have a
+// sibling .hint, mirror the placeholder text into a small persistent hint
+// below the input so the example is visible BEFORE, DURING, and AFTER the
+// user types. Idempotent: re-running this function is a no-op.
+function hydratePlaceholderHints() {
+    document.querySelectorAll('.field input[placeholder]').forEach(function(input) {
+        var ph = (input.getAttribute('placeholder') || '').trim();
+        if (!ph) return;
+        // Skip if a hint already exists right after the input.
+        var next = input.nextElementSibling;
+        if (next && next.classList.contains('hint')) return;
+        var hint = document.createElement('div');
+        hint.className = 'hint';
+        hint.textContent = ph;
+        input.parentNode.insertBefore(hint, input.nextSibling);
+    });
+}
+hydratePlaceholderHints();
 </script>
 
 </body>

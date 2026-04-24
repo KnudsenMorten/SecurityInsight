@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.192
+## v2.1.193
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI): replace stale 'LauncherConfig.ps1' user-facing references with 'LauncherConfig.custom.ps1' (37 hits / 19 files) (0ae16e21)
 - fix(SI Step1 + Step4 launchers): auth fields fall back to runtime \$global:Spn* when Step-specific names aren't set (33f757a2)
 - fix(SI Step1 Permissions): drop device-code fallback + add -Force to clear stale Az context on Interactive sign-in (ba36ae3f)
 - docs(SI _samples): refresh Sample - RiskAnalysis_{Summary,Detailed}_Bucket.xlsx from a recent run (1d68d1f5)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
 - fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
 - fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
-- docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
 
 ---
 
@@ -44,6 +44,15 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.193 — Replace stale user-facing `LauncherConfig.ps1` references with `LauncherConfig.custom.ps1` (37 hits across 19 files)
+
+- 📚 **Step2's `[ADMIN] Paste the block below into LauncherConfig.ps1 ...` print-out now says `LauncherConfig.custom.ps1`** — same for the path on the next line (`LAUNCHERS\IdentityAssetsCollectDefineTierIngestLog\LauncherConfig.custom.ps1`). Customers following Step2's end-of-run instructions were being told the wrong filename.
+- 📚 **Sample-config docstrings, "no auth method configured" throw text, "reads credentials from" engine docstrings, and Step0 update-policy comments** all updated to point at `LauncherConfig.custom.ps1`. 37 replacements across 19 files (launcher templates, sample.ps1 / defaults.ps1 docstrings, engine .ps1 doc comments, Step0 / Step2 / IdentityAssetsCollect engine messages).
+- 🧰 **Intentionally left alone** (these are NOT bugs):
+  - `Initialize-LauncherConfig.ps1`'s legacy-fallback code + documentation (the loader still accepts a literal `LauncherConfig.ps1` filename for backward compat with pre-v2.1.147 installs).
+  - Step0's `PreservePatterns` list still includes both `'launchers\*\LauncherConfig.ps1'` AND `'launchers\*\LauncherConfig.custom.ps1'` so legacy installs aren't broken on update.
+  - Every reference to `Initialize-LauncherConfig.ps1` (that is the loader's actual filename, not the customer config file).
 
 ### v2.1.192 — Step1 + Step4 launchers: auth fields fall back to runtime `$global:Spn*` globals when Step-specific names aren't set
 

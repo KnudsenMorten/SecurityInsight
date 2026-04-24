@@ -4,14 +4,14 @@
     Quickstart customer config for IdentityAssetsCollectDefineTierIngestLog.
 
 .DESCRIPTION
-    Copy this file to LauncherConfig.ps1 in the SAME folder. LauncherConfig.ps1
+    Copy this file to LauncherConfig.custom.ps1 in the SAME folder. LauncherConfig.custom.ps1
     is gitignored, so the populated copy stays on your machine and is never
     overwritten by a release upgrade.
 
     LAYERED CONFIG MODEL
 
       1. LauncherConfig.defaults.ps1   <- ships with each release; baseline.
-      2. LauncherConfig.ps1            <- THIS FILE (your copy). Set ONLY the
+      2. LauncherConfig.custom.ps1     <- THIS FILE (your copy). Set ONLY the
                                           values you actually need to override.
       3. CLI args on the launcher      <- last word for that one invocation.
 

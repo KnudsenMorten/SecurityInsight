@@ -5,7 +5,7 @@
     (OPTIONAL one-time setup).
 
 .DESCRIPTION
-    Copy this file to LauncherConfig.ps1 in the SAME folder and fill in the values
+    Copy this file to LauncherConfig.custom.ps1 in the SAME folder and fill in the values
     below. LauncherConfig.ps1 is .gitignore'd so the populated copy stays on your
     machine.
 

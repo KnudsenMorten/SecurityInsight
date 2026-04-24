@@ -3,8 +3,8 @@
 .SYNOPSIS
     Community-edition customer configuration for CriticalAssetTaggingMaintenance_FixConflictingTags.
 .DESCRIPTION
-    Copy this file to LauncherConfig.ps1 in the SAME folder and fill in the values
-    for whichever authentication method you want to use. LauncherConfig.ps1 is
+    Copy this file to LauncherConfig.custom.ps1 in the SAME folder and fill in the values
+    for whichever authentication method you want to use. LauncherConfig.custom.ps1 is
     .gitignore'd so the populated copy stays on your machine.
 
     AUTHENTICATION METHODS (pick ONE)
@@ -71,7 +71,7 @@
 # ================================================================================
 # WARNING: storing a plaintext client secret in a .ps1 file is acceptable for a
 # short-lived TEST / LAB environment ONLY. For production use Method 1, 2, or 3.
-# LauncherConfig.ps1 is .gitignore'd, so it won't accidentally land in a git
+# LauncherConfig.custom.ps1 is .gitignore'd, so it won't accidentally land in a git
 # commit -- but the secret is still in cleartext on disk, and on backup media,
 # and in any filesystem snapshot, and in whatever process the script runs under.
 # Expect to rotate the secret frequently if you do leave it here.

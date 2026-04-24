@@ -482,10 +482,10 @@ if ([bool]$global:AutomationFramework) {
     Write-Host "          (under the SecurityInsight section). The IdentityAssetsCollect engine"      -ForegroundColor Yellow
     Write-Host "          reads these globals when running with `$global:AutomationFramework=`$true."   -ForegroundColor Yellow
 } else {
-    Write-Host "  [ADMIN] Paste the block below into LauncherConfig.ps1 of the IdentityAssetsCollect" -ForegroundColor Yellow
+    Write-Host "  [ADMIN] Paste the block below into LauncherConfig.custom.ps1 of the IdentityAssetsCollect" -ForegroundColor Yellow
     Write-Host "          launcher (gitignored, sits next to LauncherConfig.sample.ps1):"             -ForegroundColor Yellow
     Write-Host ""
-    Write-Host "          LAUNCHERS\IdentityAssetsCollectDefineTierIngestLog\LauncherConfig.ps1"      -ForegroundColor Yellow
+    Write-Host "          LAUNCHERS\IdentityAssetsCollectDefineTierIngestLog\LauncherConfig.custom.ps1"      -ForegroundColor Yellow
 }
 Write-Host ""
 Write-Sep
@@ -512,7 +512,7 @@ if ([bool]$global:AutomationFramework) {
     Write-Host ("        '*Azure for Students*'")                                                                                       -ForegroundColor White
     Write-Host ("    )")                                                                                                                 -ForegroundColor White
 } else {
-    # Community mode: short global names that LauncherConfig.ps1 sets directly
+    # Community mode: short global names that LauncherConfig.custom.ps1 sets directly
     Write-Host ("    `$global:BatchSize                       = 300")                                                                   -ForegroundColor White
     Write-Host ("    `$global:TableName                       = `"{0}`""   -f $TableName)                                               -ForegroundColor White
     Write-Host ("    `$global:WorkspaceResourceId             = `"{0}`""   -f $WorkspaceResourceId.ToLower())                           -ForegroundColor White

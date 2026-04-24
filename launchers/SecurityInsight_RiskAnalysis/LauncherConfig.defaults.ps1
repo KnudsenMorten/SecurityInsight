@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Shipped with each release. The launcher dot-sources this file FIRST,
-    then dot-sources the customer's LauncherConfig.ps1 (which overrides
+    then dot-sources the customer's LauncherConfig.custom.ps1 (which overrides
     only the values they care about), then applies CLI args (last word).
 
     LayerOrder:  defaults.ps1  ->  LauncherConfig.ps1  ->  CLI args

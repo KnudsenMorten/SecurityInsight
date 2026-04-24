@@ -61,6 +61,7 @@
      - 3.5.2 [Setup Configurator](#setup-configurator)
      - 3.5.3 [Solution component overview](#solution-component-overview)
      - 3.5.4 🛡️ [Defender XDR licensing & onboarding requirements](#defender-xdr-licensing)
+     - 3.5.5 🛰️ [No Sentinel? Routing model + Entra diagnostic-settings setup](#no-sentinel-setup)
    - 3.6 [Step 2 — Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
    - 3.7 [Step 3 — Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
    - 3.8 [Step 4 — Azure OpenAI](#azure-openai-optional)
@@ -717,6 +718,97 @@ The RiskAnalysis engine submits KQL queries through Microsoft Graph advanced hun
 ```
 
 **Recommendation:** before onboarding RiskAnalysis to a new tenant, use **Defender XDR portal → Hunting → Advanced hunting → Schema** to confirm the table groups you expect to query are present. If a group is missing, either provision the corresponding licence + onboard the service, OR exclude reports that depend on it via your `*_Custom.yaml` overrides (see § 5).
+
+---
+
+<a id="355-no-sentinel-routing-and-entra-diagnostics"></a><a id="no-sentinel-setup"></a>
+#### 🛰️ 3.5.5 No Sentinel? Routing model + Entra diagnostic-settings setup
+
+[⤴ Back to top](#top)
+
+You don't need Microsoft Sentinel to run SecurityInsight. The engine adapts based on what you have. This section explains the **routing model** at a high level and walks you through the one piece of setup you DO need when Sentinel isn't in play: **forwarding Entra sign-in + audit logs to your Log Analytics workspace**.
+
+##### Three routing modes (high-level)
+
+When the RiskAnalysis engine submits a KQL query, it picks one of three paths automatically per query:
+
+| Mode | When it fires | Where the query runs | Failure modes you might see |
+|---|---|---|---|
+| 🟢 **Pure-LA** | Query references ONLY `*_CL` tables (e.g. `SI_IdentityAssets_CL`) and any LA-side tables (`SigninLogs`, `AuditLogs`, `IdentityInfo` if mirrored, etc.) | Direct call to Log Analytics REST (`api.loganalytics.io`) via your existing SPN session. **No advanced-hunting round trip, no body cap, no nginx 413.** Result-set cap is LA's native ~64 MB / 500k rows. | Missing custom table → empty result. Missing LA-side Entra table → see "Entra diagnostic-settings" below. |
+| 🟠 **Mixed** | Query joins `SI_IdentityAssets_CL` with a Defender XDR table (`DeviceInfo`, `IdentityInfo`, `ExposureGraph*`, `EmailEvents`, etc. — XDR-only data not in LA) | Engine fetches `SI_IdentityAssets_CL` from LA once, builds an inline `let SI_IdentityAssets_CL = datatable(...) [...]` block, prepends to the KQL, sends through Microsoft Graph advanced hunting (`/security/runHuntingQuery`). | nginx **413 Request Entity Too Large** on big tenants — the let-block payload exceeds advanced hunting's body cap (~1 MB). Recommendation: enable Sentinel data lake + table mirroring for `SI_IdentityAssets_CL` so the let-block becomes unnecessary, OR forward the relevant XDR data into LA so the query can run pure-LA. |
+| 🔵 **Pure-XDR** | Query references ONLY Defender XDR tables, no `*_CL` | Direct submit to advanced hunting unchanged | Missing service / SKU → see § 3.5.4. |
+
+**Engine picks the mode automatically** by inspecting each query's KQL body (with string literals stripped to avoid false positives like `"Identity"` as a column value). You don't configure routing — you just need to make sure the data the queries need is reachable. The console log shows which path was taken per report:
+
+```
+[INFO] Query touches only Log Analytics tables (no Defender XDR tables);
+       routing entire query directly to LA workspace -- no let-block, no
+       advanced-hunting round trip, no body-size limit.
+```
+
+vs.
+
+```
+[INFO] running advanced hunting query against Defender Exposure Management Graph ... Please wait !
+[INFO] SI_IdentityAssets_CL not present in advanced hunting -- engine will inline-bridge from Log Analytics.
+```
+
+##### Caveats by setup style
+
+| Your tenant | What works out of the box | What you need to configure |
+|---|---|---|
+| **Sentinel + data lake mirroring of `SI_IdentityAssets_CL`** | Everything — pure-LA, mixed, and pure-XDR all run cleanly. No size limits. Best experience. | Just enable mirroring on the custom table. |
+| **Sentinel without data lake mirroring** | Pure-LA + pure-XDR fine. Mixed queries use the let-block bridge — works on small/medium estates but can hit nginx 413 on tenants with many privileged users + heavy `CSA` / `TierSources` JSON columns. | Optional: enable data lake mirroring to remove the size cap. |
+| **No Sentinel, Entra logs forwarded to LA** | Pure-LA reports work. Mixed reports work via the let-block (subject to body cap). Sign-in / audit reports run pure-LA against `SigninLogs` / `AuditLogs`. | **Set up Entra diagnostic settings → Log Analytics** (steps below). This is THE prerequisite. |
+| **No Sentinel, no Entra log forwarding** | Pure-LA reports against `SI_IdentityAssets_CL` only. Mixed-XDR reports work but go through advanced hunting (let-block bridge). Sign-in / audit reports against LA-side tables fail (table not present). | Forward Entra logs to LA — same steps below. |
+
+##### How to forward Entra ID sign-in + audit logs to Log Analytics
+
+This is a one-time tenant configuration. Once enabled, the LA-side tables `SigninLogs`, `AADNonInteractiveUserSignInLogs`, `AuditLogs` (and a few others) start receiving data within minutes. SecurityInsight's sign-in / audit reports then route pure-LA against them and bypass advanced hunting entirely.
+
+**Two ways to do it:**
+
+**Option A — via Microsoft Sentinel (recommended for retention + analytic-rule coverage):**
+1. Open the Sentinel workspace you want the logs in
+2. **Content hub → "Microsoft Entra ID" data connector → Open connector page**
+3. Tick the log streams you want forwarded (at minimum: SigninLogs, AuditLogs, AADNonInteractiveUserSignInLogs)
+4. **Apply Changes** — Sentinel writes the diagnostic setting to Entra automatically
+
+**Option B — directly via Entra (no Sentinel SKU needed):**
+1. **Entra admin center → Monitoring & health → Diagnostic settings → + Add diagnostic setting**
+2. Name it (e.g. `entra-to-log-analytics`)
+3. Tick the categories you need:
+   - `SignInLogs` (interactive user sign-ins)
+   - `NonInteractiveUserSignInLogs` (background / token-refresh sign-ins)
+   - `ServicePrincipalSignInLogs` (SPN sign-ins)
+   - `ManagedIdentitySignInLogs` (MI sign-ins)
+   - `AuditLogs` (admin actions, group membership changes, role assignments)
+   - Optional: `ProvisioningLogs`, `RiskyUsers`, `UserRiskEvents` if you want PIM / Identity Protection data
+4. **Send to Log Analytics workspace** → pick your workspace
+5. **Save**
+
+**Required licence**: Entra ID **P1** (or higher) for `SignInLogs` / `AuditLogs`. P2 for the risk-event categories. Without P1, the diagnostic-settings page won't even let you enable the sign-in categories.
+
+**Validation** (a few minutes after enabling):
+```kql
+SigninLogs | where TimeGenerated > ago(15m) | count
+AuditLogs  | where TimeGenerated > ago(15m) | count
+```
+Both should return non-zero.
+
+##### MDE Plan 1 vs Plan 2 vs Defender for Business — quick-reference
+
+A common confusion that comes up alongside this:
+
+| You have | `Device*` tables in advanced hunting? | What works in SecurityInsight |
+|---|---|---|
+| **MDE Plan 2** / M365 E5 Security / M365 E5 | ✅ Yes (full EDR schema) | All Endpoint reports work (Device_Recommendations, vulnerability reports, attack-paths, etc.) |
+| **MDE Plan 1** | ❌ No | Endpoint reports that join `Device*` fail. The Defender portal's Device Inventory page still works (renders for both P1 + P2) — easy to think P1 is "enough" but advanced hunting is P2-only. |
+| **Defender for Business** (DfB) | ❌ No | Same as P1 — limited / no advanced hunting access on `Device*`. |
+| **MDVM** standalone add-on | Only `DeviceTvm*` (TVM tables) | Vulnerability + secure-config reports work; raw EDR reports don't. |
+| **Just upgraded** P1 / DfB → P2 | ✅ Yes — within minutes to ~24h | Wait for the tenant's advanced-hunting backend to re-provision. Re-run the engine once the propagation completes. |
+
+If you only have P1 / DfB and don't plan to upgrade, you can still get value from SecurityInsight on the **Identity** + **Azure** + **Exposure Graph** report families — just exclude the Endpoint-EDR ones via `*_Custom.yaml` overrides (see § 5).
 
 ---
 

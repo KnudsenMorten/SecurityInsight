@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.205
+## v2.1.206
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis Excel): defensive XLSX-safe sanitizer to kill the 'Repaired Records: sharedStrings.xml' open warning (3fab7506)
 - feat(SI YAML): Identity_AnyUser_NoMFA_Summary excludes external/B2B + fix typo in PrivilegedUser NoMFA Detailed scope (ba90f139)
 - fix(SI RiskAnalysis): drop @() wrap at the pure-LA Invoke-LogAnalyticsKqlQuery caller (02beb56d)
 - fix(SI _lib Initialize-LauncherConfig): snapshot params before dot-sourcing layer files (8f84a82b)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
 - docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
 - fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
-- docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
 
 ---
 
@@ -44,6 +44,19 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.206 — RiskAnalysis Excel: defensive XLSX-safe sanitizer (kills the `Repaired Records: String properties from sharedStrings.xml` Excel-open warning)
+
+- 🔧 **Bug — Excel pops `Repaired Records: String properties from /xl/sharedStrings.xml` warning** when opening `RiskAnalysis_*.xlsx`. Customer's Excel still recovers all rows, but the dialog is noisy and shakes confidence in the data. Cause: an XML-illegal control character (0x00 NUL, 0x0B vertical tab, 0x0C form feed, 0x07 BEL, 0x1B ESC, 0x7F DEL, etc.) or a lone UTF-16 surrogate half slipped into a cell value -- typically via a KQL `extract()` result, a `CSA` JSON blob, a `TierSources` payload, or pasted-in display name. `ImportExcel` writes the raw value; Excel's strict validator on file-open rejects the entry per XML 1.0 spec.
+- 🔧 **Fix.** New `ConvertTo-XlsxSafeString` helper (top of engine, near `Reset-ExcelOutput`). Strips:
+  - Control chars `0x00-0x1F` **except** TAB (`0x09`), LF (`0x0A`), CR (`0x0D`) which XML 1.0 explicitly allows
+  - DEL `0x7F`
+  - Lone high surrogates (`U+D800..U+DBFF` not followed by a low surrogate)
+  - Lone low surrogates (`U+DC00..U+DFFF` not preceded by a high surrogate)
+  - **Preserves** valid UTF-8 (incl. extended Latin) AND valid surrogate pairs (e.g. emoji `U+1F600` round-trips correctly)
+- 🧰 **Applied at both Export-Excel callsites:** `Export-Worksheet` (the main per-report exporter -- runs the sanitizer over every string property of every row before piping to `Export-Excel`) and `Export-AISummaryWorksheet` (the AI summary sheet -- sanitizes each line of the OpenAI text). Non-string property values pass through untouched (datetimes, numbers, bools).
+- 🧰 **Verified end-to-end** with a PS 5.1 test that wrote a row containing every flavour of bad char + emoji + UTF-8 to a real .xlsx, then (a) round-tripped via `Import-Excel` and (b) extracted `xl/sharedStrings.xml` from the .xlsx zip and parsed it as XML. Both paths clean. Test deleted after passing.
+- 🧰 **Zero performance impact** in the common case -- sanitizer is a no-op for any string with no bad chars (the regex `[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]` matches nothing on a clean string and returns immediately).
 
 ### v2.1.205 — Locked YAML: `Identity_AnyUser_NoMFA_Summary` excludes external / B2B + typo fix in PrivilegedUser NoMFA Detailed scope
 

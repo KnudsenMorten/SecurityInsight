@@ -284,6 +284,24 @@ function Resolve-AssetNamesForRow {
 }
 
 # ===== reset helper (delete workbook at start when OverwriteXlsx is true) =====
+function ConvertTo-XlsxSafeString {
+    [CmdletBinding()]
+    param([Parameter()][AllowEmptyString()][AllowNull()][string]$Value)
+
+    # XLSX shared-strings safety. Excel's strict XML validator (per XML 1.0 spec) rejects
+    # control characters 0x00-0x1F (except TAB/LF/CR), DEL 0x7F, and lone UTF-16 surrogate
+    # halves. When such a char slips into a cell value -- typically via a KQL extract()
+    # result, a CSA / TierSources JSON blob, or pasted-in text -- Excel still recovers
+    # the workbook on open but pops the "Repaired Records: String properties from
+    # /xl/sharedStrings.xml" warning. Stripping at the source kills the warning for
+    # every customer. v2.1.206.
+    if ([string]::IsNullOrEmpty($Value)) { return $Value }
+    $Value = [regex]::Replace($Value, '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '')
+    $Value = [regex]::Replace($Value, '[\uD800-\uDBFF](?![\uDC00-\uDFFF])', '')
+    $Value = [regex]::Replace($Value, '(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]', '')
+    return $Value
+}
+
 function Reset-ExcelOutput {
   param(
     [Parameter(Mandatory)][string]$Path,
@@ -891,7 +909,7 @@ function Export-AISummaryWorksheet {
   $rows = for ($i=0; $i -lt $lines.Count; $i++) {
     [pscustomobject]@{
       LineNo = ($i + 1)
-      Text   = $lines[$i]
+      Text   = (ConvertTo-XlsxSafeString $lines[$i])   # v2.1.206 -- strip XML-illegal control chars / lone surrogates
     }
   }
 
@@ -1902,6 +1920,23 @@ function Export-Worksheet {
 
   if ($SortColumn) {
     $Data = $Data | Sort-Object -Property $SortColumn -Descending:$SortDescending.IsPresent
+  }
+
+  # XLSX shared-strings safety: scrub control chars + lone surrogates from every
+  # string property of every row before Export-Excel. Without this, any KQL extract()
+  # result / CSA blob / pasted-in text containing such a character makes Excel pop
+  # the "Repaired Records: String properties from sharedStrings.xml" dialog on
+  # file open. v2.1.206.
+  $Data = $Data | ForEach-Object {
+    $o = [ordered]@{}
+    foreach ($p in $_.PSObject.Properties) {
+      $v = $p.Value
+      if ($v -is [string] -and -not [string]::IsNullOrEmpty($v)) {
+        $v = ConvertTo-XlsxSafeString $v
+      }
+      $o[$p.Name] = $v
+    }
+    [pscustomobject]$o
   }
 
   $excel = $Data | Export-Excel -Path $Path -WorksheetName $safeSheet -TableStyle $TableStyle `

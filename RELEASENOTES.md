@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.207
+## v2.1.208
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI Setup Configurator): Initial Setup Wizard -- 5-step all-in-one flow emitting CUSTOMDATA/SecurityInsight.custom.ps1 (4c02e63d)
 - feat(SI sample): expand SecurityInsight.custom.sample.ps1 for the upcoming Initial Setup Wizard (4b637522)
 - fix(SI RiskAnalysis Excel): defensive XLSX-safe sanitizer to kill the 'Repaired Records: sharedStrings.xml' open warning (3fab7506)
 - feat(SI YAML): Identity_AnyUser_NoMFA_Summary excludes external/B2B + fix typo in PrivilegedUser NoMFA Detailed scope (ba90f139)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
 - docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
 - docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
-- docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
 
 ---
 
@@ -44,6 +44,22 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.208 — Setup Configurator: new `🚀 Initial Setup Wizard` tab (now the default) — configure everything in ONE flow, emits `CUSTOMDATA/SecurityInsight.custom.ps1`
+
+- 🆕 **New default-active tab `🚀 Initial Setup Wizard`** at `TOOLS/SetupConfigurator/index.html`. Five-step flow with a progress pill stepper, conditional-visibility fields, and a live preview that updates as you type. Output target: **`CUSTOMDATA/SecurityInsight.custom.ps1`** (the solution-wide Layer 3 file — every engine inherits from here) — not the per-engine Layer 5 files. The existing per-engine tabs stay as `Step 1 — Permissions` / `Step 2 — Log Analytics` / `Step 3 — Azure OpenAI` / `Step 4 — Power BI` / `Ingestion engines` for advanced per-engine tuning.
+- 🧰 **Step 1 — Authentication.** Pick `SPN + secret` / `SPN + certificate` / `Managed Identity`. For SPN or cert you choose **"use existing" vs "create new during deployment"**. Existing → the wizard collects tenant / clientId / secret or thumbprint directly. New → the wizard collects just the SPN display name (or nothing for cert), and v2.1.209's orchestrator provisions the SPN/cert + writes the resulting values back during Step 1 of the deployment.
+- 🧰 **Step 2 — Log Analytics.** Single required field: subscription ID. Optional workspace name override. The orchestrator auto-creates the workspace + DCE + DCR if they don't exist.
+- 🧰 **Step 3 — Azure OpenAI.** Radio toggle (Yes default / Skip). When enabled, emits `$global:BuildSummaryByAI = $true` + optional separate subscription for OpenAI. The 5 `OpenAI_*` values get filled in by the orchestrator's Step 3 run.
+- 🧰 **Step 4 — Mail.** Radio toggle (Yes / No default). When enabled: From, fallback To, SMTP server/port, auth method (Authenticated / Anonymous), per-report routing (Summary + Detailed, each with their own enable toggle + recipient list).
+- 🧰 **Step 5 — Output.** Radio toggle for storage upload. When enabled: storage type (Azure blob / UNC), destination path, JSON sibling yes/no.
+- 🧰 **Three save options** in the preview panel (same buttons existing tabs use, now smart about filename):
+  - **`📋 Copy to clipboard`** — paste into your editor, save as `SecurityInsight.custom.ps1` in `CUSTOMDATA/`
+  - **`⬇ Download`** — lands as `SecurityInsight.custom.ps1.txt` in Downloads (`.txt` suffix because Windows MOTW blocks opening browser-downloaded `.ps1`; rename after saving)
+  - **`📋 Copy run-command`** — copies `.\InitialDeployment_Latest_Version_SecurityInsight.ps1` so you can launch the orchestrator right after saving the file
+- 🧰 **Conditional visibility** driven by `syncWizardVisibility()` — picking "SPN + Certificate" hides the secret fields, picking "Existing SPN" vs "Create new" swaps the required inputs, toggling mail/upload/OpenAI on/off hides their entire sub-sections. Stepper pills light green (`done`) behind you and blue (`active`) on the current step.
+- 🧰 **Preview-panel smart labels.** Wizard active → header reads `Generated SecurityInsight.custom.ps1`, download filename + the "Next step — run the launcher" bubble both switch to the CUSTOMDATA path + the orchestrator command. Switching to an engine tab flips them back.
+- 🧰 **No JavaScript dependencies / no server round-trips** — same in-browser principle as before. All processing stays on the client. The orchestrator script that consumes this output file ships in v2.1.209 (next).
 
 ### v2.1.207 — `CUSTOMDATA/SecurityInsight.custom.sample.ps1` refreshed with every wizard-relevant global (prep for the new Initial Setup Wizard)
 

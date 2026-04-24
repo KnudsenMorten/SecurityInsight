@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.202
+## v2.1.203
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI _lib Initialize-LauncherConfig): snapshot params before dot-sourcing layer files (8f84a82b)
 - fix(SI RiskAnalysis): pure-LA route via _SIDirectRows marker, bypassing the broken broadcast + ConvertTo-PSObjectDeep path (30715aa8)
 - fix(SI RiskAnalysis): targeted 413 message + sign-in-table classifier hint (c5d303e2)
 - feat(SI YAML): 4 new locked NoMFA reports for Tier 2 (PowerUser) + Tier 3 (RegularUser), Summary + Detailed each (5174d712)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
 - docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
 - docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
-- docs(SI README): refresh teaser tier catalog with live numbers; Azure RBAC now populates (+873) (bb70f622)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.203 — Initialize-LauncherConfig: snapshot params at function entry (fixes `_CfgWriteSnapshotAndPrune` Cannot-convert-to-String when a customer config bare-assigns `$Solution` / `$RepoRoot`)
+
+- 🔧 **Bug — engine launch failed at the layered-config stage** with `_CfgWriteSnapshotAndPrune : Cannot convert value to type System.String. (...) InvalidCastFromAnyTypeToString` at `Initialize-LauncherConfig.ps1` line 532. Customer's debug confirmed: by the time line 532 ran, `$Solution` and `$RepoRoot` were empty (`$Engine` happened to survive). Engine never got a chance to start.
+- 🔧 **Root cause.** `Initialize-LauncherConfig` dot-sources up to 5 layered config files (`. $sharedPath`, `. $platformPath`, `. $solutionCustom`, `. $defaultsPath`, `. $customPath`) into its OWN function scope. Any bare assignment in a customer-owned layer file — `$Solution = ...`, `$RepoRoot = ...`, `$Engine = ...`, etc. **without the `$global:` prefix** — silently overwrites the function's local parameters. Once cleared, the next call that takes those as `[Parameter(Mandatory)][string]` args fails parameter binding with the cast error.
+- 🔧 **Fix.** Snapshot all five params (`$RepoRoot`, `$Solution`, `$Engine`, `$LauncherDir`, `$Mode`) into uniquely-named locals (`$__siRepoRoot`, etc.) **before** any dot-sourcing happens. Use those snapshots for the `_CfgWriteSnapshotAndPrune` call at line 532. Robust against a customer bare-assignment in any layer file — the function's internal state is now insulated from layer-file scope leak.
 
 ### v2.1.202 — RiskAnalysis: pure-LA route ships rows in `_SIDirectRows` marker (fixes Excel rows showing System.Array members `Length`/`Rank`/`SyncRoot` instead of real columns)
 

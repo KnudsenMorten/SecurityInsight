@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.210
+## v2.1.211
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI Setup Configurator): 3 novice-friendly tweaks (Save-direct + install one-liner + Finish callout) (08d00d15)
 - fix(SI Step3 + InitialDeployment): auto-capture OpenAI values into customdata (no copy/paste) (c70f0797)
 - feat(SI): InitialDeployment_Latest_Version_SecurityInsight.ps1 -- single-file orchestrator with built-in interactive setup wizard (cd351d7e)
 - feat(SI Setup Configurator): Initial Setup Wizard -- 5-step all-in-one flow emitting CUSTOMDATA/SecurityInsight.custom.ps1 (4c02e63d)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
 - fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
 - fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
-- docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
 
 ---
 
@@ -44,6 +44,24 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.211 — Setup Configurator wizard: 3 novice-friendly tweaks (Save-direct + install one-liner + prominent Finish callout)
+
+- 🆕 **(a) Save directly to CUSTOMDATA** (Chrome / Edge). New `💾 Save directly` button uses the **File System Access API** (`window.showSaveFilePicker`) — opens a Save-As dialog so the user can drop the file straight into `CUSTOMDATA/` with the proper `.ps1` extension in one click. **No download → rename → move dance.** Browsers without the API (Firefox / Safari) silently fall back to the `.txt` download.
+- 🆕 **(b) Copy install one-liner.** New `📋 Copy install one-liner` button. Copies a single PowerShell command that **moves the just-downloaded `SecurityInsight.custom.ps1.txt` from `Downloads\` into `CUSTOMDATA\`, renames it to `.ps1`, and unblocks Mark-of-the-Web** in one shot. User pastes into PS, hits Enter, done. Works for engine tabs too (auto-targets the right LAUNCHERS path).
+  ```powershell
+  Move-Item -Path "$env:USERPROFILE\Downloads\SecurityInsight.custom.ps1.txt" -Destination ".\CUSTOMDATA\SecurityInsight.custom.ps1" -Force
+  Unblock-File -LiteralPath ".\CUSTOMDATA\SecurityInsight.custom.ps1"
+  ```
+- 🆕 **(c) Prominent Finish callout.** Clicking the wizard's `✅ Finish & Generate` button now flashes a thick green border + brighter background on the "Next step — run the launcher" panel, scrolls it into view, and shows a 8-second toast: *"Configuration ready. Save the file (button above) + run InitialDeployment (button below)."* No more guessing what to do next.
+- 🧰 **Button order in the preview bar** reorganised so the easiest path is leftmost: `💾 Save directly` (primary) → `⬇ Download` → `📋 Copy to clipboard` → `📋 Copy install one-liner`. Updated hint text walks novices through each option's tradeoff.
+- 🧰 **End-to-end novice flow now (after this ship):**
+  1. Open `TOOLS/SetupConfigurator/index.html` in Chrome/Edge
+  2. Wizard tab is the default. Answer 5 prompts.
+  3. Click `✅ Finish & Generate` → panel below highlights → click `💾 Save directly` → pick `CUSTOMDATA/` folder → done.
+  4. Click `📋 Copy run-command to clipboard` → paste into elevated PS → Enter.
+  5. Sign in once interactively as Global Admin → orchestrator does everything else (creates SPN, secret, LA, OpenAI, runs first reports).
+  6. Total interactions: 5 wizard answers + 2 button clicks + 1 sign-in. No filename rename, no manual paste of secrets.
 
 ### v2.1.210 — Auto-capture Step3's OpenAI values into customdata (no copy/paste for novice users)
 

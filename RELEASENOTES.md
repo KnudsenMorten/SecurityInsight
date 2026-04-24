@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.211
+## v2.1.212
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Setup Configurator wizard): conditional-visibility (hidden-attr clobber) + add missing cert display-name input (d02a08b5)
 - feat(SI Setup Configurator): 3 novice-friendly tweaks (Save-direct + install one-liner + Finish callout) (08d00d15)
 - fix(SI Step3 + InitialDeployment): auto-capture OpenAI values into customdata (no copy/paste) (c70f0797)
 - feat(SI): InitialDeployment_Latest_Version_SecurityInsight.ps1 -- single-file orchestrator with built-in interactive setup wizard (cd351d7e)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI _samples): refresh Sample - RiskAnalysis_{Summary,Detailed}_Bucket.xlsx from a recent run (1d68d1f5)
 - fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
 - fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
-- fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
 
 ---
 
@@ -44,6 +44,13 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.212 — Setup Configurator wizard: fix conditional-visibility (hidden-attribute clobber) + add missing certificate display-name input
+
+- 🔧 **Bug — wizard sub-blocks never appeared.** Customer reported: picking "Create new SPN" didn't show the display-name field; picking "SPN+Certificate (existing)" didn't show the thumbprint input; picking "SPN+Certificate (new)" had no name input at all; toggling "Send mail = Yes" didn't reveal the SMTP fields; toggling "Upload to storage = Yes" didn't reveal the destination input. Root cause: the wizard sub-blocks have the HTML `hidden` attribute set on initial render (so the page paints cleanly before JS runs), but my `syncWizardVisibility()` was using `toggleClass()` which only sets `style.display`. **`style.display = ''` does NOT override the `hidden` attribute** (per HTML spec, `hidden` always wins). Result: every sub-block stayed invisible regardless of radio selection.
+- 🔧 **Fix.** New `setWizVisible(selector, show)` helper that manipulates `el.hidden` directly. Replaced every `toggleClass` call in `syncWizardVisibility` with the new helper. All conditional fields now appear/disappear correctly when the user clicks the corresponding radio.
+- 🆕 **Added missing input — Certificate display name (new cert path).** Picking SPN+Certificate → "Generate new self-signed during deployment" now shows a `Certificate display name` field (default `cert-securityinsight`). The wizard emits `$global:OnboardValidate_CertificateDisplayName = '...'`, and the orchestrator's Phase 1 will use it to name the self-signed cert it generates in `CurrentUser\My`.
+- 🧰 **Other inputs verified now-visible** after the visibility fix: SPN display name (new SPN path), tenant ID (cert + MI paths), all mail fields (From / To / SMTP server / port / auth user / password / per-mode routing), upload destination (Azure blob URL / UNC path) + JSON sibling toggle.
 
 ### v2.1.211 — Setup Configurator wizard: 3 novice-friendly tweaks (Save-direct + install one-liner + prominent Finish callout)
 

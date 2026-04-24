@@ -60,6 +60,7 @@
      - 3.5.1 [Config-file model — `.defaults.` vs `.custom.`](#config-file-model)
      - 3.5.2 [Setup Configurator](#setup-configurator)
      - 3.5.3 [Solution component overview](#solution-component-overview)
+     - 3.5.4 🛡️ [Defender XDR licensing & onboarding requirements](#defender-xdr-licensing)
    - 3.6 [Step 2 — Connectivity: SPN or Managed Identity](#connectivity-spn-or-managed-identity)
    - 3.7 [Step 3 — Identity infrastructure: Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
    - 3.8 [Step 4 — Azure OpenAI](#azure-openai-optional)
@@ -672,6 +673,50 @@ Every SI component ships as its own launcher folder under `LAUNCHERS/`. Two grou
 **Step 0** defaults to `Interactive` (browser sign-in by a human admin). To run it unattended, also set `$global:OnboardValidate_AuthMethod = 'SpnSecret'` (or `'SpnCertificate'` / `'ManagedIdentity'`). The SPN/MI needs **Privileged Role Administrator** (or **Global Administrator**) to create app registrations + grant admin consent.
 
 **Step 4** accepts `-ValidateOnly` — turns it into a hands-off health check. No resources are created, but the engine still reports `CREATED` / `REUSED` / `MISSING` status per resource + exits non-zero if anything is missing. Good for monitoring that your Azure OpenAI deployment hasn't drifted.
+
+---
+
+<a id="354-defender-xdr-licensing--onboarding-requirements"></a><a id="defender-xdr-licensing"></a>
+#### 🛡️ 3.5.4 Defender XDR licensing & onboarding requirements
+
+[⤴ Back to top](#top)
+
+The RiskAnalysis engine submits KQL queries through Microsoft Graph advanced hunting (`/security/runHuntingQuery`). That endpoint is a **federated view** over every Defender service the tenant has licensed + onboarded — and each Defender service exposes its own table family. **A query that references a table from a service the tenant doesn't have will fail with `Failed to resolve table or column expression named 'X'`** — there's no way around it; the data simply doesn't exist in that tenant.
+
+**v2.1.198+** the engine recognises these errors as deterministic, **stops retrying immediately** (saves ~12s per failed report), and logs one clear classification line telling you which Defender service / SKU is missing. The outer report loop continues, so other reports still run.
+
+**Table-family → service map** the engine uses to classify schema errors:
+
+| Table prefix | Owner service | Required SKU |
+|---|---|---|
+| `Device*` (DeviceInfo, DeviceProcessEvents, DeviceLogonEvents, …) | **Microsoft Defender for Endpoint** EDR | **MDE Plan 2** / M365 E5 Security / M365 E5 |
+| `DeviceTvm*` (TvmInfoGathering, TvmSecureConfigurationAssessment, TvmSoftwareInventory, TvmSoftwareVulnerabilities) | **Defender Vulnerability Management** | MDVM standalone add-on, **OR** MDE Plan 2 (bundled) |
+| `Identity*` (IdentityInfo, IdentityLogonEvents, IdentityDirectoryEvents, IdentityQueryEvents) | **Defender for Identity** | MDI / EMS E5 / M365 E5 + sensor on DCs/AD FS/Entra Connect |
+| `AADSignInEvents`, `EntraIdSignInEvents`, `EntraIdSpnSignInEvents`, `GraphAPIAuditEvents`, `IdentityAccountInfo` | **Microsoft Entra** | Entra ID P1/P2 with diagnostic-settings forwarding |
+| `ExposureGraphNodes`, `ExposureGraphEdges` | **Defender Exposure Management (MDEM)** | M365 E5 Security / M365 E5 / standalone Exposure Management |
+| `EmailEvents`, `EmailUrlInfo`, `EmailAttachmentInfo`, `Message*`, `UrlClickEvents` | **Defender for Office 365 P2** | MDO P2 / M365 E5 / E5 Security / MDO P2 standalone |
+| `CloudAppEvents`, `AppFileEvents` | **Defender for Cloud Apps** | MDA / M365 E5 / EMS E5 / MDA standalone |
+| `Cloud(Audit\|Dns\|Process\|Storage)*` | **Defender for Cloud** | Workload protection plans for Servers / Storage / DNS |
+| `AlertEvidence`, `AlertInfo`, `BehaviorEntities`, `BehaviorInfo` | **Defender XDR** (alert/behavior aggregation) | At least one Defender plan generating alerts |
+| `*_CL` (e.g. `SI_IdentityAssets_CL`) | **Your Log Analytics workspace** | The matching SI ingestion engine has run + written rows; **the engine auto-bridges this case** (see § 3.10 / § 6.x) |
+
+**The MDE Plan 1 vs Plan 2 trap** ⚠️ — the most subtle case, surfaced by a real customer onboarding in v2.1.198:
+
+> The Defender portal **Devices Inventory** page (and Risk Level / Exposure Level columns) renders for both **MDE Plan 1**, **Defender for Business**, and **MDE Plan 2** customers — so seeing your devices listed there does NOT prove you have advanced-hunting access to the EDR `Device*` tables. Those tables are **MDE Plan 2 only**. If you've recently upgraded from MDE P1 / Defender for Business to MDE P2, the tables typically appear within **minutes to ~24 hours** while the tenant's advanced-hunting backend re-provisions.
+
+**What you'll see in logs when a service is missing:**
+
+```
+[WARN] Table 'DeviceInfo' not present in this tenant's advanced hunting schema.
+       Owned by Microsoft Defender for Endpoint (MDE Plan 2 / M365 E5 Security / M365 E5).
+       Devices may already be onboarded for inventory + risk + exposure (Defender for Business /
+       MDE Plan 1 also support those), but the EDR advanced-hunting schema (Device*, DeviceInfo,
+       DeviceProcessEvents, DeviceLogonEvents, etc.) requires Plan 2. Newly upgraded tenants
+       typically see the tables appear within minutes to ~24h while the backend re-provisions.
+[WARN] Not retrying (deterministic schema failure -- retries cannot conjure a missing table).
+```
+
+**Recommendation:** before onboarding RiskAnalysis to a new tenant, use **Defender XDR portal → Hunting → Advanced hunting → Schema** to confirm the table groups you expect to query are present. If a group is missing, either provision the corresponding licence + onboard the service, OR exclude reports that depend on it via your `*_Custom.yaml` overrides (see § 5).
 
 ---
 

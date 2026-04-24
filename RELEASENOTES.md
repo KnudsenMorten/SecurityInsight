@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.1.197
+## v2.1.198
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): add Sec 3.5.4 Defender XDR licensing & onboarding requirements (312c404c)
+- feat(SI RiskAnalysis): no-retry on schema errors + Defender service classification (aa668516)
+- fix(SI IdentityAssetsCollect): bulk userRegistrationDetails MFA fetch + log silent catch (fb4baabe)
 - feat(SI RiskAnalysis): transparent SI_IdentityAssets_CL bridge for workspaces without Sentinel data lake mirroring (3c18481c)
 - chore(SI IdentityAssets defaults): drop WorkspaceResourceId + ExportDestination pre-declarations (333e09df)
 - fix(SI Step3): include \$global:BuildSummaryByAI = \$true in end-of-run paste-block + sample.ps1 cross-reference (22a20218)
@@ -31,9 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): 3-line intro under WOW table explaining graph-based detection (cfa9bd9c)
 - docs(SI README § 6.9): Locked catalog inventory -- name + purpose per report/rule (80432ca1)
 - docs(SI README): expand 'out of the box' WOW table with AI-classified tier catalog breakdown (7c6d2330)
-- docs(SI README): add 'what you get out of the box' count table under the teaser (7e5d44aa)
-- feat(SI CriticalAssetTagging): ship ~177 curated sample tagging rules in Mode: Test + README guidance (b2a2d58a)
-- feat(SI CriticalAssetTagging): accept <stem>--excluded--SI alongside <stem>--tier<N>--SI (e7a351c8)
 
 ---
 
@@ -44,6 +44,15 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.198 — IdentityAssetsCollect bulk MFA fix · RiskAnalysis no-retry on schema errors · README Defender XDR licensing section
+
+- 🔧 **Bug — silent MFA mis-classification.** A real customer hit `MFAMethodCount = 0` / `MFARegistered = false` for a user (`kdahl@pingala.eu`) who had **2× Microsoft Authenticator + 2× Windows Hello for Business** registered in the Entra portal. Root cause: the MFA-method block at `IdentityAssetsCollectDefineTierIngestLog.ps1` line 2654 made one Graph call per user (`/users/{id}/authentication/methods`) wrapped in an empty `catch {}` — any throw (transient 404 / 403 / parse failure / Graph quirk) silently produced `MFA = false` with **no log line at all**. Per-user errors were invisible.
+- 🔧 **Fix — bulk endpoint as primary, logged per-user fallback.** Engine now fetches `/reports/authenticationMethods/userRegistrationDetails?$top=999` **once at startup**, caches by `ObjectId`. The per-user MFA block now (a) looks up the cache first and uses `isMfaRegistered` / `methodsRegistered` / `isPasswordlessCapable` directly — same authoritative source the Entra portal "Authentication methods activity" page uses; (b) only falls back to the per-user `/authentication/methods` call when the bulk lookup misses (e.g. a brand-new user not yet in the report — typical ~24h propagation); (c) the fallback `catch` now writes `Write-Warn ("MFA fetch failed for {0} ({1}): {2}" -f $upn, $user.id, $exception)` so silent failures stop being silent.
+- 🧰 **Performance side-effect.** One paged call now replaces N per-user calls. On a 5k-user tenant: ~5000 Graph round-trips → 5–6 paged round-trips. Materially faster + much less throttle exposure. Same `UserAuthenticationMethod.Read.All` permission already granted by Step1 — no new perms required.
+- 🔧 **Bug — pointless retries on deterministic schema errors.** `Invoke-GraphHuntingQuery` retried 4 times (~12s of waiting) on `Failed to resolve table or column expression named 'X'` errors — but missing tables don't appear via retry; the failure is deterministic. Same customer hit this with `DeviceInfo` (advanced-hunting EDR table that requires MDE Plan 2 — they'd just migrated from Defender for Business and the table hadn't propagated yet).
+- 🔧 **Fix — schema-error short-circuit + ownership classification.** Engine now detects the resolve error pattern, captures the missing table name, classifies it via the new `Get-DefenderTableOwner` helper (`Device*` → MDE P2, `DeviceTvm*` → MDVM, `Identity*` → MDI, `ExposureGraph*` → MDEM, `Email*` → MDO, `CloudApp*` → MDA, `Cloud(Audit|Dns|Process|Storage)*` → Defender for Cloud, `*_CL` → custom LA, etc.), logs ONE clear `[WARN]` line that tells the customer exactly which Defender service / SKU is missing, and **throws without retrying**. Outer report loop continues to the next report. Saves ~12s per failed report and de-noises the log.
+- 📚 **README — new § 3.5.4 "Defender XDR licensing & onboarding requirements"** with the full table-family → service map, the **MDE Plan 1 vs Plan 2 trap** (Devices Inventory page renders for both SKUs but only P2 exposes `Device*` to advanced hunting — the exact gotcha that surfaced today), the post-upgrade propagation window (~24h), the new schema-error log line shown verbatim, and a recommendation to confirm table presence in the Defender XDR Hunting → Schema browser before onboarding a new tenant. TOC updated with the new § 3.5.4 entry.
 
 ### v2.1.197 — RiskAnalysis: transparent `SI_IdentityAssets_CL` bridge for workspaces without Sentinel data lake mirroring
 

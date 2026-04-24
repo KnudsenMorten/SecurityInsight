@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.195
+## v2.1.196
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- chore(SI IdentityAssets defaults): drop WorkspaceResourceId + ExportDestination pre-declarations (333e09df)
 - fix(SI Step3): include \$global:BuildSummaryByAI = \$true in end-of-run paste-block + sample.ps1 cross-reference (22a20218)
 - fix(SI Step3 OpenAI): ship the missing LauncherConfig.defaults.ps1 (1dbf4209)
 - docs(SI): replace stale 'LauncherConfig.ps1' user-facing references with 'LauncherConfig.custom.ps1' (37 hits / 19 files) (0ae16e21)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI CriticalAssetTagging): ship ~177 curated sample tagging rules in Mode: Test + README guidance (b2a2d58a)
 - feat(SI CriticalAssetTagging): accept <stem>--excluded--SI alongside <stem>--tier<N>--SI (e7a351c8)
 - fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
-- docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.196 — IdentityAssetsCollect defaults: drop `WorkspaceResourceId` + `ExportDestination` pre-declarations
+
+- 🧰 **Removed two `if (-not (Test-Path ...)) { $global:Foo = $null }` lines** for `$global:WorkspaceResourceId` and `$global:ExportDestination` from `LAUNCHERS/IdentityAssetsCollectDefineTierIngestLog/LauncherConfig.defaults.ps1`. Both are off-by-default tenant-specific values that the customer sets in `CUSTOMDATA\SecurityInsight.custom.ps1` (Layer 3) or this engine's `LauncherConfig.custom.ps1` (Layer 5). The defaults file shouldn't even mention them — every line in the snapshot's "Layer 4 - LauncherConfig.defaults" group should be a value SI ships, not a tenant artifact.
+- 🧰 **Why this is safe.** The `IdentityAssetsCollectDefineTierIngestLog` engine runs `Set-StrictMode -Off` (line 726) and reads both variables via `[string]::IsNullOrWhiteSpace($global:Foo)` checks — an unset variable is treated as "feature off" without throwing. The pre-declarations were defensive-but-unnecessary holdovers from the v2.1.189 sweep that converted unconditional assignments to conditional.
+- 📚 **Comment block at the top of the DCR INGESTION section** explains the intentional omission so future maintainers don't add them back.
 
 ### v2.1.195 — Step3 end-of-run + sample now include `$global:BuildSummaryByAI = $true` (the master toggle)
 

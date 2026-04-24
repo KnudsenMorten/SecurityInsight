@@ -558,9 +558,11 @@ function Get-IdentityAssetsLetBlock {
 
     $sizeKb = [int]([System.Text.Encoding]::UTF8.GetByteCount($block) / 1024)
     if ($sizeKb -gt 700) {
-        Write-Warn2 ("SI_IdentityAssets_CL inline let block is {0} KB. May exceed advanced hunting query body limit (~1 MB). " +
-                     "If queries fail with payload-too-large errors, enable Sentinel data lake + table mirroring for SI_IdentityAssets_CL " +
-                     "to switch to native cross-table hunting." -f $sizeKb)
+        # Parenthesise the WHOLE concatenation; otherwise -f binds tighter than +
+        # and only the final string gets formatted (so "{0}" prints literally).
+        Write-Warn2 (("SI_IdentityAssets_CL inline let block is {0} KB. May exceed advanced hunting query body limit (~1 MB). " +
+                      "If queries fail with payload-too-large errors, enable Sentinel data lake + table mirroring for SI_IdentityAssets_CL " +
+                      "to switch to native cross-table hunting.") -f $sizeKb)
     } else {
         Write-Info ("SI_IdentityAssets_CL inline let block: {0} KB (will be prepended to every query referencing the table)" -f $sizeKb)
     }
@@ -684,8 +686,20 @@ function Invoke-GraphHuntingQuery {
 
             # XDR-table detection. \b on both sides means SI_IdentityAssets_CL doesn't trigger
             # the Identity* branch (no word boundary between '_' and 'I'). Negative lookaheads
-            # exclude our custom tables explicitly (Identity(?!Assets), Device(?!Tvm)... wait,
-            # DeviceTvm IS an XDR table from MDVM and only exists in advanced hunting too).
+            # exclude our custom tables explicitly (Identity(?!Assets)). DeviceTvm IS an XDR
+            # table from MDVM (only exists in advanced hunting), so it gets its own branch.
+            #
+            # CRITICAL: strip KQL string literals + line comments BEFORE matching, otherwise
+            # column-value strings like SecurityDomain == "Identity" or Category == "Email"
+            # falsely trigger the regex and force pure-LA queries through the let-block bridge
+            # (which then hits nginx 413 on big estates). v2.1.199 had this bug; v2.1.200 fixes.
+            $queryForDetection = $Query
+            $queryForDetection = [regex]::Replace($queryForDetection, '"[^"\r\n]*"', '""')   # double-quoted strings
+            $queryForDetection = [regex]::Replace($queryForDetection, "'[^'\r\n]*'", "''")   # single-quoted strings
+            $queryForDetection = [regex]::Replace($queryForDetection, "@'[^']*'", "''")      # @'...' verbatim single
+            $queryForDetection = [regex]::Replace($queryForDetection, '@"[^"]*"', '""')      # @"..." verbatim double
+            $queryForDetection = [regex]::Replace($queryForDetection, '//[^\r\n]*', '')      # // line comments
+
             $xdrTablePattern = '\b(' +
                 'Device(?!Tvm)\w*' +              # DeviceInfo, DeviceProcessEvents, DeviceLogonEvents, ... (MDE P2)
                 '|DeviceTvm\w*' +                  # DeviceTvmInfoGathering, DeviceTvmSecureConfigurationAssessment, ... (MDVM)
@@ -704,7 +718,7 @@ function Invoke-GraphHuntingQuery {
                 '|GraphAPIAuditEvents' +           # Entra
                 ')\b'
 
-            $hasXdrTables = $Query -match $xdrTablePattern
+            $hasXdrTables = $queryForDetection -match $xdrTablePattern
 
             if (-not $hasXdrTables) {
                 Write-Info "Query touches only Log Analytics tables (no Defender XDR tables); routing entire query directly to LA workspace -- no let-block, no advanced-hunting round trip, no body-size limit."

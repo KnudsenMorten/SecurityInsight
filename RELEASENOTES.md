@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.199
+## v2.1.200
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis): strip KQL string literals before XDR-detection regex + fix size-warning format-string (86f5a986)
 - fix(SI RiskAnalysis launchers): AutoBucketMax layered-config + widen ValidateRange to 2048 (ddff8ebf)
 - chore(SI RiskAnalysis defaults): WriteJsonOutput=$false + AutoBucketMax=1024 (585da7d4)
 - fix(SI RiskAnalysis): route pure-LA queries direct to Log Analytics, avoiding nginx 413 on the let-block bridge (240cbc19)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Layer 4 defaults): stop clobbering Layer 3 customer OpenAI / SMTP values (8f0decca)
 - fix(SI Build_Tier): diagnose NRE-on-every-retry (Azure OpenAI error envelope) (a691dbfa)
 - fix(SI Build_Tier): populate Azure role catalog + EntraID_APIPermissions_Catalog (both were empty / null) (eb45c3b0)
-- feat(SI CriticalAssetTagging): promote 177 samples from Custom -> Locked; Custom becomes override scaffold (b70b40fd)
 
 ---
 
@@ -44,6 +44,13 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.200 — RiskAnalysis: strip KQL string literals before XDR detection (fixes v2.1.199 false-positive on `"Identity"` / `"Email"` column values) + size-warning format-string fix
+
+- 🔧 **Bug — v2.1.199 routing fix didn't fire on the very queries it was meant to fix.** Customer's `Identity_AdminAccount_HasMailbox_Summary` (and `_NeverUsed_Summary`, `_OnPremSynced_Summary`) reports — pure-LA, only touch `SI_IdentityAssets_CL` — still bridged through advanced hunting and hit `413`. Root cause: my XDR-detection regex `\bIdentity(?!Assets)\w*\b` matched the **column-value string literal** `"Identity"` in `| extend SecurityDomain = "Identity"`. Same trap for any pure-LA query containing `"Email"`, `"DeviceInfo"`, etc. as a literal value. Engine misclassified those as "mixed XDR" and forced them through the let-block bridge → nginx 413 on big estates.
+- 🔧 **Fix — strip KQL string literals + line comments before running the XDR regex.** v2.1.200 pre-processes the query body (removes `"..."`, `'...'`, `@'...'`, `@"..."`, and `// ...` runs) before pattern matching, so only actual table references can trip the regex. **Verified with 7-case smoke test** covering: literal `"Identity"` / `"Email"` / `"DeviceInfo"` strings (all correctly classified pure-LA), `extract(@'...regex pattern...', ...)` arguments, and 3 mixed-query shapes (DeviceInfo / IdentityInfo / ExposureGraphNodes joins — all correctly classified mixed). Test deleted after passing; the regex itself ships as the production check.
+- 🔧 **Bug — `{0} KB` printed literally** in v2.1.197's let-block size warning. Cause: PowerShell's `-f` operator binds tighter than `+`, so `("...{0}..." + "..." + "..." -f $sizeKb)` formats only the LAST string (which has no placeholders) and concatenates it with the first two unformatted strings. Fix: parenthesise the whole concat — `(("..." + "..." + "...") -f $sizeKb)`.
+- 🧰 **Customer impact.** After this fix the failing reports route directly to LA (no let-block, no 413). LA's body cap and result cap (~64 MB / 500k rows / 10 min) is orders of magnitude beyond anything RiskAnalysis needs. Mixed XDR queries (those that genuinely join `SI_IdentityAssets_CL` against `Device*` / `Identity*` / `ExposureGraph*` etc.) still go through the let-block bridge and remain subject to advanced hunting's body cap — for those, Sentinel data lake mirroring of `SI_IdentityAssets_CL` is the only proper fix (engine then bypasses the bridge entirely).
 
 ### v2.1.199 — RiskAnalysis: route pure-LA queries directly to Log Analytics (avoids 413) · `WriteJsonOutput` default OFF · `AutoBucketMax` default raised to 1024
 

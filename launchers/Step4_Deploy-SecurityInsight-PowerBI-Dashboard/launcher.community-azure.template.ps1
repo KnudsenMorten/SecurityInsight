@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Community Azure launcher (Function / Runbook / Azure VM with MI) for
@@ -98,10 +98,14 @@ $paramMap = @{
     AccessGroupObjectId         = $global:Step4_AccessGroupObjectId
     AccessGroupRole             = $global:Step4_AccessGroupRole
     AuthMethod                  = $global:Step4_AuthMethod
-    AuthTenantId                = $global:Step4_AuthTenantId
-    AuthClientId                = $global:Step4_AuthClientId
-    AuthClientSecret            = $global:Step4_AuthClientSecret
-    AuthCertificateThumbprint   = $global:Step4_AuthCertificateThumbprint
+    # Auth values fall back to the runtime SPN globals customers already set
+    # in SecurityInsight.custom.ps1 ($global:SpnTenantId / SpnClientId /
+    # SpnClientSecret / SpnCertificateThumbprint), so Step4 doesn't require
+    # a duplicate '$global:Step4_Auth*' set just to switch auth method.
+    AuthTenantId                = if ($global:Step4_AuthTenantId)              { $global:Step4_AuthTenantId }              else { $global:SpnTenantId }
+    AuthClientId                = if ($global:Step4_AuthClientId)              { $global:Step4_AuthClientId }              else { $global:SpnClientId }
+    AuthClientSecret            = if ($global:Step4_AuthClientSecret)          { $global:Step4_AuthClientSecret }          else { $global:SpnClientSecret }
+    AuthCertificateThumbprint   = if ($global:Step4_AuthCertificateThumbprint) { $global:Step4_AuthCertificateThumbprint } else { $global:SpnCertificateThumbprint }
 }
 foreach ($k in $paramMap.Keys) {
     $v = $paramMap[$k]

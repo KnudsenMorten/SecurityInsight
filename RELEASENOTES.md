@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.191
+## v2.1.192
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Step1 + Step4 launchers): auth fields fall back to runtime \$global:Spn* when Step-specific names aren't set (33f757a2)
 - fix(SI Step1 Permissions): drop device-code fallback + add -Force to clear stale Az context on Interactive sign-in (ba36ae3f)
 - docs(SI _samples): refresh Sample - RiskAnalysis_{Summary,Detailed}_Bucket.xlsx from a recent run (1d68d1f5)
 - fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
 - fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
 - docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
-- docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
 
 ---
 
@@ -44,6 +44,19 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.192 — Step1 + Step4 launchers: auth fields fall back to runtime `$global:Spn*` globals when Step-specific names aren't set
+
+- 🔧 **Bug.** Customer who set `$global:OnboardValidate_AuthMethod = 'SpnSecret'` in their Step1 `LauncherConfig.custom.ps1` plus the runtime SPN values `$global:SpnTenantId / SpnClientId / SpnClientSecret` (already populated for every other engine) hit `ConvertTo-SecureString : Cannot bind argument to parameter 'String' because it is an empty string` — Step1 was reading only `$global:OnboardValidate_AuthTenantId / _AuthClientId / _AuthClientSecret`, ignoring the runtime SPN globals. Same naming-prefix isolation existed in Step4 (`$global:Step4_Auth*`).
+- 🔧 **Fix (Step1 + Step4 launcher templates × 4 flavours each = 8 files).** The auth-value splat now uses an inline `if (...) { Step-specific } else { runtime SPN }` per field:
+  ```powershell
+  AuthTenantId = if ($global:OnboardValidate_AuthTenantId) { $global:OnboardValidate_AuthTenantId } else { $global:SpnTenantId }
+  AuthClientId = if ($global:OnboardValidate_AuthClientId) { $global:OnboardValidate_AuthClientId } else { $global:SpnClientId }
+  ...
+  ```
+  Same pattern in Step4 with `$global:Step4_*` overrides falling back to `$global:Spn*`. Backwards compatible: customers who set the Step-specific names (or use the Setup Configurator, which generates them) keep working; customers who only set the runtime `Spn*` names now also work.
+- 🧰 **Audit confirmed Step2 + Step3 are clean** — both already read `$global:SpnTenantId / SpnClientId / SpnClientSecret` directly, no naming-prefix isolation. Same for the runtime ingestion / tagging engines.
+- 🧰 **Setup Configurator unaffected.** The Step1 tab emits `OnboardValidate_*` names; the Step4 tab emits `Step4_*` names; both match the launcher splat keys. The fallback only kicks in for manually-crafted configs.
 
 ### v2.1.191 — Step1 Permissions: drop device-code fallback + add `-Force` to clear stale Az context on Interactive sign-in
 

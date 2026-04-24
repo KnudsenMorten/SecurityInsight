@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.213
+## v2.1.214
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI README): new S 3.5.5 -- No Sentinel? Routing model + Entra diagnostic-settings setup (307d79b2)
 - feat(SI Setup Configurator): strip to wizard-only (remove Step1/Step2/Step3/Step4/Engines tabs) (1268dc30)
 - fix(SI Setup Configurator wizard): conditional-visibility (hidden-attr clobber) + add missing cert display-name input (d02a08b5)
 - feat(SI Setup Configurator): 3 novice-friendly tweaks (Save-direct + install one-liner + Finish callout) (08d00d15)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI Step1 + Step4 launchers): auth fields fall back to runtime \$global:Spn* when Step-specific names aren't set (33f757a2)
 - fix(SI Step1 Permissions): drop device-code fallback + add -Force to clear stale Az context on Interactive sign-in (ba36ae3f)
 - docs(SI _samples): refresh Sample - RiskAnalysis_{Summary,Detailed}_Bucket.xlsx from a recent run (1d68d1f5)
-- fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.214 — README: new § 3.5.5 "No Sentinel? Routing model + Entra diagnostic-settings setup"
+
+- 📚 **Three routing modes** (pure-LA / mixed / pure-XDR) explained at high level: when each fires, where the query runs, what failure modes you might see. Includes the actual log lines the engine prints so customers recognise which path was taken.
+- 📚 **Caveats matrix by setup style** — what works out of the box for: Sentinel + data lake mirroring · Sentinel without mirroring · No Sentinel + Entra forwarding · No Sentinel + no forwarding. Tells the customer what they need to configure for each.
+- 📚 **How to forward Entra ID sign-in + audit logs to Log Analytics** — the one piece of setup most non-Sentinel customers need. Two paths documented: via Sentinel data connector (recommended for retention + analytic-rule coverage) and direct via Entra Diagnostic Settings (no Sentinel SKU needed). Lists the categories to tick (`SignInLogs` / `NonInteractiveUserSignInLogs` / `ServicePrincipalSignInLogs` / `ManagedIdentitySignInLogs` / `AuditLogs` / optionally `ProvisioningLogs` / `RiskyUsers` / `UserRiskEvents`). License requirement: Entra ID P1 minimum, P2 for risk events. Includes the 2-line KQL validation snippet.
+- 📚 **MDE Plan 1 vs Plan 2 vs Defender for Business quick-reference table** — common confusion: P1 / DfB customers see devices in the Defender portal Inventory page and assume `Device*` advanced-hunting tables are available. They aren't (Plan 2 only). Table maps each licence → what works in SecurityInsight + the post-upgrade propagation window.
+- 🧰 **TOC updated** with the new § 3.5.5 entry.
 
 ### v2.1.213 — Setup Configurator: strip to wizard-only (remove Step1/Step2/Step3/Step4/Engines tabs)
 

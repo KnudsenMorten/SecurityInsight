@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.201
+## v2.1.202
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis): pure-LA route via _SIDirectRows marker, bypassing the broken broadcast + ConvertTo-PSObjectDeep path (30715aa8)
 - fix(SI RiskAnalysis): targeted 413 message + sign-in-table classifier hint (c5d303e2)
 - feat(SI YAML): 4 new locked NoMFA reports for Tier 2 (PowerUser) + Tier 3 (RegularUser), Summary + Detailed each (5174d712)
 - fix(SI RiskAnalysis): strip KQL string literals before XDR-detection regex + fix size-warning format-string (86f5a986)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
 - docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
 - docs(SI README): refresh teaser tier catalog with live numbers; Azure RBAC now populates (+873) (bb70f622)
-- fix(SI Layer 4 defaults): stop clobbering Layer 3 customer OpenAI / SMTP values (8f0decca)
 
 ---
 
@@ -44,6 +44,16 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.202 — RiskAnalysis: pure-LA route ships rows in `_SIDirectRows` marker (fixes Excel rows showing System.Array members `Length`/`Rank`/`SyncRoot` instead of real columns)
+
+- 🔧 **Bug — pure-LA reports wrote rows to Excel with only `SecurityDomain` populated, every other column blank, and weird columns `Length` / `Rank` / `IsFixedSize` / `Count` / `SyncRoot` appearing on each row.** Customer dump showed each export-pool entry was actually a `System.Object[]` packing all the report's rows in `SyncRoot`; `Select-Object -Property` then surfaced `System.Array`'s .NET properties instead of the rows' real columns. Reports with 1 result row → Count=1; 2 result rows → Count=2; 0 result rows → Count=0 — exact match for "rows packed inside the array".
+- 🔧 **Root cause** (two layers):
+  1. v2.1.199's pure-LA route mocked the Microsoft Graph response shape `[pscustomobject]@{ Results = @( [pscustomobject]@{ AdditionalProperties = $hash } ) }` and relied on the engine's `$resp.Results.AdditionalProperties` PowerShell property broadcast. That broadcast works cleanly for the Graph SDK's strongly-typed `Generic<T>` collections; for a 1-element `Object[]` of PSCustomObjects PowerShell's behavior was inconsistent enough that downstream `Calculate-RiskScore` ended up iterating the WHOLE row-array as a single "row".
+  2. The intermediate v2.1.202 first-pass fix introduced a marker property `_SIDirectRows = ,@($cleanRows.ToArray())` — but the **comma-protect** wrapped the array in another 1-element outer array. Engine read back `[array-of-1-array]`, `foreach` iterated once with `$row = the inner array`, the export pool got a `System.Array` as a single row, downstream `Select-Object` surfaced `System.Array` .NET properties.
+- 🔧 **Final fix.** Drop the comma-protect: `_SIDirectRows = $cleanRows.ToArray()` (plain assignment). Engine reads back the array directly, iterates each row as a clean PSCustomObject. **Verified end-to-end** with a 2-row repro: BROKEN path gives `pool[0].GetType() = System.Object[]` (the bug); FIXED path gives `pool.Count = 2` with both rows accessible as `PSCustomObject` and all column values intact.
+- 🔧 **Engine bypass** (carried over from v2.1.202 first pass): both call-sites (single-shot + bucketing) check for the `_SIDirectRows` marker and use the rows directly when present, skipping the `.AdditionalProperties` + `ConvertTo-PSObjectDeep` dance that only makes sense for Microsoft Graph SDK responses. Falls through to the existing unwrap when absent (normal Graph hunting). Zero impact on non-LA-routed queries.
+- 🧰 **Safety-net blacklist** for column-list build: `$systemArrayProps = @('Count','IsFixedSize','IsReadOnly','IsSynchronized','Length','LongLength','Rank','SyncRoot')` is now excluded when discovering "extra" columns from `$RiskScoreArray`'s first row. Belt-and-suspenders against any future regression where a wrapped-array row ever reaches this stage — those `System.Array` .NET property names can never end up in the Excel column list again.
 
 ### v2.1.201 — 4 new locked reports (PowerUser + RegularUser NoMFA, Tier 2 / Tier 3) + targeted 413 + sign-in-table error message
 

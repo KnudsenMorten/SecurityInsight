@@ -728,15 +728,30 @@ function Invoke-GraphHuntingQuery {
             if (-not $hasXdrTables) {
                 Write-Info "Query touches only Log Analytics tables (no Defender XDR tables); routing entire query directly to LA workspace -- no let-block, no advanced-hunting round trip, no body-size limit."
                 $rows = @(Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $wsResId -Query $Query)
-                # Mock the Microsoft Graph hunting response shape so callers don't change.
-                # The engine reads $resp.Results.AdditionalProperties (PowerShell broadcasts
-                # the property access across the Results array -> array of hashtables).
-                $wrapped = @($rows | ForEach-Object {
-                    $hash = @{}
-                    foreach ($p in $_.PSObject.Properties) { $hash[$p.Name] = $p.Value }
-                    [pscustomobject]@{ AdditionalProperties = $hash }
-                })
-                return [pscustomobject]@{ Results = $wrapped }
+                # Bypass the Microsoft Graph response shape entirely. v2.1.199 tried to mock
+                # it by wrapping each row's data in an AdditionalProperties hashtable and
+                # returning a 1-element Results array -- but PowerShell's property broadcast
+                # on a 1-element PSCustomObject array returns the raw hashtable in a way
+                # that downstream Calculate-RiskScore iterated as System.Array (Length/Rank/
+                # SyncRoot appeared on the row, the real data ended up in SyncRoot, every
+                # column except the first leaked as null). v2.1.202 fix: ship the clean rows
+                # in a marker property `_SIDirectRows` and have the engine detect it and
+                # use them directly, skipping the `.AdditionalProperties` + ConvertTo-PSObjectDeep
+                # dance that only makes sense for Microsoft Graph SDK responses.
+                $cleanRows = New-Object System.Collections.Generic.List[object]
+                foreach ($r in $rows) {
+                    $h = [ordered]@{}
+                    foreach ($p in $r.PSObject.Properties) { $h[$p.Name] = $p.Value }
+                    [void]$cleanRows.Add([pscustomobject]$h)
+                }
+                # Return the array of rows DIRECTLY -- no comma-protect, no @() wrap.
+                # An earlier draft used `,@($cleanRows.ToArray())` which wraps the array
+                # in a 1-element outer array. PSCustomObject property values store as-is,
+                # so the engine then read back a [array-of-1-array]; foreach iterated once
+                # with $row = the inner array, $ResultAll got a System.Array as a single
+                # row, and downstream Select-Object surfaced .NET Array properties
+                # (IsFixedSize / Count / Length / SyncRoot) instead of the real columns.
+                return [pscustomobject]@{ _SIDirectRows = $cleanRows.ToArray() }
             }
 
             # Mixed query path: prepend the let-block (subject to advanced hunting body limit).
@@ -3230,20 +3245,29 @@ while (-not $bucketRunSucceeded) {
           continue
       }
 
-      $rawResults = $null
-      if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
+      # v2.1.202 LA-direct marker check (see matching block further down / Invoke-GraphHuntingQuery).
+      if ($null -ne $resp -and $resp -is [pscustomobject] -and $resp.PSObject.Properties['_SIDirectRows']) {
+          $bucketResult = @($resp._SIDirectRows)
+          if (@($bucketResult).Count -eq 0) {
+              Write-Info ("bucket {0}/{1}: no results" -f $bucketNo, $bucketCountToUse)
+              continue
+          }
+      } else {
+          $rawResults = $null
+          if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
 
-      if ($null -eq $rawResults) {
-          Write-Info ("bucket {0}/{1}: no results" -f $bucketNo, $bucketCountToUse)
-          continue
-      }
+          if ($null -eq $rawResults) {
+              Write-Info ("bucket {0}/{1}: no results" -f $bucketNo, $bucketCountToUse)
+              continue
+          }
 
-      Tock
-      try {
-          $bucketResult = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
-      } catch {
-          Write-Err2 ("result conversion failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $_.Exception.Message)
-          continue
+          Tock
+          try {
+              $bucketResult = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
+          } catch {
+              Write-Err2 ("result conversion failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $_.Exception.Message)
+              continue
+          }
       }
       $bucketCount  = ($bucketResult | Measure-Object).Count
       Tick ("result conversion (bucket {0}/{1})" -f $bucketNo, $bucketCountToUse)
@@ -3307,21 +3331,36 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
             continue
         }
 
-        $rawResults = $null
-        if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
-        if ($null -eq $rawResults) {
-            Write-Warn2 "query returned no results"
-            continue
-        }
+        # v2.1.202 -- the LA-direct routing in Invoke-GraphHuntingQuery ships rows in a marker
+        # property (_SIDirectRows) because the Microsoft-Graph-shaped response shape
+        # (.Results.AdditionalProperties broadcast + ConvertTo-PSObjectDeep) doesn't round-trip
+        # cleanly for PSCustomObject rows coming from Invoke-AzOperationalInsightsQuery --
+        # 1-row results ended up with the data nested in SyncRoot and only the first column
+        # leaking through property broadcast. If the marker is present, use those rows directly.
+        if ($null -ne $resp -and $resp -is [pscustomobject] -and $resp.PSObject.Properties['_SIDirectRows']) {
+            $ResultSingle = @($resp._SIDirectRows)
+            if (@($ResultSingle).Count -eq 0) {
+                Write-Warn2 "query returned no results"
+                continue
+            }
+            Tick "result conversion"
+        } else {
+            $rawResults = $null
+            if ($null -ne $resp -and $null -ne $resp.Results) { $rawResults = $resp.Results.AdditionalProperties }
+            if ($null -eq $rawResults) {
+                Write-Warn2 "query returned no results"
+                continue
+            }
 
-        Tock
-        try {
-            $ResultSingle = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
-        } catch {
-            Write-Err2 "result conversion failed: $($_.Exception.Message)"
-            continue
+            Tock
+            try {
+                $ResultSingle = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
+            } catch {
+                Write-Err2 "result conversion failed: $($_.Exception.Message)"
+                continue
+            }
+            Tick "result conversion"
         }
-        Tick "result conversion"
 
         foreach ($row in $ResultSingle) { $ResultAll += ,$row }
         Write-Info ("rows before filters: {0}" -f $ResultAll.Count)
@@ -3457,11 +3496,18 @@ if ($ResultAll.Count -eq 0) {
     if ($OutputPropertyOrder) { $DesiredColumns += ($OutputPropertyOrder | Where-Object { $_ -notin $TraceCols }) }
     foreach ($c in $ComputedCols) { if ($DesiredColumns -notcontains $c -and $c -notin $TraceCols) { $DesiredColumns += $c } }
 
+    # System.Array members that must never leak into the desired-columns list.
+    # If any upstream stage ever lets a wrapped-array row reach here (v2.1.199 / v2.1.202
+    # had a bug where pure-LA rows were stored as a System.Array containing the real rows),
+    # Get-Member on that array could surface these as note properties via pipeline auto-
+    # unwrap behavior. Blacklist guarantees they never end up in the Excel column list.
+    $systemArrayProps = @('Count','IsFixedSize','IsReadOnly','IsSynchronized','Length','LongLength','Rank','SyncRoot')
+
     $firstObj = $RiskScoreArray | Select-Object -First 1
     if ($firstObj) {
       $allProps = ($firstObj | Get-Member -MemberType NoteProperty).Name
       foreach ($p in $allProps) {
-        if ($DesiredColumns -notcontains $p -and $p -notin $TraceCols) { $DesiredColumns += $p }
+        if ($DesiredColumns -notcontains $p -and $p -notin $TraceCols -and $p -notin $systemArrayProps) { $DesiredColumns += $p }
       }
     }
 

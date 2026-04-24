@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.190
+## v2.1.191
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Step1 Permissions): drop device-code fallback + add -Force to clear stale Az context on Interactive sign-in (ba36ae3f)
 - docs(SI _samples): refresh Sample - RiskAnalysis_{Summary,Detailed}_Bucket.xlsx from a recent run (1d68d1f5)
 - fix(SI Layer 4 defaults): 49 more unconditional \$global assignments converted to conditional (IdentityAssets / Step1 / Step2 / Step4) (07c37a0a)
 - fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI _lib Initialize-LauncherConfig): Layer 3 path now probes both monorepo + community layouts (c6101ca7)
 - docs(SI README): collapse § 3.3/3.3.1/3.4 + all § 4.x/6.x subsections; add Step 1-5 markers (1936ab07)
 - docs(SI README): § 3+4 readability pass -- numbered § 3.5 subsections, swapped § 3.6/3.7, added § 4.2.1 Tier 0-3 mermaid, fixed mojibake (dd8116f3)
-- docs(SI README): drop the old one-line tagline under the H1 (8bcca6ee)
 
 ---
 
@@ -44,6 +44,12 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.191 — Step1 Permissions: drop device-code fallback + add `-Force` to clear stale Az context on Interactive sign-in
+
+- 🔧 **`Step1_OnboardValidate-SecurityInsight-Permissions.ps1` no longer falls back to `Connect-AzAccount -UseDeviceAuthentication`.** Removed the inner try/catch that retried with device code when the browser credential threw `MissingMethodException`. Any failure now surfaces directly to the outer catch with the real error message — useful when (for example) `Connect-AzAccount` works fine in a manual ISE session but the Step1 launcher fails for a different reason that the device-code retry was masking.
+- 🔧 **Added `-Force` to `Connect-AzAccount` on the Interactive path.** Diagnoses + prevents the "stale Az session from a prior PowerShell window throws confusing errors" trap. Previously the user had to run `Disconnect-AzAccount` manually before re-running Step1; now `-Force` discards any cached token/context for the same user automatically and re-authenticates fresh. Recurrent / scheduled re-runs aren't affected because Step1 is a one-shot onboarding tool, not a hot-path engine.
+- 🧰 **Side benefit.** The hint block that fired on `MissingMethodException` (Az.Accounts / Azure.Identity DLL mismatch — `Update-Module Az.Accounts -Force` + restart PowerShell) still triggers via the outer catch, so the diagnostic guidance for that specific case is unchanged.
 
 ### v2.1.190 — Refresh sample XLSX files in `DATA/_samples/`
 

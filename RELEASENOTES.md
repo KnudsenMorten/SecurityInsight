@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.203
+## v2.1.204
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis): drop @() wrap at the pure-LA Invoke-LogAnalyticsKqlQuery caller (02beb56d)
 - fix(SI _lib Initialize-LauncherConfig): snapshot params before dot-sourcing layer files (8f84a82b)
 - fix(SI RiskAnalysis): pure-LA route via _SIDirectRows marker, bypassing the broken broadcast + ConvertTo-PSObjectDeep path (30715aa8)
 - fix(SI RiskAnalysis): targeted 413 message + sign-in-table classifier hint (c5d303e2)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
 - docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
 - docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
-- docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
 
 ---
 
@@ -44,6 +44,19 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.204 — RiskAnalysis pure-LA route: drop the `@()` wrap around the comma-protected return (THE actual cause of the SyncRoot wrap and System.Array properties leaking into rows)
+
+- 🔧 **Bug — pure-LA queries STILL wrote rows wrapped in System.Array** even after v2.1.202's `_SIDirectRows` marker bypass. Customer dump showed `$ResultAll`, `$ResultFiltered`, `$RiskScoreArray` all containing a single object whose surface was `System.Array`'s .NET properties (`Count`, `Length`, `LongLength`, `Rank`, `IsFixedSize`, `IsReadOnly`, `IsSynchronized`, `SyncRoot`) plus engine-stamped `CollectionTime`/`SolutionVersion`/`TraceName` — and the actual rows hashtables nested inside `SyncRoot`.
+- 🔧 **Root cause — exact mechanism, finally pinned down with an in-isolation PS 5.1 repro:**
+  1. `Invoke-LogAnalyticsKqlQuery` returns `,@($resp.Results)` — comma-protected so PowerShell emits the rows array as a SINGLE value to the pipeline (preserves array shape across function-output unwrap). Correct.
+  2. **Caller in pure-LA branch did `$rows = @(Invoke-LogAnalyticsKqlQuery ...)`** — the `@()` wrap re-wrapped that single comma-protected value into `[Object[1] of Object[N]]`. Verified: `@(f_with_comma).Count = 1` (not 2) when function returns 2 comma-protected rows. PS 5.1's `@()` semantics treat the comma-protected output as a single value to wrap, not as an array to preserve.
+  3. The downstream `foreach ($r in $rows)` then iterated **once** with `$r = the inner row-array`, not the rows themselves.
+  4. `foreach ($p in $r.PSObject.Properties)` enumerated `System.Array`'s native properties (Count / Length / SyncRoot / etc.) — that's where `_SIDirectRows`'s "rows" came from.
+  5. Calculate-RiskScore + Select-Object then surfaced those Array properties as Excel columns; the real row data was buried in `SyncRoot`.
+- 🔧 **Fix.** Drop the `@()` wrap at the caller. Plain assignment `$rows = Invoke-LogAnalyticsKqlQuery ...` correctly captures the inner rows array (PS 5.1 verified: count=2 for 2 rows, count=1 for 1 row, type=PSCustomObject for each element). Empty-result fallback `if ($null -eq $rows) { $rows = @() }` for the 0-row case.
+- 🧰 **Verified end-to-end** with a PS 5.1 isolation test that reproduces the BROKEN current behavior (`rows.Count = 1, rows[0].GetType = System.Object[], cleanRows[0].Category = ''`) and the FIXED behavior (`rows.Count = 2, rows[0].GetType = PSCustomObject, cleanRows[0].Category = 'Lifecycle', ResultAll.Count = 2`). Test deleted after passing.
+- 🧰 **`Invoke-LogAnalyticsKqlQuery` left UNCHANGED** (still returns `,@($resp.Results)`). The comma-protect is correct; only the caller's `@()` wrap was wrong.
 
 ### v2.1.203 — Initialize-LauncherConfig: snapshot params at function entry (fixes `_CfgWriteSnapshotAndPrune` Cannot-convert-to-String when a customer config bare-assigns `$Solution` / `$RepoRoot`)
 

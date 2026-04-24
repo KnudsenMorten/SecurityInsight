@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.1.200
+## v2.1.201
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI RiskAnalysis): targeted 413 message + sign-in-table classifier hint (c5d303e2)
+- feat(SI YAML): 4 new locked NoMFA reports for Tier 2 (PowerUser) + Tier 3 (RegularUser), Summary + Detailed each (5174d712)
 - fix(SI RiskAnalysis): strip KQL string literals before XDR-detection regex + fix size-warning format-string (86f5a986)
 - fix(SI RiskAnalysis launchers): AutoBucketMax layered-config + widen ValidateRange to 2048 (ddff8ebf)
 - chore(SI RiskAnalysis defaults): WriteJsonOutput=$false + AutoBucketMax=1024 (585da7d4)
@@ -32,8 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): drop duplicate H1 title + de-fade teaser (removed blockquote wrap) (213fcb72)
 - docs(SI README): refresh teaser tier catalog with live numbers; Azure RBAC now populates (+873) (bb70f622)
 - fix(SI Layer 4 defaults): stop clobbering Layer 3 customer OpenAI / SMTP values (8f0decca)
-- fix(SI Build_Tier): diagnose NRE-on-every-retry (Azure OpenAI error envelope) (a691dbfa)
-- fix(SI Build_Tier): populate Azure role catalog + EntraID_APIPermissions_Catalog (both were empty / null) (eb45c3b0)
 
 ---
 
@@ -44,6 +44,26 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.201 — 4 new locked reports (PowerUser + RegularUser NoMFA, Tier 2 / Tier 3) + targeted 413 + sign-in-table error message
+
+- 🆕 **`Identity_PowerUser_NoMFA_Summary` + `Identity_PowerUser_NoMFA_Detailed`** — Tier 2 users with no MFA registration. Tier 2 covers business owners / app owners / finance / HR / developers with elevated app access. RiskFactor_Consequence = 2; severity Medium-High. Probability factors: stale login (>90d), on-prem-synced, account >1y old. ConfigurationId `IDENTITY-MFA-003`.
+- 🆕 **`Identity_RegularUser_NoMFA_Summary` + `Identity_RegularUser_NoMFA_Detailed`** — Tier 3 users with no MFA registration. Volume here typically dwarfs higher tiers; even one regular user without MFA is the most common phishing/password-spray initial-access vector. RiskFactor_Consequence = 1; severity Medium. Same probability factors as PowerUser variant. ConfigurationId `IDENTITY-MFA-004`.
+- 🧰 **All four use the `EffectiveTier == N` filter pattern** consistent with the existing `Identity_PrivilegedUser_NoMFA_*` (Tier 0/1) reports. Excludes guest / B2B (handled by separate stale-guest report) and accounts younger than 7 days (provisioning grace period).
+- 🧰 **Pure-LA queries** (only touch `SI_IdentityAssets_CL`, no XDR tables) — under v2.1.200 routing they submit directly to LA, no advanced hunting round trip, no body-size limit. Should run cleanly on bare LA workspaces without Sentinel data lake.
+- 🧰 **Both orchestrators registered** — Summary entries in `RiskAnalysis_Summary_Bucket`, Detailed entries in `RiskAnalysis_Detailed_Bucket`. Total locked-report count: **100 → 104**. README § 6.9 inventory table renumbered (rows 67–100 → 71–104), teaser WOW table count updated, § 6.9 header count updated.
+- 🔧 **Targeted 413 error message.** Previously the 413 handler emitted both fixes (forward sign-in logs to LA + enable Sentinel data lake mirroring) for every 413, even when the failing query had nothing to do with sign-in tables. Now the engine inspects the failing query (with KQL string literals stripped, same v2.1.200 trick to avoid `"Identity"` false positives) and:
+  - **If the query references `AADSignInEvents` / `EntraIdSignInEvents` / `GraphAPIAuditEvents`** → emit BOTH fixes, with the sign-in-log forwarding labelled "PREFERRED FOR SIGN-IN REPORTS".
+  - **Otherwise** → emit only the data-lake-mirroring fix (and a fallback hint to drop wide columns from `IdentityAssetsCollect` ingestion).
+- 🔧 **Sign-in table classifier in `Get-DefenderTableOwner`** — the AAD/EntraId sign-in / GraphAPIAuditEvents branch now mentions the LA-forwarding alternative inline so customers see it both in the schema-error path AND the 413 path.
+
+### v2.1.200 — RiskAnalysis: strip KQL string literals before XDR detection (fixes v2.1.199 false-positive on `"Identity"` / `"Email"` column values) + size-warning format-string fix
+
+- 🆕 **`Identity_PowerUser_NoMFA_Summary` + `Identity_PowerUser_NoMFA_Detailed`** — Tier 2 users with no MFA registration. Tier 2 covers business owners / app owners / finance / HR / developers with elevated app access. RiskFactor_Consequence = 2; severity Medium-High. Probability factors: stale login (>90d), on-prem-synced, account >1y old. ConfigurationId `IDENTITY-MFA-003`.
+- 🆕 **`Identity_RegularUser_NoMFA_Summary` + `Identity_RegularUser_NoMFA_Detailed`** — Tier 3 users with no MFA registration. Volume here typically dwarfs higher tiers; even one regular user without MFA is the most common phishing/password-spray initial-access vector. RiskFactor_Consequence = 1; severity Medium. Same probability factors as PowerUser variant. ConfigurationId `IDENTITY-MFA-004`.
+- 🧰 **All four use the `EffectiveTier == N` filter pattern** consistent with the existing `Identity_PrivilegedUser_NoMFA_*` (Tier 0/1) reports. Excludes guest / B2B (handled by separate stale-guest report) and accounts younger than 7 days (provisioning grace period).
+- 🧰 **Pure-LA queries** (only touch `SI_IdentityAssets_CL`, no XDR tables) — under v2.1.200 routing they submit directly to LA, no advanced hunting round trip, no body-size limit. Should run cleanly on bare LA workspaces without Sentinel data lake.
+- 🧰 **Both orchestrators registered** — Summary entries in `RiskAnalysis_Summary_Bucket`, Detailed entries in `RiskAnalysis_Detailed_Bucket`. Total locked-report count: **100 → 104**. README § 6.9 inventory table renumbered (rows 67–100 → 71–104), teaser WOW table count updated, § 6.9 header count updated.
 
 ### v2.1.200 — RiskAnalysis: strip KQL string literals before XDR detection (fixes v2.1.199 false-positive on `"Identity"` / `"Email"` column values) + size-warning format-string fix
 

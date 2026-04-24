@@ -9509,6 +9509,197 @@
              CriticalityTier, CriticalityTierLevel, SecuritySeverity
         | order by CriticalityTier asc, RiskFactor_Probability desc, TotalIssues desc
 
+    - ReportName: Identity_PowerUser_NoMFA_Summary
+      ReportPurpose: >
+        Power users (Tier 2) with no MFA registration. Tier 2 covers intermediate-sensitivity
+        accounts -- business owners, app owners, finance, HR, developers with elevated app
+        access -- where a single-credential compromise can pivot into sensitive business data
+        even without classic admin roles. Excludes guest / B2B (handled separately) and accounts
+        younger than 7 days (provisioning grace period).
+      SecurityDomain: Identity
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability_DetailedScore
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - AssetCount
+      - TotalIssues
+      - ImpactedAssets
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |-
+        SI_IdentityAssets_CL
+        | where CollectionTime == toscalar(SI_IdentityAssets_CL | summarize max(CollectionTime))
+        | summarize arg_max(CollectionTime, *) by ObjectId
+        | where ObjectType == "User"
+        | where AccountEnabled == true
+        | where MFARegistered == false
+        | where CreatedDays > 7
+        | where IsExternal == false
+        | where IsB2BCollaborator == false
+        | where EffectiveTier == 2
+        | extend CSA_AssetTier = toint(extract(@'"AssetTier"\s*:\s*"tier-(\d)"', 1, tostring(CSA)))
+        | extend CriticalityTier = toint(coalesce(CSA_AssetTier, EffectiveTier, 2))
+        | extend CriticalityTierLevel =
+            case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+        | extend SecuritySeverity = "Medium-High"
+        | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
+        | extend RF_P_OnPremSynced = iff(OnPremSynced == true, 1, 0)
+        | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
+        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
+        | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
+            iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
+            iff(RF_P_OnPremSynced == 1, dynamic(["OnPremSynced"]),       dynamic([])),
+            iff(RF_P_OldAccount   == 1, dynamic(["AccountOlderThan1Y"]), dynamic([]))), ";")
+        | extend RiskFactor_Probability_DetailedScore =
+            strcat("StaleLastLogin=", tostring(RF_P_StaleLogin),
+                   ";OnPremSynced=", tostring(RF_P_OnPremSynced),
+                   ";AccountOlderThan1Y=", tostring(RF_P_OldAccount))
+        | extend SecurityDomain    = "Identity"
+        | extend Category          = "Authentication"
+        | extend Subcategory       = "MFA Registration"
+        | extend ConfigurationName = "Power user (Tier 2) missing MFA registration"
+        | extend ConfigurationId   = "IDENTITY-MFA-003"
+        | summarize
+            AssetCount             = dcount(ObjectId),
+            TotalIssues            = count(),
+            ImpactedAssets         = strcat_array(array_sort_asc(make_set(DisplayName)), ";"),
+            RiskFactor_Consequence = max(RiskFactor_Consequence),
+            arg_max(RiskFactor_Probability, RiskFactor_Probability_Detailed),
+            RiskFactor_Probability_DetailedScore = any(RiskFactor_Probability_DetailedScore)
+          by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+             CriticalityTier, CriticalityTierLevel, SecuritySeverity
+        | order by RiskFactor_Probability desc, TotalIssues desc
+
+    - ReportName: Identity_RegularUser_NoMFA_Summary
+      ReportPurpose: >
+        Regular users (Tier 3) with no MFA registration. While individual impact is lower
+        than for privileged or power users, regular users without MFA are the most common
+        initial-access vector in phishing + password-spray campaigns. Volume here often
+        dwarfs the higher tiers; even a single compromised regular user is a foothold for
+        lateral movement, internal phishing, and BEC. Excludes guest / B2B (handled separately)
+        and accounts younger than 7 days (provisioning grace period).
+      SecurityDomain: Identity
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability_DetailedScore
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - AssetCount
+      - TotalIssues
+      - ImpactedAssets
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |-
+        SI_IdentityAssets_CL
+        | where CollectionTime == toscalar(SI_IdentityAssets_CL | summarize max(CollectionTime))
+        | summarize arg_max(CollectionTime, *) by ObjectId
+        | where ObjectType == "User"
+        | where AccountEnabled == true
+        | where MFARegistered == false
+        | where CreatedDays > 7
+        | where IsExternal == false
+        | where IsB2BCollaborator == false
+        | where EffectiveTier == 3
+        | extend CSA_AssetTier = toint(extract(@'"AssetTier"\s*:\s*"tier-(\d)"', 1, tostring(CSA)))
+        | extend CriticalityTier = toint(coalesce(CSA_AssetTier, EffectiveTier, 2))
+        | extend CriticalityTierLevel =
+            case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+        | extend SecuritySeverity = "Medium"
+        | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
+        | extend RF_P_OnPremSynced = iff(OnPremSynced == true, 1, 0)
+        | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
+        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
+        | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
+            iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
+            iff(RF_P_OnPremSynced == 1, dynamic(["OnPremSynced"]),       dynamic([])),
+            iff(RF_P_OldAccount   == 1, dynamic(["AccountOlderThan1Y"]), dynamic([]))), ";")
+        | extend RiskFactor_Probability_DetailedScore =
+            strcat("StaleLastLogin=", tostring(RF_P_StaleLogin),
+                   ";OnPremSynced=", tostring(RF_P_OnPremSynced),
+                   ";AccountOlderThan1Y=", tostring(RF_P_OldAccount))
+        | extend SecurityDomain    = "Identity"
+        | extend Category          = "Authentication"
+        | extend Subcategory       = "MFA Registration"
+        | extend ConfigurationName = "Regular user (Tier 3) missing MFA registration"
+        | extend ConfigurationId   = "IDENTITY-MFA-004"
+        | summarize
+            AssetCount             = dcount(ObjectId),
+            TotalIssues            = count(),
+            ImpactedAssets         = strcat_array(array_sort_asc(make_set(DisplayName)), ";"),
+            RiskFactor_Consequence = max(RiskFactor_Consequence),
+            arg_max(RiskFactor_Probability, RiskFactor_Probability_Detailed),
+            RiskFactor_Probability_DetailedScore = any(RiskFactor_Probability_DetailedScore)
+          by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+             CriticalityTier, CriticalityTierLevel, SecuritySeverity
+        | order by RiskFactor_Probability desc, TotalIssues desc
+
     - ReportName: Identity_StaleUser_NoLogin180Days_Summary
       ReportPurpose: >
         Enabled user accounts with no interactive or non-interactive sign-in for 180+ days. Excludes guest/B2B accounts (handled separately). Stale privileged accounts are particularly dangerous as they may be forgotten but still retain active permissions.
@@ -14185,6 +14376,189 @@
                   RiskFactor_Probability_Detailed
                 | order by CriticalityTier asc
 
+    - ReportName: Identity_PowerUser_NoMFA_Detailed
+      ReportPurpose: >
+        Per-user detail for the PowerUser NoMFA Summary -- one row per Tier 2 user with no
+        MFA registration. Includes department / job title / on-prem-sync state / last sign-in /
+        Entra role memberships so the SOC can prioritise outreach.
+      SecurityDomain: Identity
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - DisplayName
+      - UPN
+      - ObjectId
+      - Department
+      - JobTitle
+      - EffectiveTier
+      - OnPremSynced
+      - MFARegistered
+      - AccountEnabled
+      - LastSignInDays
+      - LastSignInDateTime
+      - CreatedDays
+      - EntraID_Roles
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      SortBy:
+      - RiskFactor_Probability
+      ReportQuery:
+      - |-
+        SI_IdentityAssets_CL
+        | where CollectionTime == toscalar(SI_IdentityAssets_CL | summarize max(CollectionTime))
+        | summarize arg_max(CollectionTime, *) by ObjectId
+        | where ObjectType == "User"
+        | where AccountEnabled == true
+        | where MFARegistered == false
+        | where CreatedDays > 7
+        | where IsExternal == false
+        | where IsB2BCollaborator == false
+        | where EffectiveTier == 2
+        | extend CSA_AssetTier = toint(extract(@'"AssetTier"\s*:\s*"tier-(\d)"', 1, tostring(CSA)))
+        | extend CriticalityTier = toint(coalesce(CSA_AssetTier, EffectiveTier, 2))
+        | extend CriticalityTierLevel =
+            case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+        | extend SecuritySeverity   = "Medium-High"
+        | extend SecurityDomain     = "Identity"
+        | extend Category           = "Authentication"
+        | extend Subcategory        = "MFA Registration"
+        | extend ConfigurationName  = "Power user (Tier 2) missing MFA registration"
+        | extend ConfigurationId    = "IDENTITY-MFA-003"
+        | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
+        | extend RF_P_OnPremSynced = iff(OnPremSynced == true, 1, 0)
+        | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
+        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
+        | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
+            iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
+            iff(RF_P_OnPremSynced == 1, dynamic(["OnPremSynced"]),       dynamic([])),
+            iff(RF_P_OldAccount   == 1, dynamic(["AccountOlderThan1Y"]), dynamic([]))), ";")
+        | project SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+                  SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+                  DisplayName, UPN, ObjectId, Department, JobTitle, EffectiveTier,
+                  OnPremSynced, MFARegistered, AccountEnabled,
+                  LastSignInDays, LastSignInDateTime, CreatedDays, EntraID_Roles,
+                  RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed
+        | order by RiskFactor_Probability desc
+
+    - ReportName: Identity_RegularUser_NoMFA_Detailed
+      ReportPurpose: >
+        Per-user detail for the RegularUser NoMFA Summary -- one row per Tier 3 user with no
+        MFA registration. Volume is typically high here; sort + filter in Excel by department /
+        last-sign-in / on-prem-sync state to scope rollout campaigns.
+      SecurityDomain: Identity
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - DisplayName
+      - UPN
+      - ObjectId
+      - Department
+      - JobTitle
+      - EffectiveTier
+      - OnPremSynced
+      - MFARegistered
+      - AccountEnabled
+      - LastSignInDays
+      - LastSignInDateTime
+      - CreatedDays
+      - RiskFactor_Consequence
+      - RiskFactor_Probability
+      - RiskFactor_Probability_Detailed
+      SortBy:
+      - RiskFactor_Probability
+      ReportQuery:
+      - |-
+        SI_IdentityAssets_CL
+        | where CollectionTime == toscalar(SI_IdentityAssets_CL | summarize max(CollectionTime))
+        | summarize arg_max(CollectionTime, *) by ObjectId
+        | where ObjectType == "User"
+        | where AccountEnabled == true
+        | where MFARegistered == false
+        | where CreatedDays > 7
+        | where IsExternal == false
+        | where IsB2BCollaborator == false
+        | where EffectiveTier == 3
+        | extend CSA_AssetTier = toint(extract(@'"AssetTier"\s*:\s*"tier-(\d)"', 1, tostring(CSA)))
+        | extend CriticalityTier = toint(coalesce(CSA_AssetTier, EffectiveTier, 2))
+        | extend CriticalityTierLevel =
+            case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+        | extend SecuritySeverity   = "Medium"
+        | extend SecurityDomain     = "Identity"
+        | extend Category           = "Authentication"
+        | extend Subcategory        = "MFA Registration"
+        | extend ConfigurationName  = "Regular user (Tier 3) missing MFA registration"
+        | extend ConfigurationId    = "IDENTITY-MFA-004"
+        | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
+        | extend RF_P_OnPremSynced = iff(OnPremSynced == true, 1, 0)
+        | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
+        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
+        | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
+            iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
+            iff(RF_P_OnPremSynced == 1, dynamic(["OnPremSynced"]),       dynamic([])),
+            iff(RF_P_OldAccount   == 1, dynamic(["AccountOlderThan1Y"]), dynamic([]))), ";")
+        | project SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+                  SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+                  DisplayName, UPN, ObjectId, Department, JobTitle, EffectiveTier,
+                  OnPremSynced, MFARegistered, AccountEnabled,
+                  LastSignInDays, LastSignInDateTime, CreatedDays,
+                  RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed
+        | order by RiskFactor_Probability desc
+
     - ReportName: Identity_BreakGlass_Anomaly_Detailed
       ReportPurpose: >
         Per-identity detail view for BreakGlass Anomaly Summary.
@@ -17484,6 +17858,14 @@ ReportTemplates:
         UseQueryBucketing: false
         DefaultBucketCount: 1
         BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Identity_PowerUser_NoMFA_Detailed
+        UseQueryBucketing: false
+        DefaultBucketCount: 1
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Identity_RegularUser_NoMFA_Detailed
+        UseQueryBucketing: false
+        DefaultBucketCount: 1
+        BucketPlaceholderToken: __BUCKET_FILTER__
       - Name: Identity_BreakGlass_Anomaly_Detailed
         UseQueryBucketing: false
         DefaultBucketCount: 1
@@ -17686,6 +18068,14 @@ ReportTemplates:
         DefaultBucketCount: 1
         BucketPlaceholderToken: __BUCKET_FILTER__
       - Name: Identity_AnyUser_NoMFA_Summary
+        UseQueryBucketing: false
+        DefaultBucketCount: 1
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Identity_PowerUser_NoMFA_Summary
+        UseQueryBucketing: false
+        DefaultBucketCount: 1
+        BucketPlaceholderToken: __BUCKET_FILTER__
+      - Name: Identity_RegularUser_NoMFA_Summary
         UseQueryBucketing: false
         DefaultBucketCount: 1
         BucketPlaceholderToken: __BUCKET_FILTER__

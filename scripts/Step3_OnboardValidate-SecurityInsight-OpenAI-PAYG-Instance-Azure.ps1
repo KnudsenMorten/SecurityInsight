@@ -702,6 +702,17 @@ Write-Host ("    `$Global:OpenAI_apiVersion          = `"{0}`"" -f $AI_apiVersio
 Write-Host  "    `$Global:OpenAI_MaxTokensPerRequest = 16384"                      -ForegroundColor White
 Write-Host ""
 
+# v2.1.210 -- expose the values as $global:* so the InitialDeployment orchestrator
+# (or any other parent script that runs Step3 via & or dot-source) can auto-capture
+# them and write straight into CUSTOMDATA/SecurityInsight.custom.ps1 -- no manual
+# copy/paste of the printed paste-block above.
+$global:BuildSummaryByAI           = $true
+$global:OpenAI_apiKey              = $AI_apiKey
+$global:OpenAI_endpoint            = $AI_endpoint
+$global:OpenAI_deployment          = $AI_deployment
+$global:OpenAI_apiVersion          = $AI_apiVersion
+$global:OpenAI_MaxTokensPerRequest = 16384
+
 # ----------------------------------------------------------------------------
 # Exit code: non-zero if -ValidateOnly found any MISSING resource
 # ----------------------------------------------------------------------------

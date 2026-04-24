@@ -692,7 +692,9 @@ Write-Host ("  Location              : {0}" -f $Location)           -ForegroundC
 Write-Host ("  Endpoint              : {0}" -f $AI_endpoint)        -ForegroundColor White
 Write-Host ""
 Write-Host "  Copy into LauncherConfig.custom.ps1 (SecurityInsight_RiskAnalysis):" -ForegroundColor Yellow
+Write-Host "  (the BuildSummaryByAI master toggle is REQUIRED -- without it, the engine ignores the OpenAI_* values and skips the AI summary entirely)" -ForegroundColor Yellow
 Write-Host ""
+Write-Host  "    `$Global:BuildSummaryByAI           = `$true"                     -ForegroundColor Green
 Write-Host ("    `$Global:OpenAI_apiKey              = `"{0}`"" -f $AI_apiKey)     -ForegroundColor White
 Write-Host ("    `$Global:OpenAI_endpoint            = `"{0}`"" -f $AI_endpoint)   -ForegroundColor White
 Write-Host ("    `$Global:OpenAI_deployment          = `"{0}`"" -f $AI_deployment) -ForegroundColor White

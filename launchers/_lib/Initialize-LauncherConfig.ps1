@@ -52,6 +52,19 @@ function Initialize-LauncherConfig {
         [switch]$RequireCustom
     )
 
+    # Snapshot the four parameters into uniquely-named locals BEFORE any layer
+    # files get dot-sourced. The layered config files (shared-defaults, Layer 3
+    # solution custom, Layer 5 per-engine custom) all dot-source into THIS scope
+    # via `. $path`, so any bare `$Solution = ...` / `$Engine = ...` /
+    # `$RepoRoot = ...` / `$LauncherDir = ...` / `$Mode = ...` assignment in
+    # those files (i.e. anywhere a customer accidentally drops the `$global:`
+    # prefix) silently overwrites OUR function parameters. v2.1.203 fix.
+    $__siRepoRoot    = [string]$RepoRoot
+    $__siSolution    = [string]$Solution
+    $__siEngine      = [string]$Engine
+    $__siLauncherDir = [string]$LauncherDir
+    $__siMode        = [string]$Mode
+
     function _CfgStep ([string]$m) { Write-Host "[STEP]  $m" -ForegroundColor Cyan }
     function _CfgOk   ([string]$m) { Write-Host "[OK]    $m" -ForegroundColor Green }
     function _CfgInfo ([string]$m) { Write-Host "[INFO]  $m" -ForegroundColor Gray }
@@ -529,5 +542,8 @@ Copy $(Join-Path $LauncherDir 'LauncherConfig.sample.ps1') to LauncherConfig.cus
     _CfgRecordLayer 'Layer 6 - derived' '(initializer derivation step)' $true
 
     # ---- Write config snapshot log + prune old logs (7-day retention) --------
-    _CfgWriteSnapshotAndPrune -RepoRoot $RepoRoot -Solution $Solution -Engine $Engine -RetentionDays 7
+    # Use the v2.1.203 SNAPSHOTTED locals (taken before any dot-sourcing) so a
+    # bare `$Solution = ...` / `$RepoRoot = ...` in a customer-owned layer file
+    # can't blank out the params and break parameter binding here.
+    _CfgWriteSnapshotAndPrune -RepoRoot $__siRepoRoot -Solution $__siSolution -Engine $__siEngine -RetentionDays 7
 }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.209
+## v2.1.210
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Step3 + InitialDeployment): auto-capture OpenAI values into customdata (no copy/paste) (c70f0797)
 - feat(SI): InitialDeployment_Latest_Version_SecurityInsight.ps1 -- single-file orchestrator with built-in interactive setup wizard (cd351d7e)
 - feat(SI Setup Configurator): Initial Setup Wizard -- 5-step all-in-one flow emitting CUSTOMDATA/SecurityInsight.custom.ps1 (4c02e63d)
 - feat(SI sample): expand SecurityInsight.custom.sample.ps1 for the upcoming Initial Setup Wizard (4b637522)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI RiskAnalysis launchers): honor customer \$global:RiskAnalysis_Summary_Override / _Detailed_Override (Summary <-> Detailed flip) (bd226adf)
 - fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
 - docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
-- docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
 
 ---
 
@@ -44,6 +44,14 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.210 — Auto-capture Step3's OpenAI values into customdata (no copy/paste for novice users)
+
+- 🔧 **Customer concern**: novice users running `InitialDeployment` had to copy/paste 5 `OpenAI_*` lines from Step3's console output into `CUSTOMDATA/SecurityInsight.custom.ps1` after Phase 3. Easy to miss; defeats the "single-file all-in-one" promise.
+- 🔧 **Step3 fix.** Step3 already builds `$AI_apiKey` / `$AI_endpoint` / `$AI_deployment` / `$AI_apiVersion` as local vars then prints them as a paste-block. Now also exports them as `$global:OpenAI_apiKey` / `_endpoint` / `_deployment` / `_apiVersion` / `_MaxTokensPerRequest` (16384 default) at the very end of the script. Plus `$global:BuildSummaryByAI = $true`. The console paste-block stays — anyone running Step3 standalone still gets it — but the orchestrator now has a programmatic path.
+- 🔧 **InitialDeployment fix.** Phase 3 now reads `$global:OpenAI_*` after Step3 returns and writes each value into `CUSTOMDATA/SecurityInsight.custom.ps1` via the existing `Update-CustomData` helper (idempotent in-place edit + `.before-deploy.bak` backup). Status reports `OK (auto-captured)` with the captured count.
+- 🧰 **Result.** A novice running `.\InitialDeployment_Latest_Version_SecurityInsight.ps1` for the first time now ends up with a complete `CUSTOMDATA/SecurityInsight.custom.ps1` after one run — every value the engines need (SPN clientId + 2-yr secret, workspace resource ID, DCE ingestion URI, OpenAI key/endpoint/deployment/apiVersion) auto-populated. No manual edits required.
+- 🧰 **Backwards-compatible.** If Step3 is older than v2.1.210 (caches in `_install/SI/SCRIPTS/` not yet updated), Phase 3 logs `PARTIAL (captured=0/5)` instead of crashing, and the user sees the old paste-instruction. Re-running InstallUpdate fixes it.
 
 ### v2.1.209 — `InitialDeployment_Latest_Version_SecurityInsight.ps1` — single-file orchestrator with built-in interactive setup wizard
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.208
+## v2.1.209
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI): InitialDeployment_Latest_Version_SecurityInsight.ps1 -- single-file orchestrator with built-in interactive setup wizard (cd351d7e)
 - feat(SI Setup Configurator): Initial Setup Wizard -- 5-step all-in-one flow emitting CUSTOMDATA/SecurityInsight.custom.ps1 (4c02e63d)
 - feat(SI sample): expand SecurityInsight.custom.sample.ps1 for the upcoming Initial Setup Wizard (4b637522)
 - fix(SI RiskAnalysis Excel): defensive XLSX-safe sanitizer to kill the 'Repaired Records: sharedStrings.xml' open warning (3fab7506)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI RiskAnalysis launchers): stop stomping Layer 3 customer feature toggles (BuildSummaryByAI and 5 others) (8540dfb7)
 - docs(SI README TOC): list § 1 subsections (Outputs / Use-cases / Agents / Sample output) (fe6343c0)
 - docs(SI README): add 'SecurityInsight Agents (work in progress)' roadmap section after Use-cases (ecee38f1)
-- docs(SI README): teaser hook rephrased + verified detection counts (no number change) (b50ad848)
 
 ---
 
@@ -44,6 +44,30 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.209 — `InitialDeployment_Latest_Version_SecurityInsight.ps1` — single-file orchestrator with built-in interactive setup wizard
+
+- 🆕 **One script does everything.** New file at the SI install root: `InitialDeployment_Latest_Version_SecurityInsight.ps1`. First run: a built-in TUI wizard asks ~5 yes/no questions, then signs the admin in interactively, creates the SPN + 2-year secret named `secret` + grants tenant-root + per-subscription Owner roles, provisions Log Analytics infrastructure, optionally provisions OpenAI, runs the IdentityAssetsCollect engine to populate `SI_IdentityAssets_CL`, runs RiskAnalysis to validate end-to-end, and (optionally) deploys the Power BI dashboard. Re-run any time → idempotent validation pass.
+- 🧰 **Wizard prompts (TUI, ~5 questions, mostly Enter-to-accept-defaults):**
+  1. **Auth method:** SPN+secret (auto-create) [default] / SPN+secret (existing) / Managed Identity
+  2. **Log Analytics subscription ID** (required GUID)
+  3. **Enable AI summary?** [Y/n] — toggles `$global:BuildSummaryByAI`
+  4. **Send mail?** [y/N] — if Yes, From / To / SMTP server+port / auth user+pass
+  5. **Upload reports?** [y/N] — if Yes, blob URL or UNC path
+- 🧰 **Interactive sign-in only on first run.** When `$global:SpnClientId` + `$global:SpnClientSecret` are missing from `CUSTOMDATA/SecurityInsight.custom.ps1`, Phase 1 calls `Connect-AzAccount` + `Connect-MgGraph` interactively (browser sign-in by Global Admin / Privileged Role Admin). The created SPN + secret are written back into `SecurityInsight.custom.ps1` so subsequent runs use SPN auth (non-interactive). `-ForceInteractive` flag triggers re-sign-in if the secret was rotated externally.
+- 🧰 **Auto-grant Owner on the LA + OpenAI subscriptions.** During Phase 1's interactive admin session — the only window when a human with elevated rights is available — the script grants the new SPN `Owner` on `$global:SubscriptionId` (LA) and `$global:Step3_SubscriptionId` (OpenAI, if different). Without this, subsequent SPN-authenticated runs can't auto-create workspaces / DCEs / DCRs / OpenAI accounts on the target subscriptions. Idempotent: skips if role already assigned. Logs a clear hint with the manual grant command if the signed-in admin lacks Owner / UAA on a target subscription.
+- 🧰 **Tenant-root grants** (Reader + Tag Contributor at the tenant-root MG) also happen in Phase 1 — same pattern as the existing Step1 engine.
+- 🧰 **6 phases, each idempotent + logged:**
+  - **1. SPN+Permissions** — interactive on first run, validate-only on re-run
+  - **2. LA infrastructure** — workspace + DCE + DCR + DCE/DCR resource groups + RBAC
+  - **3. Azure OpenAI** — only if `$global:BuildSummaryByAI=$true`; calls existing Step3 engine
+  - **4. IdentityAssetsCollect** — populates `SI_IdentityAssets_CL`
+  - **5. RiskAnalysis** — first end-to-end report run (Summary mode default)
+  - **6. Power BI** — only if `$global:SendToPowerBI=$true`; calls Step4 engine
+- 🧰 **Write-back.** Auto-generated SPN clientId / secret / OpenAI keys / DCE ingestion URI / workspace resource ID get persisted into `CUSTOMDATA/SecurityInsight.custom.ps1` automatically (with backup `.before-deploy.bak`). After a single first run, the file is complete — customer never has to copy/paste console output.
+- 🧰 **Final summary table** — Phase / Status (OK / SKIP / FAIL) / Seconds / Detail. Non-zero exit code if any critical phase failed.
+- 🧰 **Flags:** `-Phase Spn,LA` (run only specific phases), `-ForceInteractive` (re-sign-in for SPN repair), `-ReconfigureWizard` (re-prompt the wizard even when customdata exists), `-SkipWriteBack` (don't edit customdata file).
+- 🧰 **Fully complements the v2.1.208 HTML wizard** — customers can use either path. HTML wizard for visual planning + the orchestrator picks the file up; or just run the orchestrator and answer 5 prompts at the command line.
 
 ### v2.1.208 — Setup Configurator: new `🚀 Initial Setup Wizard` tab (now the default) — configure everything in ONE flow, emits `CUSTOMDATA/SecurityInsight.custom.ps1`
 

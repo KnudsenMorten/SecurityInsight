@@ -602,7 +602,12 @@ function Get-DefenderTableOwner {
         }
         '^(AADSignInEvents|EntraIdSignInEvents|AADSpnSignInEvents|EntraIdSpnSignInEvents|GraphAPIAuditEvents|IdentityAccountInfo)' {
             return ("Owned by Microsoft Entra (Defender XDR pulls Entra sign-in / audit logs into advanced hunting). " +
-                    "Requires Entra ID P1 / P2 with diagnostic-settings forwarding enabled.")
+                    "Requires Entra ID P1 / P2 with diagnostic-settings forwarding enabled. " +
+                    "ALTERNATIVE: forward Entra Sign-in + Audit logs to your Log Analytics workspace via " +
+                    "Entra > Diagnostic settings (preferably routed through Microsoft Sentinel for retention + " +
+                    "analytic-rule coverage). The engine can then run sign-in queries against the LA-side " +
+                    "SigninLogs / AADNonInteractiveUserSignInLogs / AuditLogs tables instead of the XDR ones, " +
+                    "which avoids the advanced-hunting body cap on big-tenant let-block bridges.")
         }
         '^ExposureGraph' {
             return ("Owned by Microsoft Security Exposure Management (MDEM -- bundled in M365 E5 Security / " +
@@ -755,6 +760,12 @@ function Invoke-GraphHuntingQuery {
 
             $looksOverflow  = (Test-IsBucketOverflowError -Err $_) -or ($msg -match 'exceeded the allowed result size|exceeded the allowed limits|preempted')
 
+            # 413 Request Entity Too Large -- the nginx in front of /security/runHuntingQuery
+            # rejected the body size before it reached the hunting backend. This is hit by the
+            # let-block bridge on big customer estates, OR by mixed queries that join
+            # SI_IdentityAssets_CL with XDR sign-in tables (EntraIdSignInEvents etc.).
+            $looksRequestTooLarge = ($msg -match '413 Request Entity Too Large')
+
             # Schema error: missing table or column. Deterministic -- retrying cannot help.
             # Capture the table name and classify it by Defender service so the log line tells
             # the customer WHICH service / SKU they're missing.
@@ -770,6 +781,42 @@ if ($looksAuth) {
                 try { Connect-GraphHighPriv } catch { Write-Err2 "Graph reconnect failed: $($_.Exception.Message)"; throw }
             }
 
+
+            if ($looksRequestTooLarge) {
+                # Inspect THIS query (with KQL string literals stripped to avoid false positives
+                # like the Identity / Email regex trap from v2.1.199) to decide which fix to surface.
+                $qStripped = $Query
+                $qStripped = [regex]::Replace($qStripped, '"[^"\r\n]*"', '""')
+                $qStripped = [regex]::Replace($qStripped, "'[^'\r\n]*'", "''")
+                $qStripped = [regex]::Replace($qStripped, "@'[^']*'", "''")
+                $qStripped = [regex]::Replace($qStripped, '@"[^"]*"', '""')
+                $qStripped = [regex]::Replace($qStripped, '//[^\r\n]*', '')
+                $referencesSignInTables = ($qStripped -match '\b(AAD\w*SignIn\w*|EntraId\w*SignIn\w*|GraphAPIAuditEvents)\b')
+
+                Write-Warn2 ("Query body exceeded the advanced-hunting nginx body cap (413 Request Entity Too Large). " +
+                             "This is a hard Microsoft-side limit (~1 MB) on /security/runHuntingQuery; not retryable.")
+
+                if ($referencesSignInTables) {
+                    Write-Warn2 ("This query joins SI_IdentityAssets_CL with XDR sign-in tables (AADSignInEvents / " +
+                                 "EntraIdSignInEvents / GraphAPIAuditEvents), so it MUST go through advanced hunting with " +
+                                 "an inline let-block of your asset table. Two fixes:")
+                    Write-Warn2 ("  (1) PREFERRED FOR SIGN-IN REPORTS: forward Entra Sign-in + Audit logs to your Log " +
+                                 "Analytics workspace via Entra > Diagnostic settings (preferably routed through Microsoft " +
+                                 "Sentinel for retention + analytic-rule coverage). Once SigninLogs / " +
+                                 "AADNonInteractiveUserSignInLogs / AuditLogs are in LA, the YAML query authors can switch " +
+                                 "the join target to the LA-side table -- the report becomes pure-LA and bypasses the body cap.")
+                    Write-Warn2 ("  (2) Enable Microsoft Sentinel data lake + table mirroring for SI_IdentityAssets_CL. The " +
+                                 "engine probe at startup detects this and queries submit DIRECTLY to advanced hunting with " +
+                                 "no inline let-block -- the asset table is natively visible there.")
+                } else {
+                    Write-Warn2 ("Fix: enable Microsoft Sentinel data lake + table mirroring for SI_IdentityAssets_CL. The " +
+                                 "engine probe at startup detects this and queries submit DIRECTLY to advanced hunting with " +
+                                 "no inline let-block -- the asset table is natively visible there. Alternatively, reduce " +
+                                 "the per-row size of your custom asset table (drop wide columns from CSA / TierSources / " +
+                                 "Workload_Credentials in IdentityAssetsCollect) to keep the inline block under ~1 MB.")
+                }
+                throw
+            }
 
             if ($looksOverflow) {
                 Write-Warn2 "Query exceeded allowed limits/result size; not retrying (deterministic failure)."

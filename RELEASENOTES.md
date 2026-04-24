@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.204
+## v2.1.205
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI YAML): Identity_AnyUser_NoMFA_Summary excludes external/B2B + fix typo in PrivilegedUser NoMFA Detailed scope (ba90f139)
 - fix(SI RiskAnalysis): drop @() wrap at the pure-LA Invoke-LogAnalyticsKqlQuery caller (02beb56d)
 - fix(SI _lib Initialize-LauncherConfig): snapshot params before dot-sourcing layer files (8f84a82b)
 - fix(SI RiskAnalysis): pure-LA route via _SIDirectRows marker, bypassing the broken broadcast + ConvertTo-PSObjectDeep path (30715aa8)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): tighten teaser -- fold 'Included in SecurityInsight today' + subheader into the table header; drop graph-traversals paragraph (01982cc1)
 - fix(SI README): '###' rendering as literal text across sections 4.x / 5 / 6.x (GFM </details> blank-line bug) (ec44172b)
 - docs: simplify 'Microsoft MVP (Security . Azure . Security Copilot)' -> 'Microsoft MVP' across 74 files (22510119)
-- docs(SI README): teaser copy tweaks -- 'Included in SecurityInsight today' + trim implementation details (e4668f4c)
 
 ---
 
@@ -44,6 +44,11 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.205 — Locked YAML: `Identity_AnyUser_NoMFA_Summary` excludes external / B2B + typo fix in PrivilegedUser NoMFA Detailed scope
+
+- 🧰 **`Identity_AnyUser_NoMFA_Summary` — added `| where IsExternal == false`** to the main KQL filter chain. External / B2B users typically register MFA in their HOME tenant, not the resource tenant; including them inflated the "users missing MFA" count with accounts that aren't actually the reporting tenant's responsibility. The dedicated `Identity_StaleGuest_NoLogin90Days_*` reports already cover guest-specific hygiene separately.
+- 🔧 **Typo fix — `Identity_PrivilegedUser_NoMFA_Detailed` CriticalityTierLevelScope had `"Low - tier 32"`** (stray trailing `2`) instead of `"Low - tier 3"`. The engine's filter uses an exact-match (case-insensitive) compare, so Tier-3 findings under this report would never match the scope and get silently dropped. Fixed to the canonical `"Low - tier 3"` value used everywhere else in the catalog.
 
 ### v2.1.204 — RiskAnalysis pure-LA route: drop the `@()` wrap around the comma-protected return (THE actual cause of the SyncRoot wrap and System.Array properties leaking into rows)
 

@@ -9475,6 +9475,7 @@
         | where ObjectType == "User"
         | where AccountEnabled == true
         | where MFARegistered == false
+        | where IsExternal == false
         | where CreatedDays > 7
         | extend CSA_AssetTier = toint(extract(@'"AssetTier"\s*:\s*"tier-(\d)"', 1, tostring(CSA)))
         | extend CriticalityTier = toint(coalesce(CSA_AssetTier, EffectiveTier, 2))

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.194
+## v2.1.195
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI Step3): include \$global:BuildSummaryByAI = \$true in end-of-run paste-block + sample.ps1 cross-reference (22a20218)
 - fix(SI Step3 OpenAI): ship the missing LauncherConfig.defaults.ps1 (1dbf4209)
 - docs(SI): replace stale 'LauncherConfig.ps1' user-facing references with 'LauncherConfig.custom.ps1' (37 hits / 19 files) (0ae16e21)
 - fix(SI Step1 + Step4 launchers): auth fields fall back to runtime \$global:Spn* when Step-specific names aren't set (33f757a2)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI CriticalAssetTagging): accept <stem>--excluded--SI alongside <stem>--tier<N>--SI (e7a351c8)
 - fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
 - docs(SI README): promote Step 2/3/4 out of § 3.5.x into top-level § 3.6/3.7/3.8 (c452fe2b)
-- fix(SI IdentityAssetsCollect launcher): drop duplicate module pre-install loop (f56f98c2)
 
 ---
 
@@ -44,6 +44,22 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.195 — Step3 end-of-run + sample now include `$global:BuildSummaryByAI = $true` (the master toggle)
+
+- 🔧 **Bug.** Step3's "Copy into LauncherConfig.custom.ps1 (SecurityInsight_RiskAnalysis):" print-out emitted the 5 `$global:OpenAI_*` lines but **not** `$global:BuildSummaryByAI = $true`. Customers who pasted the block verbatim into RiskAnalysis got the OpenAI endpoint configured correctly, but `BuildSummaryByAI` defaulted to `$false` so the AI summary was silently skipped on every run.
+- 🔧 **Fix.** Step3 print-out now leads with the master toggle line **in green** so it's visually obvious it must be present:
+  ```
+    $Global:BuildSummaryByAI           = $true                       <- master toggle
+    $Global:OpenAI_apiKey              = "..."
+    $Global:OpenAI_endpoint            = "..."
+    $Global:OpenAI_deployment          = "..."
+    $Global:OpenAI_apiVersion          = "..."
+    $Global:OpenAI_MaxTokensPerRequest = 16384
+  ```
+  Header callout above the block makes the dependency explicit: *"the BuildSummaryByAI master toggle is REQUIRED — without it, the engine ignores the OpenAI_* values and skips the AI summary entirely"*.
+- 📚 **`Step3 LauncherConfig.sample.ps1` updated** with a 12-line IMPORTANT block at the bottom of the minimum-copy-paste section explaining: Step3 only PROVISIONS resources; to USE them in RiskAnalysis you also need to add 6 globals (the toggle + the 5 OpenAI_* lines) to RiskAnalysis's own `LauncherConfig.custom.ps1`. Step3's end-of-run output prints the lines with real values pre-filled.
+- 🧰 **Setup Configurator unaffected** — it generates Step3's OWN config (which doesn't include `BuildSummaryByAI` because that's a RiskAnalysis variable, not a Step3 variable). Cross-tab dependency is documented in the sample file.
 
 ### v2.1.194 — Step3 OpenAI: ship the missing `LauncherConfig.defaults.ps1`
 

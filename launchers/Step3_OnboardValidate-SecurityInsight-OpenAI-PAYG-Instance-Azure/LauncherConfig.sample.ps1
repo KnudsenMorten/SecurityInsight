@@ -89,6 +89,21 @@
 # LauncherConfig.custom.ps1, and run:
 #   .\launcher.community-vm.template.ps1
 # Re-run with -ValidateOnly any time to check the deployment is still healthy.
+#
+# IMPORTANT: Step3 ONLY provisions the OpenAI account + deployment. To actually
+# USE them in SecurityInsight_RiskAnalysis, after Step3 completes you must add
+# 6 globals to RiskAnalysis's LauncherConfig.custom.ps1 -- the master toggle
+# AND the 5 OpenAI_* settings:
+#   $global:BuildSummaryByAI           = $true
+#   $global:OpenAI_apiKey              = '<from Step3 end-of-run print>'
+#   $global:OpenAI_endpoint            = '<from Step3 end-of-run print>'
+#   $global:OpenAI_deployment          = '<from Step3 end-of-run print>'
+#   $global:OpenAI_apiVersion          = '<from Step3 end-of-run print>'
+#   $global:OpenAI_MaxTokensPerRequest = 16384
+# Without $global:BuildSummaryByAI = $true the AI summary is skipped entirely
+# even if the 5 OpenAI_* values are correct -- it's the master on/off switch.
+# Step3's end-of-run output prints the exact lines (with your real apiKey /
+# endpoint / deployment values filled in) ready to paste.
 
 <#
 # --- Auth: SPN + plaintext secret (TESTING ONLY; use Method 1-3 in production) ---

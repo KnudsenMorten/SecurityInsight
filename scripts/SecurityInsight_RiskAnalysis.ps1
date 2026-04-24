@@ -349,6 +349,253 @@ function Ensure-GraphAuth {
     }
 }
 
+# ===============================================================================================
+# CL-TABLE BRIDGE  (SI_IdentityAssets_CL transparent fallback)
+#
+# Advanced hunting (Microsoft Graph /security/runHuntingQuery) only sees XDR tables --
+# custom *_CL tables in Log Analytics are invisible unless Sentinel data lake mirroring is on.
+# To keep the 17000+ lines of YAML queries portable to bare LA workspaces:
+#
+#   1. First time we see a query referencing SI_IdentityAssets_CL, lazy-probe AH with
+#      'SI_IdentityAssets_CL | take 1'. Cache the answer.
+#   2. If the table IS accessible (data lake mirroring active) -> submit query as-is.
+#   3. If NOT accessible -> fetch the table once from Log Analytics via the existing
+#      Connect-AzAccount session (Invoke-AzOperationalInsightsQuery -- no manual token /
+#      REST plumbing), cache rows, and prepend a 'let SI_IdentityAssets_CL = datatable(...) [...];'
+#      block to every query that references the table. Customer KQL is unmodified -- the
+#      let definition shadows the missing table reference.
+#
+# Caveat: KQL request body is bounded (~1 MB). Estates with >~5k assets carrying large
+#         columns (CSA, Workload_Credentials) may exceed the limit; engine warns and
+#         recommends Sentinel data lake mirroring.
+# ===============================================================================================
+
+function Resolve-WorkspaceCustomerId {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$WorkspaceResourceId)
+
+    if (-not $script:_WorkspaceCustomerIdCache) { $script:_WorkspaceCustomerIdCache = @{} }
+    if ($script:_WorkspaceCustomerIdCache.ContainsKey($WorkspaceResourceId)) {
+        return $script:_WorkspaceCustomerIdCache[$WorkspaceResourceId]
+    }
+
+    if ($WorkspaceResourceId -notmatch '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/[Mm]icrosoft\.[Oo]perational[Ii]nsights/workspaces/([^/]+)') {
+        throw "Invalid WorkspaceResourceId for SI_IdentityAssets_CL bridge: $WorkspaceResourceId"
+    }
+    $subId  = $matches[1]
+    $rgName = $matches[2]
+    $wsName = $matches[3]
+
+    $curSubId = $null
+    try { $curSubId = (Get-AzContext).Subscription.Id } catch {}
+    if ($curSubId -and $curSubId -ne $subId) {
+        $null = Set-AzContext -Subscription $subId -ErrorAction Stop
+    }
+
+    $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $rgName -Name $wsName -ErrorAction Stop
+    $custId = $ws.CustomerId.Guid
+
+    if ($curSubId -and $curSubId -ne $subId) {
+        try { $null = Set-AzContext -Subscription $curSubId -ErrorAction SilentlyContinue } catch {}
+    }
+
+    $script:_WorkspaceCustomerIdCache[$WorkspaceResourceId] = $custId
+    return $custId
+}
+
+function Invoke-LogAnalyticsKqlQuery {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$WorkspaceResourceId,
+        [Parameter(Mandatory)][string]$Query,
+        [int]$TimeoutSec = 600
+    )
+
+    # Reuse the existing Connect-AzAccount session via Az.OperationalInsights -- no manual
+    # token retrieval, no REST plumbing. Az.OperationalInsights ships with the Az meta-module,
+    # which is in $script:SecurityInsight_RequiredModules (already ensured at engine startup).
+    $custId = Resolve-WorkspaceCustomerId -WorkspaceResourceId $WorkspaceResourceId
+    $resp   = Invoke-AzOperationalInsightsQuery -WorkspaceId $custId -Query $Query -Wait $TimeoutSec -ErrorAction Stop
+
+    if (-not $resp -or -not $resp.Results) { return @() }
+    return ,@($resp.Results)
+}
+
+function Get-IdentityAssetsSnapshot {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$WorkspaceResourceId)
+
+    if ($null -ne $script:_IdentityAssetsSnapshot) { return $script:_IdentityAssetsSnapshot }
+
+    Write-Info "SI_IdentityAssets_CL not present in advanced hunting -- fetching latest snapshot from Log Analytics workspace ..."
+
+    # Pre-deduplicate in LA: arg_max by ObjectId on the most recent CollectionTime.
+    # Mirrors the universal pattern every YAML query uses, so the inline let block is a drop-in.
+    $kql = @'
+SI_IdentityAssets_CL
+| where TimeGenerated > ago(7d)
+| where CollectionTime == toscalar(SI_IdentityAssets_CL | where TimeGenerated > ago(7d) | summarize max(CollectionTime))
+| summarize arg_max(CollectionTime, *) by ObjectId
+'@
+    $rows = @()
+    try {
+        $rows = @(Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $WorkspaceResourceId -Query $kql)
+    } catch {
+        Write-Err2 ("Failed to fetch SI_IdentityAssets_CL snapshot from LA: {0}" -f $_.Exception.Message)
+        $rows = @()
+    }
+    Write-Ok ("fetched {0} identity asset rows from LA workspace (cached for run lifetime)" -f $rows.Count)
+    $script:_IdentityAssetsSnapshot = $rows
+    return $rows
+}
+
+function ConvertTo-KqlStringLiteral {
+    param($Value)
+    if ($null -eq $Value) { return '""' }
+    $s = [string]$Value
+    $s = $s.Replace('\', '\\').Replace('"', '\"').Replace("`r", '\r').Replace("`n", '\n').Replace("`t", '\t')
+    return '"' + $s + '"'
+}
+
+function ConvertTo-KqlDatatableLet {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$LetName,
+        [Parameter(Mandatory)]$Rows
+    )
+
+    $rowArr = @($Rows)
+
+    if ($rowArr.Count -eq 0) {
+        return "let $LetName = datatable(ObjectId:string, ObjectType:string, AccountEnabled:bool, CollectionTime:datetime) [];"
+    }
+
+    # Union of all property names across rows (defensive -- arg_max should yield consistent shape, but be safe)
+    $allCols = New-Object System.Collections.Generic.List[string]
+    $seen    = @{}
+    foreach ($r in $rowArr) {
+        foreach ($p in $r.PSObject.Properties) {
+            if (-not $seen.ContainsKey($p.Name)) { $seen[$p.Name] = $true; [void]$allCols.Add($p.Name) }
+        }
+    }
+
+    # Type inference: walk rows, pin the first non-null value per column to a KQL type
+    $colTypes = @{}
+    foreach ($n in $allCols) { $colTypes[$n] = $null }
+    foreach ($r in $rowArr) {
+        foreach ($n in $allCols) {
+            if ($null -ne $colTypes[$n]) { continue }
+            $v = $r.$n
+            if ($null -eq $v) { continue }
+            $t = if     ($v -is [bool])     { 'bool' }
+                 elseif ($v -is [datetime]) { 'datetime' }
+                 elseif ($v -is [int] -or $v -is [long] -or $v -is [int16] -or $v -is [int32] -or $v -is [int64] -or $v -is [byte]) { 'long' }
+                 elseif ($v -is [double] -or $v -is [decimal] -or $v -is [single]) { 'real' }
+                 elseif ($v -is [string] -and $v -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}') { 'datetime' }
+                 else { 'string' }
+            $colTypes[$n] = $t
+        }
+    }
+    foreach ($n in $allCols) { if ($null -eq $colTypes[$n]) { $colTypes[$n] = 'string' } }
+
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append("let $LetName = datatable(")
+    for ($i = 0; $i -lt $allCols.Count; $i++) {
+        if ($i -gt 0) { [void]$sb.Append(', ') }
+        [void]$sb.AppendFormat('{0}:{1}', $allCols[$i], $colTypes[$allCols[$i]])
+    }
+    [void]$sb.AppendLine(') [')
+
+    $rowCount = $rowArr.Count
+    for ($r = 0; $r -lt $rowCount; $r++) {
+        $row = $rowArr[$r]
+        for ($i = 0; $i -lt $allCols.Count; $i++) {
+            if ($i -gt 0) { [void]$sb.Append(',') }
+            $n = $allCols[$i]
+            $v = $row.$n
+            $t = $colTypes[$n]
+
+            if ($null -eq $v) {
+                $stub = switch ($t) {
+                    'bool'     { 'bool(null)' }
+                    'datetime' { 'datetime(null)' }
+                    'long'     { 'long(null)' }
+                    'real'     { 'real(null)' }
+                    default    { '""' }
+                }
+                [void]$sb.Append($stub)
+            } else {
+                switch ($t) {
+                    'bool' {
+                        $boolStr = if ($v) { 'true' } else { 'false' }
+                        [void]$sb.Append($boolStr)
+                    }
+                    'datetime' {
+                        $dt = if ($v -is [datetime]) { $v } else { [datetime]::Parse([string]$v, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) }
+                        [void]$sb.AppendFormat('datetime({0})', $dt.ToUniversalTime().ToString('o'))
+                    }
+                    'long' { [void]$sb.Append([string]$v) }
+                    'real' { [void]$sb.Append(([double]$v).ToString([System.Globalization.CultureInfo]::InvariantCulture)) }
+                    default { [void]$sb.Append((ConvertTo-KqlStringLiteral $v)) }
+                }
+            }
+        }
+        if ($r -lt $rowCount - 1) { [void]$sb.AppendLine(',') } else { [void]$sb.AppendLine() }
+    }
+    [void]$sb.AppendLine('];')
+
+    return $sb.ToString()
+}
+
+function Get-IdentityAssetsLetBlock {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$WorkspaceResourceId)
+
+    if ($null -ne $script:_IdentityAssetsLetBlock) { return $script:_IdentityAssetsLetBlock }
+
+    $rows  = Get-IdentityAssetsSnapshot -WorkspaceResourceId $WorkspaceResourceId
+    $block = ConvertTo-KqlDatatableLet -LetName 'SI_IdentityAssets_CL' -Rows $rows
+
+    $sizeKb = [int]([System.Text.Encoding]::UTF8.GetByteCount($block) / 1024)
+    if ($sizeKb -gt 700) {
+        Write-Warn2 ("SI_IdentityAssets_CL inline let block is {0} KB. May exceed advanced hunting query body limit (~1 MB). " +
+                     "If queries fail with payload-too-large errors, enable Sentinel data lake + table mirroring for SI_IdentityAssets_CL " +
+                     "to switch to native cross-table hunting." -f $sizeKb)
+    } else {
+        Write-Info ("SI_IdentityAssets_CL inline let block: {0} KB (will be prepended to every query referencing the table)" -f $sizeKb)
+    }
+
+    $script:_IdentityAssetsLetBlock = $block
+    return $block
+}
+
+function Test-AdvancedHuntingHasIdentityAssets {
+    [CmdletBinding()]
+    param()
+
+    if ($null -ne $script:_AssetTableInAdvHunting) { return $script:_AssetTableInAdvHunting }
+
+    Write-Info "Probing whether SI_IdentityAssets_CL is queryable from advanced hunting (Sentinel data lake mirroring check) ..."
+    try {
+        Ensure-GraphAuth
+        # Direct call -- bypass Invoke-GraphHuntingQuery to avoid recursion through the bridge.
+        $null = Start-MgSecurityHuntingQuery -Query 'SI_IdentityAssets_CL | take 1' -ErrorAction Stop
+        $script:_AssetTableInAdvHunting = $true
+        Write-Ok "SI_IdentityAssets_CL IS queryable from advanced hunting (data lake mirroring active). Queries submit as-is."
+    } catch {
+        $msg = $_.Exception.Message
+        if ($msg -match "Failed to resolve table or column expression named 'SI_IdentityAssets_CL'") {
+            $script:_AssetTableInAdvHunting = $false
+            Write-Info "SI_IdentityAssets_CL is NOT queryable from advanced hunting -- engine will inline-bridge from Log Analytics."
+        } else {
+            # Some other error (auth, throttle). Don't cache; let the real call surface it.
+            Write-Warn2 ("AdvancedHunting probe inconclusive ({0}). Will assume table is accessible and let the real call decide." -f $msg)
+            $script:_AssetTableInAdvHunting = $true
+        }
+    }
+    return $script:_AssetTableInAdvHunting
+}
+
 function Invoke-GraphHuntingQuery {
     [CmdletBinding()]
     param(
@@ -356,6 +603,21 @@ function Invoke-GraphHuntingQuery {
         [int]$ReconnectMaxAgeMinutes = 45,
         [int]$MaxRetries = 4
     )
+
+    # CL-table bridge: if the query references SI_IdentityAssets_CL and the table is NOT
+    # mirrored to advanced hunting, prepend an inline let-block built from a one-shot LA fetch.
+    if ($Query -match '\bSI_IdentityAssets_CL\b') {
+        $available = Test-AdvancedHuntingHasIdentityAssets
+        if (-not $available) {
+            $wsResId = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_WorkspaceResourceId)) { [string]$global:SI_RiskAnalysis_WorkspaceResourceId }
+                       else { [string]$global:WorkspaceResourceId }
+            if ([string]::IsNullOrWhiteSpace($wsResId)) {
+                throw "Cannot bridge SI_IdentityAssets_CL: `$global:WorkspaceResourceId is not set. Either set it (recommended) or enable Sentinel data lake + table mirroring."
+            }
+            $letBlock = Get-IdentityAssetsLetBlock -WorkspaceResourceId $wsResId
+            $Query    = $letBlock + "`n" + $Query
+        }
+    }
 
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         Ensure-GraphAuth -MaxAgeMinutes $ReconnectMaxAgeMinutes

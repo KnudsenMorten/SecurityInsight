@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.1.196
+## v2.1.197
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI RiskAnalysis): transparent SI_IdentityAssets_CL bridge for workspaces without Sentinel data lake mirroring (3c18481c)
 - chore(SI IdentityAssets defaults): drop WorkspaceResourceId + ExportDestination pre-declarations (333e09df)
 - fix(SI Step3): include \$global:BuildSummaryByAI = \$true in end-of-run paste-block + sample.ps1 cross-reference (22a20218)
 - fix(SI Step3 OpenAI): ship the missing LauncherConfig.defaults.ps1 (1dbf4209)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): add 'what you get out of the box' count table under the teaser (7e5d44aa)
 - feat(SI CriticalAssetTagging): ship ~177 curated sample tagging rules in Mode: Test + README guidance (b2a2d58a)
 - feat(SI CriticalAssetTagging): accept <stem>--excluded--SI alongside <stem>--tier<N>--SI (e7a351c8)
-- fix(publish.yml): CUSTOMDATA/CUSTOMSCRIPTS safety rail must require a path-context, not a bare substring (710187c6)
 
 ---
 
@@ -44,6 +44,17 @@ The auto-generated commit log above tells you **what** changed in code. This sec
 Legend: 🆕 new feature · 🔧 fix · 📚 docs · 🧰 infrastructure · ⚠️ breaking (none so far in v2.1.x)
 
 ---
+
+### v2.1.197 — RiskAnalysis: transparent `SI_IdentityAssets_CL` bridge for workspaces without Sentinel data lake mirroring
+
+- 🔧 **Bug.** Standing up RiskAnalysis on a fresh Log Analytics workspace **without Sentinel + data lake** failed every report whose KQL touched `SI_IdentityAssets_CL`: advanced hunting (Microsoft Graph `/security/runHuntingQuery`) only sees XDR tables and `IdentityInfo`/`ExposureGraph*` etc. Custom `*_CL` tables in LA are invisible to that endpoint unless data lake table mirroring is enabled. 148 query references in `SecurityInsight_RiskAnalysis_Queries_Locked.yaml` died with `'where' operator: Failed to resolve table or column expression named 'SI_IdentityAssets_CL'`.
+- 🔧 **Fix.** New transparent bridge in the engine (`SecurityInsight_RiskAnalysis.ps1`, helpers inserted between `Ensure-GraphAuth` and `Invoke-GraphHuntingQuery`):
+  1. **Lazy probe.** First time a query references `SI_IdentityAssets_CL`, the engine submits `SI_IdentityAssets_CL | take 1` directly to advanced hunting and caches the result for the rest of the run. If it succeeds (data lake mirroring active) → submit every subsequent query as-is; **zero overhead, zero behavior change**.
+  2. **Inline-datatable fallback.** If the probe returns the resolve error, the engine fetches `SI_IdentityAssets_CL | summarize arg_max(CollectionTime, *) by ObjectId` from `$global:WorkspaceResourceId` **once per run** via `Invoke-AzOperationalInsightsQuery` (reuses the existing `Connect-AzAccount` SPN session — no token plumbing, no REST), caches the rows, and prepends a `let SI_IdentityAssets_CL = datatable(col1:type, col2:type, ...) [row1; row2; ...];` block to every query that references the table. Customer KQL is **unmodified** — the `let` definition shadows the missing table reference.
+- 🧰 **17000 lines of YAML queries unchanged.** The 148 references to `SI_IdentityAssets_CL` keep working as-is; bridge logic is invisible to query authors.
+- 🧰 **Cleaner choice over hand-rolled REST.** First draft used `Invoke-RestMethod` against `api.loganalytics.io` with manual `Get-AzAccessToken` + customer-id resolution; switched to `Invoke-AzOperationalInsightsQuery` from `Az.OperationalInsights` (already in `$script:SecurityInsight_RequiredModules` via the `Az` meta-module). One cmdlet call, no token retrieval.
+- 🧰 **Caveat documented in code.** KQL request body is bounded (~1 MB). Estates with >~5k assets carrying large columns (`CSA`, `Workload_Credentials`) may exceed the cap; engine logs a clear warning over 700 KB and recommends Sentinel data lake + table mirroring for that case.
+- 🧰 **Helpers added (all internal):** `Resolve-WorkspaceCustomerId` (cached ResourceId → GUID), `Invoke-LogAnalyticsKqlQuery` (thin wrapper around `Invoke-AzOperationalInsightsQuery`), `Get-IdentityAssetsSnapshot` (lazy + cached LA fetch), `ConvertTo-KqlStringLiteral` + `ConvertTo-KqlDatatableLet` (KQL literal builder with proper backslash / quote / control-char escaping), `Get-IdentityAssetsLetBlock` (cached let-block builder + size-warning), `Test-AdvancedHuntingHasIdentityAssets` (lazy + cached probe). Probe call uses `Start-MgSecurityHuntingQuery` directly to avoid recursion through the bridge.
 
 ### v2.1.196 — IdentityAssetsCollect defaults: drop `WorkspaceResourceId` + `ExportDestination` pre-declarations
 

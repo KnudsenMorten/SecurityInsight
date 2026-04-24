@@ -38,8 +38,10 @@ $global:OverwriteXlsx  = $true
 $global:ShowConfig     = $false
 
 # JSON sibling of the XLSX. Same dataset, same dir, .json next to .xlsx.
-# Default ON; set $false to skip. Filename mirrors the report template.
-$global:WriteJsonOutput = $true
+# Default OFF -- the XLSX already covers reporting + Power BI ingestion; the JSON
+# sibling exists only when the customer wants a machine-readable mirror for an
+# external pipeline. Set to $true in your LauncherConfig.custom.ps1 if you need it.
+$global:WriteJsonOutput = $false
 
 
 # ============================================================================
@@ -136,7 +138,10 @@ if (-not (Test-Path variable:global:OpenAI_MaxTokensPerRequest)) { $global:OpenA
 $global:UseQueryBucketing      = $false
 $global:DefaultBucketCount     = 2
 $global:AutoBucketCount        = $false
-$global:AutoBucketMax          = 64
+$global:AutoBucketMax          = 1024     # was 64 in earlier versions; large estates need
+                                          # higher bucket counts to stay under the 30k-row
+                                          # ceiling per query. AutoBucket only escalates as
+                                          # needed -- a small tenant still runs at low counts.
 $global:AutoBucketCache        = $true
 $global:ResetCache             = $false
 $global:BucketPlaceholderToken = '__BUCKET_FILTER__'

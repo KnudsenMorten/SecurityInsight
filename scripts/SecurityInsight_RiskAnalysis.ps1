@@ -663,7 +663,16 @@ function Invoke-GraphHuntingQuery {
     )
 
     # CL-table bridge: if the query references SI_IdentityAssets_CL and the table is NOT
-    # mirrored to advanced hunting, prepend an inline let-block built from a one-shot LA fetch.
+    # mirrored to advanced hunting, decide between two routing strategies:
+    #
+    #   PURE-LA  (no Defender XDR tables in the query)  -> submit the WHOLE query directly
+    #            to Log Analytics. No let-block, no advanced-hunting round trip, no nginx
+    #            413 risk, no row-count cap. The customer's KQL runs natively against the
+    #            real table.
+    #
+    #   MIXED    (query joins SI_IdentityAssets_CL with Device* / Identity* / ExposureGraph*
+    #            / etc.) -> only path is the let-block bridge. Subject to the ~1 MB advanced
+    #            hunting body limit; engine logs a size warning over 700 KB.
     if ($Query -match '\bSI_IdentityAssets_CL\b') {
         $available = Test-AdvancedHuntingHasIdentityAssets
         if (-not $available) {
@@ -672,6 +681,46 @@ function Invoke-GraphHuntingQuery {
             if ([string]::IsNullOrWhiteSpace($wsResId)) {
                 throw "Cannot bridge SI_IdentityAssets_CL: `$global:WorkspaceResourceId is not set. Either set it (recommended) or enable Sentinel data lake + table mirroring."
             }
+
+            # XDR-table detection. \b on both sides means SI_IdentityAssets_CL doesn't trigger
+            # the Identity* branch (no word boundary between '_' and 'I'). Negative lookaheads
+            # exclude our custom tables explicitly (Identity(?!Assets), Device(?!Tvm)... wait,
+            # DeviceTvm IS an XDR table from MDVM and only exists in advanced hunting too).
+            $xdrTablePattern = '\b(' +
+                'Device(?!Tvm)\w*' +              # DeviceInfo, DeviceProcessEvents, DeviceLogonEvents, ... (MDE P2)
+                '|DeviceTvm\w*' +                  # DeviceTvmInfoGathering, DeviceTvmSecureConfigurationAssessment, ... (MDVM)
+                '|Identity(?!Assets)\w*' +         # IdentityInfo, IdentityLogonEvents, IdentityAccountInfo, ... (MDI)
+                '|ExposureGraph\w*' +              # ExposureGraphNodes, ExposureGraphEdges (MDEM)
+                '|Email\w*' +                      # EmailEvents, EmailUrlInfo, EmailAttachmentInfo (MDO)
+                '|Message\w*' +                    # MessageEvents, MessagePostDeliveryEvents, MessageUrlInfo (MDO)
+                '|UrlClickEvents' +                # MDO
+                '|CloudApp\w*' +                   # CloudAppEvents (MDA)
+                '|AppFile\w*' +                    # AppFileEvents (MDA)
+                '|Cloud(?:Audit|Dns|Process|Storage)\w*' +  # CloudAuditEvents, CloudDnsEvents, etc. (Defender for Cloud)
+                '|Alert(?:Evidence|Info)\b' +      # AlertEvidence, AlertInfo (XDR)
+                '|Behavior(?:Entities|Info)\b' +   # BehaviorEntities, BehaviorInfo (XDR)
+                '|AAD\w*SignIn\w*' +               # AADSignInEventsBeta, AADSpnSignInEventsBeta (Entra)
+                '|EntraId\w*SignIn\w*' +           # EntraIdSignInEvents, EntraIdSpnSignInEvents (Entra)
+                '|GraphAPIAuditEvents' +           # Entra
+                ')\b'
+
+            $hasXdrTables = $Query -match $xdrTablePattern
+
+            if (-not $hasXdrTables) {
+                Write-Info "Query touches only Log Analytics tables (no Defender XDR tables); routing entire query directly to LA workspace -- no let-block, no advanced-hunting round trip, no body-size limit."
+                $rows = @(Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $wsResId -Query $Query)
+                # Mock the Microsoft Graph hunting response shape so callers don't change.
+                # The engine reads $resp.Results.AdditionalProperties (PowerShell broadcasts
+                # the property access across the Results array -> array of hashtables).
+                $wrapped = @($rows | ForEach-Object {
+                    $hash = @{}
+                    foreach ($p in $_.PSObject.Properties) { $hash[$p.Name] = $p.Value }
+                    [pscustomobject]@{ AdditionalProperties = $hash }
+                })
+                return [pscustomobject]@{ Results = $wrapped }
+            }
+
+            # Mixed query path: prepend the let-block (subject to advanced hunting body limit).
             $letBlock = Get-IdentityAssetsLetBlock -WorkspaceResourceId $wsResId
             $Query    = $letBlock + "`n" + $Query
         }

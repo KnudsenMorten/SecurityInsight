@@ -134,9 +134,10 @@
 # $global:RiskAnalysis_ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_Bucket'
 
 # ----- JSON sibling of the XLSX ----------------------------------------------
-# A .json with the same dataset is written next to the .xlsx by default.
-# Disable if you only want the Excel:
-# $global:WriteJsonOutput = $false
+# A .json with the same dataset can be written next to the .xlsx. Default is
+# OFF -- the XLSX already covers reporting and Power BI ingestion. Enable only
+# if you need a machine-readable mirror for an external pipeline:
+# $global:WriteJsonOutput = $true
 
 # ----- Log Analytics ingest (Phase 2) ----------------------------------------
 # Send the in-memory dataset to a custom LA table after the Excel build.
@@ -208,8 +209,8 @@ $global:RiskAnalysis_Detailed_To       = @('soc@yourdomain.com')
 $global:RiskAnalysis_Summary_SendMail  = $true
 $global:RiskAnalysis_Summary_To        = @('exec-summary@yourdomain.com')
 
-# --- Output: JSON sibling + upload to blob (container auto-created) ---
-$global:WriteJsonOutput    = $true
+# --- Output: optional JSON sibling + upload to blob (container auto-created) ---
+$global:WriteJsonOutput    = $false   # default OFF; set $true if you want a JSON sibling next to the .xlsx
 $global:ExportDestination  = 'https://<your-storacct>.blob.core.windows.net/riskanalysis-summary/'
 
 # --- Launcher mode overrides (flip Summary/Detailed without editing ReportTemplate) ---

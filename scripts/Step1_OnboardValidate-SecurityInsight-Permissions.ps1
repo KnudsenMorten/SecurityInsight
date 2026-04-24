@@ -269,19 +269,16 @@ try {
     Import-Module Az.Resources -ErrorAction Stop -WarningAction SilentlyContinue
     switch ($AuthMethod) {
         'Interactive' {
-            # Try the default browser credential first. If the user's local
-            # Az.Accounts / Azure.Identity DLL graph is mismatched (a very
-            # common environment issue) this path throws
-            # MissingMethodException on InteractiveBrowserCredential.
-            # Fall back to device code auth -- different credential type,
-            # different code path, unaffected by the same DLL bug.
-            try {
-                Connect-AzAccount -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            } catch [System.MissingMethodException] {
-                Write-Skip "browser credential path failed (Az.Accounts / Azure.Identity DLL mismatch in local module env)"
-                Write-Info "retrying with device code authentication..."
-                Connect-AzAccount -UseDeviceAuthentication -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            }
+            # Browser sign-in. Any failure (DLL mismatch, no browser, cancelled
+            # prompt, network) surfaces via the outer catch with the real error
+            # message instead of being masked by a device-code retry.
+            #
+            # -Force reauthenticates and discards any existing cached token/context
+            # for this user, so a stale Az session left over from a prior PowerShell
+            # window doesn't trip the script. Without -Force, an expired or
+            # mismatched cached context can throw confusing errors that disappear
+            # the moment the user runs Disconnect-AzAccount manually.
+            Connect-AzAccount -Force -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
         }
         'ManagedIdentity' {
             if ($AuthClientId) {

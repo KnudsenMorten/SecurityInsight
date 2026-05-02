@@ -37,6 +37,36 @@
 
 ---
 
+## ✨ New release v2.2 coming very soon !
+
+👉 **Zero Foot Print** — only require read-permissions. No tagging of endpoints & Azure resources.
+
+👉 **100% dynamic** based on 20+ detection rules + app catalog (500+ known server apps).
+
+👉 **Snapshot of all assets** incl. 350+ fields of data — from supported providers (Entra, ExposureGraph, MDE, MDI, AD, Azure) + calculated fields like Tier like API permissions, Role permissions (permanent + eligible).
+
+👉 **Dynamic detection of client endpoints**, based on permissions (tier) of users using the device the most.
+
+👉 **Dynamic detection of servers** using software installed, detected modules, tagging, ip subnet and more.
+
+👉 **Dynamic detection of azure** using tags (incl. parent tagging), subscription details and more.
+
+👉 **Dynamic detection of identities** based on AI qualified detection of actual permission for all identities.
+
+👉 **Weighted Risk Score** — with integration of business prioritization from CMDB (Criticality, DataSensitivity).
+
+👉 **2 primary engines:** Asset Profiling (Endpoint, Azure, Identity) + Risk Analysis.
+
+👉 **External scanning of CVEs + open ports** using Shodan against all detected public IPs.
+
+👉 **200+ risk analysis reports**.
+
+👉 **Data model** includes schema files (json) for fields, exclusions, detection rules + YAML files.
+
+👉 **Dynamic scaling with Azure Containers** to support large enterprises. Built-in performance include KEDA scaling, fingerprint caching, has caching, tier schedules and more.
+
+---
+
 <a id="toc"></a>
 ## 📑 Table of Contents
 

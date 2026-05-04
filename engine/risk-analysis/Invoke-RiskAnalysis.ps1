@@ -5741,9 +5741,14 @@ if ([bool]$global:WriteJsonOutput) {
 # is customer-configurable. Customer never has to invent DCR names.
 #########################################################################################################
 
-# Hardcoded DCR names (one per Summary / Detailed table). Customer doesn't pick these.
-$RiskAnalysis_DcrName_Summary  = 'dcr-si-risk-analysis-summary'
-$RiskAnalysis_DcrName_Detailed = 'dcr-si-risk-analysis-detailed'
+# DCR names default to 'dcr-si-risk-analysis-{summary|detailed}'. They're
+# overridable via $global:SI_RiskAnalysis_DcrName_{Summary|Detailed} so
+# customers running BOTH internal AND community demos with one cross-tenant
+# SPN can disambiguate -- AzLogDcrIngestPS does name-based DCR lookup and
+# picks the first match across all visible subscriptions, which silently
+# routes ingest to the wrong DCR when names collide.
+$RiskAnalysis_DcrName_Summary  = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DcrName_Summary))  { [string]$global:SI_RiskAnalysis_DcrName_Summary }  else { 'dcr-si-risk-analysis-summary' }
+$RiskAnalysis_DcrName_Detailed = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_DcrName_Detailed)) { [string]$global:SI_RiskAnalysis_DcrName_Detailed } else { 'dcr-si-risk-analysis-detailed' }
 
 if ($null -eq $global:SendToLogAnalytics) { $global:SendToLogAnalytics = $false }
 

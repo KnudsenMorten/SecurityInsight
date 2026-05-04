@@ -148,7 +148,7 @@ $OutputFolder = Join-Path $_v22Root 'privilege-tier-catalog'
 if (-not (Test-Path -LiteralPath $OutputFolder)) {
     New-Item -Path $OutputFolder -ItemType Directory -Force | Out-Null
 }
-$OutputFile   = Join-Path $OutputFolder 'privilege-tier-catalog.custom.json'
+$OutputFile   = Join-Path $OutputFolder 'privilege-tier-catalog.locked.json'
 
 # ============================================================
 # AI SYSTEM PROMPT  tiering definitions and output contract

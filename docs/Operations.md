@@ -229,7 +229,7 @@ SURVIVES upgrades. The merge happens at engine load time. Same model everywhere:
 | Identity schema | `profiles/identity.schema.json` | `profiles-custom/identity.schema.custom.json` |
 | Endpoint schema | `profiles/endpoint.schema.json` | `profiles-custom/endpoint.schema.custom.json` |
 | Azure schema | `profiles/azure.schema.json` | `profiles-custom/azure.schema.custom.json` |
-| Identity tier catalog | `DATA/privilege-tier-catalog.custom.json` | `identity-catalog-custom/PrivilegeTierClassifier.json` |
+| Identity tier catalog | `DATA/privilege-tier-catalog.locked.json` | `identity-catalog-custom/PrivilegeTierClassifier.json` |
 | Endpoint asset-class catalog | `endpoint-catalog/endpoint-tiering.json` | `endpoint-catalog-custom/endpoint-tiering.json` |
 | Endpoint application catalog | `endpoint-catalog/server-applications.json` | `endpoint-catalog-custom/server-applications.json` |
 | Posture rules per engine | `posture-rules-locked/<engine>/*.yaml` | `posture-rules-custom/<engine>/*.yaml` |

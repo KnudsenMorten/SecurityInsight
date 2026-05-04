@@ -1,11 +1,11 @@
-﻿{
+{
     "Metadata":  {
                      "GeneratedAt":  "\u003cset by classifier at runtime\u003e",
                      "GeneratedBy":  "SecurityInsight-PrivilegeTierClassifier.ps1 v2.0",
                      "TenantId":  "\u003cyour-tenant-id\u003e",
                      "TieringModel":  "Attacker-centric (0=immediate compromise, 3=low blast radius)",
                      "AICallsUsed":  0,
-                     "_purpose":  "SAMPLE file. The privilege-tier-classifier engine REGENERATES privilege-tier-catalog.custom.json from your live tenant on every run -- you do NOT hand-edit this file. This sample only documents the structure customers see in their generated catalog."
+                     "_purpose":  "SAMPLE file. The privilege-tier-classifier engine REGENERATES privilege-tier-catalog.locked.json from your live tenant on every run -- you do NOT hand-edit this file. This sample only documents the structure customers see in their generated catalog."
                  },
     "AD_BuiltInPermissionGroups_Tier0":  [
                                              {

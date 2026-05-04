@@ -7,7 +7,7 @@
 .DESCRIPTION
     Builds the SecurityInsight tier-definitions JSON (AD groups, Entra roles, API
     permissions, Azure RBAC) using AI-batched tiering. Output written to
-    v2.2/privilege-tier-catalog/privilege-tier-catalog.custom.json.
+    v2.2/privilege-tier-catalog/privilege-tier-catalog.locked.json.
 
     Reads credentials from LauncherConfig.custom.ps1 (.gitignore'd).
     Supports 4 auth methods (MI, SPN+KV, SPN+cert, SPN+plaintext).

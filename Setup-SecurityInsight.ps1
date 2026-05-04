@@ -18,7 +18,7 @@
       Spn             -> SPN + API perms + Azure RBAC                (Validate-SIPermissions inlined)
       LA              -> workspace + DCE + DCRs + tables             (Validate-SILogAnalytics inlined)
       OpenAI          -> Azure OpenAI PAYG instance + model deploy   (Validate-SIOpenAI inlined)
-      PrivilegeTier   -> regenerate privilege-tier-catalog.custom.json      (v2.2 NEW)
+      PrivilegeTier   -> regenerate privilege-tier-catalog.locked.json      (v2.2 NEW)
       Schemas         -> schema-drift detection report               (v2.2 NEW)
       PublicIp        -> Shodan API key + PublicIp DCR sanity        (v2.2 NEW)
       RA              -> RA reports template wiring sanity           (v2.2 NEW)
@@ -1416,8 +1416,8 @@ function Invoke-Phase-OpenAI {
 }
 
 function Invoke-Phase-PrivilegeTier {
-    Write-Phase 'PrivilegeTier' 'Regenerate privilege-tier-catalog.custom.json'
-    $catalog = Join-Path $script:_v22Root 'privilege-tier-catalog\privilege-tier-catalog.custom.json'
+    Write-Phase 'PrivilegeTier' 'Regenerate privilege-tier-catalog.locked.json'
+    $catalog = Join-Path $script:_v22Root 'privilege-tier-catalog\privilege-tier-catalog.locked.json'
     $engine  = Join-Path $script:_v22Root 'engine\privilege-tier-classifier\Invoke-PrivilegeTierClassifier.ps1'
 
     if (-not (Test-Path $engine)) { Write-Warn2 'Privilege-tier engine missing; skipping'; return 'skipped' }

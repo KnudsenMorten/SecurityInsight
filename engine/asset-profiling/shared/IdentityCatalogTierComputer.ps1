@@ -5,7 +5,7 @@
     Pure-function port of the tier-compute logic from the legacy
     SCRIPTS\IdentityAssetsCollectDefineTierIngestLog.ps1.
 
-    The catalog itself (privilege-tier-catalog/privilege-tier-catalog.custom.json) is the
+    The catalog itself (privilege-tier-catalog/privilege-tier-catalog.locked.json) is the
     AI-curated authority -- it lists every Entra role, Graph application
     permission, on-prem AD privileged group, and Azure built-in role with
     its tier (0-3). Per-asset tier computation is then 100% deterministic
@@ -18,7 +18,7 @@
 
     Usage:
         . v2.2\identity-catalog\IdentityCatalogTierComputer.ps1
-        Initialize-SIIdentityCatalog -Path 'privilege-tier-catalog/privilege-tier-catalog.custom.json'
+        Initialize-SIIdentityCatalog -Path 'privilege-tier-catalog/privilege-tier-catalog.locked.json'
         $tier = Get-SITierFromEntraAPIPerms -Perms @('Directory.ReadWrite.All','Mail.Send')
         $matches = Get-SIEntraRoleMatches -Roles @('Global Administrator')
         $effective = Get-SIMinTier -Tiers @($entraTier, $apiTier, $azureTier, $adTier)
@@ -112,7 +112,7 @@ function Initialize-SIIdentityCatalog {
         # file moved from identity-catalog/ to engine/shared/.
         # $PSScriptRoot now = v2.2/engine/asset-profiling/shared/; three parents -> SecurityInsight/
         $solnRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-        $Path = Join-Path $solnRoot 'privilege-tier-catalog/privilege-tier-catalog.custom.json'
+        $Path = Join-Path $solnRoot 'privilege-tier-catalog/privilege-tier-catalog.locked.json'
     }
 
     if ([string]::IsNullOrWhiteSpace($CustomPath)) {

@@ -69,7 +69,7 @@ asset-profiling roots:
 | `risk-analysis/locked/` + `…/custom/` | `risk-analysis-detection/`                 |
 | `discovery/` (top level)         | `engine/asset-profiling/discovery/` |
 | `storage/` + `engine/lint` + `engine/shared` + `engine/stages` | `engine/asset-profiling/{storage,lint,shared,stages}/` |
-| `privilege-tier-classifier/privilege-tier-catalog.custom.json` | `staging/asset-profiling/identity.tier.classification.json` |
+| `privilege-tier-classifier/privilege-tier-catalog.locked.json` | `staging/asset-profiling/identity.tier.classification.json` |
 | `asset-tagging/` engine          | `legacy/asset-tagging/` (retired)               |
 | `*.md` (besides README)          | `DOCS/`                                         |
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.0
+## v2.2.1
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
 - fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
 - SI v2.2.0 stable: flatten v2.2/ to root, drop v2.1 layout, audit-pass RA fixes (536e1405)
 - ci(publish): per-channel sourceRef + README regression guard (43b6e88c)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI v2.2): preview.173 — self-contained tree completion (setup/, identity-tiering engine, lowercase folders, profiler launcher PS5.1, AlwaysOn fix) (574c14c1)
 - feat(SI v2.2): preview.172 — RA SPN+secret auth via launcher + PS 5.1 robustness + preview.169 path-fix fallout (9121649d)
 - feat(SI v2.2): preview.171 — azure deferred items (cross-engine VM/Arc, parent-sub tags, parent-MG tags + ParentMG_Structure, DCR-merge diagnostic) (b8e196f6)
-- docs(SI v2.2): preview.170 — refresh all 4 v2.2 docs (auto-gen + hand-update) (9216e90f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.1 — Patch release (publish-pipeline + Reconcile fixes)
+
+Cumulative patch covering issues surfaced during the v2.2.0 stable cut. No engine semantics changed; same architecture, same Profile schemas, same RA report set as v2.2.0.
+
+### Engine fix
+
+- **`Invoke-Reconcile.ps1`** now skips its `Write-SIStageShard` re-write call when the records array is empty (Phase 7 RECONCILE crashed with `Cannot bind argument to parameter 'Records' because it is an empty array` whenever Phase 3 COLLECT cadence-skipped every asset — a legitimate state when nothing's due this cycle).
+
+### Publish-pipeline fixes (operator-facing, no customer-visible change unless re-pulling)
+
+- **`*.internal-vm.*` files stripped from public stable + preview builds.** The 6 maintainer-only `launcher.internal-vm.ps1` files (azure / endpoint / identity / privilege-tier-classifier / publicip / risk-analysis) assume the AutomateIT monorepo path conventions. Public customers use `launcher.community-vm.ps1`.
+- **`demo/` folder excluded** from public publish. `demo/community/*` carries 2linkit-internal customer values; `demo/Install-DemoConfig.ps1` is a maintainer's demo-VM refresh helper. Stays in the upstream monorepo, never published.
+- **README chain skipped on flat layout** when `SecurityInsight/README.md` was already copied verbatim during the layout-mirror step. The fallback chain (`DOCS/README.public.md` → public-marker extraction → auto-stub) was running unconditionally and crashing on `Join-Path $docsSrc 'README.public.md'` when `$docsSrc` was nulled.
+- **Stage step trimmed under GitHub Actions' 21K expression limit** (was 24,785 chars after the v2.2 flat-layout rewrite; stripped 62 comment lines to land at 20,536). Tag-triggered runs were silently rejected by GitHub before this. Follow-up TODO: extract the Stage step to a separate `_publish-stage.ps1` so the limit is moot.
+- **Duplicate `dependencies if-block` removed** from `publish.yml` (merge artifact from v2.2.0 stable cut — both branches added similar logic).
+
+### Repo hygiene
+
+- **Submodule `M (new commits)` noise silenced** via `ignore = all` in `.gitmodules` for `DefenderRepo`, `IntuneRepo`, `Purview-Goodies`. The submodule HEADs occasionally drift from the superproject pin; `git status` no longer flags them. Explicit `git submodule update` commands still work normally.
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git fetch origin
+git checkout main
+git pull origin main
+```
+
+The `v2.2.0` GitHub Release tag is **frozen at the first publish** and does not include these fixes. Pin to `v2.2.1` (or pull `main`) to get the cumulative state.
 
 ---
 

@@ -81,8 +81,15 @@ if (-not [bool]$global:AutomationFramework) {
         throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Launcher must set them or enable AutomationFramework."
     }
 }
+# Accept either the canonical SI-prefixed name or the legacy v1 SHODAN_ApiKey
+# alias (some sample configs still use the unprefixed form). Whichever is set
+# wins; if both are set, SI_Shodan_ApiKey takes precedence.
+if ([string]::IsNullOrWhiteSpace([string]$global:SI_Shodan_ApiKey) -and
+    -not [string]::IsNullOrWhiteSpace([string]$global:SHODAN_ApiKey)) {
+    $global:SI_Shodan_ApiKey = [string]$global:SHODAN_ApiKey
+}
 if ([string]::IsNullOrWhiteSpace([string]$global:SI_Shodan_ApiKey)) {
-    throw "Missing `$global:SI_Shodan_ApiKey -- set it in config/SecurityInsight.custom.ps1 or LauncherConfig.custom.ps1. Get a key at https://account.shodan.io/."
+    throw "Missing `$global:SI_Shodan_ApiKey -- set it in config/SecurityInsight.custom.ps1 or LauncherConfig.custom.ps1 (legacy `$global:SHODAN_ApiKey is also accepted). Get a key at https://account.shodan.io/."
 }
 if ([string]::IsNullOrWhiteSpace([string]$global:SI_WorkspaceResourceId)) {
     throw "Missing `$global:SI_WorkspaceResourceId -- the engine reads SI_Endpoint_Profile_CL + SI_Azure_Profile_CL from this workspace."

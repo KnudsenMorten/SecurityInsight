@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.6
+## v2.2.7
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
 - release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
 - release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
 - release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - test(SI v2.2): preview.179 — Test-Smoke extended with 3 profiler-focused checks (DOTSOURCE-PATHS, CACHE-KQL, SCHEMA-VALIDITY) (e1de0f53)
 - fix(SI v2.2): preview.178 — grind through Test-Smoke RA bugs (264 -> 16 fails, 94% reduction) (9fcb45b9)
 - test+fix(SI v2.2): preview.177 — Test-Smoke.ps1 (behavioural pre-commit guard) + RA bug fixes the test surfaced (354bae32)
-- fix(SI v2.2): preview.176 — RA query routing covers SI_*_Profile_CL + per-report visual polish (60d86297)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.7 — Shodan key: unify on canonical name, accept legacy alias
+
+The PublicIP engine refused to start when the Shodan key was set under the legacy v1 name `$global:SHODAN_ApiKey`, even though one of the per-engine sample configs documented exactly that variable. The engine throw-gate at `Invoke-PublicIpScanner.ps1:84` only checked the SI-prefixed `$global:SI_Shodan_ApiKey` form.
+
+Three places aligned on the canonical name (`$global:SI_Shodan_ApiKey`):
+- **Engine**: now accepts either name. If `SI_Shodan_ApiKey` is empty but `SHODAN_ApiKey` is set, the engine bridges them at startup and continues. The throw message now mentions both names.
+- **`auth/Get-SIShodanKey.ps1` helper**: lookup order is now `SI_Shodan_ApiKey` -> `SHODAN_ApiKey` -> `$env:SHODAN_API_KEY`.
+- **Per-engine samples** (`launcher/publicip/LauncherConfig.custom.sample.ps1` and `LauncherConfig.defaults.ps1`): now show the canonical SI-prefixed name in their commented-out template, with a note that the legacy form still works.
+
+No engine logic, no schema changes. Pure config-name compatibility patch. Set `$global:SI_Shodan_ApiKey` in `config/SecurityInsight.custom.ps1` (recommended -- one place, all engines see it).
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git pull origin main
+```
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.15
+## v2.2.16
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.16 - make RA DCR names overridable (dd9da5af)
 - release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
 - release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
 - release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.188 — Discover layout: drop NoNewline progress that glued helper output, normalize [perms] indent (93008ef5)
 - feat(SI v2.2): preview.187 — new canonical column Issues_Details (array of distinct ConfigurationName(s) per report; LA dynamic, Excel joined) (214ddeb2)
 - feat(SI v2.2): preview.186 — ImpactedAssets is an array of distinct AssetName(s) per report (LA dynamic, Excel comma-joined) (3de390a7)
-- docs(SI v2.2): preview.185 — TraceName composition doc fix (legacy engine, unchanged) (87931749)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.16 — Make RA DCR names overridable (cross-tenant SPN name-collision fix)
+
+`Invoke-RiskAnalysis.ps1` had `$RiskAnalysis_DcrName_Summary` and `$RiskAnalysis_DcrName_Detailed` HARDCODED to `dcr-si-risk-analysis-summary` / `dcr-si-risk-analysis-detailed`. Customers running the same SPN against BOTH internal AND community subscriptions hit a silent ingest-routing bug: AzLogDcrIngestPS does name-based DCR lookup across **all visible subscriptions** and picks the first match, often routing community-engine ingest to the internal DCR (or vice versa). Triggers the `404 NotFound: Data collection rule with immutable Id 'westeurope' not found` symptom we already partially papered over with retries in v2.2.14.
+
+Now overridable via globals:
+```powershell
+$global:SI_RiskAnalysis_DcrName_Summary  = 'dcr-si-risk-analysis-summary-community'
+$global:SI_RiskAnalysis_DcrName_Detailed = 'dcr-si-risk-analysis-detailed-community'
+```
+
+Falls back to the original hardcoded names when not set, so existing internal deployments are unaffected.
+
+The asset-profiling engines already had `SI_DcrNamePattern` for the same purpose (`dcr-si-{0}-profile` template); this brings RA to parity.
 
 ---
 

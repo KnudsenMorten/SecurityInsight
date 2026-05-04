@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.9
+## v2.2.10
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.10 - PublicIP Set-AzContext + Use-SIAzContext helper (1dc6fac4)
 - release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
 - release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
 - release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI v2.2): preview.182 — single RA schema source-of-truth (risk-analysis.schema.json) + per-column source-field priority (3cf2f056)
 - feat(SI v2.2): preview.181 — RA report schema realignment to canonical 20-col + 3 engine aggregates + Impact stays platform-sourced + column-lineage JSON (d52e6b4c)
 - feat+fix(SI v2.2): preview.180 — RA cross-workspace routing rewrite + engine-wide visual polish + default transcript logs (dd6fb24a)
-- test(SI v2.2): preview.179 — Test-Smoke extended with 3 profiler-focused checks (DOTSOURCE-PATHS, CACHE-KQL, SCHEMA-VALIDITY) (e1de0f53)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.10 — PublicIP Set-AzContext + shared Use-SIAzContext helper
+
+### PublicIP: Set-AzContext to workspace subscription before LA query
+
+PublicIP scanner threw `ResourceGroupNotFound` when the SPN's default Az context was on a different subscription than the one that owns `SI_WorkspaceResourceId`. Common in lab/community tenants where one SPN has access to multiple subscriptions but lands on the "wrong" one by default.
+
+`engine/publicip/Invoke-PublicIpScanner.ps1` now extracts the subscription ID from the workspace ARM resource id and calls `Set-AzContext -SubscriptionId <wsSub>` before `Get-AzOperationalInsightsWorkspace`. Defensive: only switches when the current context's subscription differs from the workspace's.
+
+### New shared helper: `auth/Use-SIAzContext.ps1`
+
+Engines querying SI_WorkspaceResourceId AND SI_DefenderWorkspaceResourceId need to switch Az context per query (the two workspaces can live in different subscriptions). The new helper `Use-SIAzContext -WorkspaceResourceId <id>` parses the sub from an ARM ResourceId and calls `Set-AzContext` only when a switch is needed.
+
+Audit confirmed the other engines were already doing this inline (HuntingQuery.ps1, RA's Resolve-WorkspaceCustomerId, Invoke-Enrich.ps1, IdentityRoleFetcher.ps1, RA's Ensure-SecurityInsightInfra). PublicIP was the only callsite missing the context-switch. New helper is for future engines / refactors.
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git pull origin main
+```
 
 ---
 

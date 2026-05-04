@@ -1,6 +1,6 @@
 # SecurityInsight -- Privilege-tier catalog JSON reference
 
-This is the **single source of truth** for `privilege-tier-catalog.custom.json` -- the AI-classified inventory of every Active Directory group, Entra role, Graph API permission, and Azure RBAC role, scored on the attacker-centric Tier 0..3 scale.
+This is the **single source of truth** for `privilege-tier-catalog.locked.json` -- the AI-classified inventory of every Active Directory group, Entra role, Graph API permission, and Azure RBAC role, scored on the attacker-centric Tier 0..3 scale.
 
 > **Authority**: validated against `engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1` (the producer) and `engine/asset-profiling/shared/IdentityCatalogTierComputer.ps1` (the consumer, lines 84-496). When code disagrees with this doc, code wins.
 
@@ -10,7 +10,7 @@ This is the **single source of truth** for `privilege-tier-catalog.custom.json` 
 
 | File | Purpose | Edited by |
 |---|---|---|
-| `privilege-tier-catalog/privilege-tier-catalog.custom.json` | Classifier output (AI-generated baseline) | `Invoke-PrivilegeTierClassifier.ps1` regenerates it |
+| `privilege-tier-catalog/privilege-tier-catalog.locked.json` | Classifier output (AI-generated baseline) | `Invoke-PrivilegeTierClassifier.ps1` regenerates it |
 | `asset-profiling-enrichment/identity/PrivilegeTierClassifier.json` (optional) | Customer overlay -- adds tenant-custom AD groups, Entra/Azure custom roles | Customer |
 
 The overlay is loaded by `IdentityCatalogTierComputer.ps1` lines 118-147 if present; absence is silent.
@@ -150,7 +150,7 @@ Create `asset-profiling-enrichment/identity/PrivilegeTierClassifier.json` (anywh
 
 ## How the catalog is generated
 
-`engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1` (output: `privilege-tier-catalog/privilege-tier-catalog.custom.json`).
+`engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1` (output: `privilege-tier-catalog/privilege-tier-catalog.locked.json`).
 
 Runs in 4 stages, one batched Azure OpenAI call per stage:
 

@@ -674,7 +674,7 @@ Each launcher takes 5–15 min depending on tenant size. They populate `SI_Ident
 > .\tools\Run-AllEngines.ps1 -PrivilegeTierClassifier  # advanced: regenerate the tier catalog (Azure OpenAI required)
 > ```
 >
-> The privilege-tier catalog (`privilege-tier-catalog\privilege-tier-catalog.custom.json`) **ships with the repo** as of v2.2.13 — Identity classification works on first run with no extra steps. The `-PrivilegeTierClassifier` switch is only needed when you want to customise the AI-generated tier definitions for your own tenant.
+> The privilege-tier catalog (`privilege-tier-catalog\privilege-tier-catalog.locked.json`) **ships with the repo** as of v2.2.13 — Identity classification works on first run with no extra steps. The `-PrivilegeTierClassifier` switch is only needed when you want to customise the AI-generated tier definitions for your own tenant.
 
 #### Step 9 — Run Risk Analysis (the headline output)
 
@@ -711,7 +711,7 @@ Each takes 15–30 min. The engine emits:
 | `Failed to resolve table 'SI_*_Profile_CL'` | DCR not provisioned for that table | Re-run `Bootstrap-Storage.ps1` |
 | AI summary skipped | `BuildSummaryByAI` not enabled OR no Azure OpenAI configured | Set `$global:BuildSummaryByAI = $true` + run `setup\Validate-SIOpenAI.ps1` |
 | Mail not sent | SMTP From address not verified at relay | Set `$global:SMTPFrom` to a verified-sender address (Brevo / SendGrid / Postmark / M365 reject mail with non-verified From) |
-| Identity engine throws `SI identity catalog not found at: ...\privilege-tier-catalog\privilege-tier-catalog.custom.json` | Catalog file got deleted (it ships in the repo as of v2.2.13). Older clones predate the shipped catalog. | `git pull` to land the shipped catalog, OR run `tools\Run-AllEngines.ps1 -PrivilegeTierClassifier` once to regenerate it locally (Azure OpenAI key required). |
+| Identity engine throws `SI identity catalog not found at: ...\privilege-tier-catalog\privilege-tier-catalog.locked.json` | Catalog file got deleted (it ships in the repo as of v2.2.13). Older clones predate the shipped catalog. | `git pull` to land the shipped catalog, OR run `tools\Run-AllEngines.ps1 -PrivilegeTierClassifier` once to regenerate it locally (Azure OpenAI key required). |
 | PublicIP throws `LA query failed: ... 'BadRequest'` | `SI_Endpoint_Profile_CL` AND `SI_Azure_Profile_CL` don't exist yet in the workspace (PublicIP queries both). v2.2.12+ tolerates one being missing; older needs both. | Run the Endpoint engine and/or Azure engine successfully at least once, OR upgrade to v2.2.12+ which uses `union isfuzzy=true` to skip missing tables. |
 | PublicIP throws `ResourceGroupNotFound` for the workspace's RG | SPN's default Az context is on a DIFFERENT subscription than the one that owns `SI_WorkspaceResourceId`. Common when one SPN sees several subscriptions. | Auto-handled in v2.2.10+ (engine `Set-AzContext`s to the workspace's sub before the LA query). On older versions, add `Set-AzContext -SubscriptionId <wsSub>` to the launcher manually. |
 | PublicIP throws `Missing $global:SI_Shodan_ApiKey` even though you set `$global:SHODAN_ApiKey` | Variable name mismatch — engine reads the SI-prefixed name, the legacy v1 sample used `SHODAN_ApiKey`. v2.2.7+ accepts both, but the canonical name is required by older versions. | Use `$global:SI_Shodan_ApiKey = '<key>'` in `config\SecurityInsight.custom.ps1`, OR upgrade to v2.2.7+ which auto-bridges the legacy name. |
@@ -1575,7 +1575,7 @@ The `Push-PreviewBundle.ps1` helper bundles the dev tree + `AutomateITPS` / `Aut
 | Engine | Folder | Purpose | Output table(s) |
 |---|---|---|---|
 | **asset-profiling** | `engine/asset-profiling/` | Identity + Endpoint + Azure → flat-column LA Profile tables. **559** enrichment rules merged from `*.locked.yaml` + `*.custom.yaml` per domain. Tier engine = pure MIN-of-SIRules (no static defaults — every signal becomes a rule entry; engine reduces). | `SI_IdentityAssets_Profile_CL`, `SI_EndpointAssets_Profile_CL`, `SI_AzureAssets_Profile_CL` |
-| **privilege-tier-classifier** | `engine/privilege-tier-classifier/` | AI-driven classifier for ambiguous Entra roles / scopes / app permissions. Reads `privilege-tier-catalog/privilege-tier-catalog.custom.json`. | Updates `Tier` on Identity profile rows |
+| **privilege-tier-classifier** | `engine/privilege-tier-classifier/` | AI-driven classifier for ambiguous Entra roles / scopes / app permissions. Reads `privilege-tier-catalog/privilege-tier-catalog.locked.json`. | Updates `Tier` on Identity profile rows |
 | **publicip** | `engine/publicip/` | Shodan scanner for Tier 0/1 public IPs. Detects open ports + CVEs on internet-exposed assets. | `SI_VulnerabilityPIP_CL` |
 | **risk-analysis** | `engine/risk-analysis/` | **134 reports** (67 Summary + 67 Detailed, fully paired) across 4 security domains (Endpoint, Identity, Azure, PublicIP). EG-primary RA pattern: queries source from Microsoft Exposure Graph (nodes + edges), join `SI_*_Profile_CL` only for Tier / CMDB enrichment. 3-layer score model (RiskScoreTotal → RiskScore_Weight_Factor → RiskScoreTotal_Weighted). | `SI_RiskAnalysis_Summary_CL`, `SI_RiskAnalysis_Detailed_CL` |
 
@@ -2327,7 +2327,7 @@ Inventory snapshot (auto-derived from the current `risk-analysis-detection/`, `a
 | 🏷️ **Asset-classification rules** — `hasMdeMachineGroupTag` / `hasAzureTag` / `egDetectedRoles` / `nameMatches` / `IPSubnetMatch` / `entraGroupMember` / `groupMembership` / `hasSoftwareInstalled` across Identity, Endpoint, Azure PaaS. Each is a `.locked.yaml` in `asset-profiling-enrichment/`. | **594** (1 azure + 590 endpoint + 2 identity + 1 cross-engine `shared/`) |
 | 🧬 **Profile schema** — flat-column LA columns the engine emits per asset | **697** fields total across 4 tables (`SI_Endpoint_Profile_CL` 168 + `SI_Identity_Profile_CL` 162 + `SI_Azure_Profile_CL` 321 + `SI_PublicIp_Profile_CL` 46) |
 | 📚 **Schema definitions** | **4** — `asset-profiling-schema/{azure,endpoint,identity,public-ip}.schema.locked.json` |
-| 👑 **Privilege tier catalog** | **1** — `privilege-tier-catalog/privilege-tier-catalog.custom.json` |
+| 👑 **Privilege tier catalog** | **1** — `privilege-tier-catalog/privilege-tier-catalog.locked.json` |
 | 🔌 **Provider connectors** | **2** — `asset-profiling-providers/{entra, servicenow-cmdb}` |
 
 **🤖 AI-classified tier catalog** — every role / permission slotted into Tier 0–3 by the AI integration in SecurityInsight:

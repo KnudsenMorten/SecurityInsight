@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.14
+## v2.2.15
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
 - release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
 - release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
 - release: SecurityInsight v2.2.12 - PublicIP tolerate missing Profile tables (acfc2a9e)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI v2.2): preview.187 — new canonical column Issues_Details (array of distinct ConfigurationName(s) per report; LA dynamic, Excel joined) (214ddeb2)
 - feat(SI v2.2): preview.186 — ImpactedAssets is an array of distinct AssetName(s) per report (LA dynamic, Excel comma-joined) (3de390a7)
 - docs(SI v2.2): preview.185 — TraceName composition doc fix (legacy engine, unchanged) (87931749)
-- feat(SI v2.2): preview.184 — Category/Subcategory: 242 reports rewritten to platform-pull (10 CVE keep static); Subcategory case normalized (9309b74f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.15 — Privilege-tier catalog renamed: `.custom.json` -> `.locked.json`
+
+The shipped catalog was named `privilege-tier-catalog.custom.json` for historical reasons (it was originally generated per-customer by PrivilegeTierClassifier). v2.2.13 made it a tracked baseline shipped in the repo, but the `.custom.*` filename clashed with the codebase's convention:
+
+- `*.locked.*` = shipped baseline, never customer-edited (e.g. `RiskAnalysis_Queries_Locked.yaml`, `endpoint.schema.locked.json`)
+- `*.custom.*` = customer-owned override, gitignored, optional (e.g. `RiskAnalysis_Queries_Custom.yaml`, `LauncherConfig.custom.ps1`)
+
+Renamed to `privilege-tier-catalog.locked.json` for full consistency. A sibling `*.custom.json` is now reserved (and gitignored) for tenant-specific overrides — for now PrivilegeTierClassifier still writes the locked file (it regenerates the baseline) but the override slot is in place for future merge support.
+
+### Files updated (28 references across 14 files)
+
+- File rename: `git mv privilege-tier-catalog/privilege-tier-catalog.custom.json -> .locked.json`
+- Engine read paths: `IdentityCatalogTierComputer.ps1`, `Build-IdentityProfileRow.ps1`
+- PrivilegeTierClassifier output: `Invoke-PrivilegeTierClassifier.ps1` (now writes `.locked.json`)
+- Launcher manifests + .NOTES blocks (community + internal flavours)
+- `Setup-SecurityInsight.ps1` PrivilegeTier phase
+- Schema reference: `asset-profiling-schema/SCHEMA.locked.json`
+- Docs: `README.md`, `docs/CATALOG-REFERENCE.md`, `docs/ARCHITECTURE.md`, `docs/Operations.md`, `internal/onboard-internal-AutomateIT.md`
+- Sample file comment: `privilege-tier-catalog.custom.sample.json` (file kept under `.custom.sample.json` — it documents what an OVERRIDE would look like)
+- AutomateIT root `.gitignore`: restored `*.custom.json` ignore for this folder so customer overrides are properly hidden
+- Pre-Publish Gate `RepoHygiene` test: dropped the v2.2.14 per-file exception (no longer needed)
+
+### Manual step on existing demo VMs
+
+If you have a demo VM that pulled v2.2.13 / v2.2.14 (which had the old `.custom.json` name), after `git pull` you'll see:
+- New file landed: `privilege-tier-catalog/privilege-tier-catalog.locked.json`
+- Old file removed by git: `privilege-tier-catalog/privilege-tier-catalog.custom.json`
+
+If you locally regenerated the catalog (ran `-PrivilegeTierClassifier` after the v2.2.13 pull), git will leave your `.custom.json` alone (it became untracked when v2.2.15 deleted it). Rename it to `.locked.json` to keep your tenant-specific catalog, OR delete it and use the shipped one.
 
 ---
 

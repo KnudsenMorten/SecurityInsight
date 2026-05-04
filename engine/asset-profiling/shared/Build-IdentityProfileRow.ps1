@@ -48,7 +48,7 @@ function Get-SIIdentitySchema {
 
 function Get-SIIdentityCatalogVersion {
     if ($script:_SISchemaCache.ContainsKey('IdentityCatalogVersion')) { return $script:_SISchemaCache['IdentityCatalogVersion'] }
-    $catPath = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'privilege-tier-catalog/privilege-tier-catalog.custom.json'
+    $catPath = Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'privilege-tier-catalog/privilege-tier-catalog.locked.json'
     if (-not (Test-Path $catPath)) { return 'unknown' }
     try {
         $raw = Get-Content $catPath -Raw -Encoding UTF8 | ConvertFrom-Json

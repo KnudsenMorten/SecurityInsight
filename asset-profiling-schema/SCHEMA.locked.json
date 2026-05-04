@@ -194,7 +194,7 @@
   ],
 
   "catalogs": [
-    { "name": "SecurityInsight_PrivilegeTierClassifier", "path": "../privilege-tier-catalog/privilege-tier-catalog.custom.json", "refresh": "daily, separate process (SecurityInsight-PrivilegeTierClassifier.ps1 v2.0)", "consumedBy": ["entra_roles_permanent", "entra_roles_eligible", "entra_api_perms_application", "entra_api_perms_delegated", "ad_builtin_groups", "azure_roles"], "size": "~6.4MB / 77,931 lines" },
+    { "name": "SecurityInsight_PrivilegeTierClassifier", "path": "../privilege-tier-catalog/privilege-tier-catalog.locked.json", "refresh": "daily, separate process (SecurityInsight-PrivilegeTierClassifier.ps1 v2.0)", "consumedBy": ["entra_roles_permanent", "entra_roles_eligible", "entra_api_perms_application", "entra_api_perms_delegated", "ad_builtin_groups", "azure_roles"], "size": "~6.4MB / 77,931 lines" },
     { "name": "Port_Risk_Catalog",               "path": "catalogs/Port_Risk_Catalog.json",                "refresh": "manual / quarterly", "consumedBy": ["nsg_internet_exposed_critical_port"] },
     { "name": "UacFlag_Tiering",                 "path": "catalogs/UacFlag_Tiering.json",                  "refresh": "manual / quarterly", "consumedBy": ["ad_uac_flags"] },
     { "name": "MS_Predefined_CriticalityRules",  "path": "catalogs/MS_Predefined_CriticalityRules.json",   "refresh": "quarterly (when MS adds new rules)", "consumedBy": ["eg_criticality_predefined"] }

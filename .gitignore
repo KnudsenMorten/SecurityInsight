@@ -25,7 +25,7 @@ SOLUTIONS/SecurityInsight/DATA/
 SOLUTIONS/SecurityInsight/LOGS/
 
 # ---------------------------------------------------------------------------
-#  Tracked: privilege-tier-catalog.custom.json
+#  Tracked: privilege-tier-catalog.locked.json
 # ---------------------------------------------------------------------------
 # The catalog JSON is a generic Microsoft-roles -> tier mapping (built by
 # PrivilegeTierClassifier from Azure OpenAI, then reviewed). It ships in the

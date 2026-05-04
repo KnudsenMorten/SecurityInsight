@@ -2,7 +2,7 @@
   "description": "SecurityInsight_PrivilegeTierClassifier -- v2.2 launcher for the privilege-tier-classifier engine.",
   "scriptType": "Engine",
   "community": true,
-  "notes": "Invokes engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1. Builds the SecurityInsight tier-definitions JSON (AD groups + Entra roles + API permissions + Azure RBAC) using AI-batched tiering. Output to v2.2/privilege-tier-catalog/privilege-tier-catalog.custom.json. Customer config layered: LauncherConfig.defaults.ps1 -> SecurityInsight.custom.ps1 (config) -> LauncherConfig.custom.ps1 -> CLI args.",
+  "notes": "Invokes engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1. Builds the SecurityInsight tier-definitions JSON (AD groups + Entra roles + API permissions + Azure RBAC) using AI-batched tiering. Output to v2.2/privilege-tier-catalog/privilege-tier-catalog.locked.json. Customer config layered: LauncherConfig.defaults.ps1 -> SecurityInsight.custom.ps1 (config) -> LauncherConfig.custom.ps1 -> CLI args.",
   "scriptName": "PrivilegeTierClassifier",
   "author": "Morten Knudsen <mok@mortenknudsen.net>",
   "version": "2.2.0",

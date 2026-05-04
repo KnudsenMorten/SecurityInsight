@@ -204,12 +204,22 @@ union _Endpoint, _Azure
     Write-Log "Submitting LA discovery query ..." "INFO"
     # Resolve the LA workspace's CustomerId (= GUID used by Invoke-AzOperationalInsightsQuery -WorkspaceId).
     # Get-AzOperationalInsightsWorkspace doesn't accept -ResourceId; parse the ARM id and call with -Name + -ResourceGroupName.
+    # The SPN's default Az context may be on a different subscription than the
+    # one that owns SI_WorkspaceResourceId (common when the workspace is in a
+    # community / lab subscription but the SPN was issued in a different sub).
+    # Switch context to the workspace's subscription before the LA query.
     try {
-        if ($global:SI_WorkspaceResourceId -notmatch '^/subscriptions/[^/]+/resourceGroups/(?<rg>[^/]+)/providers/Microsoft\.OperationalInsights/workspaces/(?<name>[^/]+)$') {
+        if ($global:SI_WorkspaceResourceId -notmatch '^/subscriptions/(?<sub>[^/]+)/resourceGroups/(?<rg>[^/]+)/providers/Microsoft\.OperationalInsights/workspaces/(?<name>[^/]+)$') {
             throw "Invalid LA workspace resource id: $($global:SI_WorkspaceResourceId)"
         }
+        $wsSub  = $matches.sub
         $wsRg   = $matches.rg
         $wsName = $matches.name
+        $ctx = Get-AzContext -ErrorAction SilentlyContinue
+        if (-not $ctx -or $ctx.Subscription.Id -ne $wsSub) {
+            Write-Log "Switching Az context to subscription $wsSub (was $($ctx.Subscription.Id))" "INFO"
+            Set-AzContext -SubscriptionId $wsSub -ErrorAction Stop | Out-Null
+        }
         $wsCustomerId = (Get-AzOperationalInsightsWorkspace -ResourceGroupName $wsRg -Name $wsName -ErrorAction Stop).CustomerId
         $resp = Invoke-AzOperationalInsightsQuery -WorkspaceId $wsCustomerId -Query $kql -ErrorAction Stop
     } catch {

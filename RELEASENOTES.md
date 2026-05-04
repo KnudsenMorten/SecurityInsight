@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.16
+## v2.2.17
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.17 - SI_RunHealth DCR overridable (18efa17b)
 - release: SecurityInsight v2.2.16 - make RA DCR names overridable (dd9da5af)
 - release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
 - release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.189 — engine-level row dedup by (ConfigurationName, ConfigurationId) collapses 50x mv-expand+join inflation (d89afb9a)
 - fix(SI v2.2): preview.188 — Discover layout: drop NoNewline progress that glued helper output, normalize [perms] indent (93008ef5)
 - feat(SI v2.2): preview.187 — new canonical column Issues_Details (array of distinct ConfigurationName(s) per report; LA dynamic, Excel joined) (214ddeb2)
-- feat(SI v2.2): preview.186 — ImpactedAssets is an array of distinct AssetName(s) per report (LA dynamic, Excel comma-joined) (3de390a7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.17 — Make SI_RunHealth DCR overridable (cross-tenant SPN name-collision fix, part 2)
+
+`Send-SIRunHealthRow.ps1` had `$dcrName = 'dcr-si-run-health'` HARDCODED. Same name-based-lookup bug as v2.2.16 fixed for RA: with one cross-tenant SPN, the run-health heartbeat would silently route to the wrong DCR (whichever sub's `dcr-si-run-health` enumerates first).
+
+Now overridable:
+```powershell
+$global:SI_RunHealth_DcrName = 'dcr-si-run-health-community'
+```
+Falls back to `dcr-si-run-health` when unset. Table name stays `SI_RunHealth` (workspace-scoped, no collision possible).
+
+### Override coverage map -- where each DCR comes from
+
+| Source | Default DCR | Override global | Status |
+|---|---|---|---|
+| Asset-profiling (Endpoint/Identity/Azure) | `dcr-si-{0}-profile` | `$SI_DcrNamePattern` | shipped |
+| PublicIP / Shodan | `dcr-si-publicip-profile` | `$SI_Shodan_DcrName` | shipped |
+| RA Detailed | `dcr-si-risk-analysis-detailed` | `$SI_RiskAnalysis_DcrName_Detailed` | v2.2.16 |
+| RA Summary | `dcr-si-risk-analysis-summary` | `$SI_RiskAnalysis_DcrName_Summary` | v2.2.16 |
+| **SI_RunHealth heartbeat** | `dcr-si-run-health` | `$SI_RunHealth_DcrName` | **v2.2.17 (NEW)** |
+| Schema-catalog audit | `dcr-si-schema-catalog` | `$SI_SchemaCatalogDcr` | shipped |
+| Asset-tag-activity audit | `dcr-si-assettag-activity` | `$SI_AssetTagActivityDcr` | shipped |
+
+All DCRs ingest into the SAME workspace via the same DCE (`$SI_DceName`), all in the same RG (`$SI_DcrResourceGroup`).
 
 ---
 

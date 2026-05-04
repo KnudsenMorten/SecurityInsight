@@ -49,10 +49,11 @@ $global:SI_ForceFullRun_PublicIp = $false
 # turns it on for ALL engines; this per-engine flag is the targeted opt-in.
 $global:SI_EnableAI_publicip = $false
 
-# Shodan API key -- read by auth/Get-SIShodanKey.ps1. Set in custom.ps1:
-#   $global:SHODAN_ApiKey = '<your-shodan-api-key>'
-# Engine continues to run if missing, but Shodan-source columns will be null.
-# Note the unprefixed name (matches v1 contract).
+# Shodan API key -- REQUIRED, engine throws at startup if not set. Set in
+# config/SecurityInsight.custom.ps1 (preferred -- one place, all engines see
+# it) or this LauncherConfig.custom.ps1:
+#   $global:SI_Shodan_ApiKey = '<your-shodan-api-key>'
+# Legacy unprefixed $global:SHODAN_ApiKey is still accepted as a fallback.
 
 # Shodan cache age -- a host's cached Shodan JSON is reused if its age is
 # within this window. Reduces credit burn for stable IPs.

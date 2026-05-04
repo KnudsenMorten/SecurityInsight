@@ -94,10 +94,11 @@
 # You are a security classifier...
 # '@
 
-# Shodan API key (REQUIRED for Shodan-source columns to populate; engine still
-# runs without it but those fields will be null). Note the unprefixed name --
-# matches the v1 contract and the auth/Get-SIShodanKey.ps1 helper.
-# $global:SHODAN_ApiKey = '<your-shodan-api-key>'
+# Shodan API key (REQUIRED -- engine throws at startup if not set). Use the
+# canonical SI-prefixed name; the legacy unprefixed $global:SHODAN_ApiKey is
+# still accepted as a fallback for v1 compatibility but the SI_-prefixed form
+# is the canonical name across all v2.2 engines.
+# $global:SI_Shodan_ApiKey = '<your-shodan-api-key>'
 
 # Shodan cache age -- reuse a host's cached Shodan JSON when its age is within
 # this window. Lower = fresher data, higher credit burn. Default 7 days.

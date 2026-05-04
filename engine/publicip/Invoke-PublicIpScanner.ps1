@@ -162,8 +162,13 @@ function Get-PublicIpsFromProfileTables {
     # doesn't fail the whole read.
     $tierMax = [int]$global:SI_Shodan_TierMax
     $lookbackDays = [int]$global:SI_Shodan_LookbackDays
+    # union isfuzzy=true silently skips tables that don't exist yet (e.g. fresh
+    # workspaces where the Azure or Endpoint engine hasn't ingested its first
+    # batch). Without isfuzzy, KQL throws BadRequest at parse time and the
+    # whole discovery query fails even if the OTHER table has data.
     $kql = @"
-let _Endpoint =
+union isfuzzy=true
+(
     SI_Endpoint_Profile_CL
     | where TimeGenerated > ago(${lookbackDays}d)
     | summarize arg_max(CollectionTime, *) by PrimaryEntityId
@@ -178,8 +183,9 @@ let _Endpoint =
               cmdbName            = tostring(column_ifexists("cmdbName", "")),
               cmdbCriticality     = tostring(column_ifexists("cmdbCriticality", "")),
               cmdbDataSensitivity = tostring(column_ifexists("cmdbDataSensitivity", "")),
-              IpAddress = _ip;
-let _Azure =
+              IpAddress = _ip
+),
+(
     SI_Azure_Profile_CL
     | where TimeGenerated > ago(${lookbackDays}d)
     | summarize arg_max(CollectionTime, *) by PrimaryEntityId
@@ -195,8 +201,8 @@ let _Azure =
               cmdbName            = tostring(column_ifexists("cmdbName", "")),
               cmdbCriticality     = tostring(column_ifexists("cmdbCriticality", "")),
               cmdbDataSensitivity = tostring(column_ifexists("cmdbDataSensitivity", "")),
-              IpAddress = _ip;
-union _Endpoint, _Azure
+              IpAddress = _ip
+)
 | where IpAddress matches regex @"^(?:\d{1,3}\.){3}\d{1,3}`$"
 | summarize arg_min(AssetTier, *) by IpAddress
 "@

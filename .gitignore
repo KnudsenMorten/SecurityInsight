@@ -25,10 +25,15 @@ SOLUTIONS/SecurityInsight/DATA/
 SOLUTIONS/SecurityInsight/LOGS/
 
 # ---------------------------------------------------------------------------
-#  Generated artifacts
+#  Tracked: privilege-tier-catalog.custom.json
 # ---------------------------------------------------------------------------
-# Built by PrivilegeTierClassifier, may contain customer-specific overrides
-privilege-tier-catalog/privilege-tier-catalog.custom.json
+# The catalog JSON is a generic Microsoft-roles -> tier mapping (built by
+# PrivilegeTierClassifier from Azure OpenAI, then reviewed). It ships in the
+# repo so customers get tier-definition updates via `git pull` and the
+# Identity engine works on first run with no extra steps. Customers who
+# want to customise tier assignments for their tenant can re-run
+# PrivilegeTierClassifier locally; the regenerated file will show as
+# modified in `git status` (expected).
 
 # ---------------------------------------------------------------------------
 #  Local IDE / OS noise

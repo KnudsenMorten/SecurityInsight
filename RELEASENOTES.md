@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.12
+## v2.2.13
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
 - release: SecurityInsight v2.2.12 - PublicIP tolerate missing Profile tables (acfc2a9e)
 - release: SecurityInsight v2.2.11 - PublicIP surface KQL error body (73b03856)
 - release: SecurityInsight v2.2.10 - PublicIP Set-AzContext + Use-SIAzContext helper (1dc6fac4)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI v2.2): preview.185 — TraceName composition doc fix (legacy engine, unchanged) (87931749)
 - feat(SI v2.2): preview.184 — Category/Subcategory: 242 reports rewritten to platform-pull (10 CVE keep static); Subcategory case normalized (9309b74f)
 - fix(SI v2.2): preview.183 — hotfix profiler Output crash from preview.180 converter regression (f288b157)
-- docs(SI v2.2): preview.182 — single RA schema source-of-truth (risk-analysis.schema.json) + per-column source-field priority (3cf2f056)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.13 — Ship privilege-tier-catalog.custom.json + 10-step setup docs refresh
+
+### Privilege-tier catalog now ships in the repo
+
+Previously gitignored as a "customer-generated artifact", but the JSON contents are actually generic — Microsoft built-in roles → tier mappings (`AD_BuiltInPermissionGroups_Tier0`, etc.). The only tenant-specific bit was a `Metadata.TenantId` field used purely for audit; not a secret.
+
+The 6.5 MB JSON is now tracked in the repo. Customers get tier-definition updates via `git pull` and the **Identity engine works on first run** with no extra steps. Customers who want to customise tier assignments can still re-run `tools\Run-AllEngines.ps1 -PrivilegeTierClassifier` to regenerate the file locally — it'll show as modified in `git status` (expected; pull conflicts are the customer's call).
+
+The `.gitignore` line that previously hid the catalog has been removed.
+
+### README §3.5 ten-step setup — updated with hard-won lessons
+
+Step 8 now mentions `tools\Run-AllEngines.ps1` as the one-shot orchestrator option (vs. running each launcher individually) and explains that the `-PrivilegeTierClassifier` switch is advanced/optional now that the catalog ships.
+
+The "When something doesn't work" troubleshooting table gained 5 new rows for errors we hit during demo-VM debugging:
+- Identity: "SI identity catalog not found" → `git pull` (catalog now ships) or `-PrivilegeTierClassifier` to regenerate
+- PublicIP: `BadRequest` from LA → asset-profiling tables don't exist yet (v2.2.12+ uses `union isfuzzy=true`)
+- PublicIP: `ResourceGroupNotFound` for the workspace's RG → SPN context (auto-handled in v2.2.10+)
+- Shodan: `Missing $global:SI_Shodan_ApiKey` → use canonical SI-prefixed name (v2.2.7+ also accepts legacy `SHODAN_ApiKey`)
+- `config\SecurityInsight.custom.ps1` keeps disappearing → upgrade to v2.2.8+ which protects it via shipped `.gitignore`
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git pull origin main
+# verify the catalog landed
+Test-Path .\privilege-tier-catalog\privilege-tier-catalog.custom.json   # True
+```
 
 ---
 

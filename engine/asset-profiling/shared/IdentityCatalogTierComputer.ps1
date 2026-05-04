@@ -125,7 +125,7 @@ function Initialize-SIIdentityCatalog {
     }
 
     if (-not (Test-Path $Path)) {
-        throw "SI identity catalog not found at: $Path. Run SCRIPTS\Build_Tier_Definitions_JSON_File.ps1 to generate."
+        throw "SI identity catalog not found at: $Path. Run launcher\privilege-tier-classifier\launcher.community-vm.ps1 (community) or launcher.internal-vm.ps1 (internal) once to generate it; the identity engine cannot classify users without this catalog."
     }
 
     $tierDefs = Get-Content -Path $Path -Raw -Encoding UTF8 | ConvertFrom-Json

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.8
+## v2.2.9
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
 - release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
 - release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
 - release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
@@ -33,13 +34,29 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI v2.2): preview.181 — RA report schema realignment to canonical 20-col + 3 engine aggregates + Impact stays platform-sourced + column-lineage JSON (d52e6b4c)
 - feat+fix(SI v2.2): preview.180 — RA cross-workspace routing rewrite + engine-wide visual polish + default transcript logs (dd6fb24a)
 - test(SI v2.2): preview.179 — Test-Smoke extended with 3 profiler-focused checks (DOTSOURCE-PATHS, CACHE-KQL, SCHEMA-VALIDITY) (e1de0f53)
-- fix(SI v2.2): preview.178 — grind through Test-Smoke RA bugs (264 -> 16 fails, 94% reduction) (9fcb45b9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.9 — Fix RA Summary template name in Run-AllEngines
+
+`tools/Run-AllEngines.ps1` was passing `-ReportTemplate "RiskAnalysis"` for the Summary window, but the YAML defines two templates with explicit names: `RiskAnalysis_Detailed` and `RiskAnalysis_Summary`. The Summary launcher threw:
+
+> ReportTemplate 'RiskAnalysis' not found in YAML under ReportTemplates.
+
+Now passes `RiskAnalysis_Summary`. Detailed window was already correct.
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git pull origin main
+```
 
 ---
 

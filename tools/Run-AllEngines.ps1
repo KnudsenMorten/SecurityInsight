@@ -255,7 +255,7 @@ if ($PrivilegeTierClassifier) {
         @{ Title = 'SI - Identity';                Path = "$Root\launcher\identity\launcher.community-vm.ps1";                  Args = $ff }
         @{ Title = 'SI - PublicIP';                Path = "$Root\launcher\publicip\launcher.community-vm.ps1";                  Args = $ff }
         @{ Title = 'SI - RA Detailed';             Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Detailed"' }
-        @{ Title = 'SI - RA Summary';              Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis"' }
+        @{ Title = 'SI - RA Summary';              Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Summary"' }
     )
 }
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.4
+## v2.2.5
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
 - release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
 - release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
 - release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
@@ -33,13 +34,58 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - test+fix(SI v2.2): preview.177 — Test-Smoke.ps1 (behavioural pre-commit guard) + RA bug fixes the test surfaced (354bae32)
 - fix(SI v2.2): preview.176 — RA query routing covers SI_*_Profile_CL + per-report visual polish (60d86297)
 - chore(SI v2.2): preview.175 — output indent 7-char -> 1-char + drop redundant phase-name prefix labels + fix EndpointAzureCorrelationCache KQL BadRequest (003f344f)
-- feat(SI v2.2): preview.174 — engine output overhaul + AssetName derivation in 3 row builders + RA internal-vm launcher fix (3ada3818)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.5 — Run-AllEngines now public + race fix + better Identity error message
+
+Three small fixes, all surfaced by demo VM runs against the public stable repo. Recommended upgrade for anyone using the demo orchestrator or running the Identity engine for the first time.
+
+### Run-AllEngines.ps1 moved to `tools/` (public)
+
+Previously lived in `demo/` (internal-only, excluded from publish), so demo VMs needed manual file drops to receive fixes. Now ships under `tools/Run-AllEngines.ps1` — public users get it via `git pull`, no workarounds.
+
+The `-Install` path-math was updated to walk one level up (`tools/` → `<SI root>` → `demo/community/`) instead of treating `<SI root>` as the script's parent. Public installs (no `demo/` folder) get a friendly hint pointing to `Setup-SecurityInsight.ps1 -Wizard` instead of crashing on a missing snapshot.
+
+### PrivilegeTierClassifier no longer races the other 6 collectors
+
+First-ever runs were failing on Identity discovery with:
+
+> SI identity catalog not found at `<root>\privilege-tier-catalog\privilege-tier-catalog.custom.json`
+
+Root cause: parallel-window mode fired all 7 launchers within seconds, but Identity needs the JSON catalog that PrivilegeTierClassifier produces — the file simply didn't exist yet on first run.
+
+Fix: PrivilegeTierClassifier is now position 1 in the launch plan with a `WaitForFile` gate (timeout 600s). The orchestrator polls for `privilege-tier-catalog.custom.json` to appear before fanning out the other 6 collectors. Subsequent runs (where the file already exists) gate-through immediately.
+
+Also removed a stale `} else { ... }` block left over from a prior refactor in `tools/Run-AllEngines.ps1` — would have parse-errored on `-Install` mode runs (silent on default mode because that branch was unreachable).
+
+PrivilegeTierClassifier was also passed the wrong arg in v2.2.4: `-ForceFullRun` — which the launcher rejects (it always rebuilds the full tier-definitions JSON by design; no cadence skip exists to bypass). Now passes empty args.
+
+### Identity engine error message points to the right script
+
+`engine/asset-profiling/shared/IdentityCatalogTierComputer.ps1:128` was throwing:
+
+> Run SCRIPTS\Build_Tier_Definitions_JSON_File.ps1 to generate.
+
+That script was deleted during the v2 → v2.2 migration. Updated to:
+
+> Run launcher\privilege-tier-classifier\launcher.community-vm.ps1 (community) or launcher.internal-vm.ps1 (internal) once to generate it; the identity engine cannot classify users without this catalog.
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git pull origin main
+# OR pin to v2.2.5:
+git fetch --tags
+git checkout v2.2.5
+```
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.13
+## v2.2.14
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
 - release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
 - release: SecurityInsight v2.2.12 - PublicIP tolerate missing Profile tables (acfc2a9e)
 - release: SecurityInsight v2.2.11 - PublicIP surface KQL error body (73b03856)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI v2.2): preview.186 — ImpactedAssets is an array of distinct AssetName(s) per report (LA dynamic, Excel comma-joined) (3de390a7)
 - docs(SI v2.2): preview.185 — TraceName composition doc fix (legacy engine, unchanged) (87931749)
 - feat(SI v2.2): preview.184 — Category/Subcategory: 242 reports rewritten to platform-pull (10 CVE keep static); Subcategory case normalized (9309b74f)
-- fix(SI v2.2): preview.183 — hotfix profiler Output crash from preview.180 converter regression (f288b157)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.14 — Asset-profiling Output: retry on transient DCR-cache 404 + Pre-Publish Gate exception
+
+### Asset-profiling Output stage now retries on transient DCR-cache failures
+
+A freshly auto-created DCR can land in `$global:AzDcrDetails` with an empty / unresolved `ImmutableId`. AzLogDcrIngestPS's URL builder then falls back to a non-GUID string (commonly the DCE's `Location`, e.g. `'westeurope'`) and the Log Ingestion API rejects the call with:
+
+> 404 NotFound: Data collection rule with immutable Id 'westeurope' not found.
+
+`engine/asset-profiling/stages/Invoke-Output.ps1` now wraps the `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` call in a 3-attempt retry loop. On any 404 / `NotFound` / `immutable Id` error pattern it sleeps (30s, then 60s), re-calls `Get-AzDcrListAll` to refresh the cache, and retries. Non-transient errors throw immediately (preserves existing diagnostics).
+
+In practice the DCR's immutableId populates in ARG within 30-90s, so the second attempt usually succeeds. Eliminates the "first run on a fresh community workspace fails ingest, run completes successfully when re-fired" pattern.
+
+### Pre-Publish Gate: allow tracked privilege-tier-catalog.custom.json
+
+The `RepoHygiene / No customer .custom.json files tracked` test in `tests/pester/SI-PrePublish.Tests.ps1` failed v2.2.13 publish because the catalog JSON was now intentionally tracked. Added an explicit exception path so the gate ignores `privilege-tier-catalog/privilege-tier-catalog.custom.json` (the only `.custom.json` we allow in the repo).
 
 ---
 

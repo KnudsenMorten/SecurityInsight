@@ -350,14 +350,50 @@ function Write-SIClassificationToLogAnalytics {
         $DataVariable = Build-DataArrayToAlignWithSchema -Data $DataVariable 4>$null
 
         # ---- 5. POST ----
+        # Retry-with-cache-refresh: a freshly auto-created DCR may be missing
+        # from $global:AzDcrDetails OR present with an unresolved/empty
+        # immutableId; AzLogDcrIngestPS sometimes falls back to the location
+        # string ('westeurope') as the URL path, producing
+        #   404 NotFound: Data collection rule with immutable Id 'westeurope' not found.
+        # Wait + re-call Get-AzDcrListAll between attempts so the DCR's
+        # immutableId has time to populate in ARG.
         $global:EnableCompressionDefault = $true
         Write-SIStep ('Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output (compression={0}, rows={1})' -f $global:EnableCompressionDefault, $DataVariable.Count)
-        $null = Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output `
-            -DceName     $global:SI_DceName `
-            -DcrName     $dcrName `
-            -Data        $DataVariable `
-            -TableName   $tableName `
-            @authParams 4>$null
+        $maxAttempts = 3
+        $attempt = 0
+        while ($true) {
+            $attempt++
+            try {
+                $null = Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output `
+                    -DceName     $global:SI_DceName `
+                    -DcrName     $dcrName `
+                    -Data        $DataVariable `
+                    -TableName   $tableName `
+                    @authParams 4>$null
+                break  # success
+            } catch {
+                $msg  = $_.Exception.Message
+                $body = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { '' }
+                $combined = ($msg + ' ' + $body)
+                $isTransient = $combined -match '404|NotFound|immutable Id|data collection rule'
+                if (-not $isTransient -or $attempt -ge $maxAttempts) {
+                    throw  # let outer catch surface the full error
+                }
+                $sleepSec = 30 * $attempt  # 30, 60s
+                Write-SIWarn ('LA ingest attempt {0}/{1} failed (transient DCR-cache issue): {2}. Refreshing DCE/DCR cache and retrying in {3}s ...' -f $attempt, $maxAttempts, $msg, $sleepSec)
+                Start-Sleep -Seconds $sleepSec
+                if (-not $useMi) {
+                    try {
+                        $global:AzDcrDetails = Get-AzDcrListAll `
+                                                    -AzAppId     $spnAppId `
+                                                    -AzAppSecret $spnSecret `
+                                                    -TenantId    $spnTenantId 4>$null
+                    } catch {
+                        Write-SIWarn ('Get-AzDcrListAll refresh failed during retry: {0}' -f $_.Exception.Message)
+                    }
+                }
+            }
+        }
 
         return ('OK -- {0} rows -> {1}_CL via {2}  ({3} auth, CollectionTime={4:o})' -f $DataVariable.Count, $tableName, $dcrName, $authNote, $RunContext.CollectionTime)
     }

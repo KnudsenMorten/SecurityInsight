@@ -98,14 +98,15 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Root           = 'C:\Demo\SecurityInsight',
+    [string]$Root                    = 'C:\Demo\SecurityInsight',
     [switch]$Install,
-    [string]$GitRepoUrl     = 'https://github.com/KnudsenMorten/SecurityInsight.git',
-    [string]$Tag            = '',
+    [string]$GitRepoUrl              = 'https://github.com/KnudsenMorten/SecurityInsight.git',
+    [string]$Tag                     = '',
     [switch]$SkipPull,
-    [int]   $StaggerSeconds = 2,
+    [int]   $StaggerSeconds          = 2,
     [switch]$Sequential,
-    [switch]$NoForceFullRun
+    [switch]$NoForceFullRun,
+    [switch]$PrivilegeTierClassifier
 )
 $ErrorActionPreference = 'Continue'
 
@@ -203,19 +204,25 @@ $ver = Get-Content -LiteralPath (Join-Path $Root 'VERSION') -ErrorAction Silentl
 Write-Host ('VERSION: ' + $ver) -ForegroundColor Yellow
 
 # ---------------------------------------------------------------------------
-# 4. Kill stale community-vm launcher processes
+# 4. Kill stale community-vm launcher processes (skipped in -PrivilegeTierClassifier
+#    mode -- standalone PTC runs alongside an existing fan-out and must NOT
+#    terminate sibling collector windows still in flight).
 # ---------------------------------------------------------------------------
-Write-Host "`n==> killing stale launcher.community-vm.ps1 processes" -ForegroundColor Cyan
 $mePid = $PID
-$stale = Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProcessId -ne $mePid -and $_.CommandLine -match 'launcher\.community-vm\.ps1' }
-if ($stale) {
-    foreach ($p in $stale) {
-        Write-Host ('  killing PID ' + $p.ProcessId) -ForegroundColor Yellow
-        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-    }
+if ($PrivilegeTierClassifier) {
+    Write-Host "`n==> -PrivilegeTierClassifier mode -- skipping stale-process kill (leave sibling launchers alone)" -ForegroundColor Cyan
 } else {
-    Write-Host '  (none found)' -ForegroundColor Gray
+    Write-Host "`n==> killing stale launcher.community-vm.ps1 processes" -ForegroundColor Cyan
+    $stale = Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessId -ne $mePid -and $_.CommandLine -match 'launcher\.community-vm\.ps1' }
+    if ($stale) {
+        foreach ($p in $stale) {
+            Write-Host ('  killing PID ' + $p.ProcessId) -ForegroundColor Yellow
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        Write-Host '  (none found)' -ForegroundColor Gray
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -226,21 +233,31 @@ $ff = if ($NoForceFullRun) { '' } else { '-ForceFullRun' }
 # (it always rebuilds the full tier-definitions JSON by design -- no cadence
 # skip to bypass). RA launchers take -ReportTemplate, not -ForceFullRun.
 #
+# Default plan = 6 collectors + 2 RA passes. PrivilegeTierClassifier (PTC)
+# is OFF by default because it's slow (rebuilds the full tier-definitions
+# JSON via Azure OpenAI every run) and the catalog rarely changes between
+# demos. To run PTC standalone (no other engines, single window), pass
+# -PrivilegeTierClassifier. Identity discovery requires the catalog JSON;
+# if missing on a fresh install, run -PrivilegeTierClassifier once first,
+# then the default plan.
+#
 # WaitForFile = a path the orchestrator polls (up to WaitTimeoutSec) before
-# launching the next plan item. Used to gate the 6 collectors on the
-# PrivilegeTierClassifier catalog being written, since identity discovery
-# refuses to run without it. Other items omit WaitForFile and fan out
-# immediately (parallel mode) or in sequence (-Sequential mode).
-$catalogJson = Join-Path $Root 'privilege-tier-catalog\privilege-tier-catalog.custom.json'
-$plan = @(
-    @{ Title = 'SI - PrivilegeTierClassifier'; Path = "$Root\launcher\privilege-tier-classifier\launcher.community-vm.ps1"; Args = ''; WaitForFile = $catalogJson; WaitTimeoutSec = 600 }
-    @{ Title = 'SI - Endpoint';                Path = "$Root\launcher\endpoint\launcher.community-vm.ps1";                  Args = $ff }
-    @{ Title = 'SI - Azure';                   Path = "$Root\launcher\azure\launcher.community-vm.ps1";                     Args = $ff }
-    @{ Title = 'SI - Identity';                Path = "$Root\launcher\identity\launcher.community-vm.ps1";                  Args = $ff }
-    @{ Title = 'SI - PublicIP';                Path = "$Root\launcher\publicip\launcher.community-vm.ps1";                  Args = $ff }
-    @{ Title = 'SI - RA Detailed';             Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Detailed"' }
-    @{ Title = 'SI - RA Summary';              Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis"' }
-)
+# launching the next plan item. Reserved for future use; current plans
+# don't set it (PTC always runs solo when -PrivilegeTierClassifier is on).
+if ($PrivilegeTierClassifier) {
+    $plan = @(
+        @{ Title = 'SI - PrivilegeTierClassifier'; Path = "$Root\launcher\privilege-tier-classifier\launcher.community-vm.ps1"; Args = '' }
+    )
+} else {
+    $plan = @(
+        @{ Title = 'SI - Endpoint';                Path = "$Root\launcher\endpoint\launcher.community-vm.ps1";                  Args = $ff }
+        @{ Title = 'SI - Azure';                   Path = "$Root\launcher\azure\launcher.community-vm.ps1";                     Args = $ff }
+        @{ Title = 'SI - Identity';                Path = "$Root\launcher\identity\launcher.community-vm.ps1";                  Args = $ff }
+        @{ Title = 'SI - PublicIP';                Path = "$Root\launcher\publicip\launcher.community-vm.ps1";                  Args = $ff }
+        @{ Title = 'SI - RA Detailed';             Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Detailed"' }
+        @{ Title = 'SI - RA Summary';              Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis"' }
+    )
+}
 
 # ---------------------------------------------------------------------------
 # 6. Fire each window via cmd /c start (rock-solid for parallel spawns)

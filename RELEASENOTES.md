@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.5
+## v2.2.6
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
 - release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
 - release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
 - release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
@@ -33,13 +34,40 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.178 — grind through Test-Smoke RA bugs (264 -> 16 fails, 94% reduction) (9fcb45b9)
 - test+fix(SI v2.2): preview.177 — Test-Smoke.ps1 (behavioural pre-commit guard) + RA bug fixes the test surfaced (354bae32)
 - fix(SI v2.2): preview.176 — RA query routing covers SI_*_Profile_CL + per-report visual polish (60d86297)
-- chore(SI v2.2): preview.175 — output indent 7-char -> 1-char + drop redundant phase-name prefix labels + fix EndpointAzureCorrelationCache KQL BadRequest (003f344f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.6 — Run-AllEngines: PTC opt-in, no longer kills siblings in PTC mode
+
+PrivilegeTierClassifier (PTC) was added to the default plan in v2.2.5 with a `WaitForFile` gate. In practice that gate slowed every demo by 30-90s because PTC rebuilds the entire tier-definitions JSON via Azure OpenAI on every run, even when the catalog hasn't changed. Demos waited on a slow first window before the visually impressive 6-window fan-out started.
+
+This version moves PTC OUT of the default plan and into a new `-PrivilegeTierClassifier` switch:
+
+```powershell
+# Default: 6 windows (Endpoint, Azure, Identity, PublicIP, RA Detailed, RA Summary)
+.\tools\Run-AllEngines.ps1
+
+# Standalone: just PTC, in its own window. Use this once on fresh installs
+# (Identity needs the catalog) or whenever you want to refresh the tier defs.
+.\tools\Run-AllEngines.ps1 -PrivilegeTierClassifier
+```
+
+`-PrivilegeTierClassifier` mode also **skips the stale-process kill block** so it can run alongside an in-flight fan-out without terminating sibling collector windows. Default mode kills stale launchers as before.
+
+Fresh-install ordering: run `-PrivilegeTierClassifier` once, wait for the catalog JSON to land at `<root>\privilege-tier-catalog\privilege-tier-catalog.custom.json`, then run the default plan.
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git pull origin main
+```
 
 ---
 

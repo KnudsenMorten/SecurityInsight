@@ -4,6 +4,7 @@
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
 - SI v2.2.0 stable: flatten v2.2/ to root, drop v2.1 layout, audit-pass RA fixes (536e1405)
 - ci(publish): per-channel sourceRef + README regression guard (43b6e88c)
 - docs(SI README): add 'New release v2.2 coming very soon !' teaser callout (9b283fcf)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI v2.2): preview.172 — RA SPN+secret auth via launcher + PS 5.1 robustness + preview.169 path-fix fallout (9121649d)
 - feat(SI v2.2): preview.171 — azure deferred items (cross-engine VM/Arc, parent-sub tags, parent-MG tags + ParentMG_Structure, DCR-merge diagnostic) (b8e196f6)
 - docs(SI v2.2): preview.170 — refresh all 4 v2.2 docs (auto-gen + hand-update) (9216e90f)
-- chore(SI v2.2): preview.169 — discovery → asset-profiling, RA engine renamed Invoke-RiskAnalysis.ps1, doc renames + delete SCHEMA-SPEC (bb6c5db0)
 
 ---
 

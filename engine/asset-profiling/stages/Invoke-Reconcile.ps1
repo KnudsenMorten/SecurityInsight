@@ -262,13 +262,17 @@ function Invoke-SIReconcile {
         }
     }
 
-    # Re-write enriched records back to staging
-    Write-SIStageShard -Context $RunContext.StorageContext `
-                       -ContainerName $RunContext.StagingContainer `
-                       -RunId $RunContext.RunId `
-                       -Stage 'Classify' `
-                       -ShardIndex $RunContext.ShardIndex `
-                       -Records $records | Out-Null
+    # Re-write enriched records back to staging. Skip when there were no records
+    # to enrich (legitimate state when Phase 3 cadence-skipped every asset --
+    # nothing to re-write, and Write-SIStageShard rejects empty arrays).
+    if ($records -and @($records).Count -gt 0) {
+        Write-SIStageShard -Context $RunContext.StorageContext `
+                           -ContainerName $RunContext.StagingContainer `
+                           -RunId $RunContext.RunId `
+                           -Stage 'Classify' `
+                           -ShardIndex $RunContext.ShardIndex `
+                           -Records $records | Out-Null
+    }
 
     # Reverse direction: gap rows (CMDB CIs nothing discovered)
     $gapRows = New-Object System.Collections.ArrayList

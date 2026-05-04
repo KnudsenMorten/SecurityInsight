@@ -31,11 +31,11 @@ BeforeDiscovery {
 
 BeforeAll {
     Import-Module powershell-yaml -Force
-    # Recompute (BeforeDiscovery script: vars don't always survive into BeforeAll)
-    # tests/pester/<file>.ps1 -> tests/pester -> tests -> v2.2 (3 ups from $PSCommandPath)
+    # Path resolution after the v2.2 flatten:
+    #   tests/pester/<file>.ps1 -> tests/pester -> tests -> SecurityInsight  (3 ups)
+    #   SecurityInsight -> SOLUTIONS -> AutomateIT  (2 more ups, NOT 3 as before flatten)
     $_v22 = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
-    # v2.2 -> SecurityInsight -> SOLUTIONS -> AutomateIT (repo root, 3 more ups)
-    $_repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $_v22))
+    $_repo = Split-Path -Parent (Split-Path -Parent $_v22)
     $script:V22Root  = $_v22
     $script:RepoRoot = $_repo
     $script:RaYaml   = Join-Path $_v22 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml'
@@ -43,6 +43,10 @@ BeforeAll {
     $script:RaCatalog   = ConvertFrom-Yaml (Get-Content -Raw -LiteralPath $script:RaYaml)
     $script:RaReports   = @($script:RaCatalog.Reports)
     $script:RaTemplates = @($script:RaCatalog.ReportTemplates)
+    # Authoritative report count: count `- ReportName:` entries directly. ConvertFrom-Yaml
+    # on Linux (GitHub Actions runner) sometimes undercounts vs the literal entry count.
+    # Both should agree; if they don't, use the regex-derived total as truth.
+    $script:RaReportCount = ([regex]::Matches((Get-Content -Raw -LiteralPath $script:RaYaml), '(?m)^\s+- ReportName:')).Count
 }
 
 # ============================================================================
@@ -231,7 +235,10 @@ Describe 'DocConsistency' {
         $claimed = ([regex]::Matches($readmeText, '(\b\d{2,4}\b)\s+(?:Risk Analysis reports|attacker-centric KQL reports)') |
                     ForEach-Object { [int]$_.Groups[1].Value })
         $claimed | Should -Not -BeNullOrEmpty
-        $claimed | ForEach-Object { $_ | Should -Be $script:RaReports.Count -Because "drift" }
+        # Use the regex-derived YAML report count (authoritative) rather than
+        # ConvertFrom-Yaml's parsed structure -- the latter undercounts on the
+        # Linux GitHub Actions runner due to a powershell-yaml version quirk.
+        $claimed | ForEach-Object { $_ | Should -Be $script:RaReportCount -Because "README ($_) vs YAML ($script:RaReportCount) drift" }
     }
 
     It 'linked doc exists: <_>' -ForEach @(

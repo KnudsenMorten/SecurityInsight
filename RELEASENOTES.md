@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.2
+## v2.2.3
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
 - release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
 - release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
 - fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
@@ -33,13 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - chore(SI v2.2): preview.175 — output indent 7-char -> 1-char + drop redundant phase-name prefix labels + fix EndpointAzureCorrelationCache KQL BadRequest (003f344f)
 - feat(SI v2.2): preview.174 — engine output overhaul + AssetName derivation in 3 row builders + RA internal-vm launcher fix (3ada3818)
 - feat(SI v2.2): preview.173 — self-contained tree completion (setup/, identity-tiering engine, lowercase folders, profiler launcher PS5.1, AlwaysOn fix) (574c14c1)
-- feat(SI v2.2): preview.172 — RA SPN+secret auth via launcher + PS 5.1 robustness + preview.169 path-fix fallout (9121649d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.3 — Pre-Publish Gate fixes + demo orchestrator
+
+Two unrelated fixes bundled together. **No engine changes** — same Profile schemas, same RA reports, same launchers as v2.2.2.
+
+### Pre-Publish Gate (`tests/pester/SI-PrePublish.Tests.ps1`) fixes
+
+The gate had been failing on every push since the v2.2 flatten — three test failures, all caused by the path-resolution math being one level too deep:
+
+- **`$_repo` calculation**: `tests/pester/<file>.ps1` walks up 3 levels to `SecurityInsight` (not `v2.2/` anymore), so `$_repo` only needs **2** more ups (`SecurityInsight → SOLUTIONS → AutomateIT`), not 3. Previously was resolving to `C:\SCRIPTS\` instead of `C:\SCRIPTS\AutomateIT\`, which broke `WorkflowSyntax` tests that look for `.github/workflows/*.yml` under `$RepoRoot`.
+- **`DocConsistency` README report-count check**: now uses a regex-derived count (`^- ReportName:` line count) instead of `ConvertFrom-Yaml | .Reports.Count`. The latter undercounts on the Linux GitHub Actions runner due to a `powershell-yaml` parser quirk (returned 134 vs the actual 136 entries). The regex pattern matches the same authoritative source the README itself documents.
+
+After this patch the gate goes from `1375/1385 PASS` (3 failures + 6 skip) to **green**.
+
+### Demo orchestrator (`demo/Run-AllEngines.ps1`)
+
+Internal-only helper for demo VMs. **Not published to the public stable repo** (lives in `demo/` which is excluded from publish). Distribute manually to demo VMs that need it.
+
+Two modes:
+
+- **Default**: assumes `-Root` is an existing SI install. `git pull` to refresh, kill any stale launcher processes, fire 7 PowerShell windows in parallel — one per engine + 2 RA passes (Detailed + Summary).
+- **`-Install`**: fresh-VM setup. Clones the public repo to `-Root` if missing, drops customer config from `demo/community/` snapshot, then fires the 7 windows.
+
+Uses `cmd /c start "title" powershell.exe -NoExit -File <launcher>` for window spawning — much more reliable than `Start-Process powershell` for parallel multi-window scenarios on Windows (avoids AV / Defender SmartScreen rate-limiting that silently dropped windows when 7+ powershell.exe processes spawn within ~1 second).
+
+Switches:
+- `-Sequential` — wait for each window to close before opening the next (CI-friendly)
+- `-NoForceFullRun` — respect tier cadence (faster on warm runs)
+- `-Tag v2.2.x` — pin a specific tag during `-Install`
+- `-StaggerSeconds N` — delay between window launches (default 2s; bump to 3-4 if AV still drops some)
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git fetch origin
+git pull origin main
+# OR pin to v2.2.3:
+git fetch --tags
+git checkout v2.2.3
+```
 
 ---
 

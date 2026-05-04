@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.1
+## v2.2.2
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
 - release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
 - fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
 - SI v2.2.0 stable: flatten v2.2/ to root, drop v2.1 layout, audit-pass RA fixes (536e1405)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI v2.2): preview.174 — engine output overhaul + AssetName derivation in 3 row builders + RA internal-vm launcher fix (3ada3818)
 - feat(SI v2.2): preview.173 — self-contained tree completion (setup/, identity-tiering engine, lowercase folders, profiler launcher PS5.1, AlwaysOn fix) (574c14c1)
 - feat(SI v2.2): preview.172 — RA SPN+secret auth via launcher + PS 5.1 robustness + preview.169 path-fix fallout (9121649d)
-- feat(SI v2.2): preview.171 — azure deferred items (cross-engine VM/Arc, parent-sub tags, parent-MG tags + ParentMG_Structure, DCR-merge diagnostic) (b8e196f6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.2 — README cosmetic fixes
+
+Doc-only patch. No engine changes, no schema changes, no script changes.
+
+- **"Whole product in one picture" Mermaid diagram** redrawn with `flowchart TB` (top-bottom) outer layout + `direction LR` inside the SOURCES + OUTPUTS subgraphs. Fits on a normal-width screen and the node text is actually readable. Old `flowchart LR` with 5 horizontal subgraphs was getting squeezed to ~1/4 of the screen width on standard rendering, making node text unreadable.
+- **Report count corrected** in the diagram: `134 attacker-centric KQL reports` → `136`. Also added PublicIP to the report-domain list.
+- **TOC**: removed orphaned `0. [Capabilities]` entry that was pointing at the old section moved into § 10 What's New & Capabilities during the v2.2.0 restructure.
+
+### Upgrade
+
+Just `git pull` — no schema/config touch needed.
+
+```powershell
+cd <your SI install>
+git fetch origin
+git pull origin main
+# OR pin to v2.2.2:
+git fetch --tags
+git checkout v2.2.2
+```
 
 ---
 

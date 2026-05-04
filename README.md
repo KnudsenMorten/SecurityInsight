@@ -82,7 +82,6 @@
 <a id="toc"></a>
 ## 📑 Table of Contents
 
-0. [Capabilities](#v22-whats-new) — what it does at a glance (11 capability deep-dives)
 1. [Introduction](#introduction) — outputs, use-cases, agents, sample output
 2. [Understanding the Framework](#understanding-the-framework) — the risk model concept (start here if new)
    - 2.1 [Why a graph, not a list](#why-a-graph-not-a-list)
@@ -140,25 +139,27 @@
 #### 🖼️ The whole product in one picture
 
 ```mermaid
-flowchart LR
-    subgraph SOURCES ["Microsoft data sources<br/>(read-only API)"]
+flowchart TB
+    subgraph SOURCES ["Microsoft data sources (read-only API)"]
+        direction LR
         S1[Defender for Endpoint<br/>devices, vulnerabilities]
         S2[Defender Exposure Graph<br/>nodes + edges]
         S3[Entra ID<br/>users, SPNs, roles]
         S4[Azure Resource Graph<br/>resources + tags]
-        S5[Optional: ServiceNow CMDB CSV]
+        S5[Optional<br/>ServiceNow CMDB CSV]
     end
-    subgraph PROFILE ["1️⃣ Asset profiling"]
-        P1[Collect → Classify → Tier 0–3<br/>per asset, with proofs]
+    subgraph PROFILE ["1. Asset profiling"]
+        P1[Collect → Classify → Tier 0–3 per asset, with proofs]
     end
-    subgraph RA ["2️⃣ Risk Analysis"]
-        R1[134 attacker-centric KQL reports<br/>across Endpoint, Identity, Azure]
+    subgraph RA ["2. Risk Analysis"]
+        R1[136 attacker-centric KQL reports<br/>across Endpoint, Identity, Azure, PublicIP]
     end
-    subgraph OUT ["3️⃣ Outputs"]
-        O1[📧 Excel + AI summary email]
-        O2[📊 Power BI / Workbook]
-        O3[🗃️ Log Analytics tables]
-        O4[📦 JSON to UNC / blob]
+    subgraph OUT ["3. Outputs"]
+        direction LR
+        O1[Excel + AI<br/>summary email]
+        O2[Power BI<br/>+ Workbook]
+        O3[Log Analytics<br/>tables]
+        O4[JSON to<br/>UNC / blob]
     end
     SOURCES --> PROFILE --> RA --> OUT
     style SOURCES fill:#e8f4fd,stroke:#2a6592

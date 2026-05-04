@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.10
+## v2.2.11
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.11 - PublicIP surface KQL error body (73b03856)
 - release: SecurityInsight v2.2.10 - PublicIP Set-AzContext + Use-SIAzContext helper (1dc6fac4)
 - release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
 - release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.183 — hotfix profiler Output crash from preview.180 converter regression (f288b157)
 - docs(SI v2.2): preview.182 — single RA schema source-of-truth (risk-analysis.schema.json) + per-column source-field priority (3cf2f056)
 - feat(SI v2.2): preview.181 — RA report schema realignment to canonical 20-col + 3 engine aggregates + Impact stays platform-sourced + column-lineage JSON (d52e6b4c)
-- feat+fix(SI v2.2): preview.180 — RA cross-workspace routing rewrite + engine-wide visual polish + default transcript logs (dd6fb24a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.11 — PublicIP: surface KQL error body + missing-table hint
+
+The PublicIP scanner's KQL error path was logging only the HTTP status (`Operation returned an invalid status code 'BadRequest'`) — useless for diagnosing whether the cause was a missing table, a syntax error, or a permissions gap.
+
+`engine/publicip/Invoke-PublicIpScanner.ps1` now also logs `$_.ErrorDetails.Message` (the JSON body from `Invoke-AzOperationalInsightsQuery`, which carries the actual KQL error message), and prints a hint that BadRequest usually means `SI_Endpoint_Profile_CL` / `SI_Azure_Profile_CL` don't exist yet in the workspace — run the endpoint + azure engines first.
 
 ---
 

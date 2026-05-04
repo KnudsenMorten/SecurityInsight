@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.3
+## v2.2.4
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
 - release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
 - release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
 - release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.176 — RA query routing covers SI_*_Profile_CL + per-report visual polish (60d86297)
 - chore(SI v2.2): preview.175 — output indent 7-char -> 1-char + drop redundant phase-name prefix labels + fix EndpointAzureCorrelationCache KQL BadRequest (003f344f)
 - feat(SI v2.2): preview.174 — engine output overhaul + AssetName derivation in 3 row builders + RA internal-vm launcher fix (3ada3818)
-- feat(SI v2.2): preview.173 — self-contained tree completion (setup/, identity-tiering engine, lowercase folders, profiler launcher PS5.1, AlwaysOn fix) (574c14c1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.4 — Demo orchestrator: silence git-stderr noise
+
+Tiny patch — only touches `demo/Run-AllEngines.ps1` (internal-only). When the script runs `git pull` (default mode) or `git clone` (-Install mode), git writes its progress messages to stderr. PowerShell's "native command stderr = error" behavior renders these as red `RemoteException / NativeCommandError` blocks even though the command succeeded.
+
+Fix: pipe through `ForEach-Object { Write-Host $_ }` instead of `| Out-Host`. PowerShell now sees each line as data and prints it normally — no more scary red blocks for what is just `From https://...` informational text.
+
+No engine, schema, README, or workflow changes.
 
 ---
 

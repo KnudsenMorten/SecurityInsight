@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.11
+## v2.2.12
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.12 - PublicIP tolerate missing Profile tables (acfc2a9e)
 - release: SecurityInsight v2.2.11 - PublicIP surface KQL error body (73b03856)
 - release: SecurityInsight v2.2.10 - PublicIP Set-AzContext + Use-SIAzContext helper (1dc6fac4)
 - release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI v2.2): preview.184 — Category/Subcategory: 242 reports rewritten to platform-pull (10 CVE keep static); Subcategory case normalized (9309b74f)
 - fix(SI v2.2): preview.183 — hotfix profiler Output crash from preview.180 converter regression (f288b157)
 - docs(SI v2.2): preview.182 — single RA schema source-of-truth (risk-analysis.schema.json) + per-column source-field priority (3cf2f056)
-- feat(SI v2.2): preview.181 — RA report schema realignment to canonical 20-col + 3 engine aggregates + Impact stays platform-sourced + column-lineage JSON (d52e6b4c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.12 — PublicIP: tolerate missing Profile tables (union isfuzzy=true)
+
+The PublicIP discovery KQL queried `SI_Endpoint_Profile_CL` AND `SI_Azure_Profile_CL` via two `let` statements + `union`. KQL parses table refs at submit time, so if EITHER table didn't exist (common on fresh workspaces where one engine has ingested but the other hasn't), the whole query failed with `BadRequest`.
+
+Switched to `union isfuzzy=true ( ... ), ( ... )` — non-existent tables are silently skipped, and discovery proceeds against whichever tables ARE present. Now you can run PublicIP after just Endpoint has ingested, even before Azure has its first run.
 
 ---
 

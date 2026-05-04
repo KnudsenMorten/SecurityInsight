@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.7
+## v2.2.8
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
 - release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
 - release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
 - release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat+fix(SI v2.2): preview.180 — RA cross-workspace routing rewrite + engine-wide visual polish + default transcript logs (dd6fb24a)
 - test(SI v2.2): preview.179 — Test-Smoke extended with 3 profiler-focused checks (DOTSOURCE-PATHS, CACHE-KQL, SCHEMA-VALIDITY) (e1de0f53)
 - fix(SI v2.2): preview.178 — grind through Test-Smoke RA bugs (264 -> 16 fails, 94% reduction) (9fcb45b9)
-- test+fix(SI v2.2): preview.177 — Test-Smoke.ps1 (behavioural pre-commit guard) + RA bug fixes the test surfaced (354bae32)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.8 — Add .gitignore to public repo (protect customer secrets)
+
+The public repo never had a `.gitignore`, leaving customer-owned files like `config/SecurityInsight.custom.ps1` (which holds Shodan key, SPN secret, OpenAI key) in an unprotected state:
+
+- `git pull` left them alone (only modifies tracked files), but
+- `git clean -fd` would silently delete them (untracked + not-ignored), and
+- `git add .` followed by `git commit -am` would publish secrets to the public repo (you'd have to actively notice and skip them)
+
+This release ships a `.gitignore` at the SI repo root that explicitly protects:
+- `config/SecurityInsight.custom.ps1`
+- `launcher/*/LauncherConfig.custom.ps1`
+- `logs/`, `OUTPUT/`, `DATA/`, `staging/` (run output)
+- `privilege-tier-catalog/privilege-tier-catalog.custom.json` (rebuilt by PTC)
+- IDE / OS noise (`.vs/`, `.DS_Store`, etc.)
+
+After upgrading: customer config files survive `git clean -fd`, and accidental `git add .` won't stage them.
+
+### Upgrade
+
+```powershell
+cd <your SI install>
+git pull origin main
+```
 
 ---
 

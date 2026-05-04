@@ -1,0 +1,40 @@
+# SecurityInsight -- public repo .gitignore
+#
+# Protects customer secrets + run output from being:
+#   - accidentally committed via `git add .`
+#   - destroyed by `git clean -fd`
+#
+# This file ships to the public repo via the AutomateIT publish workflow
+# (the source AutomateIT/.gitignore covers the same paths from the monorepo
+# side; this file covers them from the customer-VM side).
+
+# ---------------------------------------------------------------------------
+#  Customer secrets / config -- NEVER commit
+# ---------------------------------------------------------------------------
+config/SecurityInsight.custom.ps1
+launcher/*/LauncherConfig.custom.ps1
+
+# ---------------------------------------------------------------------------
+#  Run output -- regenerated each run, no value in git
+# ---------------------------------------------------------------------------
+logs/
+OUTPUT/
+DATA/
+staging/
+SOLUTIONS/SecurityInsight/DATA/
+SOLUTIONS/SecurityInsight/LOGS/
+
+# ---------------------------------------------------------------------------
+#  Generated artifacts
+# ---------------------------------------------------------------------------
+# Built by PrivilegeTierClassifier, may contain customer-specific overrides
+privilege-tier-catalog/privilege-tier-catalog.custom.json
+
+# ---------------------------------------------------------------------------
+#  Local IDE / OS noise
+# ---------------------------------------------------------------------------
+.vs/
+.idea/
+*.suo
+.DS_Store
+Thumbs.db

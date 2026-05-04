@@ -1,0 +1,21 @@
+id:        MicrosoftRemoteDesktopGateway
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Remote Desktop Gateway'
+category:  'Remote Access'
+description: ''
+displayNames:
+  - 'Microsoft Remote Desktop Gateway'
+  - 'RD Gateway'
+
+detections:
+  - id: MicrosoftRemoteDesktopGateway
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_desktop_gateway*'
+    set:
+      Tier:     1
+      Purpose:  'Jump host'
+      Category: 'Remote Access'

@@ -1,0 +1,24 @@
+id:        SharedDevice
+appliesTo: endpoint
+mode:      locked
+purpose:   'Shared Device'
+category:  'Client Devices'
+description: 'Multi-user shared device; cached creds from many users on one box.'
+
+detections:
+  - id: SharedDevice
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^shared\d'
+            - '(?i)^shared-pc'
+            - '(?i)shared.device'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)shared.device'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Shared Device'
+      Category: 'Client Devices'

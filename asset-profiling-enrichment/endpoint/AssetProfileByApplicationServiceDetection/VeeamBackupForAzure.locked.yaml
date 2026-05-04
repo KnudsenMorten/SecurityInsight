@@ -1,0 +1,20 @@
+id:        VeeamBackupForAzure
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veeam Backup for Azure'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veeam Backup for Azure'
+
+detections:
+  - id: VeeamBackupForAzure
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'backup_for_azure*'
+    set:
+      Tier:     1
+      Purpose:  'Backup'
+      Category: 'Backup'

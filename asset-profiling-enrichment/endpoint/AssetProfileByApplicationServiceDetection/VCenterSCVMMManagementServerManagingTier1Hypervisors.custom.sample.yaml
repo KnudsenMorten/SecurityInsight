@@ -1,0 +1,119 @@
+# ============================================================================
+# SAMPLE / TEMPLATE -- not loaded by the engine (.sample.* files are skipped).
+#
+# To activate this rule with your own tier verdict / detection / metadata:
+#   1. Copy this file to a sibling without the `.sample` suffix:
+#        <RuleId>.custom.yaml      (in the same folder as this file)
+#   2. Edit the `set:` block (Tier / Purpose / Category / Tags / cmdbId).
+#   3. Optionally edit the `detections:` block to change the match logic.
+#   4. Keep `id:` unchanged -- the engine deduplicates by id and your custom
+#      file then overrides any sibling `<RuleId>.locked.yaml`.
+#
+# Field grammar reference:  docs/RULE-REFERENCE.md
+# Annotated full template:  ../_TEMPLATE.custom.sample.yaml
+#
+# IMPORTANT: never set `cmdbName`, `cmdbCriticality`, `cmdbDataSensitivity`
+# inline in `set:`. They are auto-stamped from CMDB.csv via the `cmdbId`
+# lookup at Reconcile. Inline values cause drift between rule and CSV.
+#
+# ----------------------------------------------------------------------------
+# QUICK SYNTAX REFERENCE -- every detect kind, with required + optional params
+# (full reference + per-engine availability in RULE-REFERENCE.md)
+# ----------------------------------------------------------------------------
+#
+#   nameMatches                     (all engines)
+#     namePatterns: [regex,...]     # required (alias: patterns)
+#
+#   osPlatform                      (endpoint)
+#     osPatterns:   [regex,...]     # required (alias: patterns)
+#
+#   hasMdeMachineGroupTag           (endpoint)
+#     machineTagPatterns: [regex,...]  # required (alias: patterns)
+#
+#   egDetectedRoles                 (endpoint, identity)
+#     egSignals:   [string,...]     # required (alias: roles)
+#
+#   hasEntraExtensionAttributeTag   (identity)
+#     attribute:   string           # required, e.g. extensionAttribute6
+#     value:       string           # required
+#     match:       exact | <other>  # optional, default exact (other = -like)
+#
+#   hasSoftwareInstalled            (endpoint)
+#     tvmSoftwareNames: [glob,...]  # required ('vendor/name' or '*/name')
+#
+#   groupMembership                 (identity)
+#     group:       string           # required (single name; CI exact)
+#
+#   hasAzureTagDirectOrParent       (azure; also endpoint when correlated)
+#     tag:         string           # required (key, CI exact)
+#     value:       string|list      # optional (presence-only if absent)
+#     match:       <operator>       # optional, default equal
+#
+#   egKustoQuery                    (escape hatch -- endpoint, identity, azure)
+#     kql:         string           # required, returns asset IDs
+#
+#   mostFrequentUserTier            (endpoint)
+#     tierValues:  [int,...]        # required, e.g. [0] or [0,1]
+#
+#   ipInRange                       (endpoint, azure)
+#     cidrs:       [CIDR,...]       # required (alias: cidr)
+#     fields:      [string,...]     # optional, restricts which fields to scan
+#
+#   hasTag                          (endpoint, identity, azure)
+#     tag:         string           # optional*  (key, CI exact)
+#     value:       string|list      # optional*  (depends on match)
+#     match:       <operator>       # optional, default equal
+#     sources:     [string,...]     # optional: mde,eg,entra,arm,cmdb,ad
+#     # *at least one of tag / value required; value-only equal is REFUSED
+#
+# Operators usable as `match:` (for hasTag, hasAzureTagDirectOrParent):
+#   equal (default) -- exact CI string match
+#   like            -- PowerShell -like wildcards ('*foo*', 'bar?')
+#   has             -- substring presence (CI)
+#   regex           -- .NET regex match
+#   matches         -- alias for regex
+#   in              -- value appears in a list
+#   startswith      -- prefix match (CI)
+#   endswith        -- suffix match (CI)
+#
+# `set:` block:
+#   Tier:        int 0..3 (0=Critical, 1=High, 2=Medium, 3=Low)
+#   Purpose:     string (human-readable role label)
+#   Category:    string (grouping bucket)
+#   Tags:        [string,...] (free-form, aggregated across rule matches)
+#   cmdbId:      string (foreign key into CMDB.csv -- auto-stamps cmdbName +
+#                       cmdbCriticality + cmdbDataSensitivity from the row)
+# ============================================================================
+id:        VCenterSCVMMManagementServerManagingTier1Hypervisors
+appliesTo: endpoint
+mode:      locked
+purpose:   'vCenter / SCVMM Management Server (Managing Tier 1 Hypervisors)'
+category:  'Hypervisor'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |C|e|n|t|r|a|l|i|s|e|d|\|\| |m|a|n|a|g|e|m|e|n|t|\|\| |o|f|\|\| |t|i|e|r|\|\| |1|\|\| |h|y|p|e|r|v|i|s|o|r|s|;|\|\| |o|n|e|\|\| |c|o|n|s|o|l|e|,|\|\| |m|a|n|y|\|\| |h|o|s|t|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|s|y|s|t|e|m|_|c|e|n|t|e|r|_|v|i|r|t|u|a|l|_|m|a|c|h|i|n|e|_|m|a|n|a|g|e|r|
+
+detections:
+  - id: VCenterSCVMMManagementServerManagingTier1Hypervisors
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vmware_vcenter*'
+            - 'system_center_virtual_machine_manager*'
+            - 'scvmm*'
+            - 'system_center_virtual_machine_manager*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^vcenter.*t1'
+            - '(?i)^scvmm.*t1'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)vcenter.tier.?1'
+            - '(?i)scvmm.tier.?1'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'vCenter / SCVMM Management Server (Managing Tier 1 Hypervisors)'
+      Category: 'Hypervisor'

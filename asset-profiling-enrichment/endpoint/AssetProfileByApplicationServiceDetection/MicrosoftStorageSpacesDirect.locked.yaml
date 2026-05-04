@@ -1,0 +1,21 @@
+id:        MicrosoftStorageSpacesDirect
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Storage Spaces Direct'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'Microsoft Storage Spaces Direct'
+  - 'S2D'
+
+detections:
+  - id: MicrosoftStorageSpacesDirect
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'storage_spaces_direct*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

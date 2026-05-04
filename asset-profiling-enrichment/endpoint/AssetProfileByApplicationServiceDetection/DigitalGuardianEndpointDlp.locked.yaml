@@ -1,0 +1,20 @@
+id:        DigitalGuardianEndpointDlp
+appliesTo: endpoint
+mode:      locked
+purpose:   'Digital Guardian'
+category:  'DLP'
+description: ''
+displayNames:
+  - 'Digital Guardian'
+
+detections:
+  - id: DigitalGuardianEndpointDlp
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'endpoint_dlp*'
+    set:
+      Tier:     1
+      Purpose:  'DLP'
+      Category: 'DLP'

@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "SI v2.2 Risk Analysis -- canonical schema",
+  "description": "Source-of-truth for the RA report shape. (1) `outputColumns` enumerates the canonical 21-col OutputPropertyOrder + 4 engine-meta columns. (2) `domains` carries per-(SecurityDomain) Impact lookup tables -- engine consults these when a row has no platform-provided Impact. Category + Subcategory are set by the per-report KQL via `extend Category = ...` (either a static literal or a tostring(<source-field>) when the platform exposes a meaningful classifier like EG `FindingLabel` or MDC `recommendationCategory`).",
+  "version": "",
+  "lastUpdated": "2026-04-30",
+
+  "domains": {
+    "Identity": {
+      "tables": ["SI_Identity_Profile_CL"],
+      "rationale": "Identity findings are policy-driven (no MFA, stale account, unverified SPN, etc.) -- the platform has NO `Impact` column. Engine resolves Impact via the static byCategory map below; query author sets Category as a literal in `extend Category = \"<lit>\"`.",
+      "impact": {
+        "default": 5.0,
+        "comment": "Initial scores -- tune per tenant policy. Range 0-10.",
+        "byCategory": {
+          "Authentication":          9.0,
+          "Account Lifecycle":       5.0,
+          "Privileged Access":       9.0,
+          "Workload Identities":     7.0,
+          "Password Policy":         6.0,
+          "Identity Hygiene":        4.0,
+          "Conditional Access":      8.0,
+          "Multi-Factor":            9.0,
+          "Privileged SPN":          9.0,
+          "Stale Identity":          4.0,
+          "Service Account":         7.0,
+          "Guest / External":        6.0,
+          "Shadow Admin":            9.0,
+          "Break Glass":            10.0,
+          "Sign-in Risk":            8.0,
+          "Role Assignment":         8.0,
+          "Mailbox Access":          7.0,
+          "Attack Paths":            9.0,
+          "Admin Account Hygiene":   6.0,
+          "Identity Lifecycle":      5.0,
+          "Privilege Escalation Paths": 9.0,
+          "Sign-in Behaviour":       7.0,
+          "Threat Intelligence":     8.0
+        }
+      }
+    },
+
+    "Endpoint": {
+      "tables": ["SI_Endpoint_Profile_CL", "ExposureGraphNodes"],
+      "rationale": "Endpoint findings come from MDE / MDVM / EG. Impact = CVSS 0-10 from `Properties.raw.cvssScore` when the EG finding carries it. When the platform doesn't surface Impact (posture / hygiene reports), engine falls back to the static byCategory map. Query author sets Category either as a literal OR `tostring(FindingLabel)` for EG-driven reports.",
+      "impact": {
+        "default": 5.0,
+        "byCategory": {
+          "Vulnerabilities":   8.0,
+          "CVEs":              8.0,
+          "Application":       5.0,
+          "OS":                6.0,
+          "Security controls": 7.0,
+          "Firmware":          6.0,
+          "Network":           6.0,
+          "Accounts":          7.0,
+          "Endpoint Hygiene":  4.0,
+          "Sensor Health":     6.0,
+          "Onboarding":        5.0,
+          "EDR":               7.0,
+          "Antivirus":         6.0,
+          "Bitlocker":         7.0,
+          "TPM / Secure Boot": 6.0,
+          "Attack Paths":      9.0
+        }
+      }
+    },
+
+    "Azure": {
+      "tables": ["SI_Azure_Profile_CL", "ExposureGraphNodes"],
+      "rationale": "Azure findings come from Defender for Cloud + EG. Impact = `Properties.raw.severity` (MDC severity 0-10) when present; static byCategory fallback otherwise. Query author sets Category as a literal OR `tostring(FindingLabel)` / `tostring(Properties.raw.recommendationCategory)`.",
+      "impact": {
+        "default": 5.0,
+        "byCategory": {
+          "Public exposure + data sensitivity": 9.0,
+          "Encryption at rest":                 7.0,
+          "Encryption in transit":              7.0,
+          "Network exposure":                   8.0,
+          "Authentication":                     8.0,
+          "DDoS protection":                    6.0,
+          "Soft-delete / recovery":             5.0,
+          "RBAC / least privilege":             7.0,
+          "Logging / retention":                4.0,
+          "Workload identity":                  6.0,
+          "mdcSecurityRecommendation":          6.0,
+          "mdcManagementRecommendation":        4.0,
+          "Attack Paths":                       9.0,
+          "AttackPath_GitHubToAzure":           9.0
+        }
+      }
+    },
+
+    "Publicip": {
+      "tables": ["SI_VulnerabilityPIP_CL"],
+      "rationale": "Public IP findings -- Shodan-derived port + service exposure. Single Category vocabulary today.",
+      "impact": {
+        "default": 5.0,
+        "byCategory": {
+          "Exposed service":  7.0,
+          "Open admin port":  9.0,
+          "Vulnerability":    8.0,
+          "Geo anomaly":      4.0
+        }
+      }
+    },
+
+    "Hygiene": {
+      "tables": ["SI_*_Profile_CL  (engine-internal)"],
+      "rationale": "Hygiene reports check the engine's own data-quality (orphan rate, drift, coverage). Low Impact -- operator awareness, not security findings.",
+      "impact": {
+        "default": 2.0,
+        "byCategory": {
+          "Coverage drop":   3.0,
+          "Cmdb orphan":     2.0,
+          "Drift":           3.0,
+          "Pipeline":        4.0,
+          "Stale Asset":     2.0,
+          "Unsupported OS":  5.0
+        }
+      }
+    },
+
+    "RiskAnalysis": {
+      "tables": ["SI_RiskAnalysis_Summary_CL"],
+      "rationale": "RA-self meta reports (engine-internal). Diagnostic, not finding.",
+      "impact": { "default": 1.0, "byCategory": {} }
+    }
+  },
+
+  "outputColumns": {
+    "canonicalOrder": [
+      "SecurityDomain", "Category", "Subcategory", "ConfigurationName", "ConfigurationId",
+      "Impact", "SecuritySeverity", "CriticalityTier", "CriticalityTierLevel",
+      "RiskFactor_Consequence", "RiskFactor_Probability", "RiskFactor_Probability_Detailed",
+      "RiskFactor_Weight", "RiskConsequenceScore", "RiskProbabilityScore",
+      "RiskScoreTotal", "RiskScoreTotal_Weighted",
+      "AssetCount", "TotalIssues", "Issues_Details", "ImpactedAssets"
+    ],
+    "engineMeta": ["CollectionTime", "SolutionVersion", "TraceName", "TraceID"],
+    "extrasPolicy": "Reports MAY emit additional report-specific columns (EdgeLabel, AppHttpAllowed, cmdb fields, etc.) -- engine preserves them AFTER the canonical 21 in the projected row (Calculate-RiskScore @ Invoke-RiskAnalysis.ps1:1844)."
+  },
+
+  "engineNotes": {
+    "categoryResolution": "Per-report query OWNS Category and Subcategory via `extend Category = ...`. Two patterns: (a) STATIC literal: `extend Category = \"<lit>\"` (used by Identity / Hygiene / posture reports). (b) PLATFORM-DERIVED: `extend Category = tostring(FindingLabel)` for EG-finding reports / `extend Category = tostring(Properties.raw.recommendationCategory)` for MDC reports. Engine NEVER overrides Category from a hidden source-field map -- if you see something unexpected, it's the query speaking.",
+    "impactResolution": "Engine resolves Impact in this priority order: (1) per-row `Impact` column from the query (CVSS / MDC severity numeric, 0-10), (2) static `domains.<SecurityDomain>.impact.byCategory[<row.Category>]`, (3) `domains.<SecurityDomain>.impact.default`. Result is normalized to a 0-10 real before SecuritySeverity mapping. The byCategory map is the SI authoring policy; tune scores per tenant by editing this JSON.",
+    "scoringOverride": "RiskFactor_Consequence / RiskFactor_Probability / RiskFactor_Weight are still per-report (extends in the query). The static Impact map only provides the BASE value when the platform didn't surface one."
+  }
+}

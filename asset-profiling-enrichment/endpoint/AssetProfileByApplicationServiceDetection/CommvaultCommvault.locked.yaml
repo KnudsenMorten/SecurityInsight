@@ -1,0 +1,20 @@
+id:        CommvaultCommvault
+appliesTo: endpoint
+mode:      locked
+purpose:   'Commvault Server'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Commvault Server'
+
+detections:
+  - id: CommvaultCommvault
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'commvault*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

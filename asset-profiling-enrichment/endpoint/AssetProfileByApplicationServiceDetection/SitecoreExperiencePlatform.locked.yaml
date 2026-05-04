@@ -1,0 +1,20 @@
+id:        SitecoreExperiencePlatform
+appliesTo: endpoint
+mode:      locked
+purpose:   'Sitecore Experience Platform'
+category:  'CMS'
+description: ''
+displayNames:
+  - 'Sitecore Experience Platform'
+
+detections:
+  - id: SitecoreExperiencePlatform
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'experience_platform*'
+    set:
+      Tier:     2
+      Purpose:  'CMS'
+      Category: 'CMS'

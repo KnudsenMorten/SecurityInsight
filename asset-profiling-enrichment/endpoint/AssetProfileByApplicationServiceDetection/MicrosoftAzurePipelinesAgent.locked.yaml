@@ -1,0 +1,20 @@
+id:        MicrosoftAzurePipelinesAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Azure Pipelines Agent'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'Azure Pipelines Agent'
+
+detections:
+  - id: MicrosoftAzurePipelinesAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_pipelines_agent*'
+    set:
+      Tier:     2
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

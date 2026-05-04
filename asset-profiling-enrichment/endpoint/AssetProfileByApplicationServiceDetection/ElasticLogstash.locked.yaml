@@ -1,0 +1,20 @@
+id:        ElasticLogstash
+appliesTo: endpoint
+mode:      locked
+purpose:   'Logstash'
+category:  'SIEM/Log'
+description: ''
+displayNames:
+  - 'Logstash'
+
+detections:
+  - id: ElasticLogstash
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'logstash*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM/Log'
+      Category: 'SIEM/Log'

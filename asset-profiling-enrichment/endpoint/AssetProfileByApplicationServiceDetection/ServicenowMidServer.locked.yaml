@@ -1,0 +1,20 @@
+id:        ServicenowMidServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'ServiceNow MID Server'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'ServiceNow MID Server'
+
+detections:
+  - id: ServicenowMidServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mid_server*'
+    set:
+      Tier:     1
+      Purpose:  'ITSM'
+      Category: 'ITSM'

@@ -1,0 +1,20 @@
+id:        ZscalerInternetAccessConnector
+appliesTo: endpoint
+mode:      locked
+purpose:   'Zscaler Internet Access Connector'
+category:  'ZTNA/Proxy'
+description: ''
+displayNames:
+  - 'Zscaler Internet Access Connector'
+
+detections:
+  - id: ZscalerInternetAccessConnector
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'internet_access_connector*'
+    set:
+      Tier:     1
+      Purpose:  'ZTNA/Proxy'
+      Category: 'ZTNA/Proxy'

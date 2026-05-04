@@ -1,0 +1,31 @@
+id:        UPSManagementControllerPowerDisruptionPotential
+appliesTo: endpoint
+mode:      locked
+purpose:   'UPS Management Controller (Power Disruption Potential)'
+category:  'IoT / OT'
+description: 'Compromise enables timed power loss to data center equipment.'
+
+detections:
+  - id: UPSManagementControllerPowerDisruptionPotential
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'apc_powerchute*'
+            - 'eaton_intelligent_power_manager*'
+            - 'vertiv_*'
+            - 'schneider_powerchute*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^ups\d'
+            - '(?i)^ups-mgmt'
+            - '(?i)ups.controller'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)ups'
+            - '(?i)power.management'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'UPS Management Controller (Power Disruption Potential)'
+      Category: 'IoT / OT'

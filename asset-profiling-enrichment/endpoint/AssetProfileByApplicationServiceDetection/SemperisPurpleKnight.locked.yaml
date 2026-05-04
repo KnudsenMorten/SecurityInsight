@@ -1,0 +1,20 @@
+id:        SemperisPurpleKnight
+appliesTo: endpoint
+mode:      locked
+purpose:   'Purple Knight'
+category:  'Identity Security'
+description: ''
+displayNames:
+  - 'Purple Knight'
+
+detections:
+  - id: SemperisPurpleKnight
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'purple_knight*'
+    set:
+      Tier:     1
+      Purpose:  'Identity Security'
+      Category: 'Identity Security'

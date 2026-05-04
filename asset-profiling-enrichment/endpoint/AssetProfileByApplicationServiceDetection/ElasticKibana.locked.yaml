@@ -1,0 +1,20 @@
+id:        ElasticKibana
+appliesTo: endpoint
+mode:      locked
+purpose:   'Kibana'
+category:  'SIEM/Log'
+description: ''
+displayNames:
+  - 'Kibana'
+
+detections:
+  - id: ElasticKibana
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'kibana*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM/Log'
+      Category: 'SIEM/Log'

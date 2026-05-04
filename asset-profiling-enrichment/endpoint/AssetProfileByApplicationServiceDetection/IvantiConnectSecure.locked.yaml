@@ -1,0 +1,20 @@
+id:        IvantiConnectSecure
+appliesTo: endpoint
+mode:      locked
+purpose:   'Ivanti Connect Secure'
+category:  'VPN'
+description: ''
+displayNames:
+  - 'Ivanti Connect Secure'
+
+detections:
+  - id: IvantiConnectSecure
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'connect_secure*'
+    set:
+      Tier:     1
+      Purpose:  'VPN'
+      Category: 'VPN'

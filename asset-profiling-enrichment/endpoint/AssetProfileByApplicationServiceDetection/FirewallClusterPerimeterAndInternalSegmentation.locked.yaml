@@ -1,0 +1,33 @@
+id:        FirewallClusterPerimeterAndInternalSegmentation
+appliesTo: endpoint
+mode:      locked
+purpose:   'Firewall Cluster (Perimeter and Internal Segmentation)'
+category:  'Network Equipment'
+description: 'Controls every trust boundary in the network; rule changes can expose any segment.'
+
+detections:
+  - id: FirewallClusterPerimeterAndInternalSegmentation
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'palo_alto_pan-os*'
+            - 'fortinet_fortios*'
+            - 'checkpoint_gaia*'
+            - 'cisco_asa*'
+            - 'cisco_firepower*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^fw\d'
+            - '(?i)^fw-perim'
+            - '(?i)^fw-core'
+            - '(?i)firewall'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)firewall.tier.?0'
+            - '(?i)perimeter.fw'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Firewall Cluster (Perimeter and Internal Segmentation)'
+      Category: 'Network Equipment'

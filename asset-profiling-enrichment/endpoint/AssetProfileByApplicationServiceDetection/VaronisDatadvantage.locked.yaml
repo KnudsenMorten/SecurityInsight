@@ -1,0 +1,20 @@
+id:        VaronisDatadvantage
+appliesTo: endpoint
+mode:      locked
+purpose:   'Varonis DatAdvantage'
+category:  'Data Security'
+description: ''
+displayNames:
+  - 'Varonis DatAdvantage'
+
+detections:
+  - id: VaronisDatadvantage
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'datadvantage*'
+    set:
+      Tier:     1
+      Purpose:  'Data Security'
+      Category: 'Data Security'

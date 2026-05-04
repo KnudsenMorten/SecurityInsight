@@ -1,0 +1,20 @@
+id:        VmwareViewComposer
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware View Composer'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'VMware View Composer'
+
+detections:
+  - id: VmwareViewComposer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'view_composer*'
+    set:
+      Tier:     2
+      Purpose:  'VDI'
+      Category: 'VDI'

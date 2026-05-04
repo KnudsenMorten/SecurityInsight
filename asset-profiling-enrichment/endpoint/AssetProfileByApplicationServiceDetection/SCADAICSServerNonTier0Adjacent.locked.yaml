@@ -1,0 +1,31 @@
+id:        SCADAICSServerNonTier0Adjacent
+appliesTo: endpoint
+mode:      locked
+purpose:   'SCADA / ICS Server (Non-Tier 0 Adjacent)'
+category:  'IoT / OT'
+description: 'Supervises industrial processes; compromise has safety/operational impact even if not adjacent to tier 0.'
+
+detections:
+  - id: SCADAICSServerNonTier0Adjacent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'wonderware*'
+            - 'ge_ifix*'
+            - 'siemens_wincc*'
+            - 'rockwell_factorytalk*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^scada\d'
+            - '(?i)^ics-srv'
+            - '(?i)scada.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)scada'
+            - '(?i)ics.server'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'SCADA / ICS Server (Non-Tier 0 Adjacent)'
+      Category: 'IoT / OT'

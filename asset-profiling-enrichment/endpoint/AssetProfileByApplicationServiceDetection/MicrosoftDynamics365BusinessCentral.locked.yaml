@@ -1,0 +1,20 @@
+id:        MicrosoftDynamics365BusinessCentral
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Dynamics 365 Business Central'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Microsoft Dynamics 365 Business Central'
+
+detections:
+  - id: MicrosoftDynamics365BusinessCentral
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dynamics_365_business_central*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

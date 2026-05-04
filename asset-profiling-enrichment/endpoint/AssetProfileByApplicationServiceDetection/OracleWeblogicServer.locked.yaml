@@ -1,0 +1,20 @@
+id:        OracleWeblogicServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Oracle WebLogic Server'
+category:  'App Server'
+description: ''
+displayNames:
+  - 'Oracle WebLogic Server'
+
+detections:
+  - id: OracleWeblogicServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'weblogic_server*'
+    set:
+      Tier:     2
+      Purpose:  'App Server'
+      Category: 'App Server'

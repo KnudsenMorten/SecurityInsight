@@ -1,0 +1,20 @@
+id:        IcingaIcinga
+appliesTo: endpoint
+mode:      locked
+purpose:   'Icinga'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Icinga'
+
+detections:
+  - id: IcingaIcinga
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'icinga*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

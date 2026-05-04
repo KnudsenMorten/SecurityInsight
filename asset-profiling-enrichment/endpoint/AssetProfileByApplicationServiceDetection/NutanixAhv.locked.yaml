@@ -1,0 +1,21 @@
+id:        NutanixAhv
+appliesTo: endpoint
+mode:      locked
+purpose:   'Nutanix AHV'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'Nutanix AHV'
+  - 'Nutanix Acropolis'
+
+detections:
+  - id: NutanixAhv
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ahv*'
+    set:
+      Tier:     0
+      Purpose:  'Virtualization'
+      Category: 'Virtualization'

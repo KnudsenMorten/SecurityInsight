@@ -1,0 +1,29 @@
+id:        FileServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'File Server'
+category:  'Server Roles'
+description: 'Holds business data and shares; data exfiltration/ransomware target with workload-level impact.'
+
+detections:
+  - id: FileServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_file_server*'
+            - 'samba*'
+            - 'netapp_ontap*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^fs\d'
+            - '(?i)^file\d'
+            - '(?i)file.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)file.server'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'File Server'
+      Category: 'Server Roles'

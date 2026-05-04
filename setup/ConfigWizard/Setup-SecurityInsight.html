@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>SecurityInsight v2.2 -- Config Wizard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="referrer" content="no-referrer" />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <!-- =================================================================== -->
+  <!-- LEFT RAIL: branding + page navigation                               -->
+  <!-- =================================================================== -->
+  <aside class="rail">
+    <div class="rail-brand">
+      <!-- Inline shield SVG -- no external image, works offline. -->
+      <svg class="shield" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path d="M12 2 L21 5 V12 C21 16.5 17.5 20.5 12 22 C6.5 20.5 3 16.5 3 12 V5 Z"
+              fill="#2a8b9b" stroke="#fff" stroke-width="1.2" stroke-linejoin="round"/>
+        <path d="M8 12 L11 15 L16 9" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span>SecurityInsight</span>
+    </div>
+    <div class="rail-tag">Config Wizard &nbsp;&middot;&nbsp; v2.2</div>
+
+    <div class="rail-section">Setup</div>
+    <ul class="rail-nav" id="rail-nav">
+      <!-- Populated by app.js. Each <li> has data-page="<id>". -->
+    </ul>
+
+    <div class="rail-foot">
+      Built by <a href="https://mortenknudsen.net" target="_blank" rel="noopener">Morten Knudsen</a><br/>
+      Microsoft MVP &middot; <a href="https://github.com/KnudsenMorten" target="_blank" rel="noopener">GitHub</a><br/><br/>
+      All input stays in your browser. Nothing is uploaded.
+    </div>
+  </aside>
+
+  <!-- =================================================================== -->
+  <!-- MAIN CONTENT AREA -- one section per page, hidden/shown by app.js   -->
+  <!-- =================================================================== -->
+  <main class="main">
+
+    <!-- ---------------- PAGE 1: WELCOME ----------------------------- -->
+    <section class="page" data-page="welcome" hidden>
+      <div class="hero">
+        <div class="page-eyebrow" style="color:#9fdde7;">SecurityInsight v2.2</div>
+        <h2>Configure your tenant in 10 short steps.</h2>
+        <p>This wizard generates every <code>*.custom.*</code> override file the SecurityInsight engines need -- tenant identity, workspace, CMDB cache, asset tagging, risk-analysis exclusions, Shodan, and more. Answers persist in your browser so you can stop and resume anytime.</p>
+        <div class="hero-actions">
+          <button class="btn primary" id="btn-start">Start configuring &rarr;</button>
+          <button class="btn ghost-light" id="btn-reset">Reset all answers</button>
+        </div>
+      </div>
+
+      <h3 style="margin: 28px 0 6px; color: var(--navy); font-size: 18px;">Before you begin -- have these handy</h3>
+      <p style="color: var(--muted); margin: 0 0 8px;">Skim the cards below; you'll need each value at some point in the wizard.</p>
+
+      <div class="prereqs">
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Entra tenant ID</div>
+          <div class="prereq-body">Azure portal &rarr; Microsoft Entra ID &rarr; Overview &rarr; "Tenant ID" GUID.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Service principal app ID</div>
+          <div class="prereq-body">An app registration in Entra with the SecurityInsight Graph + Defender + Log Analytics permissions.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Key Vault + secret name <em>or</em> certificate thumbprint</div>
+          <div class="prereq-body">Where the SPN credential lives. Cert is recommended for production; secret is fine for lab.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Log Analytics workspace + DCE</div>
+          <div class="prereq-body">Name of the workspace that will host SI_*_CL tables, plus the Data Collection Endpoint and its resource group.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>Subscription ID</div>
+          <div class="prereq-body">Where Log Analytics + DCE live (the wizard supports cross-sub later).</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>(Optional) CMDB CSV, Shodan API key</div>
+          <div class="prereq-body">Only needed if you want CMDB enrichment or Shodan attack-surface signals. Asked later.</div>
+        </div>
+      </div>
+
+      <div class="note" style="margin-top: 22px;">
+        <strong>How this wizard works.</strong> Each page collects a slice of config and renders the matching PowerShell or YAML snippet on the right side of the page. Copy it into the indicated <code>*.custom.*</code> file path. A future iteration will write the files for you via the launcher script -- for now you copy + paste.
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 2: TENANT IDENTITY --------------------- -->
+    <section class="page" data-page="tenant" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 1 of 10 &middot; Tenant identity</div>
+        <h2 class="page-title">Who are we authenticating as?</h2>
+        <p class="page-lead">SecurityInsight engines authenticate to Entra and Azure once per run as a service principal. Pick a credential type, fill in the details. The wizard will emit a Layer-1 platform-defaults snippet that every engine inherits.</p>
+      </div>
+
+      <div class="card">
+        <h3>Tenant + service principal</h3>
+        <p class="card-sub">All three are required. Tenant + App ID are GUIDs; the wizard validates the format inline.</p>
+
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_tenant">Tenant ID (GUID)</label>
+            <input type="text" id="f_tenant" data-key="tenantId" autocomplete="off"
+                   placeholder="00000000-0000-0000-0000-000000000000" />
+            <span class="err" data-err="tenantId">Must be a GUID, e.g. 12345678-aaaa-bbbb-cccc-1234567890ab</span>
+          </div>
+          <div class="field required">
+            <label for="f_app">App registration (client) ID (GUID)</label>
+            <input type="text" id="f_app" data-key="appId" autocomplete="off"
+                   placeholder="00000000-0000-0000-0000-000000000000" />
+            <span class="err" data-err="appId">Must be a GUID</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Credential</h3>
+        <p class="card-sub">Pick how the SPN proves who it is. Certificate is recommended for production; Key Vault secret is the easiest for lab tenants.</p>
+
+        <div class="toggle-group" data-toggle-key="credType" style="margin-bottom: 16px;">
+          <label data-val="kvSecret"><input type="radio" name="credType" value="kvSecret" /> Key Vault secret</label>
+          <label data-val="certThumb"><input type="radio" name="credType" value="certThumb" /> Certificate thumbprint</label>
+        </div>
+
+        <!-- Key Vault secret block -->
+        <div class="form-grid" data-cred-block="kvSecret">
+          <div class="field required">
+            <label for="f_kv">Key Vault name</label>
+            <input type="text" id="f_kv" data-key="kvName" autocomplete="off"
+                   placeholder="kv-2linkit-automation-p" />
+            <span class="err" data-err="kvName">3-24 chars, lowercase letters / digits / hyphens, must start with a letter.</span>
+          </div>
+          <div class="field required">
+            <label for="f_secret">Secret name in the vault</label>
+            <input type="text" id="f_secret" data-key="secretName" autocomplete="off"
+                   placeholder="SecurityInsight-Secret"
+                   data-default="SecurityInsight-Secret" />
+            <span class="err" data-err="secretName">Required.</span>
+          </div>
+        </div>
+
+        <!-- Certificate thumbprint block -->
+        <div class="form-grid" data-cred-block="certThumb" hidden>
+          <div class="field required span-2">
+            <label for="f_thumb">Certificate thumbprint (40 hex chars, no spaces)</label>
+            <input type="text" id="f_thumb" data-key="certThumbprint" autocomplete="off"
+                   placeholder="A1B2C3D4E5F60718293A4B5C6D7E8F9001020304" />
+            <span class="err" data-err="certThumbprint">Must be exactly 40 hexadecimal characters.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">launcher/&lt;engine&gt;/LauncherConfig.custom.ps1 (Layer 5)</span>
+        </div>
+        <pre class="preview" id="preview-tenant"># Fill in the fields above to generate the PowerShell snippet.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-tenant">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------- PAGE 3: WORKSPACE + INGESTION --------------- -->
+    <section class="page" data-page="workspace" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 2 of 10 &middot; Workspace + ingestion</div>
+        <h2 class="page-title">Where do collected signals land?</h2>
+        <p class="page-lead">Every engine writes its profile rows to a Log Analytics custom table (<code>SI_*_CL</code>) via a Data Collection Endpoint + Rule. The wizard will append the workspace + DCE settings to the same Layer-5 snippet.</p>
+      </div>
+
+      <div class="card">
+        <h3>Subscription</h3>
+        <p class="card-sub">Subscription that hosts the Log Analytics workspace + DCE (cross-sub support comes later in the wizard).</p>
+        <div class="form-grid">
+          <div class="field required span-2">
+            <label for="f_sub">Subscription ID (GUID)</label>
+            <input type="text" id="f_sub" data-key="subscriptionId" autocomplete="off"
+                   placeholder="00000000-0000-0000-0000-000000000000" />
+            <span class="err" data-err="subscriptionId">Must be a GUID.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Log Analytics workspace</h3>
+        <p class="card-sub">If the workspace doesn't exist yet, the bootstrap will create it. Defaults match the v2.2 standard layout -- override only if your org uses different names.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_ws">Workspace name</label>
+            <input type="text" id="f_ws" data-key="workspaceName" autocomplete="off"
+                   placeholder="log-platform-management-securityinsight"
+                   data-default="log-platform-management-securityinsight" />
+            <span class="err" data-err="workspaceName">Required.</span>
+          </div>
+          <div class="field required">
+            <label for="f_wsrg">Workspace resource group</label>
+            <input type="text" id="f_wsrg" data-key="workspaceRg" autocomplete="off"
+                   placeholder="rg-securityinsight"
+                   data-default="rg-securityinsight" />
+            <span class="err" data-err="workspaceRg">Required.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Data Collection Endpoint</h3>
+        <p class="card-sub">DCE for the SI_* tables. The bootstrap creates the matching DCRs alongside it.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_dce">DCE name</label>
+            <input type="text" id="f_dce" data-key="dceName" autocomplete="off"
+                   placeholder="dce-securityinsight"
+                   data-default="dce-securityinsight" />
+            <span class="err" data-err="dceName">Required.</span>
+          </div>
+          <div class="field required">
+            <label for="f_dcerg">DCE resource group</label>
+            <input type="text" id="f_dcerg" data-key="dceRg" autocomplete="off"
+                   placeholder="rg-dce-securityinsight"
+                   data-default="rg-dce-securityinsight" />
+            <span class="err" data-err="dceRg">Required.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet (cumulative)</h4>
+          <span class="target">launcher/&lt;engine&gt;/LauncherConfig.custom.ps1 (Layer 5)</span>
+        </div>
+        <pre class="preview" id="preview-workspace"># Fill in the fields above to generate the PowerShell snippet.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-workspace">Copy snippet</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- PLACEHOLDER PAGES (3 -- 10) ----------------------- -->
+    <section class="page" data-page="output" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 3 of 10</div>
+        <h2 class="page-title">Output sinks</h2>
+        <p class="page-lead">XLSX + JSON output destinations, mail routing, blob upload.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">Output sinks page</h3>
+        <p>Will collect: report destination (UNC / Azure blob), per-mode mail routing, retention.</p>
+      </div>
+    </section>
+
+    <section class="page" data-page="cmdb" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 4 of 10</div>
+        <h2 class="page-title">CMDB integration</h2>
+        <p class="page-lead">ServiceNow CMDB export feed for asset enrichment.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">CMDB page</h3>
+        <p>Will guide CMDB.csv format, refresh schedule, column mapping.</p>
+      </div>
+    </section>
+
+    <section class="page" data-page="apptag" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 5 of 10</div>
+        <h2 class="page-title">App / service tagging</h2>
+        <p class="page-lead">Map application or service detection signals to asset tags.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">App tagging page</h3>
+        <p>Will edit AssetProfileByApplicationServiceDetection/*.custom.yaml.</p>
+      </div>
+    </section>
+
+    <section class="page" data-page="raexcl" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 6 of 10</div>
+        <h2 class="page-title">Risk Analysis exclusions</h2>
+        <p class="page-lead">Per-report CVE / config exclusions and global tag exclusions.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">RA exclusions page</h3>
+        <p>Will edit RiskAnalysisGlobalExclusions.custom.json + per-report &lt;ReportName&gt;.exclude.custom.json.</p>
+      </div>
+    </section>
+
+    <section class="page" data-page="assettag" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 7 of 10</div>
+        <h2 class="page-title">Asset exclusion / tier tags</h2>
+        <p class="page-lead">Manual tier overrides + asset-level exclusions.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">Asset tagging page</h3>
+        <p>Will edit AssetTagging.custom.yaml.</p>
+      </div>
+    </section>
+
+    <section class="page" data-page="shodan" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 8 of 10</div>
+        <h2 class="page-title">Shodan attack surface</h2>
+        <p class="page-lead">Public IP enumeration via Shodan REST API.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">Shodan page</h3>
+        <p>Will collect API key, target tier filter, scan cadence.</p>
+      </div>
+    </section>
+
+    <section class="page" data-page="advanced" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 9 of 10</div>
+        <h2 class="page-title">Advanced overrides</h2>
+        <p class="page-lead">Per-engine knobs most customers never touch.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">Advanced page</h3>
+        <p>Will expose AssetLimit, parallelism, transcript verbosity, etc.</p>
+      </div>
+    </section>
+
+    <section class="page" data-page="review" hidden>
+      <div class="page-header">
+        <div class="page-eyebrow">Step 10 of 10</div>
+        <h2 class="page-title">Review &amp; generate</h2>
+        <p class="page-lead">One-shot review of every snippet the wizard built.</p>
+      </div>
+      <div class="placeholder-card">
+        <span class="soon-pill">Coming soon</span>
+        <h3 style="margin-top: 12px;">Review page</h3>
+        <p>This page (in the next iteration) will let you write all generated <code>*.custom.*</code> files to disk in one click via the <code>Setup-SecurityInsight.ps1 -Wizard</code> entry-point acting as a tiny local API. For the current scaffold you copy each snippet manually from its page.</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- =================================================================== -->
+  <!-- STICKY BOTTOM BAR: progress + navigation                            -->
+  <!-- =================================================================== -->
+  <div class="bar">
+    <div>
+      <div class="progress-text" id="progress-text">Page 1 of 10</div>
+      <div class="progress-bar"><div class="fill" id="progress-fill" style="width: 10%;"></div></div>
+    </div>
+    <div class="bar-actions">
+      <button class="btn" id="btn-back">&larr; Back</button>
+      <button class="btn primary" id="btn-next">Next &rarr;</button>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast">Copied to clipboard.</div>
+
+<script src="app.js"></script>
+</body>
+</html>

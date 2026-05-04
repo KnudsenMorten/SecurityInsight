@@ -1,0 +1,20 @@
+id:        VmwareNsxEdge
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware NSX Edge'
+category:  'Network/SDN'
+description: ''
+displayNames:
+  - 'VMware NSX Edge'
+
+detections:
+  - id: VmwareNsxEdge
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nsx_edge*'
+    set:
+      Tier:     1
+      Purpose:  'Network/SDN'
+      Category: 'Network/SDN'

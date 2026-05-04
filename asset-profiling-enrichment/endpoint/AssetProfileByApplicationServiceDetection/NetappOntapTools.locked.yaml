@@ -1,0 +1,21 @@
+id:        NetappOntapTools
+appliesTo: endpoint
+mode:      locked
+purpose:   'NetApp ONTAP Tools'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'NetApp ONTAP Tools'
+  - 'NetApp Virtual Storage Console'
+
+detections:
+  - id: NetappOntapTools
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ontap_tools*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

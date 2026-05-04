@@ -1,0 +1,20 @@
+id:        MicrosoftDnsServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft DNS Server'
+category:  'Network'
+description: 'T0 when co-hosted with DC role'
+displayNames:
+  - 'Microsoft DNS Server'
+
+detections:
+  - id: MicrosoftDnsServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dns_server*'
+    set:
+      Tier:     1
+      Purpose:  'Network'
+      Category: 'Network'

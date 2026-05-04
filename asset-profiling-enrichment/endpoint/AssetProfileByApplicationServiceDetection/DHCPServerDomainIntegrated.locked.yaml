@@ -1,0 +1,29 @@
+id:        DHCPServerDomainIntegrated
+appliesTo: endpoint
+mode:      locked
+purpose:   'DHCP Server (Domain-Integrated)'
+category:  'Network Equipment'
+description: 'Domain-joined DHCP can register DDNS records; combined with DNS attacks enables impersonation.'
+
+detections:
+  - id: DHCPServerDomainIntegrated
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_dhcp_server*'
+            - 'isc_dhcp*'
+            - 'infoblox_dhcp*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^dhcp\d'
+            - '(?i)dhcp.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)dhcp.server'
+            - '(?i)domain.joined.dhcp'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'DHCP Server (Domain-Integrated)'
+      Category: 'Network Equipment'

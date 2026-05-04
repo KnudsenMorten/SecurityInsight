@@ -1,0 +1,21 @@
+id:        MicrosoftHostIntegrationServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Host Integration Server'
+category:  'Integration'
+description: ''
+displayNames:
+  - 'Microsoft Host Integration Server'
+  - 'HIS'
+
+detections:
+  - id: MicrosoftHostIntegrationServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'host_integration_server*'
+    set:
+      Tier:     2
+      Purpose:  'Integration'
+      Category: 'Integration'

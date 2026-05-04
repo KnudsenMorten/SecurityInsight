@@ -1,0 +1,20 @@
+id:        MicrosoftTeamsRooms
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Teams Rooms'
+category:  'Collaboration'
+description: ''
+displayNames:
+  - 'Microsoft Teams Rooms'
+
+detections:
+  - id: MicrosoftTeamsRooms
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'teams_rooms*'
+    set:
+      Tier:     3
+      Purpose:  'Collaboration'
+      Category: 'Collaboration'

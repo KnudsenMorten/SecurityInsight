@@ -1,0 +1,21 @@
+id:        MicrosoftActiveDirectoryFederationServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Active Directory Federation Services'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Active Directory Federation Services'
+  - 'Active Directory Federation Services 3.0'
+
+detections:
+  - id: MicrosoftActiveDirectoryFederationServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_federation_services*'
+    set:
+      Tier:     0
+      Purpose:  'AD FS (primary)'
+      Category: 'Identity'

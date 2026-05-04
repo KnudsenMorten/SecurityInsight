@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "engine": "publicip",
+  "_purpose": "SAMPLE customer overlay for public-ip.schema.locked.json. Copy to public-ip.schema.custom.json (gitignored) and edit. Engine deep-merges with the locked file at startup. Customer wins on field conflict; new fields are additive.",
+
+  "extraIPs": {
+    "_purpose": "Manual public-IP list scanned by Shodan alongside auto-discovered IPs (Endpoint + Azure profile tables). Use for non-Azure / non-MDE assets like physical firewalls, branch-office gateways, partner endpoints, on-prem servers with public IPs. Each entry lands in SI_VulnerabilityPIP_CL with AssetEngine='extra'. Required: ipAddress, assetName. Optional: tier (default 99 = unranked), cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity. Duplicates of auto-discovered IPs are silently ignored.",
+    "entries": [
+      {
+        "_comment":            "EXAMPLE: branch-office firewall not in MDE / Azure -- replace with your real assets",
+        "ipAddress":           "203.0.113.10",
+        "assetName":           "FW-BranchOffice-Stockholm",
+        "tier":                1,
+        "cmdbId":              "FW-001",
+        "cmdbName":            "Branch FW Stockholm",
+        "cmdbCriticality":     "High",
+        "cmdbDataSensitivity": "Internal"
+      },
+      {
+        "_comment":            "EXAMPLE: partner endpoint exposing partner-API. Tier-2 because compromise = data exposure but not lateral movement",
+        "ipAddress":           "203.0.113.42",
+        "assetName":           "Partner-API-Gateway",
+        "tier":                2,
+        "cmdbId":              "PARTNER-API-001",
+        "cmdbName":            "Partner API Gateway (vendor X)",
+        "cmdbCriticality":     "Medium",
+        "cmdbDataSensitivity": "Confidential"
+      },
+      {
+        "_comment":            "TEST IP -- safe to leave during onboarding to verify the OpenPort + Vulnerability detection path. scanme.nmap.org is Nmap's official scan target (public consent), reliably indexed in Shodan with multiple open ports.",
+        "ipAddress":           "45.33.32.156",
+        "assetName":           "TEST scanme.nmap.org",
+        "tier":                3,
+        "cmdbId":              "TEST-001",
+        "cmdbName":            "TEST - Nmap scan target",
+        "cmdbCriticality":     "Low",
+        "cmdbDataSensitivity": "Public"
+      }
+    ]
+  }
+}

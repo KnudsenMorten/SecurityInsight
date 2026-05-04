@@ -1,0 +1,45 @@
+id:        ADCertificateServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'AD CS Server (Certificate Authority)'
+category:  'Server Roles'
+description: |
+  Active Directory Certificate Services -- both Root and Subordinate
+  (Issuing) Certificate Authority variants. Both are T0: root CA private
+  key compromise enables forging certificates trusted across the entire
+  forest; subordinate CA can issue certificates trusted across the
+  domain enabling identity forgery. The operational distinction
+  (root-of-trust vs day-to-day issuer) isn't security-relevant for tier
+  classification.
+
+detections:
+  - id: ADCertificateServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_certificate_services*'
+            - 'adcs_*'
+            - 'certificate_services*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^rootca'
+            - '(?i)^ca-root'
+            - '(?i)root.certificate.authority'
+            - '(?i)^pki-root'
+            - '(?i)^subca'
+            - '(?i)^ca-sub'
+            - '(?i)issuing.ca'
+            - '(?i)^pki-issuing'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)root.ca'
+            - '(?i)adcs.root'
+            - '(?i)sub.?ca'
+            - '(?i)issuing.ca'
+            - '(?i)adcs.sub'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'AD CS Server (Certificate Authority)'
+      Category: 'Server Roles'

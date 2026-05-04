@@ -1,0 +1,31 @@
+id:        LaboratoryEquipmentWithNetworkInterface
+appliesTo: endpoint
+mode:      locked
+purpose:   'Laboratory Equipment with Network Interface'
+category:  'IoT / OT'
+description: 'Specialized lab gear with embedded OS; data tampering risk, limited pivot value.'
+
+detections:
+  - id: LaboratoryEquipmentWithNetworkInterface
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'labview*'
+            - 'agilent_*'
+            - 'thermo_fisher_*'
+            - 'shimadzu_*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^lab\d'
+            - '(?i)^lab-eq'
+            - '(?i)laboratory'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)lab.equipment'
+            - '(?i)laboratory'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Laboratory Equipment with Network Interface'
+      Category: 'IoT / OT'

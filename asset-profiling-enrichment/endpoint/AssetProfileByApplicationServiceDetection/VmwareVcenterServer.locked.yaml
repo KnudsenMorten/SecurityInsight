@@ -1,0 +1,22 @@
+id:        VmwareVcenterServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware vCenter Server'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'VMware vCenter Server'
+  - 'VMware vCenter Server Appliance'
+  - 'VMware vCenter'
+
+detections:
+  - id: VmwareVcenterServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vcenter_server*'
+    set:
+      Tier:     0
+      Purpose:  'vCenter (managing T0 hypervisors)'
+      Category: 'Virtualization'

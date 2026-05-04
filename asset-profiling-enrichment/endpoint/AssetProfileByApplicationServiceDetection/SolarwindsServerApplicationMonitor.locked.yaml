@@ -1,0 +1,21 @@
+id:        SolarwindsServerApplicationMonitor
+appliesTo: endpoint
+mode:      locked
+purpose:   'SolarWinds Server & Application Monitor'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'SolarWinds Server & Application Monitor'
+  - 'SAM'
+
+detections:
+  - id: SolarwindsServerApplicationMonitor
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server_application_monitor*'
+    set:
+      Tier:     1
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

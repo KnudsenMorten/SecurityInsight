@@ -1,0 +1,20 @@
+id:        SquidSquid
+appliesTo: endpoint
+mode:      locked
+purpose:   'Squid Web Proxy'
+category:  'Proxy'
+description: ''
+displayNames:
+  - 'Squid Web Proxy'
+
+detections:
+  - id: SquidSquid
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'squid*'
+    set:
+      Tier:     2
+      Purpose:  'Proxy'
+      Category: 'Proxy'

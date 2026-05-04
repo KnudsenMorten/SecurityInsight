@@ -1,0 +1,20 @@
+id:        CouchbaseServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Couchbase Server'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Couchbase Server'
+
+detections:
+  - id: CouchbaseServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

@@ -1,0 +1,10 @@
+{
+  "description": "SecurityInsight_AssetProfiling_Identity -- v2.2 asset-profiling launcher for the identity engine.",
+  "scriptType": "Engine",
+  "community": true,
+  "notes": "Invokes engine/asset-profiling/Invoke-SIEngineRun.ps1 -Engine identity. Customer config layered: LauncherConfig.defaults.ps1 -> LauncherConfig.custom.ps1 -> CLI args.",
+  "scriptName": "AssetProfiling_Identity",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "version": "2.2.0",
+  "communityRepo": "SecurityInsight"
+}

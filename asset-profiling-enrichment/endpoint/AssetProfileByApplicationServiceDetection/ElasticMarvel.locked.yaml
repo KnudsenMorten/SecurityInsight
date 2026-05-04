@@ -1,0 +1,20 @@
+id:        ElasticMarvel
+appliesTo: endpoint
+mode:      locked
+purpose:   'Elasticsearch Marvel'
+category:  'SIEM/Log'
+description: ''
+displayNames:
+  - 'Elasticsearch Marvel'
+
+detections:
+  - id: ElasticMarvel
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'marvel*'
+    set:
+      Tier:     2
+      Purpose:  'SIEM/Log'
+      Category: 'SIEM/Log'

@@ -1,0 +1,36 @@
+id:        VCenterSCVMMManagementServerManagingTier0Hypervisors
+appliesTo: endpoint
+mode:      locked
+purpose:   'vCenter / SCVMM Management Server (Managing Tier 0 Hypervisors)'
+category:  'Hypervisor'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |C|e|n|t|r|a|l|\|\| |h|y|p|e|r|v|i|s|o|r|\|\| |m|a|n|a|g|e|m|e|n|t|\|\| |p|l|a|n|e|;|\|\| |o|n|e|\|\| |c|o|n|s|o|l|e|\|\| |c|o|n|t|r|o|l|s|\|\| |a|l|l|\|\| |t|i|e|r|\|\| |0|\|\| |h|o|s|t|s|\|\| |a|n|d|\|\| |g|u|e|s|t|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |v|m|w|a|r|e|/|v|c|e|n|t|e|r|_|s|e|r|v|e|r|
+
+detections:
+  - id: VCenterSCVMMManagementServerManagingTier0Hypervisors
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vmware_vcenter*'
+            - 'vcenter_server*'
+            - 'system_center_virtual_machine_manager*'
+            - 'scvmm*'
+            - 'vcenter_server*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^vcenter\d'
+            - '(?i)^vcsa\d'
+            - '(?i)^scvmm\d'
+            - '(?i)vcenter.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)vcenter'
+            - '(?i)scvmm'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'vCenter / SCVMM Management Server (Managing Tier 0 Hypervisors)'
+      Category: 'Hypervisor'

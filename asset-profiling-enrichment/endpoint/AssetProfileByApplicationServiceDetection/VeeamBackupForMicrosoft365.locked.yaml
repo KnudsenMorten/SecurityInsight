@@ -1,0 +1,20 @@
+id:        VeeamBackupForMicrosoft365
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veeam Backup for Microsoft 365'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veeam Backup for Microsoft 365'
+
+detections:
+  - id: VeeamBackupForMicrosoft365
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'backup_for_microsoft_365*'
+    set:
+      Tier:     1
+      Purpose:  'Backup'
+      Category: 'Backup'

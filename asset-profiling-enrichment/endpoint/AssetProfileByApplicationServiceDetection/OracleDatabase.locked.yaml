@@ -1,0 +1,23 @@
+id:        OracleDatabase
+appliesTo: endpoint
+mode:      locked
+purpose:   'Oracle Database 19c'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Oracle Database 19c'
+  - 'Oracle Database 21c'
+  - 'Oracle Database 23c'
+  - 'Oracle Database'
+
+detections:
+  - id: OracleDatabase
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'database*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

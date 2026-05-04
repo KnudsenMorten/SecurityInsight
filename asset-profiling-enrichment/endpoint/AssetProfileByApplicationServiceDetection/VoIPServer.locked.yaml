@@ -1,0 +1,31 @@
+id:        VoIPServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'VoIP Server'
+category:  'Server Roles'
+description: 'Voice service server; outage impact, limited security pivot.'
+
+detections:
+  - id: VoIPServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'asterisk*'
+            - 'freepbx*'
+            - '3cx*'
+            - 'elastix*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^voip-srv'
+            - '(?i)^pbx\d'
+            - '(?i)voip.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)voip.server'
+            - '(?i)pbx'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'VoIP Server'
+      Category: 'Server Roles'

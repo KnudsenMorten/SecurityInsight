@@ -1,0 +1,21 @@
+id:        MicrosoftEndpointConfigurationManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Endpoint Configuration Manager Console'
+category:  'Endpoint Mgmt'
+description: ''
+displayNames:
+  - 'Microsoft Endpoint Configuration Manager Console'
+  - 'MECM Console'
+
+detections:
+  - id: MicrosoftEndpointConfigurationManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'endpoint_configuration_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Endpoint Mgmt'
+      Category: 'Endpoint Mgmt'

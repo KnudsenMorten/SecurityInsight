@@ -1,0 +1,20 @@
+id:        IbmTivoliAccessManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Tivoli Access Manager'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'IBM Tivoli Access Manager'
+
+detections:
+  - id: IbmTivoliAccessManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'tivoli_access_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Identity'
+      Category: 'Identity'

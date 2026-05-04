@@ -1,0 +1,22 @@
+id:        CitrixVirtualAppsAndDesktops
+appliesTo: endpoint
+mode:      locked
+purpose:   'Citrix Virtual Apps and Desktops'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'Citrix Virtual Apps and Desktops'
+  - 'Citrix XenApp'
+  - 'Citrix XenDesktop'
+
+detections:
+  - id: CitrixVirtualAppsAndDesktops
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'virtual_apps_and_desktops*'
+    set:
+      Tier:     2
+      Purpose:  'VDI'
+      Category: 'VDI'

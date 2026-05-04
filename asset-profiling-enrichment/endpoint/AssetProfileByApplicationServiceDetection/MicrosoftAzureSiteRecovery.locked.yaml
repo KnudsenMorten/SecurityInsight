@@ -1,0 +1,21 @@
+id:        MicrosoftAzureSiteRecovery
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Azure Site Recovery'
+category:  'DR/Replication'
+description: ''
+displayNames:
+  - 'Microsoft Azure Site Recovery'
+  - 'ASR'
+
+detections:
+  - id: MicrosoftAzureSiteRecovery
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_site_recovery*'
+    set:
+      Tier:     1
+      Purpose:  'DR/Replication'
+      Category: 'DR/Replication'

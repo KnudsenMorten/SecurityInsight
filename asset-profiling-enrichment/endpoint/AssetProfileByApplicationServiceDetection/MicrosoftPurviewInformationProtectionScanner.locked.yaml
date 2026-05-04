@@ -1,0 +1,21 @@
+id:        MicrosoftPurviewInformationProtectionScanner
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Purview Information Protection Scanner'
+category:  'DLP'
+description: ''
+displayNames:
+  - 'Microsoft Purview Information Protection Scanner'
+  - 'Azure Information Protection Scanner'
+
+detections:
+  - id: MicrosoftPurviewInformationProtectionScanner
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'purview_information_protection_scanner*'
+    set:
+      Tier:     1
+      Purpose:  'DLP'
+      Category: 'DLP'

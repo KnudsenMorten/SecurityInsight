@@ -1,0 +1,21 @@
+id:        CitrixProvisioningServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Citrix Provisioning Server'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'Citrix Provisioning Server'
+  - 'Citrix PVS'
+
+detections:
+  - id: CitrixProvisioningServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'provisioning_server*'
+    set:
+      Tier:     1
+      Purpose:  'VDI'
+      Category: 'VDI'

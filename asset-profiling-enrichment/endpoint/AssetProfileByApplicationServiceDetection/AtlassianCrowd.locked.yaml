@@ -1,0 +1,20 @@
+id:        AtlassianCrowd
+appliesTo: endpoint
+mode:      locked
+purpose:   'Atlassian Crowd'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Atlassian Crowd'
+
+detections:
+  - id: AtlassianCrowd
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'crowd*'
+    set:
+      Tier:     1
+      Purpose:  'Identity'
+      Category: 'Identity'

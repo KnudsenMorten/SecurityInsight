@@ -1,0 +1,36 @@
+id:        LogAggregationServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Log Aggregation Server'
+category:  'Management'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |H|o|l|d|s|\|\| |c|o|l|l|e|c|t|e|d|\|\| |l|o|g|s|\|\| |a|n|d|\|\| |f|o|r|w|a|r|d|e|r|\|\| |c|r|e|d|e|n|t|i|a|l|s|;|\|\| |d|a|t|a|\|\| |i|n|t|e|g|r|i|t|y|\|\| |t|a|r|g|e|t|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |e|l|a|s|t|i|c|/|l|o|g|s|t|a|s|h|
+
+detections:
+  - id: LogAggregationServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'logstash*'
+            - 'fluentd*'
+            - 'graylog*'
+            - 'rsyslog*'
+            - 'syslog-ng*'
+            - 'logstash*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^log\d'
+            - '(?i)^syslog\d'
+            - '(?i)^logagg'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)log.aggregation'
+            - '(?i)syslog'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Log Aggregation Server'
+      Category: 'Management'

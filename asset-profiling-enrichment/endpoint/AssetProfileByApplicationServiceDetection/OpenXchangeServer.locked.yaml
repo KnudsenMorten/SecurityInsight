@@ -1,0 +1,20 @@
+id:        OpenXchangeServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Open-Xchange Server'
+category:  'Mail/Collaboration'
+description: ''
+displayNames:
+  - 'Open-Xchange Server'
+
+detections:
+  - id: OpenXchangeServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     2
+      Purpose:  'Mail/Collaboration'
+      Category: 'Mail/Collaboration'

@@ -1,0 +1,22 @@
+id:        CyberarkPrivilegedAccessManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'CyberArk Privileged Access Manager'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'CyberArk Privileged Access Manager'
+  - 'CyberArk PAS'
+  - 'CyberArk Vault'
+
+detections:
+  - id: CyberarkPrivilegedAccessManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'privileged_access_manager*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

@@ -1,0 +1,21 @@
+id:        SplunkSoar
+appliesTo: endpoint
+mode:      locked
+purpose:   'Splunk SOAR'
+category:  'SOAR'
+description: ''
+displayNames:
+  - 'Splunk SOAR'
+  - 'Splunk Phantom'
+
+detections:
+  - id: SplunkSoar
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'soar*'
+    set:
+      Tier:     1
+      Purpose:  'SOAR'
+      Category: 'SOAR'

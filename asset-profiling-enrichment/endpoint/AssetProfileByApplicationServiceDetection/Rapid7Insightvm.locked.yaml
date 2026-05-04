@@ -1,0 +1,20 @@
+id:        Rapid7Insightvm
+appliesTo: endpoint
+mode:      locked
+purpose:   'Rapid7 InsightVM'
+category:  'Vulnerability Mgmt'
+description: ''
+displayNames:
+  - 'Rapid7 InsightVM'
+
+detections:
+  - id: Rapid7Insightvm
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'insightvm*'
+    set:
+      Tier:     1
+      Purpose:  'Vulnerability Mgmt'
+      Category: 'Vulnerability Mgmt'

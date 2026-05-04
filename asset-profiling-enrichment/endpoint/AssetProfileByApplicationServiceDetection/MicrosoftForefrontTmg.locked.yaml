@@ -1,0 +1,21 @@
+id:        MicrosoftForefrontTmg
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Forefront Threat Management Gateway'
+category:  'Proxy'
+description: 'EOS - flag for removal'
+displayNames:
+  - 'Microsoft Forefront Threat Management Gateway'
+  - 'TMG'
+
+detections:
+  - id: MicrosoftForefrontTmg
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'forefront_tmg*'
+    set:
+      Tier:     1
+      Purpose:  'Proxy'
+      Category: 'Proxy'

@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+
+  "_purpose": "REFERENCE FILE -- not loaded by the engine. Copy parts you need into: risk-analysis-detection/riskscore_weighted.schema.custom.json. Whatever top-level section you put there REPLACES that section in the locked model. The consolidator (Build-RiskAnalysis.ps1) auto-merges before emitting KQL.",
+
+  "_loadingNotes": [
+    "Locked model:   risk-analysis/riskscore_weighted.schema.json   (shipped, do NOT edit)",
+    "Custom overlay: risk-analysis-detection/riskscore_weighted.schema.custom.json   (you create -- this file is a sample of that)",
+    "Merge: each top-level section here REPLACES the locked one in full (no deep merge). So if you override severityMapper, include ALL the thresholds you want.",
+    "Underscore-prefixed keys (_purpose, _designNotes, etc) are skipped by the merger -- safe to leave as documentation here."
+  ],
+
+  "_examplesIncluded": [
+    "1. Tighter severity thresholds (lower bar to call something High)",
+    "2. Custom tier labels matching your internal naming",
+    "3. CMDB criticality weights aligned with your CMDB enum",
+    "4. Wider impact normalizer covering your data source's vocabulary",
+    "5. Per-engine extra risk-factor fields (audit / freshness bools you want included)"
+  ],
+
+
+  "severityMapper": {
+    "_comment_replace": "EXAMPLE: lower the High threshold from 7.0 to 6.5 so 'High' triggers earlier",
+    "sourceColumn": "Impact",
+    "outputColumn": "SecuritySeverity",
+    "thresholds": [
+      { "min": 9.0, "label": "Very High" },
+      { "min": 6.5, "label": "High" },
+      { "min": 4.0, "label": "Medium" },
+      { "min": 0.1, "label": "Low" }
+    ],
+    "default": "Low"
+  },
+
+  "tierMapper": {
+    "_comment_replace": "EXAMPLE: rename tier labels to match your internal terminology",
+    "sourceColumn": "CriticalityTier",
+    "outputColumn": "CriticalityTierLevel",
+    "valueMap": {
+      "0": "Crown Jewel (T0)",
+      "1": "Business Critical (T1)",
+      "2": "Standard (T2)",
+      "3": "Workgroup (T3)"
+    },
+    "default": "Workgroup (T3)"
+  },
+
+  "cmdbWeightMapper": {
+    "_comment_replace": "EXAMPLE: align the CMDB-criticality weight with YOUR CMDB's enum (default expects Critical/High/Medium/Low). Your CMDB may use Mission/Important/Standard.",
+    "sourceColumn": "cmdbCriticality",
+    "outputColumn": "RiskFactor_Weight",
+    "valueMap": {
+      "Mission":   3.0,
+      "Important": 2.0,
+      "Standard":  1.0,
+      "Low":       0.0
+    },
+    "default": 0.0
+  },
+
+  "weightedRiskFactors": {
+    "_comment_replace": "ENGINE-KEYED weight model. Each engine has its own list of fields; each field has a value->multiplier map. Engine determined from report's SecurityDomain (Endpoint -> endpoint, Identity -> identity, Azure -> azure). Engine reads its section, generates a per-field case() expression, combines them per Combine mode, emits RiskScore_Weight_Detailed (e.g. 'cmdbCriticality=Critical;cmdbDataSensitivity=Restricted'), RiskScore_Weight_Factor (cumulative multiplier), and substitutes the //__WEIGHTED_FACTORS_BEGIN__/END__ block in the query. Customer adds fields without touching KQL or engine code. With zero fields (or section absent), the no-op default in the query stands -- weighted score equals base score. RiskScoreTotal_Weighted >= RiskScoreTotal always (clamped via max_of downstream).",
+
+    "_combineNotes": [
+      "product       -- per-field multipliers compound (cmdbCriticality 1.5 * cmdbDataSensitivity 1.3 = 1.95). Default; matches 'more signals = bigger weight' intuition.",
+      "max           -- only the largest single field multiplier counts. Use when signals overlap and you want to avoid double-counting.",
+      "sum-of-deltas -- 1.0 + sum(multiplier - 1 for each field). Linear additive."
+    ],
+    "_maxMultiplierNotes": "Optional safety cap on the cumulative multiplier. Omit or set to 0 for no cap.",
+    "_valueMapNotes": "valueMap keys match the actual column value. Case-insensitive at match time (engine lowercases both sides). 'default' is the multiplier when no key matches (defaults to 1.0 if omitted).",
+
+    "endpoint": {
+      "combine":       "product",
+      "maxMultiplier": 5.0,
+      "fields": [
+        {
+          "_comment": "EXAMPLE -- CMDB criticality string -> multiplier. Adjust keys to YOUR CMDB's enum (Mission/Important/Standard, Sev1/Sev2, P0/P1, etc.).",
+          "field":    "cmdbCriticality",
+          "valueMap": {
+            "Critical": 1.50,
+            "High":     1.25,
+            "Medium":   1.10,
+            "Low":      1.00
+          },
+          "default":  1.00
+        },
+        {
+          "_comment": "EXAMPLE -- data-sensitivity classification adds risk weight on sensitive-data hosts.",
+          "field":    "cmdbDataSensitivity",
+          "valueMap": {
+            "Restricted":   1.30,
+            "Confidential": 1.20,
+            "Internal":     1.05,
+            "Public":       1.00
+          },
+          "default":  1.00
+        }
+      ]
+    },
+
+    "identity": {
+      "combine":       "product",
+      "maxMultiplier": 5.0,
+      "fields": [
+        {
+          "_comment": "EXAMPLE -- CMDB criticality on identity (group / OU / cost-center linked).",
+          "field":    "cmdbCriticality",
+          "valueMap": {
+            "Critical": 1.50,
+            "High":     1.25,
+            "Medium":   1.10,
+            "Low":      1.00
+          },
+          "default":  1.00
+        }
+      ]
+    },
+
+    "azure": {
+      "combine":       "product",
+      "maxMultiplier": 5.0,
+      "fields": [
+        {
+          "_comment": "EXAMPLE -- CMDB criticality on Azure resource (CMDB-tagged or AzureSubscriptionId-mapped).",
+          "field":    "cmdbCriticality",
+          "valueMap": {
+            "Critical": 1.50,
+            "High":     1.25,
+            "Medium":   1.10,
+            "Low":      1.00
+          },
+          "default":  1.00
+        }
+      ]
+    }
+  },
+
+  "impactNormalizer": {
+    "_comment_replace": "EXAMPLE: extend the stringMap to cover your data source's severity vocabulary (e.g. ServiceNow 'Sev1/Sev2', Tenable 'Critical/High/Medium/Low/Info')",
+    "sourceColumn": "Impact",
+    "outputColumn": "Impact",
+    "stringMap": {
+      "critical":      10.0,
+      "very high":     10.0,
+      "sev1":          10.0,
+      "high":           8.0,
+      "sev2":           8.0,
+      "medium":         5.0,
+      "moderate":       5.0,
+      "sev3":           5.0,
+      "low":            2.0,
+      "sev4":           2.0,
+      "informational":  1.0,
+      "info":           1.0
+    },
+    "default": 0.0
+  },
+
+  "riskFactorDetailedMapper": {
+    "_comment_replace": "EXAMPLE: append additional bool fields to count as 'risk factors' per engine. NOTE: every type=bool + purpose=risk field in the profile schema is auto-included (you DO NOT need to list those here). Only add NON-risk-purpose bools you want included (e.g. audit / freshness / compliance).",
+    "outputColumn": "RiskFactor_Probability_Detailed",
+    "perEngineFields": {
+      "endpoint":  ["IsStaleAsset", "IsCmdbOrphan", "IsTransient"],
+      "identity":  ["IsExternalIdentity", "IsCmdbOrphan", "IsBreakGlass"],
+      "azure":     ["IsCmdbOrphan", "IsTransient"]
+    }
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": "2.3.3",
+  "lastModified": "2026-04-27",
+  "engine": "publicip",
+  "table": "SI_VulnerabilityPIP_CL",
+  "dcrName": "dcr-si-publicip-profile",
+  "extends": "SCHEMA.json",
+
+  "sourcesConsumed": ["azure", "exposureGraph", "shodan", "derived"],
+
+  "entityIds": {
+    "primaryPriority": [
+      { "assetType": ["PublicIP"], "order": ["IpAddress"] }
+    ],
+    "expectedTypes": ["IpAddress", "AzureResourceId", "ExposureGraphNodeId"],
+    "hubJoin": "azure",
+    "crossEngineLinkRule": "When the IP is bound to an Azure publicIPAddresses resource, append { type: AzureResourceId, id: <armId>, relation: bound_to } so SI_VulnerabilityPIP_CL rows join SI_Azure_Profile_CL via shared EntityIds."
+  },
+
+  "hashes": [
+    { "name": "CollectHash",  "overPhases": ["in"], "description": "Hash of every phase=in field. Detects upstream drift in raw collected data." },
+    { "name": "ProfileHash",  "overPhases": ["profile"], "excludesFields": ["CollectHash", "ProfileHash"], "description": "Hash of every phase=profile field plus rule-set hash. Lets KQL show only verdict-changing snapshots." }
+  ],
+
+  "rawPayload": {
+    "storageColumn": "Properties",
+    "sizeBudgetKb": 128,
+    "truncationStrategy": "drop_largest_field",
+    "sources": {
+
+      "azure": {
+        "_policy": "include-only (default-deny). Source = arm.publicIPAddresses resource for the IP's parent ARM record.",
+        "includePaths": [
+          "id", "name", "location", "subscriptionId", "resourceGroup",
+          "properties.ipAddress", "properties.publicIPAllocationMethod", "properties.publicIPAddressVersion",
+          "properties.dnsSettings.fqdn", "properties.dnsSettings.domainNameLabel",
+          "properties.ddosSettings.protectionMode", "properties.idleTimeoutInMinutes",
+          "properties.ipConfiguration.id", "sku.name", "sku.tier", "tags"
+        ]
+      },
+
+      "exposureGraph": {
+        "_policy": "include-only. Source = ExposureGraphNodes where NodeLabel == 'microsoft.network/publicipaddresses' OR exposedToInternet edges resolve to this IP.",
+        "includePaths": [
+          "NodeId", "NodeLabel", "NodeName", "Categories[*]",
+          "NodeProperties.rawData.ipAddress",
+          "NodeProperties.rawData.exposedToInternet",
+          "NodeProperties.rawData.exposedToInternet.evidence.nodeIds[*]",
+          "NodeProperties.rawData.criticalityLevel.*"
+        ]
+      },
+
+      "shodan": {
+        "_policy": "include-only. Source = Shodan REST API GET /shodan/host/{ip}. Cached per-IP in Azure Table Storage with 7-day TTL (Shodan's own crawl frequency is ~weekly; on-demand /scan is opt-in via -ForceShodanRescan and consumes 1 credit per IP).",
+        "includePaths": [
+          "ip_str", "ports[*]", "vulns[*]", "hostnames[*]", "domains[*]",
+          "country_code", "country_name", "city", "region_code",
+          "org", "isp", "asn", "os",
+          "last_update", "tags[*]",
+          "data[*].port", "data[*].transport", "data[*].product", "data[*].version", "data[*].cpe[*]",
+          "data[*].vulns",
+          "data[*].ssl.cert.issuer.CN", "data[*].ssl.cert.subject.CN",
+          "data[*].ssl.cert.expired", "data[*].ssl.cert.expires",
+          "data[*].ssl.versions[*]"
+        ]
+      }
+    }
+  },
+
+  "fields": [
+    { "name": "PrimaryEntityId",         "type": "string",   "purpose": "identity",    "source": "derived",       "sourcePath": "the public IP itself (string form)",                                                  "stage": { "writtenBy": "collect",  "readBy": ["enrich", "posture_analyze", "classify", "dashboard", "sentinel"] }, "addedIn": "2.3.0" },
+    { "name": "PrimaryEntityType",       "type": "string",   "purpose": "identity",    "source": "derived",       "sourcePath": "always 'IpAddress'",                                                                  "stage": { "writtenBy": "collect",  "readBy": ["enrich", "posture_analyze", "classify"] },                          "addedIn": "2.3.0" },
+    { "name": "EntityIds",               "type": "dynamic",  "purpose": "correlation", "source": "derived",       "sourcePath": "merged from all sources -- IpAddress (always), AzureResourceId (when ARG-known), ExposureGraphNodeId (when EG-seen)", "stage": { "writtenBy": "collect", "readBy": ["enrich", "posture_analyze", "classify", "sentinel"] }, "addedIn": "2.3.0" },
+    { "name": "RunId",                   "type": "string",   "purpose": "identity",    "source": "derived",       "sourcePath": "UUID per orchestrator run",                                                            "stage": { "writtenBy": "bootstrap","readBy": ["all"] },                                                              "addedIn": "2.3.0" },
+    { "name": "CollectionTime",          "type": "datetime", "purpose": "freshness",   "source": "derived",       "sourcePath": "now() at output, shared across shards of one execution",                              "stage": { "writtenBy": "classify", "readBy": ["all"] },                                                              "addedIn": "2.3.0" },
+
+    { "name": "IpAddress",               "type": "string",   "purpose": "correlation", "source": "derived",       "sourcePath": "lowercased, IPv4 dotted or IPv6 colon form",                                           "stage": { "writtenBy": "collect", "readBy": ["enrich", "posture_analyze", "classify", "dashboard", "sentinel"] }, "addedIn": "2.3.0" },
+    { "name": "IpVersion",               "type": "string",   "purpose": "pivot",       "source": "derived",       "sourcePath": "'IPv4' or 'IPv6' from address shape",                                                  "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "AzureResourceId",         "type": "string",   "purpose": "correlation", "source": "azure",         "sourcePath": "arm.publicIPAddresses.id (null when IP is not from this tenant's Azure subscriptions)", "stage": { "writtenBy": "collect", "readBy": ["enrich", "classify", "dashboard"] },                                  "addedIn": "2.3.0" },
+    { "name": "BoundToResourceId",       "type": "string",   "purpose": "correlation", "source": "azure",         "sourcePath": "arm.publicIPAddresses.properties.ipConfiguration.id (NIC / load-balancer / firewall / app-gateway parent)", "stage": { "writtenBy": "collect", "readBy": ["enrich", "classify"] },                              "addedIn": "2.3.0" },
+    { "name": "Fqdn",                    "type": "string",   "purpose": "attribution", "source": "azure",         "sourcePath": "arm.publicIPAddresses.properties.dnsSettings.fqdn",                                    "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "AllocationMethod",        "type": "string",   "purpose": "pivot",       "source": "azure",         "sourcePath": "arm.publicIPAddresses.properties.publicIPAllocationMethod (Static / Dynamic)",         "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "DdosProtectionMode",      "type": "string",   "purpose": "posture",     "source": "azure",         "sourcePath": "arm.publicIPAddresses.properties.ddosSettings.protectionMode (Enabled / Disabled / VirtualNetworkInherited)", "stage": { "writtenBy": "collect", "readBy": ["enrich", "classify"] }, "usedBy": [{ "kind": "posture_rule", "name": "PublicIpDdosDisabled" }], "addedIn": "2.3.0" },
+
+    { "name": "OpenPorts",               "type": "dynamic",  "purpose": "posture",     "source": "shodan",        "sourcePath": "shodan.ports[*] (sorted ascending, deduped)",                                          "stage": { "writtenBy": "collect", "readBy": ["enrich", "posture_analyze", "classify", "dashboard", "sentinel"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_open_port_count" }, { "kind": "posture_rule", "name": "PublicIpHasOpenAdminPorts" }], "addedIn": "2.3.0" },
+    { "name": "OpenPortCount",           "type": "int",      "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "array_length(OpenPorts)" },                                              "stage": { "writtenBy": "enrich",  "readBy": ["posture_analyze", "classify", "dashboard"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_open_port_count" }], "addedIn": "2.3.0" },
+    { "name": "OpenPortServices",        "type": "dynamic",  "purpose": "forensic",    "source": "shodan",        "sourcePath": "shodan.data[*] -- per-port {port, transport, product, version, cpe[]}",                "stage": { "writtenBy": "collect", "readBy": ["classify", "sentinel"] },                                            "addedIn": "2.3.0" },
+    { "name": "HasRdpOpen",              "type": "bool",     "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "OpenPorts contains 3389" },                                              "stage": { "writtenBy": "enrich",  "readBy": ["classify"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_admin_port_open" }, { "kind": "posture_rule", "name": "PublicIpRdpExposed" }], "addedIn": "2.3.0" },
+    { "name": "HasSshOpen",              "type": "bool",     "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "OpenPorts contains 22" },                                                "stage": { "writtenBy": "enrich",  "readBy": ["classify"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_admin_port_open" }, { "kind": "posture_rule", "name": "PublicIpSshExposed" }], "addedIn": "2.3.0" },
+    { "name": "HasSmbOpen",              "type": "bool",     "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "OpenPorts contains 445" },                                               "stage": { "writtenBy": "enrich",  "readBy": ["classify"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_admin_port_open" }, { "kind": "posture_rule", "name": "PublicIpSmbExposed" }], "addedIn": "2.3.0" },
+    { "name": "HasDbOpen",               "type": "bool",     "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "OpenPorts intersects {1433,3306,5432,27017,6379,9200,5984,11211,1521}" }, "stage": { "writtenBy": "enrich",  "readBy": ["classify"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_admin_port_open" }, { "kind": "posture_rule", "name": "PublicIpDatabaseExposed" }], "addedIn": "2.3.0" },
+    { "name": "HasManagementPortOpen",   "type": "bool",     "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "OpenPorts intersects {22,23,135,139,445,1433,2375,3306,3389,5432,5900,5985,5986,6379,9200,11211,27017}" }, "stage": { "writtenBy": "enrich", "readBy": ["classify", "dashboard"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_admin_port_open" }], "addedIn": "2.3.0" },
+
+    { "name": "Vulns",                   "type": "dynamic",  "purpose": "posture",     "source": "shodan",        "sourcePath": "union(shodan.vulns[*], shodan.data[*].vulns) -- CVE id list",                          "stage": { "writtenBy": "collect", "readBy": ["enrich", "posture_analyze", "classify", "dashboard", "sentinel"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_cve_count" }, { "kind": "posture_rule", "name": "PublicIpHasKnownCves" }], "addedIn": "2.3.0" },
+    { "name": "VulnCount",               "type": "int",      "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "array_length(Vulns)" },                                                  "stage": { "writtenBy": "enrich",  "readBy": ["posture_analyze", "classify", "dashboard"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_cve_count" }], "addedIn": "2.3.0" },
+    { "name": "MaxCvssScore",            "type": "real",     "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "max(shodan.vulns_metadata[*].cvss) when vulns_metadata exposed by Shodan; else null" }, "stage": { "writtenBy": "enrich", "readBy": ["classify", "dashboard"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_max_cvss" }], "addedIn": "2.3.0" },
+    { "name": "HasCriticalCve",          "type": "bool",     "purpose": "posture",     "source": "derived",       "derivation": { "algorithm": "MaxCvssScore >= 9.0 OR Vulns contains any of the curated critical CVE list (e.g. EternalBlue, ProxyShell, Log4Shell)" }, "stage": { "writtenBy": "enrich", "readBy": ["classify"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_critical_cve" }, { "kind": "posture_rule", "name": "PublicIpCriticalCve" }], "addedIn": "2.3.0" },
+
+    { "name": "Hostnames",               "type": "dynamic",  "purpose": "attribution", "source": "shodan",        "sourcePath": "shodan.hostnames[*]",                                                                  "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "Asn",                     "type": "string",   "purpose": "attribution", "source": "shodan",        "sourcePath": "shodan.asn",                                                                            "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "Isp",                     "type": "string",   "purpose": "attribution", "source": "shodan",        "sourcePath": "shodan.isp",                                                                            "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "OrgName",                 "type": "string",   "purpose": "attribution", "source": "shodan",        "sourcePath": "shodan.org",                                                                            "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "Country",                 "type": "string",   "purpose": "attribution", "source": "shodan",        "sourcePath": "shodan.country_code (ISO 3166-1 alpha-2)",                                              "stage": { "writtenBy": "collect", "readBy": ["dashboard"] },                                                       "addedIn": "2.3.0" },
+    { "name": "ShodanLastSeen",          "type": "datetime", "purpose": "freshness",   "source": "shodan",        "sourcePath": "shodan.last_update (ISO timestamp of Shodan's last crawl of this IP)",                  "stage": { "writtenBy": "collect", "readBy": ["enrich", "dashboard"] },                                             "addedIn": "2.3.0" },
+    { "name": "ShodanLastSeenDays",      "type": "int",      "purpose": "freshness",   "source": "derived",       "derivation": { "algorithm": "datediff('day', ShodanLastSeen, now())" },                              "stage": { "writtenBy": "enrich",  "readBy": ["classify", "dashboard"] }, "addedIn": "2.3.0" },
+    { "name": "InShodan",                "type": "bool",     "purpose": "lifecycle",   "source": "derived",       "derivation": { "algorithm": "Shodan returned a host record (i.e. has been crawled at least once)" },  "stage": { "writtenBy": "collect", "readBy": ["classify", "dashboard"] }, "addedIn": "2.3.0" },
+
+    { "name": "ExposedToInternet",       "type": "bool",     "purpose": "risk",        "source": "exposureGraph", "sourcePath": "eg.node.NodeProperties.rawData.exposedToInternet.type == 'InternetExposure' (when EG has the IP)", "stage": { "writtenBy": "collect", "readBy": ["enrich", "classify"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_eg_internet_exposed" }], "addedIn": "2.3.0" },
+    { "name": "EgCriticalityLevel",      "type": "int",      "purpose": "risk",        "source": "exposureGraph", "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel.criticalityLevel (effective tier 0-3 from Defender EG)", "stage": { "writtenBy": "collect", "readBy": ["classify"] }, "usedBy": [{ "kind": "tier_contributor", "name": "publicip_eg_criticality" }], "addedIn": "2.3.0" },
+
+    { "name": "CollectHash",             "type": "string",   "purpose": "identity",    "source": "derived",       "sourcePath": "SHA256 over collect-stage fields",                                                       "stage": { "writtenBy": "classify", "readBy": ["sentinel"] }, "addedIn": "2.3.0" },
+    { "name": "EnrichHash",              "type": "string",   "purpose": "identity",    "source": "derived",       "sourcePath": "SHA256 over enrich-stage fields",                                                        "stage": { "writtenBy": "classify", "readBy": ["sentinel"] }, "addedIn": "2.3.0" },
+    { "name": "PostureHash",             "type": "string",   "purpose": "identity",    "source": "derived",       "sourcePath": "SHA256 over posture-stage fields",                                                       "stage": { "writtenBy": "classify", "readBy": ["sentinel"] }, "addedIn": "2.3.0" },
+    { "name": "ClassifyHash",            "type": "string",   "purpose": "identity",    "source": "derived",       "sourcePath": "SHA256 over classify-stage fields",                                                      "stage": { "writtenBy": "classify", "readBy": ["sentinel"] }, "addedIn": "2.3.0" },
+
+    { "name": "AssetType",               "type": "string",   "purpose": "kpi",         "source": "derived",       "derivation": { "algorithm": "always 'PublicIP'" },                                                     "stage": { "writtenBy": "classify", "readBy": ["dashboard"] }, "addedIn": "2.3.0" },
+    { "name": "AssetId",                 "type": "string",   "purpose": "identity",    "source": "derived",       "derivation": { "algorithm": "alias of PrimaryEntityId (= the public IP itself in string form) -- shared cross-engine asset-id field for consistent reporting / dashboards" }, "stage": { "writtenBy": "profile",  "readBy": ["dashboard", "risk_analysis"] }, "addedIn": "2.2.0" },
+    { "name": "AssetName",               "type": "string",   "purpose": "pivot",       "source": "derived",       "derivation": { "algorithm": "alias of PrimaryEntityId (= the public IP itself) -- shared cross-engine asset-name field for consistent reporting / dashboards" }, "stage": { "writtenBy": "profile",  "readBy": ["dashboard", "risk_analysis"] }, "addedIn": "2.2.0" },
+    { "name": "Tier",                    "type": "int",      "purpose": "kpi",         "source": "derived",       "derivation": { "algorithm": "weighted_tier_aggregator", "see": "aggregator section in this file" },    "stage": { "writtenBy": "classify", "readBy": ["dashboard", "sentinel"] }, "addedIn": "2.3.0" },
+    { "name": "SIRules",                 "type": "dynamic",  "purpose": "audit",       "source": "derived",       "derivation": { "algorithm": "rule_matches", "see": "Profile stage: AssetProfileBy* YAML matches" }, "stage": { "writtenBy": "profile",  "readBy": ["dashboard", "sentinel", "audit"] }, "addedIn": "2.3.2" },
+    { "name": "IsEnabledActive",         "type": "bool",     "purpose": "freshness",   "source": "derived",       "derivation": { "algorithm": "enabled_and_recent", "inputs": ["IP bound to active Azure resource OR Shodan returned data within $global:SI_ActiveStaleDays"], "default_stale_days": 30 }, "stage": { "writtenBy": "profile",  "readBy": ["dashboard", "sentinel"] }, "addedIn": "2.3.3" },
+    { "name": "Group",                   "type": "string",   "purpose": "kpi",         "source": "derived",       "derivation": { "algorithm": "from BoundToResourceId parent kind (vm / lb / firewall / app-gw / orphan)" }, "stage": { "writtenBy": "classify", "readBy": ["dashboard"] }, "addedIn": "2.3.0" },
+    { "name": "Verdict",                 "type": "string",   "purpose": "kpi",         "source": "derived",       "derivation": { "algorithm": "verdict_from_tier_and_findings" },                                       "stage": { "writtenBy": "classify", "readBy": ["dashboard", "sentinel"] }, "addedIn": "2.3.0" }
+  ],
+
+  "aggregator": {
+    "algorithm": "min_tier_over_contributors",
+    "tieBreaker": "lowest_tier_wins",
+    "contributors": [
+      { "id": "publicip_critical_cve",            "weight": 1.0, "algorithm": "tier_from_bool",    "signalField": "HasCriticalCve",            "tierWhenTrue": 0, "_comment": "Critical CVE on an internet-facing IP = T0 immediate." },
+      { "id": "publicip_admin_port_open",         "weight": 0.9, "algorithm": "min_tier_over_bools", "signalFields": ["HasRdpOpen","HasSshOpen","HasSmbOpen","HasDbOpen"], "tierWhenAny": 1, "_comment": "Open RDP/SSH/SMB/DB on the public internet = T1." },
+      { "id": "publicip_max_cvss",                "weight": 0.8, "algorithm": "tier_from_threshold","signalField": "MaxCvssScore", "thresholds": [{ "min": 9.0, "tier": 0 }, { "min": 7.0, "tier": 1 }, { "min": 4.0, "tier": 2 }] },
+      { "id": "publicip_eg_internet_exposed",     "weight": 0.6, "algorithm": "tier_from_bool",    "signalField": "ExposedToInternet",         "tierWhenTrue": 2 },
+      { "id": "publicip_eg_criticality",          "weight": 0.5, "algorithm": "tier_from_value",   "signalField": "EgCriticalityLevel",        "_comment": "Defender EG-derived criticality (0-3) flows through directly." },
+      { "id": "publicip_open_port_count",         "weight": 0.3, "algorithm": "tier_from_threshold","signalField": "OpenPortCount", "thresholds": [{ "min": 20, "tier": 1 }, { "min": 5, "tier": 2 }] },
+      { "id": "publicip_cve_count",               "weight": 0.3, "algorithm": "tier_from_threshold","signalField": "VulnCount",     "thresholds": [{ "min": 5, "tier": 1 }, { "min": 1, "tier": 2 }] }
+    ]
+  }
+}

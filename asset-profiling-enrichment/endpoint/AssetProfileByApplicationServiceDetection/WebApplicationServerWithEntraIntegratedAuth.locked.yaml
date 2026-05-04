@@ -1,0 +1,38 @@
+id:        WebApplicationServerWithEntraIntegratedAuth
+appliesTo: endpoint
+mode:      locked
+purpose:   'Web Application Server with Entra Integrated Auth'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |E|n|t|r|a|-|i|n|t|e|g|r|a|t|e|d|\|\| |a|p|p|\|\| |s|u|r|f|a|c|e|;|\|\| |S|S|R|F|/|t|o|k|e|n|\|\| |t|h|e|f|t|\|\| |c|a|n|\|\| |p|i|v|o|t|\|\| |t|o|\|\| |i|d|e|n|t|i|t|y|\|\| |s|c|o|p|e|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |a|p|a|c|h|e|/|t|o|m|c|a|t|,|\|\| |n|g|i|n|x|/|n|g|i|n|x|,|\|\| |n|g|i|n|x|/|n|g|i|n|x|_|p|l|u|s|
+
+detections:
+  - id: WebApplicationServerWithEntraIntegratedAuth
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft_iis*'
+            - 'apache_http_server*'
+            - 'nginx*'
+            - 'tomcat*'
+            - 'tomcat*'
+            - 'nginx_plus*'
+            - 'nginx*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^web\d'
+            - '(?i)^app\d'
+            - '(?i)^webapp\d'
+            - '(?i)web.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)webapp'
+            - '(?i)entra.auth'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Web Application Server with Entra Integrated Auth'
+      Category: 'Server Roles'

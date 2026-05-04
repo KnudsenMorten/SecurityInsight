@@ -1,0 +1,33 @@
+id:        PrintServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Print Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |H|o|s|t|s|\|\| |p|r|i|n|t|\|\| |q|u|e|u|e|s|;|\|\| |l|i|m|i|t|e|d|\|\| |b|u|s|i|n|e|s|s|\|\| |i|m|p|a|c|t|,|\|\| |n|a|r|r|o|w|\|\| |l|a|t|e|r|a|l|-|m|o|v|e|m|e|n|t|\|\| |v|a|l|u|e|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |p|a|p|e|r|c|u|t|/|p|a|p|e|r|c|u|t|
+
+detections:
+  - id: PrintServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_print_server*'
+            - 'papercut*'
+            - 'cups*'
+            - 'papercut*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^print\d'
+            - '(?i)^prtsrv\d'
+            - '(?i)print.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)print.server'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Print Server'
+      Category: 'Server Roles'

@@ -1,0 +1,21 @@
+id:        MicrosoftAzureAdConnectHealth
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Azure AD Connect Health agent for sync'
+category:  'Identity Sync'
+description: ''
+displayNames:
+  - 'Microsoft Azure AD Connect Health agent for sync'
+  - 'Microsoft Entra Connect Health agent'
+
+detections:
+  - id: MicrosoftAzureAdConnectHealth
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_ad_connect_health*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Sync'
+      Category: 'Identity Sync'

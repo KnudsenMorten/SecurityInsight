@@ -1,0 +1,21 @@
+id:        ArcserveUdp
+appliesTo: endpoint
+mode:      locked
+purpose:   'Arcserve Backup'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Arcserve Backup'
+  - 'Arcserve UDP'
+
+detections:
+  - id: ArcserveUdp
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'udp*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

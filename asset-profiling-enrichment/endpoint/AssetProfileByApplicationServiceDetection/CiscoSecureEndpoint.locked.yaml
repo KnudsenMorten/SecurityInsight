@@ -1,0 +1,21 @@
+id:        CiscoSecureEndpoint
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cisco Secure Endpoint'
+category:  'EDR'
+description: ''
+displayNames:
+  - 'Cisco Secure Endpoint'
+  - 'Cisco AMP for Endpoints'
+
+detections:
+  - id: CiscoSecureEndpoint
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'secure_endpoint*'
+    set:
+      Tier:     1
+      Purpose:  'EDR'
+      Category: 'EDR'

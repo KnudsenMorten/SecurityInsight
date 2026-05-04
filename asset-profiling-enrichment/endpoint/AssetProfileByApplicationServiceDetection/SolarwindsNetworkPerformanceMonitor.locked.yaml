@@ -1,0 +1,21 @@
+id:        SolarwindsNetworkPerformanceMonitor
+appliesTo: endpoint
+mode:      locked
+purpose:   'SolarWinds Network Performance Monitor'
+category:  'Monitoring'
+description: 'Historic supply-chain target; treat with extra rigor'
+displayNames:
+  - 'SolarWinds Network Performance Monitor'
+  - 'SolarWinds NPM'
+
+detections:
+  - id: SolarwindsNetworkPerformanceMonitor
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'network_performance_monitor*'
+    set:
+      Tier:     1
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

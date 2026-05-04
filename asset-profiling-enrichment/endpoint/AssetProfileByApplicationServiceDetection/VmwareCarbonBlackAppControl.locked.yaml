@@ -1,0 +1,20 @@
+id:        VmwareCarbonBlackAppControl
+appliesTo: endpoint
+mode:      locked
+purpose:   'Carbon Black App Control'
+category:  'EDR'
+description: ''
+displayNames:
+  - 'Carbon Black App Control'
+
+detections:
+  - id: VmwareCarbonBlackAppControl
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'carbon_black_app_control*'
+    set:
+      Tier:     1
+      Purpose:  'EDR'
+      Category: 'EDR'

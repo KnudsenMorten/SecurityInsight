@@ -1,0 +1,22 @@
+id:        MicrosoftAzureDevopsServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Azure DevOps Server'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'Azure DevOps Server'
+  - 'Team Foundation Server'
+  - 'TFS'
+
+detections:
+  - id: MicrosoftAzureDevopsServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_devops_server*'
+    set:
+      Tier:     1
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

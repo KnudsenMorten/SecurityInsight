@@ -1,0 +1,20 @@
+id:        BookstackBookstack
+appliesTo: endpoint
+mode:      locked
+purpose:   'BookStack'
+category:  'Wiki'
+description: ''
+displayNames:
+  - 'BookStack'
+
+detections:
+  - id: BookstackBookstack
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bookstack*'
+    set:
+      Tier:     3
+      Purpose:  'Wiki'
+      Category: 'Wiki'

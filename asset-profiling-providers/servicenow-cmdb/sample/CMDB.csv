@@ -1,0 +1,6 @@
+﻿cmdbID;cmdbName;DataSensitivity;Criticality;Owner;OwnerMail
+1;Active Directory;Confidential;Critical;Bent Hansen;BH@company.dk
+2;SAP;Confidential;Critical;Inge Sørensen;IS@company.dk
+3;Intranet;Internal;Low;Inge Sørensen;IS@company.dk
+4;vm-ware;Restricted;Critical;Morten Knudsen;mok@company.dk
+5;Integration Partner x;Restricted;Medium;Paul Ingham;PA@ocompany.dk

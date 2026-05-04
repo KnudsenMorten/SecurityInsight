@@ -1,0 +1,13 @@
+{
+  "_comment": "Per-report exclude lists. Rename this file to '<ReportName>.exclude.custom.json' to activate (e.g. Device_Missing_CVEs_Summary.exclude.custom.json). Engine substitutes placeholders in the KQL at runtime: __EXCLUDED_CVES__ -> ExcludedCves array, __EXCLUDED_CONFIGURATION_IDS__ -> ExcludedConfigurationIds array, __CVE_MIN_AGE_DAYS__ -> CveMinAgeDays scalar. File-absent or property-missing -> default. Edit JSON to add/remove items; no YAML edits needed.",
+  "ExcludedCves": [
+    "CVE-2024-12345",
+    "CVE-2023-99999"
+  ],
+  "ExcludedConfigurationIds": [
+    "scid-2090",
+    "scid-22"
+  ],
+  "CveMinAgeDays": 0,
+  "_comment_CveMinAgeDays": "Optional. 0 = no age filter (default). Set to 40 to only flag CVEs whose lastModifiedDate is OLDER than 40 days. Use case: skip newly-disclosed CVEs that are still in the normal patch window, focus on overdue ones. CVEs with a missing/unparseable lastModifiedDate are kept (defensive fallback)."
+}

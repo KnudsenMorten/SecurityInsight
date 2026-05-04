@@ -1,0 +1,20 @@
+id:        MicrosoftAzureMigrateAppliance
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Azure Migrate Appliance'
+category:  'Cloud Migration'
+description: ''
+displayNames:
+  - 'Microsoft Azure Migrate Appliance'
+
+detections:
+  - id: MicrosoftAzureMigrateAppliance
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_migrate_appliance*'
+    set:
+      Tier:     1
+      Purpose:  'Cloud Migration'
+      Category: 'Cloud Migration'

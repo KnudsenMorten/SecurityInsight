@@ -1,0 +1,22 @@
+id:        MicrosoftAdvancedThreatAnalytics
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Advanced Threat Analytics'
+category:  'Identity Security'
+description: 'Predecessor to Defender for Identity'
+displayNames:
+  - 'Microsoft Advanced Threat Analytics'
+  - 'ATA Center'
+  - 'Microsoft ATA'
+
+detections:
+  - id: MicrosoftAdvancedThreatAnalytics
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'advanced_threat_analytics*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Security'
+      Category: 'Identity Security'

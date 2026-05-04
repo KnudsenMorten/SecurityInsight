@@ -1,0 +1,20 @@
+id:        VeeamBackupForAws
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veeam Backup for AWS'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veeam Backup for AWS'
+
+detections:
+  - id: VeeamBackupForAws
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'backup_for_aws*'
+    set:
+      Tier:     1
+      Purpose:  'Backup'
+      Category: 'Backup'

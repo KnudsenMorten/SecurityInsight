@@ -1,0 +1,21 @@
+id:        VmwareSiteRecoveryManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware Site Recovery Manager'
+category:  'DR/Replication'
+description: ''
+displayNames:
+  - 'VMware Site Recovery Manager'
+  - 'VMware SRM'
+
+detections:
+  - id: VmwareSiteRecoveryManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'site_recovery_manager*'
+    set:
+      Tier:     0
+      Purpose:  'DR/Replication'
+      Category: 'DR/Replication'

@@ -1,0 +1,21 @@
+id:        SophosSafeguard
+appliesTo: endpoint
+mode:      locked
+purpose:   'Sophos Central Endpoint'
+category:  'Encryption'
+description: ''
+displayNames:
+  - 'Sophos Central Endpoint'
+  - 'Sophos SafeGuard'
+
+detections:
+  - id: SophosSafeguard
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'safeguard*'
+    set:
+      Tier:     1
+      Purpose:  'Encryption'
+      Category: 'Encryption'

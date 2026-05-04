@@ -1,0 +1,20 @@
+id:        VaronisDataprivilege
+appliesTo: endpoint
+mode:      locked
+purpose:   'Varonis DataPrivilege'
+category:  'Data Security'
+description: ''
+displayNames:
+  - 'Varonis DataPrivilege'
+
+detections:
+  - id: VaronisDataprivilege
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dataprivilege*'
+    set:
+      Tier:     1
+      Purpose:  'Data Security'
+      Category: 'Data Security'

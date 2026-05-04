@@ -1,0 +1,20 @@
+id:        AtlassianFisheye
+appliesTo: endpoint
+mode:      locked
+purpose:   'Atlassian Fisheye'
+category:  'SCM'
+description: ''
+displayNames:
+  - 'Atlassian Fisheye'
+
+detections:
+  - id: AtlassianFisheye
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'fisheye*'
+    set:
+      Tier:     2
+      Purpose:  'SCM'
+      Category: 'SCM'

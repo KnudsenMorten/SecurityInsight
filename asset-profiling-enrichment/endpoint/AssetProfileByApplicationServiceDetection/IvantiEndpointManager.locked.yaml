@@ -1,0 +1,21 @@
+id:        IvantiEndpointManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Ivanti Endpoint Manager'
+category:  'Endpoint Mgmt'
+description: ''
+displayNames:
+  - 'Ivanti Endpoint Manager'
+  - 'LANDesk Management Suite'
+
+detections:
+  - id: IvantiEndpointManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'endpoint_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Endpoint Mgmt'
+      Category: 'Endpoint Mgmt'

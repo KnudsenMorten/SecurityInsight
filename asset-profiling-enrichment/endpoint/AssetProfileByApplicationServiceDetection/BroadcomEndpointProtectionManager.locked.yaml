@@ -1,0 +1,20 @@
+id:        BroadcomEndpointProtectionManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Symantec Endpoint Protection Manager'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'Symantec Endpoint Protection Manager'
+
+detections:
+  - id: BroadcomEndpointProtectionManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'endpoint_protection_manager*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

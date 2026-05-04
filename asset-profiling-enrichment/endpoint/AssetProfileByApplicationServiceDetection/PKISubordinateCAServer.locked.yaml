@@ -1,0 +1,34 @@
+id:        PKISubordinateCAServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'PKI Subordinate CA Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |S|u|b|o|r|d|i|n|a|t|e|\|\| |C|A|\|\| |c|a|n|\|\| |i|s|s|u|e|\|\| |t|r|u|s|t|e|d|\|\| |c|e|r|t|i|f|i|c|a|t|e|s|;|\|\| |o|n|e|\|\| |p|i|v|o|t|\|\| |f|r|o|m|\|\| |i|s|s|u|i|n|g|\|\| |i|d|e|n|t|i|t|y|-|b|e|a|r|i|n|g|\|\| |c|e|r|t|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |c|i|t|r|i|x|/|a|d|c|,|\|\| |m|i|c|r|o|s|o|f|t|/|a|c|t|i|v|e|_|d|i|r|e|c|t|o|r|y|_|c|e|r|t|i|f|i|c|a|t|e|_|s|e|r|v|i|c|e|s|
+
+detections:
+  - id: PKISubordinateCAServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_certificate_services*'
+            - 'adcs_*'
+            - 'adc*'
+            - 'active_directory_certificate_services*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^subca\d'
+            - '(?i)^pki-issuing'
+            - '(?i)issuing.ca'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)issuing.ca'
+            - '(?i)sub.?ca'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'PKI Subordinate CA Server'
+      Category: 'Server Roles'

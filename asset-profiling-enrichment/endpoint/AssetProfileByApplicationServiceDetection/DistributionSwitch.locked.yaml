@@ -1,0 +1,30 @@
+id:        DistributionSwitch
+appliesTo: endpoint
+mode:      locked
+purpose:   'Distribution Switch'
+category:  'Network Equipment'
+description: 'Aggregates many access switches; compromise affects multiple user/server segments.'
+
+detections:
+  - id: DistributionSwitch
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_ios*'
+            - 'cisco_catalyst*'
+            - 'arista_eos*'
+            - 'juniper_junos*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^dist-sw'
+            - '(?i)^distsw\d'
+            - '(?i)distribution.switch'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)distribution.switch'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Distribution Switch'
+      Category: 'Network Equipment'

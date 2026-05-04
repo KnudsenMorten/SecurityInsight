@@ -1,0 +1,21 @@
+id:        MicrosoftDistributedFileSystem
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Distributed File System'
+category:  'File Storage'
+description: ''
+displayNames:
+  - 'Microsoft Distributed File System'
+  - 'DFS Replication'
+
+detections:
+  - id: MicrosoftDistributedFileSystem
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'distributed_file_system*'
+    set:
+      Tier:     2
+      Purpose:  'File Storage'
+      Category: 'File Storage'

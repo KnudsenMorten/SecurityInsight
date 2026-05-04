@@ -1,0 +1,20 @@
+id:        RsaAuthenticationManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'RSA Authentication Manager'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'RSA Authentication Manager'
+
+detections:
+  - id: RsaAuthenticationManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'authentication_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

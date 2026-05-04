@@ -1,0 +1,10 @@
+{
+  "description": "SecurityInsight_AssetProfiling_PublicIp -- v2.2 asset-profiling launcher for the publicip engine.",
+  "scriptType": "Engine",
+  "community": true,
+  "notes": "Invokes engine/asset-profiling/Invoke-SIEngineRun.ps1 -Engine publicip. Customer config layered: LauncherConfig.defaults.ps1 -> LauncherConfig.custom.ps1 -> CLI args.",
+  "scriptName": "AssetProfiling_PublicIp",
+  "author": "Morten Knudsen <mok@mortenknudsen.net>",
+  "version": "2.2.0",
+  "communityRepo": "SecurityInsight"
+}

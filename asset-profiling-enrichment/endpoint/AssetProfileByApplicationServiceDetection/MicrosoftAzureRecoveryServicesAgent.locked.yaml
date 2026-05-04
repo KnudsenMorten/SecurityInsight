@@ -1,0 +1,22 @@
+id:        MicrosoftAzureRecoveryServicesAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Azure Recovery Services Agent'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Microsoft Azure Recovery Services Agent'
+  - 'Microsoft Azure Backup Agent'
+  - 'MARS Agent'
+
+detections:
+  - id: MicrosoftAzureRecoveryServicesAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_recovery_services_agent*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

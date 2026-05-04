@@ -1,0 +1,20 @@
+id:        AmazonCloudwatchAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Amazon CloudWatch Agent'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Amazon CloudWatch Agent'
+
+detections:
+  - id: AmazonCloudwatchAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cloudwatch_agent*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

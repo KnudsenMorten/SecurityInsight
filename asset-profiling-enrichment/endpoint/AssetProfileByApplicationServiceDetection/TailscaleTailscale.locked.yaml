@@ -1,0 +1,20 @@
+id:        TailscaleTailscale
+appliesTo: endpoint
+mode:      locked
+purpose:   'Tailscale'
+category:  'VPN'
+description: ''
+displayNames:
+  - 'Tailscale'
+
+detections:
+  - id: TailscaleTailscale
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'tailscale*'
+    set:
+      Tier:     2
+      Purpose:  'VPN'
+      Category: 'VPN'

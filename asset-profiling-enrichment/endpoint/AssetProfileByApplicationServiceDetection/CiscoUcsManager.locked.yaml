@@ -1,0 +1,20 @@
+id:        CiscoUcsManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cisco UCS Manager'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'Cisco UCS Manager'
+
+detections:
+  - id: CiscoUcsManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ucs_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

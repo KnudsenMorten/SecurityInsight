@@ -1,0 +1,21 @@
+id:        JenkinsAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Jenkins Agent'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'Jenkins Agent'
+  - 'Jenkins Slave'
+
+detections:
+  - id: JenkinsAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'agent*'
+    set:
+      Tier:     2
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

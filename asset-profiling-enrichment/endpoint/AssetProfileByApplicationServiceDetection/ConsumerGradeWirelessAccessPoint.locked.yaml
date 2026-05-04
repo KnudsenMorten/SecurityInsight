@@ -1,0 +1,30 @@
+id:        ConsumerGradeWirelessAccessPoint
+appliesTo: endpoint
+mode:      locked
+purpose:   'Consumer-Grade Wireless Access Point'
+category:  'Network Equipment'
+description: 'Consumer AP; limited features and small RF footprint.'
+
+detections:
+  - id: ConsumerGradeWirelessAccessPoint
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'tp-link*'
+            - 'netgear*'
+            - 'linksys*'
+            - 'asus_router*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^consumer.?ap'
+            - '(?i)^home.?wifi'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)consumer.ap'
+            - '(?i)home.wifi'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Consumer-Grade Wireless Access Point'
+      Category: 'Network Equipment'

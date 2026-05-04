@@ -1,0 +1,20 @@
+id:        LogrhythmPlatformManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'LogRhythm Platform Manager'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'LogRhythm Platform Manager'
+
+detections:
+  - id: LogrhythmPlatformManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'platform_manager*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

@@ -1,0 +1,21 @@
+id:        MediawikiMediawiki
+appliesTo: endpoint
+mode:      locked
+purpose:   'MediaWiki'
+category:  'Wiki'
+description: ''
+displayNames:
+  - 'MediaWiki'
+  - 'DokuWiki'
+
+detections:
+  - id: MediawikiMediawiki
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mediawiki*'
+    set:
+      Tier:     3
+      Purpose:  'Wiki'
+      Category: 'Wiki'

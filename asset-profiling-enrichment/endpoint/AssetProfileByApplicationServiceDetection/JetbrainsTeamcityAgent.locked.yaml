@@ -1,0 +1,20 @@
+id:        JetbrainsTeamcityAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'TeamCity Build Agent'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'TeamCity Build Agent'
+
+detections:
+  - id: JetbrainsTeamcityAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'teamcity_agent*'
+    set:
+      Tier:     2
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

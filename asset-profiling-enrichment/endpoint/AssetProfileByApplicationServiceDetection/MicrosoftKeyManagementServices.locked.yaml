@@ -1,0 +1,21 @@
+id:        MicrosoftKeyManagementServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Key Management Service Host'
+category:  'Licensing/Crypto'
+description: ''
+displayNames:
+  - 'Microsoft Key Management Service Host'
+  - 'KMS Host'
+
+detections:
+  - id: MicrosoftKeyManagementServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'key_management_services*'
+    set:
+      Tier:     1
+      Purpose:  'Licensing/Crypto'
+      Category: 'Licensing/Crypto'

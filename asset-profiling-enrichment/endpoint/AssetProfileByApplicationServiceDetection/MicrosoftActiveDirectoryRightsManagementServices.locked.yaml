@@ -1,0 +1,21 @@
+id:        MicrosoftActiveDirectoryRightsManagementServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Active Directory Rights Management Services'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Active Directory Rights Management Services'
+  - 'AD RMS'
+
+detections:
+  - id: MicrosoftActiveDirectoryRightsManagementServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_rights_management_services*'
+    set:
+      Tier:     0
+      Purpose:  'AD RMS'
+      Category: 'Identity'

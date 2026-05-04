@@ -1,0 +1,21 @@
+id:        MicrosoftFileServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft File Server'
+category:  'File Storage'
+description: ''
+displayNames:
+  - 'Microsoft File Server'
+  - 'File Services'
+
+detections:
+  - id: MicrosoftFileServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'file_server*'
+    set:
+      Tier:     2
+      Purpose:  'File Storage'
+      Category: 'File Storage'

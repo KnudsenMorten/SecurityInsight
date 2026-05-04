@@ -1,0 +1,21 @@
+id:        MicrosoftLaps
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft LAPS'
+category:  'Identity'
+description: 'LAPS protects local admin creds; T0 due to credential scope'
+displayNames:
+  - 'Microsoft LAPS'
+  - 'Local Administrator Password Solution'
+
+detections:
+  - id: MicrosoftLaps
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'laps*'
+    set:
+      Tier:     0
+      Purpose:  'Identity'
+      Category: 'Identity'

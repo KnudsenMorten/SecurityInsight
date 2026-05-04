@@ -1,0 +1,20 @@
+id:        JfrogArtifactory
+appliesTo: endpoint
+mode:      locked
+purpose:   'JFrog Artifactory'
+category:  'Artifact Repo'
+description: ''
+displayNames:
+  - 'JFrog Artifactory'
+
+detections:
+  - id: JfrogArtifactory
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'artifactory*'
+    set:
+      Tier:     1
+      Purpose:  'Artifact Repo'
+      Category: 'Artifact Repo'

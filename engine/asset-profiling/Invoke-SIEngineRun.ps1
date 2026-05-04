@@ -1,0 +1,311 @@
+#Requires -Version 5.1
+<#
+    SecurityInsight v2.2 -- top-level orchestrator entry point.
+
+    Runs one engine end-to-end through all 6 stages. The orchestrator does
+    NOT itself parallelise across collector workers -- shards are enqueued
+    on the worker queue in stages 1/2/3 and a separate worker process
+    pulls them. In single-host mode (Mock or small fleets), the orchestrator
+    drains its own queues inline.
+#>
+
+[CmdletBinding(DefaultParameterSetName = 'Real')]
+param(
+    [Parameter(Mandatory)]
+    [ValidateSet('endpoint','identity','azure','publicip','schema-discovery')]
+    [string]$Engine,
+
+    # Storage account name + key. When NOT supplied, fall back to
+    # $global:SI_StorageAccount + $global:SI_StorageKey (set by custom.ps1
+    # / Bootstrap-Storage.ps1). Lets the typical call shrink to:
+    #   .\Invoke-SIEngineRun.ps1 -Engine azure -Sinks LA -ForceFullRun
+    [Parameter(ParameterSetName = 'Real')]
+    [Parameter(ParameterSetName = 'OAuth')]
+    [string]$StorageAccountName,
+
+    [Parameter(ParameterSetName = 'Real')]
+    [string]$StorageAccountKey,
+
+    [Parameter(Mandatory, ParameterSetName = 'OAuth')]
+    [switch]$UseStorageOAuth,
+
+    [Parameter(Mandatory, ParameterSetName = 'Mock')]
+    [switch]$Mock,
+
+    [Parameter()]
+    [int]$AssetLimit = 0,
+
+    [Parameter()]
+    [string[]]$Sinks = @('LA','JSON','Excel'),
+
+    [Parameter()]
+    [int]$ShardCount = 1,
+
+    [Parameter()]
+    [int]$ShardIndex = 0,
+
+    # Run-level CollectionTime shared across ALL shards of one execution.
+    # Naming follows the AzLogDcrIngestPS convention (column name 'CollectionTime',
+    # ISO-8601 UTC). Every replica MUST stamp its rows with the SAME value so
+    # KQL can recover the full set via `where CollectionTime == toscalar(... |
+    # summarize max(CollectionTime))`. Producer (KEDA pattern) mints once and
+    # passes via queue. Without an explicit value, falls back to $env:SI_COLLECTION_TIME
+    # then to floor-to-minute of UTC-now (parallel replicas booting in the same
+    # minute converge on the same value).
+    [Parameter()]
+    [datetime]$CollectionTime,
+
+    # Skip both fingerprint short-circuits for THIS run. Every asset re-runs
+    # Enrich + Classify regardless of cache state. Used after rule/prompt
+    # changes invalidate prior verdicts. Resolution order (highest wins):
+    #   1. -ForceFullRun switch on CLI
+    #   2. $env:SI_FORCE_FULL_RUN = '1'
+    #   3. $global:SI_ForceFullRun = $true (custom.ps1)
+    [Parameter()]
+    [switch]$ForceFullRun,
+
+    [Parameter()]
+    [string]$RootPath = $PSScriptRoot
+)
+
+$ErrorActionPreference = 'Stop'
+
+# auto-load customer-overlay file each engine launch.
+# Lookup order (first hit wins; cycle stops at filesystem root):
+#   1. $global:SI_CustomConfigPath  (explicit override set in $PROFILE / launcher)
+#   2. SOLUTIONS/SecurityInsight/config/SecurityInsight.custom.ps1
+#      (relative to this script's location -- standard internal-VM layout)
+# Customers no longer have to manually re-source custom.ps1 after editing it;
+# every `& '.\Invoke-SIEngineRun.ps1' ...' picks up the latest globals.
+# Skipped silently when nothing is found (mock / CI / minimal layouts).
+$customConfigPath = if ($global:SI_CustomConfigPath) {
+    [string]$global:SI_CustomConfigPath
+} else {
+    # $PSScriptRoot = ...\SecurityInsight\engine\asset-profiling
+    # one Split-Path -Parent   = ...\SecurityInsight\engine
+    # two Split-Path -Parent   = ...\SecurityInsight\v2.2
+    # three Split-Path -Parent = ...\SecurityInsight  <-- target parent of config
+    # had THREE Split-Path calls (correct under earlier layout, wrong
+    # mid-restructure); current asset-profiling/ depth needs THREE again.
+    Join-Path (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))) 'config/SecurityInsight.custom.ps1'   # forward slash works on both Win + Linux
+}
+# ----------------------------------------------------------------------
+# Visual style helpers (Write-SIBanner / -Phase / -Step / -Ok / -Err /
+# -Warn / -Info / -Done + Invoke-SIQuietBlock for Az SDK noise).
+# Dot-source BEFORE custom-config + module probes so first-line output
+# is already styled.
+# ----------------------------------------------------------------------
+. (Join-Path $PSScriptRoot '_shared/Write-SIStyle.ps1')
+
+# -Verbose switch: wires both PS-standard $VerbosePreference (so stage code
+# that calls Write-Verbose surfaces) AND a script-scope $script:SIVerbose
+# flag so we can decide on extras (full error stack traces, SDK HTTP
+# traces, per-shard inventory dump, per-rule trace). When NOT passed, the
+# AzLogDcrIngestPS / Az SDK VERBOSE storms are suppressed by Invoke-
+# SIQuietBlock; only [STEP]/[OK]/[INFO]/[WARN]/[ERR] markers reach the
+# console. Pass -Verbose to debug.
+$script:SIVerbose = $PSBoundParameters.ContainsKey('Verbose') -and [bool]$PSBoundParameters['Verbose']
+if ($script:SIVerbose) {
+    $global:VerbosePreference = 'Continue'
+    $ErrorView = 'NormalView'    # full PS error formatting (default)
+} else {
+    $global:VerbosePreference = 'SilentlyContinue'
+}
+
+if (Test-Path $customConfigPath) {
+    Write-SIInfo ("loading customer config: {0}" -f $customConfigPath)
+    . $customConfigPath
+}
+
+$v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $v22Root 'engine\asset-profiling\storage\StorageContext.ps1')
+. (Join-Path $v22Root 'engine\asset-profiling\storage\FingerprintCache.ps1')
+. (Join-Path $v22Root 'engine\asset-profiling\storage\StagingBlob.ps1')
+. (Join-Path $v22Root 'engine\asset-profiling\storage\WorkerQueue.ps1')
+. (Join-Path $v22Root 'Get-FingerprintEngine.ps1')
+
+$runId = '{0:yyyyMMddTHHmmssZ}-{1}-{2}' -f ([datetime]::UtcNow), $Engine, [guid]::NewGuid().ToString().Substring(0,8)
+
+# ---- CollectionTime (shared across all shards of one execution) ----
+# Resolution order documented above on parameter declaration.
+if (-not $PSBoundParameters.ContainsKey('CollectionTime')) {
+    $envCt = [Environment]::GetEnvironmentVariable('SI_COLLECTION_TIME')
+    if ($envCt) {
+        $CollectionTime = [datetime]::Parse($envCt, $null, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal)
+    } else {
+        # Floor to minute -- parallel replicas launched within the same minute
+        # converge on the same value. KEDA producer should override explicitly.
+        $now = [datetime]::UtcNow
+        $CollectionTime = [datetime]::new($now.Year, $now.Month, $now.Day, $now.Hour, $now.Minute, 0, [DateTimeKind]::Utc)
+    }
+}
+
+switch ($PSCmdlet.ParameterSetName) {
+    'Mock'  {
+        $ctx = New-SIStorageContext -Mock
+    }
+    'OAuth' {
+        if (-not $StorageAccountName -and $global:SI_StorageAccount) { $StorageAccountName = [string]$global:SI_StorageAccount }
+        if (-not $StorageAccountName) { throw 'StorageAccountName is required (pass -StorageAccountName or set $global:SI_StorageAccount in custom.ps1).' }
+        $ctx = New-SIStorageContext -AccountName $StorageAccountName -UseOAuth
+    }
+    default {
+        # Real (default): fall back to globals when CLI args omitted -- lets the
+        # typical call simplify to '.\Invoke-SIEngineRun.ps1 -Engine azure -Sinks LA'.
+        if (-not $StorageAccountName -and $global:SI_StorageAccount) { $StorageAccountName = [string]$global:SI_StorageAccount }
+        if (-not $StorageAccountKey  -and $global:SI_StorageKey)     { $StorageAccountKey  = [string]$global:SI_StorageKey }
+        if (-not $StorageAccountName) { throw 'StorageAccountName is required (pass -StorageAccountName or set $global:SI_StorageAccount in custom.ps1).' }
+        if (-not $StorageAccountKey)  { throw 'StorageAccountKey is required (pass -StorageAccountKey or set $global:SI_StorageKey in custom.ps1; or use -UseStorageOAuth for AAD-based storage auth).' }
+        $ctx = New-SIStorageContext -AccountName $StorageAccountName -AccountKey $StorageAccountKey
+    }
+}
+
+$tableName     = Initialize-SIFingerprintTable -Context $ctx
+$containerName = Initialize-SIStagingContainer -Context $ctx
+foreach ($q in @('discover','collect','enrich','classify')) {
+    Initialize-SIQueue -Context $ctx -QueueName "si-$Engine-$q" | Out-Null
+}
+
+# ForceFullRun resolution: CLI switch > env var > custom-file global.
+$forceFullRun = [bool]$ForceFullRun
+if (-not $forceFullRun) {
+    $envFf = [Environment]::GetEnvironmentVariable('SI_FORCE_FULL_RUN')
+    if ($envFf -in '1','true','True','yes') { $forceFullRun = $true }
+}
+if (-not $forceFullRun -and $global:SI_ForceFullRun) { $forceFullRun = $true }
+
+$runContext = [pscustomobject]@{
+    RunId            = $runId
+    CollectionTime   = $CollectionTime
+    ForceFullRun     = $forceFullRun
+    Engine           = $Engine
+    StartedAt        = [datetime]::UtcNow
+    AssetLimit       = $AssetLimit
+    Sinks            = $Sinks
+    ShardCount       = $ShardCount
+    ShardIndex       = $ShardIndex
+    StorageContext   = $ctx
+    FingerprintTable = $tableName
+    StagingContainer = $containerName
+    StageResults     = @{}
+}
+
+$siVersion = 'unknown'
+$verFile = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'VERSION'
+if (Test-Path $verFile) { $siVersion = (Get-Content -Raw $verFile).Trim() }
+
+# Pretty engine-name + service domain for the banner.
+$engineLabel = switch ($Engine) {
+    'identity'         { 'Asset Profiling - Identity (users + service principals)' }
+    'endpoint'         { 'Asset Profiling - Endpoint (devices + servers)' }
+    'azure'            { 'Asset Profiling - Azure (resources + management groups)' }
+    'publicip'         { 'Asset Profiling - Public IP (Shodan + Azure publicIPAddresses)' }
+    'schema-discovery' { 'Schema Discovery (meta-engine)' }
+    default            { "Asset Profiling - $Engine" }
+}
+
+# Banner with engine + version + run details. Shown on every invocation.
+$bannerExtra = [ordered]@{
+    'CollectionTime' = ('{0:u}' -f $CollectionTime)
+    'ForceFullRun'   = $forceFullRun
+    'Sinks'          = ($Sinks -join ', ')
+    'AssetLimit'     = $(if ($AssetLimit -le 0) { 'no limit' } else { $AssetLimit })
+    'Verbose'        = $script:SIVerbose
+}
+if ($ShardCount -gt 1) { $bannerExtra['Sharding'] = ('replica {0} of {1}' -f ($ShardIndex+1), $ShardCount) }
+
+Write-SIBanner -Engine $engineLabel `
+               -Version ('v{0}' -f $siVersion) `
+               -RunId   $runId `
+               -Mode    $ctx.Mode `
+               -Extra   $bannerExtra
+
+# Per-shard heartbeat -> SI_RunHealth_CL. Start row goes out before any
+# work begins; End row goes out in the finally block below (success OR
+# failure). A Start row with no matching End row is the signal that this
+# replica was killed (OOM, container crash) -- KQL detects via leftanti join.
+. (Join-Path $PSScriptRoot 'shared\Send-SIRunHealthRow.ps1')
+# RunHealth ingest emits a wall of `VERBOSE: GET https://...` from
+# AzLogDcrIngestPS / Az SDK. Silence unless caller passed -Verbose.
+Invoke-SIQuietBlock { Send-SIRunHealthRow -RunContext $runContext -Phase 'Start' }
+
+$stagesRoot = Join-Path $PSScriptRoot 'stages'
+# Stage list -- order is the contract. Names map to file Invoke-<Name>.ps1 +
+# function Invoke-SI<Name> in stages/. Index for the log line is computed
+# at runtime so renumbering doesn't touch identifiers.
+# Stage list per engine. Asset-profiling engines (endpoint/identity/azure)
+# share the 7-stage pipeline. The schema-discovery meta-engine runs a
+# completely different set: enumerate EG/hunting schema -> diff against
+# stored baseline -> AI-propose rules for new findings -> write drafts to
+# posture-rules-pending/ + audit to SI_SchemaCatalog_CL.
+$stages = if ($Engine -eq 'schema-discovery') {
+    @('Schedule','SchemaDiscover','SchemaDiff','SchemaPropose','SchemaOutput')
+} else {
+    # Profile + Reconcile slot in between Classify and Output.
+    # Profile evaluates AssetProfileBy* YAML rules and overlays SI_RuleMatches /
+    # SI_RuleTier onto Verdict (final tier becomes MIN of existing + rule-derived).
+    # Reconcile re-enabled. disabled it under the
+    # impression it ran cross-engine lookups (those actually live in Enrich) --
+    # in fact Reconcile is the CMDB-merge stage. Without it Properties.collect.
+    # cmdb stays empty and CMDB columns (cmdbId/cmdbName/etc.) never populate.
+    @('Schedule','Discover','Collect','Enrich','Classify','Profile','Reconcile','Output','Tagging')
+}
+
+$exitReason   = 'success'
+$exitErrorMsg = ''
+$assetCount   = -1
+try {
+    $stageIdx = 0
+    foreach ($s in $stages) {
+        $stageStart = [datetime]::UtcNow
+        Write-SIPhase ($stageIdx+1) $stages.Count $s
+        . (Join-Path $stagesRoot ('Invoke-{0}.ps1' -f $s))
+        $result = & ('Invoke-SI{0}' -f $s) -RunContext $runContext
+        $runContext.StageResults[$s] = $result
+        Write-SIDone ('{0}  ({1:n1}s)' -f $result.Summary, ([datetime]::UtcNow - $stageStart).TotalSeconds)
+        # Capture asset count from Discover stage for the End heartbeat.
+        if ($s -eq 'Discover' -and $result.PSObject.Properties['AssetCount']) {
+            $assetCount = [int]$result.AssetCount
+        }
+        $stageIdx++
+    }
+
+    Write-Host ''
+    $line = '=' * 88
+    Write-SIOk $line
+    Write-SIOk (' RUN COMPLETE  *  {0}  *  {1:n1}s elapsed' -f $runId, ([datetime]::UtcNow - $runContext.StartedAt).TotalSeconds)
+    Write-SIOk $line
+    return $runContext
+}
+catch {
+    $exitReason   = 'error'
+    $exitErrorMsg = $_.Exception.Message
+    Write-Host ''
+    $line = '=' * 88
+    Write-SIErr $line
+    Write-SIErr (' RUN FAILED  *  {0}  *  {1:n1}s elapsed' -f $runId, ([datetime]::UtcNow - $runContext.StartedAt).TotalSeconds)
+    Write-SIErr $line
+    Write-SIErr  $exitErrorMsg
+    if ($script:SIVerbose) {
+        Write-Host ''
+        Write-Host '  --- VERBOSE: full exception detail ---' -ForegroundColor White
+        Write-Host ($_ | Format-List -Property * -Force | Out-String) -ForegroundColor White
+        if ($_.ScriptStackTrace) {
+            Write-Host '  --- VERBOSE: script stack trace ---' -ForegroundColor White
+            Write-Host $_.ScriptStackTrace -ForegroundColor White
+        }
+    } else {
+        Write-Host ''
+        Write-Host '  Re-run with -Verbose for the full exception + stack trace.' -ForegroundColor White
+    }
+    throw
+}
+finally {
+    Invoke-SIQuietBlock {
+        Send-SIRunHealthRow -RunContext $runContext `
+                            -Phase 'End' `
+                            -AssetCount $assetCount `
+                            -ExitReason $exitReason `
+                            -ErrorMessage $exitErrorMsg
+    }
+}

@@ -1,0 +1,38 @@
+id:        BackupServerWithDCCABackupData
+appliesTo: endpoint
+mode:      locked
+purpose:   'Backup Server with DC/CA Backup Data'
+category:  'Management'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |B|a|c|k|u|p|s|\|\| |o|f|\|\| |D|C|s|/|C|A|s|\|\| |c|o|n|t|a|i|n|\|\| |n|t|d|s|\|\|.|d|i|t|\|\| |a|n|d|\|\| |C|A|\|\| |p|r|i|v|a|t|e|\|\| |k|e|y|s|\|\| |e|n|a|b|l|i|n|g|\|\| |f|u|l|l|\|\| |i|d|e|n|t|i|t|y|-|p|l|a|n|e|\|\| |c|o|m|p|r|o|m|i|s|e|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |c|o|m|m|v|a|u|l|t|/|c|o|m|m|v|a|u|l|t|,|\|\| |m|i|c|r|o|s|o|f|t|/|a|z|u|r|e|_|b|a|c|k|u|p|_|s|e|r|v|e|r|
+
+detections:
+  - id: BackupServerWithDCCABackupData
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'veeam_backup*'
+            - 'commvault*'
+            - 'veritas_netbackup*'
+            - 'microsoft_data_protection_manager*'
+            - 'azure_backup*'
+            - 'commvault*'
+            - 'azure_backup_server*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^backup.*t0'
+            - '(?i)backup.tier.?0'
+            - '(?i)^bkp.*dc'
+            - '(?i)dc.backup'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)backup.tier.?0'
+            - '(?i)dc.backup'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Backup Server with DC/CA Backup Data'
+      Category: 'Management'

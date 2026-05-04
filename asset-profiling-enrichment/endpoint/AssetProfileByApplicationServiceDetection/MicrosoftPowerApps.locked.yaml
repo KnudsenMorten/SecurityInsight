@@ -1,0 +1,20 @@
+id:        MicrosoftPowerApps
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Power Apps'
+category:  'Low-code'
+description: ''
+displayNames:
+  - 'Microsoft Power Apps'
+
+detections:
+  - id: MicrosoftPowerApps
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'power_apps*'
+    set:
+      Tier:     2
+      Purpose:  'Low-code'
+      Category: 'Low-code'

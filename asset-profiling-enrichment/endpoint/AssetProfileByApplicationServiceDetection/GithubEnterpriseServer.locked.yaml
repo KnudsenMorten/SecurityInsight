@@ -1,0 +1,20 @@
+id:        GithubEnterpriseServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'GitHub Enterprise Server'
+category:  'SCM'
+description: ''
+displayNames:
+  - 'GitHub Enterprise Server'
+
+detections:
+  - id: GithubEnterpriseServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'enterprise_server*'
+    set:
+      Tier:     1
+      Purpose:  'SCM'
+      Category: 'SCM'

@@ -1,0 +1,21 @@
+id:        CiscoIdentityServicesEngine
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cisco Identity Services Engine'
+category:  'NAC'
+description: ''
+displayNames:
+  - 'Cisco Identity Services Engine'
+  - 'Cisco ISE'
+
+detections:
+  - id: CiscoIdentityServicesEngine
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'identity_services_engine*'
+    set:
+      Tier:     1
+      Purpose:  'NAC'
+      Category: 'NAC'

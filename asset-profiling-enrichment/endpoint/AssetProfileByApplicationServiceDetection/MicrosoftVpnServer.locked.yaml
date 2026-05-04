@@ -1,0 +1,21 @@
+id:        MicrosoftVpnServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Routing and Remote Access Server'
+category:  'VPN'
+description: ''
+displayNames:
+  - 'Microsoft Routing and Remote Access Server'
+  - 'Microsoft VPN Server'
+
+detections:
+  - id: MicrosoftVpnServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vpn_server*'
+    set:
+      Tier:     1
+      Purpose:  'VPN'
+      Category: 'VPN'

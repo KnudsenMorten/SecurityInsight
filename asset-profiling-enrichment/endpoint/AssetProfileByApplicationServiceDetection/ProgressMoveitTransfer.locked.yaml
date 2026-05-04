@@ -1,0 +1,20 @@
+id:        ProgressMoveitTransfer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Progress MOVEit Transfer'
+category:  'MFT'
+description: 'Heavily targeted historically; harden rigorously'
+displayNames:
+  - 'Progress MOVEit Transfer'
+
+detections:
+  - id: ProgressMoveitTransfer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'moveit_transfer*'
+    set:
+      Tier:     2
+      Purpose:  'MFT'
+      Category: 'MFT'

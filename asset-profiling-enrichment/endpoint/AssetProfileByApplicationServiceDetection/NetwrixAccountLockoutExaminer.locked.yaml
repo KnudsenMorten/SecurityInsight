@@ -1,0 +1,20 @@
+id:        NetwrixAccountLockoutExaminer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Netwrix Account Lockout Examiner'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Netwrix Account Lockout Examiner'
+
+detections:
+  - id: NetwrixAccountLockoutExaminer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'account_lockout_examiner*'
+    set:
+      Tier:     1
+      Purpose:  'Identity'
+      Category: 'Identity'

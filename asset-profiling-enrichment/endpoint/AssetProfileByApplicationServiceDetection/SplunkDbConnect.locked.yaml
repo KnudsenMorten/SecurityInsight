@@ -1,0 +1,20 @@
+id:        SplunkDbConnect
+appliesTo: endpoint
+mode:      locked
+purpose:   'Splunk DB Connect'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'Splunk DB Connect'
+
+detections:
+  - id: SplunkDbConnect
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'db_connect*'
+    set:
+      Tier:     2
+      Purpose:  'SIEM'
+      Category: 'SIEM'

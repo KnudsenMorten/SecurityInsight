@@ -1,0 +1,21 @@
+id:        MicrosoftActiveDirectoryLightweightDirectoryServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Active Directory Lightweight Directory Services'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Active Directory Lightweight Directory Services'
+  - 'AD LDS'
+
+detections:
+  - id: MicrosoftActiveDirectoryLightweightDirectoryServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_lightweight_directory_services*'
+    set:
+      Tier:     0
+      Purpose:  'AD LDS'
+      Category: 'Identity'

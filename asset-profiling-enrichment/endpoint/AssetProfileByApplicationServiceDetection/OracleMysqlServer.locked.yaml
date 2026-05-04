@@ -1,0 +1,21 @@
+id:        OracleMysqlServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'MySQL Server'
+category:  'Database'
+description: ''
+displayNames:
+  - 'MySQL Server'
+  - 'MySQL Community Server'
+
+detections:
+  - id: OracleMysqlServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mysql_server*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

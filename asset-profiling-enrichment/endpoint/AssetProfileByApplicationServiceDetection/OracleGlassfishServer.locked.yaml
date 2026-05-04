@@ -1,0 +1,20 @@
+id:        OracleGlassfishServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'GlassFish Server'
+category:  'App Server'
+description: ''
+displayNames:
+  - 'GlassFish Server'
+
+detections:
+  - id: OracleGlassfishServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'glassfish_server*'
+    set:
+      Tier:     2
+      Purpose:  'App Server'
+      Category: 'App Server'

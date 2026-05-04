@@ -1,0 +1,20 @@
+id:        MicrosoftFslogix
+appliesTo: endpoint
+mode:      locked
+purpose:   'FSLogix'
+category:  'Profile Mgmt'
+description: ''
+displayNames:
+  - 'FSLogix'
+
+detections:
+  - id: MicrosoftFslogix
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'fslogix*'
+    set:
+      Tier:     2
+      Purpose:  'Profile Mgmt'
+      Category: 'Profile Mgmt'

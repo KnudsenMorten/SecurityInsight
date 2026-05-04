@@ -1,0 +1,20 @@
+id:        RsaSecuridAuthenticationAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'RSA SecurID Authentication Agent'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'RSA SecurID Authentication Agent'
+
+detections:
+  - id: RsaSecuridAuthenticationAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'securid_authentication_agent*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

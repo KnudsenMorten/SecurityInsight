@@ -1,0 +1,21 @@
+id:        VeritasBackupExec
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veritas Backup Exec'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veritas Backup Exec'
+  - 'Backup Exec'
+
+detections:
+  - id: VeritasBackupExec
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'backup_exec*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

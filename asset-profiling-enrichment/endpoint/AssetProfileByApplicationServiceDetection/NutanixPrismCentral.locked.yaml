@@ -1,0 +1,20 @@
+id:        NutanixPrismCentral
+appliesTo: endpoint
+mode:      locked
+purpose:   'Nutanix Prism Central'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'Nutanix Prism Central'
+
+detections:
+  - id: NutanixPrismCentral
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'prism_central*'
+    set:
+      Tier:     0
+      Purpose:  'Virtualization'
+      Category: 'Virtualization'

@@ -1,0 +1,21 @@
+id:        MicrosoftAzureAdConnectSync
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Azure AD Connect synchronization services'
+category:  'Identity Sync'
+description: ''
+displayNames:
+  - 'Microsoft Azure AD Connect synchronization services'
+  - 'Microsoft Entra Connect Sync Engine'
+
+detections:
+  - id: MicrosoftAzureAdConnectSync
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_ad_connect_sync*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Sync'
+      Category: 'Identity Sync'

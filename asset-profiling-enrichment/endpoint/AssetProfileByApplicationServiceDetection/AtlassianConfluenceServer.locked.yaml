@@ -1,0 +1,21 @@
+id:        AtlassianConfluenceServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Confluence Server'
+category:  'Collaboration'
+description: ''
+displayNames:
+  - 'Confluence Server'
+  - 'Confluence Data Center'
+
+detections:
+  - id: AtlassianConfluenceServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'confluence_server*'
+    set:
+      Tier:     2
+      Purpose:  'Collaboration'
+      Category: 'Collaboration'

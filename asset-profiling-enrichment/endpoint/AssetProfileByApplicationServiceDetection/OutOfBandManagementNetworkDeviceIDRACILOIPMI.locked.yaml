@@ -1,0 +1,34 @@
+id:        OutOfBandManagementNetworkDeviceIDRACILOIPMI
+appliesTo: endpoint
+mode:      locked
+purpose:   'Out-of-Band Management Network Device (iDRAC, iLO, IPMI)'
+category:  'Network Equipment'
+description: 'OOB management gives bare-metal control of every host on the management LAN.'
+
+detections:
+  - id: OutOfBandManagementNetworkDeviceIDRACILOIPMI
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dell_idrac*'
+            - 'hpe_ilo*'
+            - 'hp_ilo*'
+            - 'supermicro_ipmi*'
+            - 'lenovo_xclarity*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^idrac\d'
+            - '(?i)^ilo\d'
+            - '(?i)^ipmi\d'
+            - '(?i)^oob-'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)oob'
+            - '(?i)idrac'
+            - '(?i)ilo'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Out-of-Band Management Network Device (iDRAC, iLO, IPMI)'
+      Category: 'Network Equipment'

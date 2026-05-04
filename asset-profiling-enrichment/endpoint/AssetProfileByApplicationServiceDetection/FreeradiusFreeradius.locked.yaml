@@ -1,0 +1,20 @@
+id:        FreeradiusFreeradius
+appliesTo: endpoint
+mode:      locked
+purpose:   'FreeRADIUS'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'FreeRADIUS'
+
+detections:
+  - id: FreeradiusFreeradius
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'freeradius*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

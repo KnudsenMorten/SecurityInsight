@@ -1,0 +1,20 @@
+id:        MicrosoftProjectServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Project Server'
+category:  'Project Mgmt'
+description: ''
+displayNames:
+  - 'Microsoft Project Server'
+
+detections:
+  - id: MicrosoftProjectServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'project_server*'
+    set:
+      Tier:     2
+      Purpose:  'Project Mgmt'
+      Category: 'Project Mgmt'

@@ -1,0 +1,3101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "engine": "endpoint",
+  "table": "SI_Endpoint_Profile_CL",
+  "dcrName": "dcr-si-endpoint-profile",
+  "extends": "SCHEMA.json",
+  "sourcesConsumed": [
+    "mde",
+    "exposureGraph",
+    "entra",
+    "azure",
+    "derived"
+  ],
+  "entityIds": {
+    "primaryPriority": [
+      {
+        "deviceType": [
+          "managed",
+          "iot",
+          "azureVm"
+        ],
+        "order": [
+          "MdeDeviceId",
+          "AadDeviceId",
+          "IntuneDeviceId",
+          "Hostname"
+        ]
+      }
+    ],
+    "expectedTypes": [
+      "MdeDeviceId",
+      "AadDeviceId",
+      "IntuneDeviceId",
+      "AzureResourceId",
+      "HardwareUuid",
+      "AzureVmId",
+      "AwsResourceName",
+      "GcpFullResourceName",
+      "Hostname"
+    ],
+    "hubJoin": "exposureGraph",
+    "mergedDeviceLinkRule": "When DeviceInfo populates a row, append HardwareUuid, AzureVmId, AwsResourceName, GcpFullResourceName to EntityIds; all MergedDeviceIds[*] get appended as { type: MdeDeviceId, id: <predecessorId>, relation: merged_predecessor } so historical Sentinel queries still resolve the asset",
+    "crossEngineAzureRule": "When device is an Azure VM, the same asset has rows in BOTH Endpoint_Profile_CL and Azure_Profile_CL linked via shared EntityIds[?type=='AzureResourceId']"
+  },
+  "egNodeLabelScope": [
+    "device",
+    "microsoft.compute/virtualmachines",
+    "microsoft.compute/virtualmachines/extensions"
+  ],
+  "hashes": [
+    {
+      "name": "CollectHash",
+      "overPhases": [
+        "in"
+      ],
+      "description": "Hash of every phase=in field. Detects upstream drift in raw collected data."
+    },
+    {
+      "name": "ProfileHash",
+      "overPhases": [
+        "profile"
+      ],
+      "excludesFields": [
+        "CollectHash",
+        "ProfileHash"
+      ],
+      "description": "Hash of every phase=profile field plus rule-set hash. Lets KQL show only verdict-changing snapshots."
+    }
+  ],
+  "rawPayload": {
+    "storageColumn": "Properties",
+    "sizeBudgetKb": 256,
+    "truncationStrategy": "drop_largest_field",
+    "sources": {
+      "mde": {
+        "_policy": "include-only (default-deny). Only paths listed here flow to Properties.collect.mde. New MS fields are NOT auto-included -- monthly schema-drift detection adds them after review.",
+        "includePaths": [
+          "id",
+          "computerDnsName",
+          "osPlatform",
+          "osVersion",
+          "osProcessor",
+          "osBuild",
+          "version",
+          "lastSeen",
+          "firstSeen",
+          "healthStatus",
+          "onboardingStatus",
+          "deviceValue",
+          "rbacGroupId",
+          "rbacGroupName",
+          "riskScore",
+          "exposureLevel",
+          "aadDeviceId",
+          "machineTags[*]",
+          "defenderAvStatus",
+          "onboardedDateTime",
+          "isPotentialDuplication",
+          "isExcluded",
+          "vulnerabilityCount",
+          "missingKbCount",
+          "publicIp",
+          "mergedDeviceIds[*]",
+          "mergedMachineIds[*]"
+        ]
+      },
+      "exposureGraph": {
+        "_policy": "include-only (default-deny). Monthly schema-drift detection adds new MS fields after review.",
+        "includePaths": [
+          "NodeId",
+          "NodeLabel",
+          "NodeName",
+          "Categories[*]",
+          "EntityIds[*]",
+          "NodeProperties.rawData.deviceCategory",
+          "NodeProperties.rawData.deviceType",
+          "NodeProperties.rawData.deviceSubtype",
+          "NodeProperties.rawData.deviceName",
+          "NodeProperties.rawData.deviceRole[*]",
+          "NodeProperties.rawData.graphInternalLabel",
+          "NodeProperties.rawData.machineGroup",
+          "NodeProperties.rawData.onboardingStatus",
+          "NodeProperties.rawData.sensorHealthState",
+          "NodeProperties.rawData.senseClientVersion",
+          "NodeProperties.rawData.isHybridAzureADJoined",
+          "NodeProperties.rawData.isAzureADJoined",
+          "NodeProperties.rawData.azureADJoinType",
+          "NodeProperties.rawData.aadDeviceId",
+          "NodeProperties.rawData.isCustomerFacing",
+          "NodeProperties.rawData.isExcluded",
+          "NodeProperties.rawData.firstSeenByInventory",
+          "NodeProperties.rawData.lastSeen",
+          "NodeProperties.rawData.exposureScore",
+          "NodeProperties.rawData.riskScore",
+          "NodeProperties.rawData.osPlatform",
+          "NodeProperties.rawData.osPlatformFriendlyName",
+          "NodeProperties.rawData.osDistribution",
+          "NodeProperties.rawData.osVersion",
+          "NodeProperties.rawData.osVersionFriendlyName",
+          "NodeProperties.rawData.osArchitecture",
+          "NodeProperties.rawData.osBuild",
+          "NodeProperties.rawData.osBuildRevision",
+          "NodeProperties.rawData.osReleaseId",
+          "NodeProperties.rawData.publicIP",
+          "NodeProperties.rawData.vendor",
+          "NodeProperties.rawData.model",
+          "NodeProperties.rawData.deviceDynamicTags[*]",
+          "NodeProperties.rawData.deviceManualTags[*]",
+          "NodeProperties.rawData.criticalityConfidenceHigh[*]",
+          "NodeProperties.rawData.criticalityConfidenceLow[*]",
+          "NodeProperties.rawData.discoverySources-udi.sources[*].productName",
+          "NodeProperties.rawData.tpmData.*",
+          "NodeProperties.rawData.remoteServicesInfo.smb.*",
+          "NodeProperties.rawData.remoteServicesInfo.rdp.*",
+          "NodeProperties.rawData.remoteServicesInfo.winRm.*",
+          "NodeProperties.rawData.remoteServicesInfo.wmi.*",
+          "NodeProperties.rawData.remoteServicesInfo.rpc.*",
+          "NodeProperties.rawData.remoteServicesInfo.rpcMapper.*",
+          "NodeProperties.rawData.rdpStatus.*",
+          "NodeProperties.rawData.machineSid",
+          "NodeProperties.rawData.deviceRegistryTags[*]",
+          "NodeProperties.rawData.hasGuardMisconfigurations[*]",
+          "NodeProperties.rawData.assetValue",
+          "NodeProperties.rawData.exposedToInternet.evidence.nodeIds[*]",
+          "NodeProperties.rawData.exposedToInternet.evidence.edgeIds[*]",
+          "NodeProperties.rawData.exposedToInternet.type",
+          "NodeProperties.rawData.exposedToInternet.effectiveRules[*].sourceCidr",
+          "NodeProperties.rawData.identifiedResourceUsers[*]",
+          "NodeProperties.rawData.isApplicableForMdeThroughDefenderForServers.isApplicable",
+          "NodeProperties.rawData.isApplicableForMdeThroughDefenderForServers.reason",
+          "NodeProperties.rawData.isUsiServer",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].resourceId",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].rules[*].sourceCidr[*]",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].rules[*].destinationCidr[*]",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].rules[*].destinationPortRanges[*]",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].rules[*].protocolRanges[*]",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].rules[*].access",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].rules[*].priority",
+          "NodeProperties.rawData.networkingComponentMetadata.securityRules[*].rules[*].direction",
+          "NodeProperties.rawData.networkingComponentMetadata.ipAddresses[*]",
+          "NodeProperties.rawData.criticalityLevel.criticalityLevel",
+          "NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel",
+          "NodeProperties.rawData.criticalityLevel.ruleNames[*]",
+          "NodeProperties.rawData.manualCriticalityLevel",
+          "NodeProperties.rawData.hasAuthorityMisConfigurations[*]",
+          "NodeProperties.rawData.potentialDuplicateOf",
+          "NodeProperties.rawData.deviceRegistryTags[*].key",
+          "NodeProperties.rawData.deviceRegistryTags[*].value",
+          "NodeProperties.rawData.registryDeviceTag"
+        ]
+      },
+      "deviceInfo": {
+        "_policy": "include-only (default-deny). Bulk-aggregated from Defender XDR Advanced Hunting DeviceInfo table; one query per snapshot, NOT per device.",
+        "includePaths": [
+          "DeviceId",
+          "DeviceName",
+          "AadDeviceId",
+          "AzureResourceId",
+          "HardwareUuid",
+          "AzureVmId",
+          "AzureVmSubscriptionId",
+          "AwsResourceName",
+          "GcpFullResourceName",
+          "CloudPlatforms",
+          "HostDeviceId",
+          "OSPlatform",
+          "OSArchitecture",
+          "OSBuild",
+          "OSVersion",
+          "OSVersionInfo",
+          "OSDistribution",
+          "OsBuildRevision",
+          "Vendor",
+          "Model",
+          "DeviceCategory",
+          "DeviceType",
+          "DeviceSubtype",
+          "OnboardingStatus",
+          "ClientVersion",
+          "MachineGroup",
+          "SensorHealthState",
+          "JoinType",
+          "IsAzureADJoined",
+          "PublicIP",
+          "IsInternetFacing",
+          "ConnectivityType",
+          "LoggedOnUsers",
+          "DeviceManualTags",
+          "DeviceDynamicTags",
+          "RegistryDeviceTag",
+          "MergedDeviceIds",
+          "MergedToDeviceId",
+          "ExposureLevel",
+          "AssetValue",
+          "IsExcluded",
+          "ExclusionReason",
+          "IsTransient",
+          "MitigationStatus",
+          "Site",
+          "DiscoverySources"
+        ]
+      },
+      "azure": {
+        "_policy": "include-only (default-deny). Only present when device is Azure-hosted (microsoft.compute/virtualmachines).",
+        "includePaths": [
+          "id",
+          "name",
+          "type",
+          "location",
+          "tags.*",
+          "properties.hardwareProfile.vmSize",
+          "properties.storageProfile.osDisk.osType",
+          "properties.osProfile.computerName",
+          "resources[*].id",
+          "resources[*].type",
+          "resources[*].name"
+        ]
+      }
+    }
+  },
+  "aggregator": {
+    "field": "Tier",
+    "mode": "forced_overrides_first_then_weighted_min",
+    "tierRange": [
+      0,
+      3
+    ],
+    "defaultTier": 3,
+    "contributors": [
+      {
+        "id": "endpoint_catalog_match",
+        "weight": 1.0,
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "endpoint-tiering",
+        "signalField": "SIRules[*].Tier",
+        "_comment": "Asset class matched via TVM/EG/name-pattern -- catalog rules emit SIRules entries; engine MIN-reduces the Tier field."
+      },
+      {
+        "id": "posture_rule_target_tier",
+        "weight": 1.0,
+        "algorithm": "min_tier_over_posture_rules",
+        "source": "posture-rules-locked + posture-rules-custom",
+        "signalField": "PostureHits[*].TargetTier",
+        "_comment": "Locked + custom posture rules emitting TargetTier (DC EG signal, Exchange TVM, etc.)."
+      },
+      {
+        "id": "endpoint_eg_criticality",
+        "weight": 0.7,
+        "algorithm": "pass_through",
+        "signalField": "CriticalityLevel",
+        "_comment": "EG criticalityLevel.criticalityLevel (manual or rule-based) -- weighted hint, not authoritative. Lower than catalog/posture-rule because EG rules can be tenant-customised in ways the operator may not have validated."
+      },
+      {
+        "id": "endpoint_user_based_tier",
+        "weight": 0.9,
+        "algorithm": "pass_through",
+        "signalField": "MostFrequentUserTier",
+        "_comment": "MIN tier across top-5 most-frequent logon users in last 3d (cross-engine join with Identity_Profile_CL). Receptionist PC -> no privileged user -> null (no opinion). Finance/HR person's laptop -> Tier 2. IT admin's PAW -> Tier 1. Domain admin desktop -> Tier 0. High weight (0.9) because frequent + identified user is a strong signal, but not 1.0 -- contractor / break-glass / one-off support sessions can pollute the top-5."
+      },
+      {
+        "id": "endpoint_internet_exposed",
+        "weight": 0.6,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "ExposedToInternet",
+        "_comment": "Internet-reachable endpoint -- cap at T1 regardless of catalog finding."
+      },
+      {
+        "id": "endpoint_internet_exposed_rdp",
+        "weight": 0.7,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "HasInternetExposedRdp"
+      },
+      {
+        "id": "endpoint_internet_exposed_ssh",
+        "weight": 0.7,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "HasInternetExposedSsh"
+      },
+      {
+        "id": "endpoint_high_priv_user",
+        "weight": 0.5,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "HighPrivIdentifiedUsers",
+        "_comment": "Cross-engine join: device used by T0/T1 identity -> escalate device tier."
+      },
+      {
+        "id": "endpoint_port_risk",
+        "weight": 0.4,
+        "algorithm": "pass_through",
+        "signalField": "HighestPortRiskScore",
+        "_comment": "Severity from Port_Risk_Catalog."
+      },
+      {
+        "id": "tenant_si_manual_tag",
+        "weight": 1.0,
+        "algorithm": "tag_based_tier",
+        "signalField": "MachineTags",
+        "tagPattern": "(?i)tier[_-]?(?<tier>[0-3])(--SI)?",
+        "_comment": "Operator-set MachineTag like 'EmployeeWorkstations--tier3--SI' -- authoritative."
+      }
+    ]
+  },
+  "schemaVersion": "2.3.6",
+  "lastModified": "2026-04-29",
+  "fields": [
+    {
+      "name": "PrimaryEntityId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "EntityIds[0].id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PrimaryEntityType",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "EntityIds[0].type",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntityIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "derived",
+      "sourcePath": "merged from all sources (mde+exposureGraph+azure+derived)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RunId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "UUID per orchestrator run",
+      "stage": {
+        "writtenBy": "bootstrap",
+        "readBy": [
+          "all"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CollectionTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "derived",
+      "sourcePath": "now() at output",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "all"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MdeDeviceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "mde.machine.id (also DeviceInfo.DeviceId)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AadDeviceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "mde.machine.aadDeviceId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureResourceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.id (when Azure-hosted)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetName",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of Hostname (preferred) or DisplayName -- shared cross-engine asset-name field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "AssetId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of PrimaryEntityId (= MDE DeviceId / AAD DeviceId) -- shared cross-engine asset-id field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "Hostname",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "mde.machine.computerDnsName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DisplayName",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "first-non-empty",
+        "inputs": [
+          "ENTRA_DisplayName",
+          "MDE_DeviceName-shortname",
+          "EG.rawData.deviceName"
+        ]
+      },
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "HardwareUuid",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.HardwareUuid",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureVmId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.AzureVmId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureVmSubscriptionId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.AzureVmSubscriptionId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AwsResourceName",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.AwsResourceName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "GcpFullResourceName",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.GcpFullResourceName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HostDeviceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.HostDeviceId (WSL → Windows host)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MergedDeviceIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.MergedDeviceIds (kept in EntityIds with relation: merged_predecessor)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MergedToDeviceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.MergedToDeviceId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CollectHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over collect-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EnrichHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over enrich-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PostureHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over posture-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ClassifyHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over classify-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnboardingStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "mde.machine.onboardingStatus",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HealthStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "mde.machine.healthStatus",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsExcluded",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "mde.machine.isExcluded",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsDomainController",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "shortcut: services contain NTDS or Netlogon"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_domain_controller"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsCustomerFacing",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isCustomerFacing (BYOD/IoT shadow IT signal)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MsCriticalityLevel",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel (Microsoft Exposure Mgmt asset criticality verdict: Low/Medium/High/VeryHigh) -- comparison column only; does NOT drive Tier (per feedback_si_ra_tier_source memory: Tier sources from CL only)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MachineRiskState",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.machineRiskState (Defender's per-device risk verdict: Low/Medium/High/Informational) -- feeds RiskFactor_Probability_Detailed.HighMachineRisk token",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsCompromisedRecently",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isCompromisedRecently (post-compromise indicators within last N days). STRONG signal -- feeds RiskFactor_Probability_Detailed.IsCompromisedRecently token",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsProductionEnvironment",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isProductionEnvironment (prod vs dev classification) -- feeds RiskFactor_Consequence_Detailed.IsProductionEnvironment token",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsAdfsServer",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isAdfsServer -- feeds RiskFactor_Consequence_Detailed.IsAdfsServer (federated identity = catastrophic blast radius)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "FirstSeen",
+      "type": "datetime",
+      "purpose": "lifecycle",
+      "source": "mde",
+      "sourcePath": "mde.machine.firstSeen",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastSeen",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "mde",
+      "sourcePath": "mde.machine.lastSeen",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SensorHealthState",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.sensorHealthState (Active/InactiveRecent)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SenseClientVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.senseClientVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RiskScore",
+      "type": "string",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "mde.machine.riskScore (None/Low/Medium/High)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "mde_risk_score"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExposureLevel",
+      "type": "string",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "mde.machine.exposureLevel",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "mde_exposure_level"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceValue",
+      "type": "string",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "mde.machine.deviceValue",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "mde_device_value"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetValue",
+      "type": "string",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.AssetValue (Defender for Cloud)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExposedToInternet",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.exposedToInternet.type == 'InternetExposure'",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_internet_exposed"
+        },
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedAsset"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExposureSourceCidrs",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.exposedToInternet.effectiveRules[*].sourceCidr",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "VulnerabilityCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "mde.machine.vulnerabilityCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MissingKbCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "mde.machine.missingKbCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CriticalCveCount30d",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "kql.DeviceTvmSoftwareVulnerabilities where CveSeverity == 'Critical'"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IdentifiedResourceUsersCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "array_length(eg.node.NodeProperties.rawData.identifiedResourceUsers)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HighPrivIdentifiedUsers",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_join",
+        "join": "accountObjectId → Identity_Profile_CL.Tier <= 1"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_high_priv_user"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasGuardMisconfigurations",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasGuardMisconfigurations[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MachineSid",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.machineSid (local Windows SID)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LoggedOnUsersCount_derived",
+      "type": "int",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "count_distinct(LoggedOnUsers)"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "JoinType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.JoinType (Domain/Azure/Workgroup)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DefenderAvStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.DefenderAvStatus (Updated/OutOfDate/Disabled/Unknown)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "DefenderAvNotUpdated"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DefenderAvMode",
+      "type": "string",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.DefenderAvMode (Active/Passive)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EdrMode",
+      "type": "string",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.EdrMode (Block/Audit/Disabled)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "EdrInAuditMode"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MitigationStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.MitigationStatus (Block/Audit/Disabled etc.)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsInternetFacing",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.IsInternetFacing",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_internet_exposed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsTransient",
+      "type": "bool",
+      "purpose": "lifecycle",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.IsTransient (short-lived asset, e.g. CI runner)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsPotentialDuplication",
+      "type": "bool",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.IsPotentialDuplication",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExclusionReason",
+      "type": "string",
+      "purpose": "lifecycle",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.ExclusionReason",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnboardedDateTime",
+      "type": "datetime",
+      "purpose": "lifecycle",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.OnboardedDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OffboardedDateTime",
+      "type": "datetime",
+      "purpose": "lifecycle",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.OffboardedDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastSeenDays",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "now_minus_LastSeen_days"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EffectiveIpAddresses_mde",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.IPAddresses (most recent observed IP set)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CriticalityConfidenceHigh",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityConfidenceHigh[*] (high-confidence rule labels)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "VulnerableSoftwareCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.vulnerableSoftwareCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "InternetExposedReasons",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.exposedToInternet.reasons[*] (when ExposedToInternet=true)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "WeeklyActiveUsersCount",
+      "type": "int",
+      "purpose": "attribution",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.weeklyActiveUsersCount (rough usage signal)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastDailyDeviceUsageDate",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.lastDailyDeviceUsageDate",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "InactivityPeriod",
+      "type": "string",
+      "purpose": "freshness",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.inactivityPeriod (D{n} format)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MostFrequentUserTier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_user_logon_min_tier",
+        "lookbackDays": 3,
+        "topN": 5,
+        "join": "DeviceLogonEvents.AccountObjectId -> Identity_Profile_CL.PrimaryEntityId.Tier"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_user_based_tier"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MostFrequentUsers",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_user_logon_min_tier",
+        "shape": "[ { Upn, Tier, LogonCount }, ... ] sorted by LogonCount desc, top 5"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CriticalityLevel",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel.criticalityLevel (effective tier 0-3, manual wins over rule)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_eg_criticality"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RuleBasedCriticalityLevel",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel (tier from EG rule engine, before manual override)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ManualCriticalityLevel",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.manualCriticalityLevel (operator-set override)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CriticalityRuleNames",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel.ruleNames[*] (which EG rules / manual tags fired)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasAuthorityMisConfigurations",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasAuthorityMisConfigurations[*] (OS-level / authority misconfigs distinct from Guard misconfigs)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PotentialDuplicateOf",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.potentialDuplicateOf (NodeId of likely-duplicate device record)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "GraphInternalLabel",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.graphInternalLabel (workstation/audioAndVideo/smartAppliance/networkPhysicalDevice/mobile/printer/unclassifiedDevice)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "FirstSeenByInventory",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.firstSeenByInventory",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EgLastSeen",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.lastSeen (EG-side; complements MDE LastSeen)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DiscoverySourceProducts",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.discoverySources-udi.sources[*].productName (Defender for Endpoint, MDI, Azure Arc, etc.)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceRegistryTags",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.deviceRegistryTags[*] (key/value pairs from registry-based MDE tagging)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RegistryDeviceTag_exposureGraph",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.registryDeviceTag (single-value registry tag form)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "NsgEffectiveRules",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "NetworkInterfaces[*].securityRules[*].rules[?priority < 65000] flattened"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OpenInboundPortsFromInternet",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "distinct ports where direction:Inbound, access:Allow, sourceCidr contains 0.0.0.0/0"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedPort"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OpenInboundPortsFromExternalIps",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "distinct ports where sourceCidr is public CIDR but not 0.0.0.0/0"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OpenInboundPortsFromVnet",
+      "type": "dynamic",
+      "purpose": "enrichment",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "sourceCidr is RFC1918 / VirtualNetwork tag"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasInternetExposedRdp",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "port 3389 internet-reachable"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_internet_exposed_rdp"
+        },
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedRdp"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasInternetExposedSsh",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "port 22 internet-reachable"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_internet_exposed_ssh"
+        },
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedSsh"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasInternetExposedSmb",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "port 445 (or 137-139) internet-reachable"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedSmb"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasInternetExposedWinRm",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "port 5985 or 5986 internet-reachable"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedWinRm"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasInternetExposedDbPort",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "any of {1433, 1521, 3306, 5432, 6379, 27017, 9042, 9200} internet-reachable"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedDatabasePort"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasNarrowAdminAllow",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "port 22/3389/5985/5986 with sourceCidr = single specific external IP"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PortExposureFindings",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "[{port, service, sourceType, severity, ruleId, priority}] per open port",
+        "catalog": "Port_Risk_Catalog"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HighestPortRiskScore",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "max severity, mapped via Port_Risk_Catalog.json",
+        "catalog": "Port_Risk_Catalog"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "endpoint_port_risk"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OpenOutboundDestinations",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "distinct destinationCidr/port pairs for Outbound Allow rules"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "NicCount",
+      "type": "int",
+      "purpose": "enrichment",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "array_length(NetworkInterfaces)"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EffectiveIpAddresses_derived",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "merged NetworkInterfaces[*].ipAddresses[*]"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LoggedOnUsersCount_mde",
+      "type": "int",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "array_length(parse_json(DeviceInfo.LoggedOnUsers))",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LoggedOnUsers",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "parse_json(DeviceInfo.LoggedOnUsers) -- [{UserName, DomainName, Sid}]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LoggedOnUserSids",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "mde",
+      "sourcePath": "LoggedOnUsers[*].Sid (cross-engine join key to Identity_Profile_CL.OnPremSid)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CloudPlatforms",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.CloudPlatforms (Azure|AWS|GCP|Azure Arc)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ConnectivityType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.ConnectivityType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Site",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.Site (physical location)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RegistryDeviceTag_mde",
+      "type": "string",
+      "purpose": "enrichment",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.RegistryDeviceTag",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OsBuildRevision",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.OsBuildRevision",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OsVersionInfo",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.OsVersionInfo",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceCategory",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.deviceCategory (Endpoint/IoT/Unknown)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.deviceType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceSubtype",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.deviceSubtype",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceRole",
+      "type": "dynamic",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.deviceRole[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OsPlatform",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "mde.machine.osPlatform",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OsVersion",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "mde.machine.osVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OsBuild",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "mde.machine.osBuild",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OsProcessor",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "mde.machine.osProcessor",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OsArchitecture",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.OSArchitecture",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RbacGroupName",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "mde.machine.rbacGroupName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MachineGroup",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.machineGroup",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MachineTags",
+      "type": "dynamic",
+      "purpose": "pivot",
+      "source": "mde",
+      "sourcePath": "mde.machine.machineTags[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "tenant_si_manual_tag"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceDynamicTags",
+      "type": "dynamic",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.deviceDynamicTags[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeviceManualTags",
+      "type": "dynamic",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.deviceManualTags[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetTags",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "sourcePath": "derived from MachineTags + DeviceManualTags + DeviceDynamicTags (deduped, joined by ';')",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "_comment": "Concatenation of MachineTags + DeviceManualTags + DeviceDynamicTags joined with ';'. Used by RA __EXCLUDED_ASSET_TAGS__ filter to drop devices the operator has explicitly tagged as excluded (e.g. '--Excluded--SI'). Empty string when no tags. Computed in Build-EndpointProfileRow.ps1 so RA queries can run a cheap `where AssetTags has_any (_excludedAssetTags)` without per-row JSON expansion.",
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Vendor",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.vendor",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "posture_analyze",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Model",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.model",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "posture_analyze",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PublicIp",
+      "type": "string",
+      "purpose": "risk",
+      "source": "mde",
+      "sourcePath": "mde.machine.publicIp (or DeviceInfo.PublicIP)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PrimaryUser",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "most-frequent UPN from LoggedOnUsers last 30d"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Owner",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.tags.owner (when Azure-hosted)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Region",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.location (when Azure-hosted)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsApplicableForDefenderForServers",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isApplicableForMdeThroughDefenderForServers.isApplicable",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsApplicableForDefenderForServersReason",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isApplicableForMdeThroughDefenderForServers.reason",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsUsiServer",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isUsiServer",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Extensions",
+      "type": "dynamic",
+      "purpose": "enrichment",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "rollup of microsoft.compute/virtualmachines/extensions children"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsHybridAzureADJoined",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "DeviceInfo / EG (isHybridAzureADJoined)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsAzureADJoined",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "mde",
+      "sourcePath": "DeviceInfo.IsAzureADJoined",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureADJoinType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.azureADJoinType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "TpmSupported",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.tpmData.supported",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "TpmActivated",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.tpmData.activated",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "TpmEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.tpmData.enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "TpmVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.tpmData.version",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SmbEnableSmb1Protocol",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.remoteServicesInfo.smb.enableSmb1Protocol",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "Smb1Enabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SmbRequireSecuritySignature",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.remoteServicesInfo.smb.requireSecuritySignature",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SmbEncryptData",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.remoteServicesInfo.smb.encryptData",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RdpAllowConnections",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.remoteServicesInfo.rdp.allowConnections",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RdpNlaRequired",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.remoteServicesInfo.rdp.nlaRequired",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "RdpNlaDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RdpServiceRunning",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.remoteServicesInfo.rdp.serviceRunning",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "WinRmServiceRunning",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.remoteServicesInfo.winRm.serviceRunning",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "shortcut_or_heuristic"
+      },
+      "stage": {
+        "writtenBy": "posture_analyze",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetSubtype",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "shortcut_or_heuristic"
+      },
+      "stage": {
+        "writtenBy": "posture_analyze",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetGroup",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "heuristic_cluster"
+      },
+      "stage": {
+        "writtenBy": "posture_analyze",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Tier",
+      "type": "int",
+      "purpose": "kpi",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "weighted_tier_aggregator",
+        "see": "aggregator section in this file"
+      },
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SIRules",
+      "type": "dynamic",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "rule_matches",
+        "see": "Profile stage: AssetProfileBy* YAML matches"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel",
+          "audit"
+        ]
+      },
+      "addedIn": "2.3.2"
+    },
+    {
+      "name": "IsEnabledActive",
+      "type": "bool",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "enabled_and_recent",
+        "inputs": [
+          "MDE_OnboardingStatus != Offboarded",
+          "MDE_LastSeen|EG.lastSeen <= $global:SI_ActiveStaleDays",
+          "or MDE_SensorHealthState in (Active, ImpairedCommunication)"
+        ],
+        "default_stale_days": 30
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.3"
+    },
+    {
+      "name": "Group",
+      "type": "string",
+      "purpose": "kpi",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "UnsupportedOSDetected",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIEndpointUnsupportedOS",
+        "see": "engine/shared/Get-SIRiskFactors.ps1 -- legacy/EOL OS list (Windows 7/8/8.1/Server 2003-2012, EOL Linux distros, macOS major < 13)"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "IsExcludedByTag",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIEndpointExcludedByTag",
+        "see": "engine/shared/Get-SIRiskFactors.ps1 -- true when any EG manual/dynamic/tags array contains '--Excluded--SI'. Operator-driven opt-out from RA reports."
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.5"
+    },
+    {
+      "name": "UnsupportedOSReason",
+      "type": "string",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIEndpointUnsupportedOS",
+        "see": "human-readable reason: 'Windows EOL: WindowsServer2008'"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "DefenderAvOutOfDate",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIDefenderAvOutOfDate",
+        "inputs": [
+          "DefenderAvStatus !~ 'Updated|UpToDate|GoodHealth|HealthyAndUpToDate'"
+        ]
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "DaysInactive",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Get-SIDaysInactive",
+        "inputs": [
+          "max of LastSignInDateTime, LastSeen, EgLastSeen, MDE_LastSeen, EG_LastSeen"
+        ],
+        "sentinel_no_signal": 9999
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "IsStaleAsset",
+      "type": "bool",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "DaysInactive >= 30 OR no signal"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "IsCmdbOrphan",
+      "type": "bool",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "CmdbMatchPhase == 'orphan' AND Tier <= 1"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "purpose": "correlation",
+      "addedIn": "2.3.6",
+      "name": "cmdbId",
+      "source": "cmdb",
+      "sourcePath": "cmdb.id (CMDB row primary key when matched at Reconcile)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "correlation",
+      "addedIn": "2.3.6",
+      "name": "cmdbName",
+      "source": "cmdb",
+      "sourcePath": "cmdb.name (display name from CMDB)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "cmdbCriticality",
+      "source": "cmdb",
+      "sourcePath": "cmdb.criticality (Critical / High / Medium / Low)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "cmdbDataSensitivity",
+      "source": "cmdb",
+      "sourcePath": "cmdb.dataSensitivity (Restricted / Confidential / Internal / Public)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchPhase",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "Reconcile-stage classification of how the asset was matched to CMDB: rule / identity / orphan / stale-cache / gap-cis"
+      }
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchState",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "Reconcile-stage match outcome: matched / unmatched / ambiguous"
+      }
+    }
+  ]
+}

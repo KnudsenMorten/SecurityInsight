@@ -1,0 +1,3097 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "engine": "identity",
+  "table": "SI_Identity_Profile_CL",
+  "dcrName": "dcr-si-identity-profile",
+  "extends": "SCHEMA.json",
+  "sourcesConsumed": [
+    "entra",
+    "mdi",
+    "exposureGraph",
+    "signInLogs",
+    "derived"
+  ],
+  "entityIds": {
+    "primaryPriority": [
+      {
+        "identityType": [
+          "User",
+          "ServicePrincipal",
+          "ManagedIdentity",
+          "Group"
+        ],
+        "order": [
+          "AadObjectId",
+          "SecurityIdentifier",
+          "ActiveDirectoryObjectGuid"
+        ]
+      },
+      {
+        "identityType": [
+          "ServiceAccount",
+          "Computer"
+        ],
+        "order": [
+          "SecurityIdentifier",
+          "ActiveDirectoryObjectGuid"
+        ]
+      }
+    ],
+    "expectedTypes": [
+      "AadObjectId",
+      "Upn",
+      "Mail",
+      "SecurityIdentifier",
+      "ActiveDirectoryObjectGuid"
+    ],
+    "hubJoin": "exposureGraph",
+    "miParentLinkRule": "When identityType == ManagedIdentity, append { type: AzureResourceId, id: <attachedResourceId>, relation: attached_to } so MI joins to parent ARM resource"
+  },
+  "egNodeLabelScope": [
+    "user",
+    "group",
+    "serviceprincipal",
+    "managedidentity"
+  ],
+  "hashes": [
+    {
+      "name": "CollectHash",
+      "overPhases": [
+        "in"
+      ],
+      "description": "Hash of every phase=in field. Detects upstream drift in raw collected data."
+    },
+    {
+      "name": "ProfileHash",
+      "overPhases": [
+        "profile"
+      ],
+      "excludesFields": [
+        "CollectHash",
+        "ProfileHash"
+      ],
+      "description": "Hash of every phase=profile field plus rule-set hash. Lets KQL summarize arg_max(CollectionTime,*) by PrimaryEntityId, ProfileHash show only verdict-changing snapshots."
+    }
+  ],
+  "rawPayload": {
+    "storageColumn": "Properties",
+    "sizeBudgetKb": 256,
+    "truncationStrategy": "drop_largest_field",
+    "sources": {
+      "entra": {
+        "_policy": "include-only (default-deny). Only paths listed here flow to Properties.collect.entra. New MS fields are NOT auto-included -- monthly schema-drift detection adds them after review.",
+        "includePaths": [
+          "id",
+          "userPrincipalName",
+          "mail",
+          "displayName",
+          "userType",
+          "accountEnabled",
+          "createdDateTime",
+          "deletedDateTime",
+          "externalUserState",
+          "externalUserStateChangeDateTime",
+          "creationType",
+          "signInActivity.*",
+          "lastPasswordChangeDateTime",
+          "passwordPolicies",
+          "refreshTokensValidFromDateTime",
+          "signInSessionsValidFromDateTime",
+          "onPremisesSyncEnabled",
+          "onPremisesImmutableId",
+          "onPremisesSecurityIdentifier",
+          "onPremisesSamAccountName",
+          "onPremisesUserPrincipalName",
+          "onPremisesLastSyncDateTime",
+          "onPremisesDistinguishedName",
+          "onPremisesDomainName",
+          "onPremisesExtensionAttributes.*",
+          "onPremisesProvisioningErrors[*]",
+          "identities[*]",
+          "assignedLicenses[*].skuId",
+          "assignedPlans[*]",
+          "licenseAssignmentStates[*]",
+          "employeeId",
+          "employeeType",
+          "employeeHireDate",
+          "employeeLeaveDateTime",
+          "employeeOrgData.*",
+          "jobTitle",
+          "department",
+          "companyName",
+          "country",
+          "usageLocation",
+          "city",
+          "officeLocation",
+          "mobilePhone",
+          "businessPhones[*]",
+          "proxyAddresses[*]",
+          "otherMails[*]",
+          "imAddresses[*]",
+          "securityIdentifier",
+          "customSecurityAttributes",
+          "isManagementRestricted"
+        ]
+      },
+      "mdi": {
+        "_policy": "include-only (default-deny). Monthly schema-drift detection adds new MS fields after review.",
+        "includePaths": [
+          "id",
+          "identityType",
+          "investigationPriority",
+          "investigationPriorityLevel",
+          "sensitivity.*",
+          "lateralMovementPath",
+          "lastSeenActivity",
+          "sensorId",
+          "distinguishedName",
+          "sid",
+          "sourceObjectId",
+          "isHidden",
+          "isDisabled",
+          "isLockedOut",
+          "assignedRoles[*]",
+          "isSensitive",
+          "isHybridIdentity"
+        ]
+      },
+      "exposureGraph": {
+        "_policy": "include-only (default-deny). Monthly schema-drift detection adds new MS fields after review.",
+        "includePaths": [
+          "NodeId",
+          "NodeLabel",
+          "NodeName",
+          "Categories[*]",
+          "EntityIds[*]",
+          "NodeProperties.rawData.primaryProvider",
+          "NodeProperties.rawData.aadSid",
+          "NodeProperties.rawData.adSid",
+          "NodeProperties.rawData.sidHistory[*]",
+          "NodeProperties.rawData.activeDirectoryObjectId",
+          "NodeProperties.rawData.adDomainId",
+          "NodeProperties.rawData.accountObjectId",
+          "NodeProperties.rawData.accountUpn",
+          "NodeProperties.rawData.accountName",
+          "NodeProperties.rawData.accountDomain",
+          "NodeProperties.rawData.accountDisplayName",
+          "NodeProperties.rawData.accountEnabled",
+          "NodeProperties.rawData.assignedRoles[*]",
+          "NodeProperties.rawData.createdDateTime",
+          "NodeProperties.rawData.emailAddress",
+          "NodeProperties.rawData.otherMailAddresses[*]",
+          "NodeProperties.rawData.isActive",
+          "NodeProperties.rawData.identityType",
+          "NodeProperties.rawData.securityPrincipalType",
+          "NodeProperties.rawData.distinguishedName",
+          "NodeProperties.rawData.commonName",
+          "NodeProperties.rawData.adminCount",
+          "NodeProperties.rawData.passwordUpdateTime",
+          "NodeProperties.rawData.userAccountControl[*]",
+          "NodeProperties.rawData.nestedAdGroupNames[*]",
+          "NodeProperties.rawData.nestedCriticalAdGroups.*",
+          "NodeProperties.rawData.hasLeakedCredentials",
+          "NodeProperties.rawData.hasAdLeakedCredentials",
+          "NodeProperties.rawData.hasServicePrincipalName",
+          "NodeProperties.rawData.criticalityLevel.*",
+          "NodeProperties.rawData.identityMetadata.*",
+          "NodeProperties.rawData.tags[*]",
+          "NodeProperties.rawData.jobTitle",
+          "NodeProperties.rawData.isDomainController",
+          "NodeProperties.rawData.isExchangeServerDnsName",
+          "NodeProperties.rawData.isTaggedAsExchangeServer",
+          "NodeProperties.rawData.isSensitive",
+          "NodeProperties.rawData.appId",
+          "NodeProperties.rawData.appOwnerOrganizationId",
+          "NodeProperties.rawData.publisherName",
+          "NodeProperties.rawData.servicePrincipalType",
+          "NodeProperties.rawData.alternativeNames[*]",
+          "NodeProperties.rawData.managedIdentityMetadata.accountType",
+          "NodeProperties.rawData.managedIdentityMetadata.attachedResourceId"
+        ]
+      },
+      "signInLogs": {
+        "tables": [
+          "SigninLogs",
+          "AADNonInteractiveUserSignInLogs",
+          "AADServicePrincipalSignInLogs",
+          "AADManagedIdentitySignInLogs"
+        ],
+        "perIdentityTypeRouting": [
+          {
+            "identityType": "User",
+            "tablesQueried": [
+              "SigninLogs",
+              "AADNonInteractiveUserSignInLogs"
+            ]
+          },
+          {
+            "identityType": "ServiceAccount",
+            "tablesQueried": [],
+            "reason": "on-prem only, no Entra sign-ins"
+          },
+          {
+            "identityType": "ServicePrincipal",
+            "tablesQueried": [
+              "AADServicePrincipalSignInLogs",
+              "AADNonInteractiveUserSignInLogs"
+            ],
+            "reason": "delegated flows appear as AppId in NonInteractive"
+          },
+          {
+            "identityType": "ManagedIdentity",
+            "tablesQueried": [
+              "AADManagedIdentitySignInLogs"
+            ]
+          },
+          {
+            "identityType": "Group",
+            "tablesQueried": []
+          },
+          {
+            "identityType": "Computer",
+            "tablesQueried": []
+          }
+        ],
+        "aggregationPattern": "One bulk query per LA table per snapshot (NEVER per identity); join back in PowerShell. Pattern: SigninLogs | summarize ... by UserId."
+      }
+    }
+  },
+  "aggregator": {
+    "name": "Tier",
+    "algorithm": "weighted_tier_aggregator",
+    "aggregation": {
+      "mode": "forced_overrides_first_then_weighted_min",
+      "thresholdWeight": 0.5,
+      "tieBreak": "prefer_lower_tier"
+    },
+    "proofField": "Properties.classify.proofs",
+    "contributors": [
+      {
+        "id": "breakglass",
+        "weight": 1.0,
+        "trueTier": 0,
+        "override": "forced",
+        "signalField": "IsBreakGlass"
+      },
+      {
+        "id": "heuristic_disabled",
+        "weight": 1.0,
+        "falseTier": 3,
+        "override": "forced",
+        "signalField": "AccountEnabled"
+      },
+      {
+        "id": "tenant_si_manual_tag",
+        "weight": 1.0,
+        "override": "forced",
+        "signalField": "TierFromManualSITag",
+        "parser": {
+          "regex": "^(?P<group>[^-]+)--tier(?P<tier>[0-3])--SI$"
+        },
+        "conflictHandling": {
+          "multiTag": "pick_lowest_tier"
+        }
+      },
+      {
+        "id": "entra_roles_permanent",
+        "weight": 1.0,
+        "signalField": "EntraRolesPermanentVerdict_Tier",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "evidenceField": "Properties.classify.proofs.entra_roles_permanent"
+      },
+      {
+        "id": "entra_roles_eligible",
+        "weight": 1.0,
+        "signalField": "EntraRolesEligibleVerdict_Tier",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "evidenceField": "Properties.classify.proofs.entra_roles_eligible",
+        "rationale": "Catalog match — PIM-eligible role still IS a T0 role per catalog; weight 1.0"
+      },
+      {
+        "id": "entra_api_perms_application",
+        "weight": 1.0,
+        "signalField": "EntraApiPermsApplicationVerdict_Tier",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "evidenceField": "Properties.classify.proofs.entra_api_perms_application"
+      },
+      {
+        "id": "entra_api_perms_delegated",
+        "weight": 1.0,
+        "signalField": "EntraApiPermsDelegatedVerdict_Tier",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "evidenceField": "Properties.classify.proofs.entra_api_perms_delegated",
+        "rationale": "Catalog match — delegated permission still IS the cataloged tier; weight 1.0"
+      },
+      {
+        "id": "ad_builtin_groups",
+        "weight": 1.0,
+        "signalField": "AdBuiltinGroupsVerdict_Tier",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "evidenceField": "Properties.classify.proofs.ad_builtin_groups"
+      },
+      {
+        "id": "azure_roles",
+        "weight": 1.0,
+        "signalField": "AzureRolesVerdict_Tier",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "evidenceField": "Properties.classify.proofs.azure_roles",
+        "scopeHandling": "keep_per_assignment"
+      },
+      {
+        "id": "eg_criticality_predefined",
+        "weight": 0.7,
+        "signalField": "EgCriticalityLevel",
+        "mapping": {
+          "0": 0,
+          "1": 1,
+          "2": 2,
+          "3": 3,
+          "4": 3
+        },
+        "ruleFilter": {
+          "classification": "predefined",
+          "ruleCatalog": "MS_Predefined_CriticalityRules"
+        },
+        "rationale": "EG criticality is catalog-driven but uses MS-defined scoring rather than your PrivilegeTierClassifier catalog; slight discount"
+      },
+      {
+        "id": "eg_criticality_custom",
+        "weight": 0.5,
+        "signalField": "EgCriticalityLevel",
+        "mapping": {
+          "0": 0,
+          "1": 1,
+          "2": 2,
+          "3": 3,
+          "4": 3
+        },
+        "ruleFilter": {
+          "classification": "custom"
+        },
+        "perRuleOverrides": [
+          {
+            "pattern": "Tier0_*",
+            "tier": 0,
+            "weight": 1.0
+          },
+          {
+            "pattern": "Production_PCI_Scope",
+            "tier": 0,
+            "weight": 1.0
+          },
+          {
+            "pattern": "Critical_Custom_*",
+            "tier": 0,
+            "weight": 0.9
+          }
+        ]
+      },
+      {
+        "id": "ad_admin_count",
+        "weight": 0.7,
+        "trueTier": 1,
+        "signalField": "AdminCount"
+      },
+      {
+        "id": "ad_uac_flags",
+        "weight": 1.0,
+        "signalField": "HighestRiskUacFlag",
+        "catalog": "UacFlag_Tiering",
+        "rationale": "Catalog match against UacFlag_Tiering — deterministic; weight 1.0"
+      },
+      {
+        "id": "mdi_sensitive",
+        "weight": 0.6,
+        "trueTier": 1,
+        "signalField": "MdiIsSensitive"
+      },
+      {
+        "id": "leaked_credentials",
+        "weight": 0.4,
+        "trueTierClamp": {
+          "maxTier": null
+        },
+        "signalField": "HasLeakedCredentials"
+      },
+      {
+        "id": "third_party_multi_tenant_spn",
+        "weight": 0.5,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "IsThirdPartyMultiTenantSpn",
+        "appliesWhen": {
+          "field": "IdentityType",
+          "op": "eq",
+          "value": "ServicePrincipal"
+        }
+      },
+      {
+        "id": "legacy_spn",
+        "weight": 0.4,
+        "trueTier": 1,
+        "signalField": "IsLegacySpn",
+        "appliesWhen": {
+          "field": "ServicePrincipalType",
+          "op": "eq",
+          "value": "Legacy"
+        }
+      },
+      {
+        "id": "mi_attached_resource_tier_inheritance",
+        "weight": 0.9,
+        "algorithm": "pass_through",
+        "signalField": "AttachedResourceTier",
+        "appliesWhen": {
+          "field": "IdentityType",
+          "op": "eq",
+          "value": "ManagedIdentity"
+        }
+      },
+      {
+        "id": "mi_user_assigned_multi_resource",
+        "weight": 0.5,
+        "threshold": {
+          "when": "AttachedResourceCount >= 3",
+          "tierClamp": {
+            "maxTier": 1
+          }
+        },
+        "appliesWhen": {
+          "field": "IsUserAssignedManagedIdentity",
+          "op": "eq",
+          "value": true
+        }
+      },
+      {
+        "id": "mi_orphaned",
+        "weight": 0.3,
+        "whenNull": {
+          "postureFinding": "orphaned_managed_identity"
+        },
+        "signalField": "AttachedAzureResourceId",
+        "appliesWhen": {
+          "field": "IdentityType",
+          "op": "eq",
+          "value": "ManagedIdentity"
+        }
+      },
+      {
+        "id": "ad_domain_controller_account",
+        "weight": 1.0,
+        "trueTier": 0,
+        "override": "forced",
+        "signalField": "IsDomainControllerAccount",
+        "appliesWhen": {
+          "field": "SecurityPrincipalType",
+          "op": "eq",
+          "value": "MachineAccount"
+        }
+      },
+      {
+        "id": "ad_exchange_server_account",
+        "weight": 0.9,
+        "trueTier": 0,
+        "signalField": "IsExchangeServerAccount",
+        "appliesWhen": {
+          "field": "SecurityPrincipalType",
+          "op": "eq",
+          "value": "MachineAccount"
+        }
+      },
+      {
+        "id": "signin_dormant_user",
+        "weight": 0.6,
+        "trueTierClamp": {
+          "maxTier": 3
+        },
+        "signalField": "HasInteractiveSignInDormant90d",
+        "appliesWhen": {
+          "field": "IdentityType",
+          "op": "eq",
+          "value": "User"
+        }
+      },
+      {
+        "id": "signin_never_signed_in",
+        "weight": 0.5,
+        "trueTierClamp": {
+          "maxTier": 3
+        },
+        "signalField": "HasNeverSignedIn",
+        "postureFinding": "orphaned_identity"
+      },
+      {
+        "id": "signin_risky_pattern",
+        "weight": 0.7,
+        "threshold": {
+          "when": "RiskySignIns30d >= 3",
+          "tierClamp": {
+            "maxTier": 1
+          }
+        }
+      },
+      {
+        "id": "signin_anonymous_ip",
+        "weight": 0.6,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "HasAnonymousIpSignIn",
+        "postureFinding": "anonymous_ip_signin"
+      },
+      {
+        "id": "signin_impossible_travel",
+        "weight": 0.5,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "HasRiskyImpossibleTravel",
+        "postureFinding": "impossible_travel"
+      },
+      {
+        "id": "signin_mfa_bypass",
+        "weight": 0.7,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "HasMfaBypass",
+        "appliesWhen": {
+          "allOf": [
+            {
+              "field": "IdentityType",
+              "op": "eq",
+              "value": "User"
+            },
+            {
+              "field": "PreliminaryTier",
+              "op": "lte",
+              "value": 2
+            }
+          ]
+        },
+        "postureFinding": "privileged_user_no_mfa"
+      },
+      {
+        "id": "signin_spn_ip_anomaly",
+        "weight": 0.7,
+        "trueTierClamp": {
+          "maxTier": 1
+        },
+        "signalField": "HasSpnIpAnomaly",
+        "appliesWhen": {
+          "field": "IdentityType",
+          "op": "eq",
+          "value": "ServicePrincipal"
+        },
+        "postureFinding": "spn_ip_diversity_anomaly"
+      }
+    ]
+  },
+  "aiEligibility": {
+    "enabled": true,
+    "predicates": [
+      {
+        "field": "PreliminaryTier",
+        "op": "in",
+        "values": [
+          0,
+          1,
+          2
+        ]
+      },
+      {
+        "field": "AssetTypeHint",
+        "op": "in",
+        "values": [
+          "server",
+          "workload",
+          "service_account",
+          "managed_identity"
+        ]
+      }
+    ],
+    "excludePredicates": [
+      {
+        "field": "IsBreakGlass",
+        "op": "eq",
+        "value": true
+      },
+      {
+        "field": "AssetTypeHint",
+        "op": "eq",
+        "value": "workstation"
+      }
+    ],
+    "onSkip": {
+      "assetType": "heuristic.fallback",
+      "propertiesMetaAiSkippedReason": "<rendered>"
+    },
+    "note": "Identity engine is currently catalog-driven and does not call AI. ai_eligibility shown for future enablement; -DisableAI is a no-op for identity today."
+  },
+  "aiBudget": {
+    "promptTokensPerAsset": 4000,
+    "reserveForResponse": 800,
+    "dropPriorityOrder": [
+      "raw",
+      "forensic",
+      "enrichment",
+      "pivot",
+      "posture",
+      "risk"
+    ],
+    "onOverflow": {
+      "propertiesPostureContextTruncated": true,
+      "propertiesPostureDroppedFields": "<list>"
+    }
+  },
+  "schemaVersion": "2.3.6",
+  "lastModified": "2026-04-29",
+  "fields": [
+    {
+      "name": "PrimaryEntityId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "EntityIds[0].id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PrimaryEntityType",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "EntityIds[0].type",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntityIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "derived",
+      "sourcePath": "merged from all sources (entra+mdi+exposureGraph+derived)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RunId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "UUID per orchestrator run",
+      "stage": {
+        "writtenBy": "bootstrap",
+        "readBy": [
+          "all"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CollectionTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "derived",
+      "sourcePath": "now() at output",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "all"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Upn",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "entra",
+      "sourcePath": "graph.user.userPrincipalName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Mail",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "entra",
+      "sourcePath": "graph.user.mail",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnPremSid",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "entra",
+      "sourcePath": "graph.user.onPremisesSecurityIdentifier",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnPremSamAccountName",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "entra",
+      "sourcePath": "graph.user.onPremisesSamAccountName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnPremObjectGuid",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "mdi",
+      "sourcePath": "mdi.identity.objectGuid (also EG ActiveDirectoryObjectGuid)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EmployeeId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "entra",
+      "sourcePath": "graph.user.employeeId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CollectHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over collect-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EnrichHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over enrich-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PostureHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over posture-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ClassifyHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over classify-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AccountEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.user.accountEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "heuristic_disabled"
+        },
+        {
+          "kind": "posture_rule",
+          "name": "DisabledPrivilegedUser"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "UserType",
+      "type": "string",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.user.userType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CreationType",
+      "type": "string",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.user.creationType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExternalUserState",
+      "type": "string",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.user.externalUserState",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnPremisesSyncEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.user.onPremisesSyncEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsManagementRestricted",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.user.isManagementRestricted",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsBreakGlass",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "catalog_match_upn_pattern"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasLeakedCredentials",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasLeakedCredentials",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasAdLeakedCredentials",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasAdLeakedCredentials",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MdiIsLockedOut",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "mdi",
+      "sourcePath": "mdi.identity.isLockedOut",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MdiIsSensitive",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "mdi",
+      "sourcePath": "mdi.identity.sensitivity.isSensitive",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsAdSensitiveFlagged",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isSensitive (AD-side ≠ MDI's)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CreatedDateTime",
+      "type": "datetime",
+      "purpose": "lifecycle",
+      "source": "entra",
+      "sourcePath": "graph.user.createdDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DeletedDateTime",
+      "type": "datetime",
+      "purpose": "lifecycle",
+      "source": "entra",
+      "sourcePath": "graph.user.deletedDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EmployeeHireDate",
+      "type": "datetime",
+      "purpose": "lifecycle",
+      "source": "entra",
+      "sourcePath": "graph.user.employeeHireDate",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EmployeeLeaveDateTime",
+      "type": "datetime",
+      "purpose": "lifecycle",
+      "source": "entra",
+      "sourcePath": "graph.user.employeeLeaveDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastSignInDateTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "entra",
+      "sourcePath": "graph.user.signInActivity.lastSignInDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastNonInteractiveSignInDateTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "entra",
+      "sourcePath": "graph.user.signInActivity.lastNonInteractiveSignInDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastSuccessfulSignInDateTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "entra",
+      "sourcePath": "graph.user.signInActivity.lastSuccessfulSignInDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastSignInDays",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "now_minus_LastSignInDateTime"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LastPasswordChangeDateTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "entra",
+      "sourcePath": "graph.user.lastPasswordChangeDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaIsRegistered",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.isMfaRegistered (BULK fetched once per run)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PrivilegedUserNoMfa"
+        },
+        {
+          "kind": "tier_contributor",
+          "name": "user_mfa_missing"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaIsCapable",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.isMfaCapable",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsPasswordlessCapable",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.isPasswordlessCapable (FIDO2 / Windows Hello)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PrivilegedUserNotPasswordless"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsSsprRegistered",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.isSsprRegistered",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsSsprCapable",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.isSsprCapable",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsSsprEnabled",
+      "type": "bool",
+      "purpose": "policy",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.isSsprEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaMethods",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.methodsRegistered[*] (excludes 'password')",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaMethodCount",
+      "type": "int",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "array_length(MfaMethods)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaDefaultMethod",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.defaultMfaMethod",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaSystemPreferredMethods",
+      "type": "dynamic",
+      "purpose": "attribution",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.systemPreferredAuthenticationMethods[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaPreferredSecondary",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.userPreferredMethodForSecondaryAuthentication",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MfaLastUpdatedDateTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "entra",
+      "sourcePath": "graph.reports.authenticationMethods.userRegistrationDetails.lastUpdatedDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnPremLastSyncDateTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "entra",
+      "sourcePath": "graph.user.onPremisesLastSyncDateTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MdiLastSeenActivity",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "mdi",
+      "sourcePath": "mdi.identity.lastSeenActivity",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRoles_Permanent",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "entra",
+      "sourcePath": "graph.roleManagement.directory.roleAssignments[?principalId==user]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRoles_Eligible",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "entra",
+      "sourcePath": "graph.roleManagement.directory.roleEligibilitySchedules[?principalId==user]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraAppPermissions_Application",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "entra",
+      "sourcePath": "graph.servicePrincipal.appRoleAssignments",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraAppPermissions_Delegated",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "entra",
+      "sourcePath": "graph.oauth2PermissionGrants",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "NestedGroups",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "entra",
+      "sourcePath": "graph.user.transitiveMemberOf (filtered to groups)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdNestedGroupNames",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.nestedAdGroupNames[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdNestedCriticalGroups",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.nestedCriticalAdGroups[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureRoles_Assignments",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "arm.roleAssignments[?principalId==user]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdminCount",
+      "type": "int",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.adminCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "UserAccountControl",
+      "type": "dynamic",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.userAccountControl[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SidHistory",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.sidHistory[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasSidHistory",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "array_length(SidHistory) > 0"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesPermanentVerdict_Tier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "sections": [
+          "EntraID_BuiltInRoles_Tier0..3",
+          "EntraID_CustomRoles_Tier0..3"
+        ],
+        "matchKey": "Id",
+        "input": "EntraRoles_Permanent"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesPermanentVerdict_TopMatch",
+      "type": "string",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "name_of_min_tier_match"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesPermanentVerdict_MatchCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "count_catalog_matches"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesPermanentVerdict_MissCount",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "count_catalog_misses"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesEligibleVerdict_Tier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "sections": [
+          "EntraID_BuiltInRoles_Tier0..3",
+          "EntraID_CustomRoles_Tier0..3"
+        ],
+        "matchKey": "Id",
+        "input": "EntraRoles_Eligible"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesEligibleVerdict_TopMatch",
+      "type": "string",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesEligibleVerdict_MatchCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraRolesEligibleVerdict_MissCount",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsApplicationVerdict_Tier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "sections": [
+          "EntraID_APIPermissions_Tier0..3"
+        ],
+        "matchKey": "(AppId,'Application',Value)",
+        "input": "EntraAppPermissions_Application"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsApplicationVerdict_TopMatch",
+      "type": "string",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsApplicationVerdict_MatchCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsApplicationVerdict_MissCount",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsDelegatedVerdict_Tier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "sections": [
+          "EntraID_APIPermissions_Tier0..3"
+        ],
+        "matchKey": "(AppId,'Delegated',Value)",
+        "input": "EntraAppPermissions_Delegated"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsDelegatedVerdict_TopMatch",
+      "type": "string",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsDelegatedVerdict_MatchCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntraApiPermsDelegatedVerdict_MissCount",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdBuiltinGroupsVerdict_Tier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "sections": [
+          "AD_BuiltInPermissionGroups_Tier0..3"
+        ],
+        "matchKey": "Name (case-insensitive)",
+        "input": "AdNestedGroupNames ∪ AdNestedCriticalGroups[*].groupName ∪ Groups"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdBuiltinGroupsVerdict_TopMatch",
+      "type": "string",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdBuiltinGroupsVerdict_MatchCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdBuiltinGroupsVerdict_MissCount",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureRolesVerdict_Tier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "sections": [
+          "Azure_BuiltInRoles_Tier0..3",
+          "Azure_CustomRoles_Tier0..3"
+        ],
+        "matchKey": "Id",
+        "input": "AzureRoles_Assignments"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureRolesVerdict_TopMatch",
+      "type": "string",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureRolesVerdict_MatchCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureRolesVerdict_MissCount",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IdentityTieringCatalogVersion",
+      "type": "string",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "stamp_from_catalog_metadata",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "field": "Metadata.GeneratedAt"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "sentinel",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EgCriticalityLevel",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel.criticalityLevel",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EgRuleBasedCriticalityLevel",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel.ruleBasedCriticalityLevel",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EgCriticalityRuleNamesPredefined",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "intersect_with_catalog",
+        "catalog": "MS_Predefined_CriticalityRules"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EgCriticalityRuleNamesCustom",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "subtract_catalog",
+        "catalog": "MS_Predefined_CriticalityRules"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MdiInvestigationPriority",
+      "type": "int",
+      "purpose": "risk",
+      "source": "mdi",
+      "sourcePath": "mdi.identity.investigationPriority",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AppId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "entra",
+      "sourcePath": "graph.servicePrincipal.appId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AppOwnerOrganizationId",
+      "type": "string",
+      "purpose": "posture",
+      "source": "entra",
+      "sourcePath": "graph.servicePrincipal.appOwnerOrganizationId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PublisherName",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "graph.servicePrincipal.publisherName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ServicePrincipalType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "graph.servicePrincipal.servicePrincipalType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsFirstPartyMicrosoftSpn",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "AppOwnerOrganizationId == 'f8cdef31-a31e-4b4a-93e4-5f571e91255a'"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsHomeTenantSpn",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "AppOwnerOrganizationId == HomeTenantId"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsThirdPartyMultiTenantSpn",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "not first-party MS, not home-tenant"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsLegacySpn",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "ServicePrincipalType == 'Legacy'"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MiAccountType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.managedIdentityMetadata.accountType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsSystemAssignedManagedIdentity",
+      "type": "bool",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "MiAccountType == 'SystemManagedIdentity'"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsUserAssignedManagedIdentity",
+      "type": "bool",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "MiAccountType == 'UserAssignedManagedIdentity'"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsExplicitManagedIdentity",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "parse_alternativeNames isExplicit=true"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AttachedAzureResourceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "managedIdentityMetadata.attachedResourceId ?? first(alternativeNames matching ARM ID pattern)"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AttachedResourceType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "parse_arm_resource_type from AttachedAzureResourceId"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AttachedResourceTier",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_join",
+        "join": "AttachedAzureResourceId → Azure_Profile_CL.Tier"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AttachedResourceCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "count_resources_referencing_uami"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsManagedServiceAccount",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "IdentityType == 'ServiceAccount' AND accountName endswith '$'"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsDomainControllerAccount",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isDomainController",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsExchangeServerAccount",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "isExchangeServerDnsName OR isTaggedAsExchangeServer"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasServicePrincipalName",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasServicePrincipalName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DisplayName",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "coalesce(graph.user.displayName, graph.servicePrincipal.displayName, graph.group.displayName)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetName",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of DisplayName -- shared cross-engine asset-name field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "AssetId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of PrimaryEntityId (= Entra ObjectId for users / SPs / MIs / groups) -- shared cross-engine asset-id field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "AssetType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of ObjectType (User / ServicePrincipal / ManagedIdentity / Group / ServiceAccount / Computer) -- shared cross-engine asset-type field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "IdentityType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "infer-from-entra-or-eg",
+        "inputs": [
+          "ENTRA_AssetType",
+          "ENTRA_SPType",
+          "eg.rawData.identityType"
+        ]
+      },
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ObjectType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "v2.1-style alias of IdentityType -- emits 'User' / 'ServicePrincipal' / 'ManagedIdentity' / 'Group' / 'ServiceAccount' / 'Computer'. Kept for back-compat with legacy SI_IdentityAssets_CL queries."
+      },
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.5"
+    },
+    {
+      "name": "CSA",
+      "type": "string",
+      "purpose": "audit",
+      "source": "entra",
+      "sourcePath": "Concatenation of customSecurityAttributes assignments as 'set/attribute=value' pairs (e.g. 'SecurityInsight/AssetTier=tier-0; SecurityInsight/RegulatoryScope=PCI'). Source: graph.user.customSecurityAttributes / graph.servicePrincipal.customSecurityAttributes. Asset-tagging KQL parses the CSA string with extract(@\"tier-(\\d+)\", 1, tostring(CSA)).",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.5"
+    },
+    {
+      "name": "SecurityPrincipalType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "infer-from-entra-or-eg",
+        "inputs": [
+          "ENTRA_AssetType"
+        ]
+      },
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PrimaryProvider",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "infer-from-entra-or-eg",
+        "inputs": [
+          "ENTRA_OnPrem",
+          "eg.rawData.primaryProvider"
+        ]
+      },
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Department",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "graph.user.department",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EmployeeType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "graph.user.employeeType",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "JobTitle",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "graph.user.jobTitle",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Country",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "graph.user.country",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "OnPremDomainName",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "entra",
+      "sourcePath": "graph.user.onPremisesDomainName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Manager",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "entra",
+      "sourcePath": "graph.user.manager/$ref",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ManagerUpn",
+      "type": "string",
+      "purpose": "attribution",
+      "source": "entra",
+      "sourcePath": "graph.user.manager/userPrincipalName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "UsageLocation",
+      "type": "string",
+      "purpose": "compliance",
+      "source": "entra",
+      "sourcePath": "graph.user.usageLocation",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PasswordPolicies",
+      "type": "string",
+      "purpose": "policy",
+      "source": "entra",
+      "sourcePath": "graph.user.passwordPolicies",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "LicenseSkuIds",
+      "type": "dynamic",
+      "purpose": "compliance",
+      "source": "entra",
+      "sourcePath": "graph.user.assignedLicenses[*].skuId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Tags",
+      "type": "dynamic",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "merge eg.tags ∪ mdi.tags ∪ inferred"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExtensionAttributes",
+      "type": "dynamic",
+      "purpose": "enrichment",
+      "source": "entra",
+      "sourcePath": "graph.user.onPremisesExtensionAttributes (whole object)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CustomSecurityAttributes",
+      "type": "dynamic",
+      "purpose": "compliance",
+      "source": "entra",
+      "sourcePath": "graph.user.customSecurityAttributes",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetSubtypeAI",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "posture_analyze",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetGroupAI",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "ai_cluster"
+      },
+      "stage": {
+        "writtenBy": "posture_analyze",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "Tier",
+      "type": "int",
+      "purpose": "kpi",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "weighted_tier_aggregator",
+        "see": "aggregator section in this file"
+      },
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SIRules",
+      "type": "dynamic",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "rule_matches",
+        "see": "Profile stage: AssetProfileBy* YAML matches"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel",
+          "audit"
+        ]
+      },
+      "addedIn": "2.3.2"
+    },
+    {
+      "name": "IsEnabledActive",
+      "type": "bool",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "enabled_and_recent",
+        "inputs": [
+          "AccountEnabled",
+          "LastSignInDays<=$global:SI_ActiveStaleDays"
+        ],
+        "default_stale_days": 30
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.3"
+    },
+    {
+      "name": "AssetGroup",
+      "type": "string",
+      "purpose": "kpi",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsOrphanSPN",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Get-SIIdentityRiskFactors",
+        "inputs": [
+          "IsServicePrincipal && Owner is null/empty"
+        ]
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "HasExpiringCredentials",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Get-SIIdentityRiskFactors",
+        "inputs": [
+          "NextCredentialExpiryDateTime within 30 days"
+        ]
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "CredentialExpiryDays",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "(NextCredentialExpiryDateTime - now()).TotalDays, null when missing"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "HasNoMfa",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "MfaState matches none|notRegistered|notCapable, AND not an SPN"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "HasPasswordNeverExpires",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "PasswordPolicies contains DisablePasswordExpiration / DisableExpiration"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "IsExternalIdentity",
+      "type": "bool",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Upn contains '#EXT#'"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "IsHighRiskPermissionGrant",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "EntraAppPermissions_Application | EntraRoles_Permanent | EntraRoles_Eligible intersects high-risk list (Directory.ReadWrite.All, RoleManagement.ReadWrite.Directory, ...)"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "DaysInactive",
+      "type": "int",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Get-SIDaysInactive",
+        "inputs": [
+          "max of LastSignInDateTime, LastSeen, EgLastSeen"
+        ],
+        "sentinel_no_signal": 9999
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "IsCmdbOrphan",
+      "type": "bool",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "CmdbMatchPhase == 'orphan' AND Tier <= 1"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "purpose": "correlation",
+      "addedIn": "2.3.6",
+      "name": "cmdbId",
+      "source": "cmdb",
+      "sourcePath": "cmdb.id (CMDB row primary key when matched at Reconcile)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "correlation",
+      "addedIn": "2.3.6",
+      "name": "cmdbName",
+      "source": "cmdb",
+      "sourcePath": "cmdb.name (display name from CMDB)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "cmdbCriticality",
+      "source": "cmdb",
+      "sourcePath": "cmdb.criticality (Critical / High / Medium / Low)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "cmdbDataSensitivity",
+      "source": "cmdb",
+      "sourcePath": "cmdb.dataSensitivity (Restricted / Confidential / Internal / Public)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchPhase",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "Reconcile-stage classification of how the asset was matched to CMDB: rule / identity / orphan / stale-cache / gap-cis"
+      }
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchState",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "Reconcile-stage match outcome: matched / unmatched / ambiguous"
+      }
+    },
+    {"name":"MsCriticalityLevel","type":"string","purpose":"posture","source":"exposureGraph","sourcePath":"eg.user.NodeProperties.rawData.criticalityLevel","stage":{"writtenBy":"collect","readBy":["enrich","classify","risk_analysis"]},"addedIn":"2.3.0"},
+    {"name":"IsCompromisedRecently","type":"bool","purpose":"posture","source":"exposureGraph","sourcePath":"eg.user.NodeProperties.rawData.isCompromisedRecently. Feeds RiskFactor_Probability_Detailed.","stage":{"writtenBy":"collect","readBy":["enrich","classify","risk_analysis"]},"addedIn":"2.3.0"},
+    {"name":"IsExternalUser","type":"bool","purpose":"posture","source":"exposureGraph","sourcePath":"eg.user.NodeProperties.rawData.externalUser. B2B guest indicator -- different threat model.","stage":{"writtenBy":"collect","readBy":["enrich","classify","risk_analysis"]},"addedIn":"2.3.0"},
+    {"name":"OnPremSyncEnabled","type":"bool","purpose":"posture","source":"exposureGraph","sourcePath":"eg.user.NodeProperties.rawData.onPremSyncEnabled. Hybrid identity signal.","stage":{"writtenBy":"collect","readBy":["enrich","classify","risk_analysis"]},"addedIn":"2.3.0"},
+    {"name":"IsMfaCapable","type":"bool","purpose":"posture","source":"exposureGraph","sourcePath":"eg.user.NodeProperties.rawData.isMfaCapable.","stage":{"writtenBy":"collect","readBy":["enrich","classify","risk_analysis"]},"addedIn":"2.3.0"},
+    {"name":"IsMfaRegistered","type":"bool","purpose":"posture","source":"exposureGraph","sourcePath":"eg.user.NodeProperties.rawData.isMfaRegistered. More granular than current MFA tracking -- capable != registered != enforced.","stage":{"writtenBy":"collect","readBy":["enrich","classify","risk_analysis"]},"addedIn":"2.3.0"},
+    {"name":"EntraAccountObjectId","type":"string","purpose":"identifier","source":"exposureGraph","sourcePath":"eg.user.NodeProperties.rawData.accountObjectId. Direct Entra link -- feeds the Entra portal link in MoreDetails.","stage":{"writtenBy":"collect","readBy":["enrich","classify","risk_analysis"]},"addedIn":"2.3.0"}
+  ]
+}

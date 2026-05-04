@@ -1,0 +1,21 @@
+id:        CheckpointHarmonyEndpoint
+appliesTo: endpoint
+mode:      locked
+purpose:   'Check Point Endpoint Security E80'
+category:  'EDR'
+description: ''
+displayNames:
+  - 'Check Point Endpoint Security E80'
+  - 'Check Point Harmony Endpoint'
+
+detections:
+  - id: CheckpointHarmonyEndpoint
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'harmony_endpoint*'
+    set:
+      Tier:     1
+      Purpose:  'EDR'
+      Category: 'EDR'

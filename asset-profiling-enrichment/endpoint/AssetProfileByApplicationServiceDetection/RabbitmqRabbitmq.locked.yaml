@@ -1,0 +1,20 @@
+id:        RabbitmqRabbitmq
+appliesTo: endpoint
+mode:      locked
+purpose:   'RabbitMQ'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'RabbitMQ'
+
+detections:
+  - id: RabbitmqRabbitmq
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'rabbitmq*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

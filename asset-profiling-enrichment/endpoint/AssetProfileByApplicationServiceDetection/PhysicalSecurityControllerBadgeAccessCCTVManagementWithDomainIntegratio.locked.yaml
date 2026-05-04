@@ -1,0 +1,33 @@
+id:        PhysicalSecurityControllerBadgeAccessCCTVManagementWithDomainIntegratio
+appliesTo: endpoint
+mode:      locked
+purpose:   'Physical Security Controller (Badge Access, CCTV Management) with Domain Integration'
+category:  'IoT / OT'
+description: 'Domain-joined physical security controller can be pivoted into AD or used to disable physical defences.'
+
+detections:
+  - id: PhysicalSecurityControllerBadgeAccessCCTVManagementWithDomainIntegratio
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'lenel_onguard*'
+            - 'genetec_security_center*'
+            - 'milestone_xprotect*'
+            - 'honeywell_pro-watch*'
+            - 'software_house_ccure*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^badge\d'
+            - '(?i)^cctv\d'
+            - '(?i)^accesscontrol'
+            - '(?i)physical.security'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)badge.access'
+            - '(?i)cctv.management'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Physical Security Controller (Badge Access, CCTV Management) with Domain Integration'
+      Category: 'IoT / OT'

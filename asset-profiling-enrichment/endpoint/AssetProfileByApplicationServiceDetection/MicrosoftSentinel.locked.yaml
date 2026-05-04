@@ -1,0 +1,21 @@
+id:        MicrosoftSentinel
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Sentinel'
+category:  'SIEM'
+description: 'Sentinel is SaaS; on-prem connector hosts inherit tier'
+displayNames:
+  - 'Microsoft Sentinel'
+  - 'Azure Sentinel'
+
+detections:
+  - id: MicrosoftSentinel
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sentinel*'
+    set:
+      Tier:     0
+      Purpose:  'SIEM'
+      Category: 'SIEM'

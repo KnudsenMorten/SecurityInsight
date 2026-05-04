@@ -1,0 +1,20 @@
+id:        HpeNimbleConnectionManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Nimble Storage Connection Manager'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'Nimble Storage Connection Manager'
+
+detections:
+  - id: HpeNimbleConnectionManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nimble_connection_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

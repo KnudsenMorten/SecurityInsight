@@ -1,0 +1,20 @@
+id:        MicrosoftExchangeHybridConfigurationWizard
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Exchange Hybrid Configuration'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Microsoft Exchange Hybrid Configuration'
+
+detections:
+  - id: MicrosoftExchangeHybridConfigurationWizard
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'exchange_hybrid_configuration_wizard*'
+    set:
+      Tier:     1
+      Purpose:  'Mail'
+      Category: 'Mail'

@@ -1,0 +1,21 @@
+id:        EntrustNshield
+appliesTo: endpoint
+mode:      locked
+purpose:   'Entrust nShield Software'
+category:  'PKI/HSM'
+description: ''
+displayNames:
+  - 'Entrust nShield Software'
+  - 'Thales nShield'
+
+detections:
+  - id: EntrustNshield
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nshield*'
+    set:
+      Tier:     0
+      Purpose:  'PKI/HSM'
+      Category: 'PKI/HSM'

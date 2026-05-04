@@ -1,0 +1,21 @@
+id:        AdobeCommerce
+appliesTo: endpoint
+mode:      locked
+purpose:   'Magento Commerce'
+category:  'E-commerce'
+description: ''
+displayNames:
+  - 'Magento Commerce'
+  - 'Adobe Commerce'
+
+detections:
+  - id: AdobeCommerce
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'commerce*'
+    set:
+      Tier:     2
+      Purpose:  'E-commerce'
+      Category: 'E-commerce'

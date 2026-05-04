@@ -1,0 +1,82 @@
+id:        AssetProfileByDeviceType
+appliesTo: endpoint
+mode:      locked
+purpose:   'Baseline device-type tier defaults'
+category:  'Device Type'
+description: |
+  Catch-all device-type rule for endpoints that don't match a specific
+  application-service rule (the 589 AssetProfileByApplicationServiceDetection
+  rules cover server roles like AD/Exchange/IIS/SQL; this rule covers the
+  REST: workstations, PAW, Mac, IoT, mobile).
+
+detections:
+
+  - id: PrivilegedAccessWorkstation
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^paw[-_]'
+            - '(?i)^paw\d'
+            - '(?i)[-_]paw[-_]'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)^paw'
+            - '(?i)privileged.access.workstation'
+            - '(?i)tier.?0.workstation'
+    set:
+      Tier:     0
+      Purpose:  'Privileged Access Workstation'
+      Category: 'Device Type'
+
+  - id: JumpServer
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^jump[-_]'
+            - '(?i)^bastion[-_]'
+            - '(?i)[-_]jump\d'
+            - '(?i)[-_]jumphost'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)jump.?server'
+            - '(?i)bastion'
+    set:
+      Tier:     1
+      Purpose:  'Jump Server / Bastion'
+      Category: 'Device Type'
+
+  - id: MobileDevice
+    detect:
+      any:
+        - kind: osPlatform
+          osPatterns:
+            - '(?i)^iOS'
+            - '(?i)^iPadOS'
+            - '(?i)^Android'
+    set:
+      Tier:     3
+      Purpose:  'Mobile Device'
+      Category: 'Device Type'
+
+  - id: IoTDevice
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)appletv'
+            - '(?i)^tv[-_]'
+            - '(?i)^iot[-_]'
+            - '(?i)^cam[-_]'
+            - '(?i)printer'
+        - kind: osPlatform
+          osPatterns:
+            - '(?i)^TvOS'
+            - '(?i)^WatchOS'
+            - '(?i)^IoT'
+            - '(?i)^Embedded'
+    set:
+      Tier:     3
+      Purpose:  'IoT / OT Device'
+      Category: 'Device Type'

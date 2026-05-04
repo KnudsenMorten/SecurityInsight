@@ -1,0 +1,31 @@
+id:        ContentFilteringWebProxyAppliance
+appliesTo: endpoint
+mode:      locked
+purpose:   'Content Filtering / Web Proxy Appliance'
+category:  'Network Equipment'
+description: 'Outbound URL filter without TLS inspection; bypassable but useful for egress control.'
+
+detections:
+  - id: ContentFilteringWebProxyAppliance
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'websense*'
+            - 'forcepoint*'
+            - 'barracuda_web_filter*'
+            - 'smoothwall*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^webfilter\d'
+            - '(?i)^contentfilter'
+            - '(?i)web.proxy'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)content.filter'
+            - '(?i)web.filter'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Content Filtering / Web Proxy Appliance'
+      Category: 'Network Equipment'

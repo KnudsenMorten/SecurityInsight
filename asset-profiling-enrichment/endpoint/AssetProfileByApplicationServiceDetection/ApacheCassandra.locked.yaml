@@ -1,0 +1,21 @@
+id:        ApacheCassandra
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cassandra'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Cassandra'
+  - 'Apache Cassandra'
+
+detections:
+  - id: ApacheCassandra
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cassandra*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

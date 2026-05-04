@@ -1,0 +1,20 @@
+id:        AtlassianCrucible
+appliesTo: endpoint
+mode:      locked
+purpose:   'Atlassian Crucible'
+category:  'SCM'
+description: ''
+displayNames:
+  - 'Atlassian Crucible'
+
+detections:
+  - id: AtlassianCrucible
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'crucible*'
+    set:
+      Tier:     2
+      Purpose:  'SCM'
+      Category: 'SCM'

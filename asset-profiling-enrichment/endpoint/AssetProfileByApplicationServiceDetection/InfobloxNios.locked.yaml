@@ -1,0 +1,20 @@
+id:        InfobloxNios
+appliesTo: endpoint
+mode:      locked
+purpose:   'Infoblox NIOS'
+category:  'Network'
+description: ''
+displayNames:
+  - 'Infoblox NIOS'
+
+detections:
+  - id: InfobloxNios
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nios*'
+    set:
+      Tier:     1
+      Purpose:  'Network'
+      Category: 'Network'

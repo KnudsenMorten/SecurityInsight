@@ -1,0 +1,20 @@
+id:        IvantiServiceManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Ivanti Service Manager'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'Ivanti Service Manager'
+
+detections:
+  - id: IvantiServiceManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'service_manager*'
+    set:
+      Tier:     2
+      Purpose:  'ITSM'
+      Category: 'ITSM'

@@ -1,0 +1,22 @@
+id:        AtlassianJiraServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Jira Software Server'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'Jira Software Server'
+  - 'Jira Server'
+  - 'Jira Data Center'
+
+detections:
+  - id: AtlassianJiraServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'jira_server*'
+    set:
+      Tier:     2
+      Purpose:  'ITSM'
+      Category: 'ITSM'

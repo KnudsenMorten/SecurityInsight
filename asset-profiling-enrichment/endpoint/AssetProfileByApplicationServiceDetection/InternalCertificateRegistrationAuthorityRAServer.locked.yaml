@@ -1,0 +1,31 @@
+id:        InternalCertificateRegistrationAuthorityRAServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Internal Certificate Registration Authority (RA) Server'
+category:  'Server Roles'
+description: 'Approves certificate requests; compromise enables issuance of low-tier identity certs.'
+
+detections:
+  - id: InternalCertificateRegistrationAuthorityRAServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_certificate_services*'
+            - 'ndes*'
+            - 'scep*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^ra\d'
+            - '(?i)^ndes\d'
+            - '(?i)^scep\d'
+            - '(?i)registration.authority'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)cert.ra'
+            - '(?i)ndes'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Internal Certificate Registration Authority (RA) Server'
+      Category: 'Server Roles'

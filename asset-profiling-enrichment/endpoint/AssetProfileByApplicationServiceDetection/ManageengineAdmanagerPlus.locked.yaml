@@ -1,0 +1,20 @@
+id:        ManageengineAdmanagerPlus
+appliesTo: endpoint
+mode:      locked
+purpose:   'ManageEngine ADManager Plus'
+category:  'Identity Mgmt'
+description: ''
+displayNames:
+  - 'ManageEngine ADManager Plus'
+
+detections:
+  - id: ManageengineAdmanagerPlus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'admanager_plus*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Mgmt'
+      Category: 'Identity Mgmt'

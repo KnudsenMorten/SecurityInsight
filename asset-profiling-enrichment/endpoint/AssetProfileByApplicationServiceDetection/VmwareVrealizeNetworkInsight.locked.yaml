@@ -1,0 +1,20 @@
+id:        VmwareVrealizeNetworkInsight
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware vRealize Network Insight'
+category:  'Network/SDN'
+description: ''
+displayNames:
+  - 'VMware vRealize Network Insight'
+
+detections:
+  - id: VmwareVrealizeNetworkInsight
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vrealize_network_insight*'
+    set:
+      Tier:     1
+      Purpose:  'Network/SDN'
+      Category: 'Network/SDN'

@@ -1,0 +1,21 @@
+id:        VeritasNetbackup
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veritas NetBackup Server'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veritas NetBackup Server'
+  - 'Veritas NetBackup Master Server'
+
+detections:
+  - id: VeritasNetbackup
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'netbackup*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

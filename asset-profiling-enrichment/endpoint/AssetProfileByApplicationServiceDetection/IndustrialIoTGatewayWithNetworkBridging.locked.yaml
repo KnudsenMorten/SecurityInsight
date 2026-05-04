@@ -1,0 +1,31 @@
+id:        IndustrialIoTGatewayWithNetworkBridging
+appliesTo: endpoint
+mode:      locked
+purpose:   'Industrial IoT Gateway with Network Bridging'
+category:  'IoT / OT'
+description: 'Bridges OT and IT networks; compromise creates a path between segmentation zones.'
+
+detections:
+  - id: IndustrialIoTGatewayWithNetworkBridging
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_iot_gateway*'
+            - 'moxa*'
+            - 'hms_ewon*'
+            - 'advantech_iot*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^iot-gw'
+            - '(?i)^otgw\d'
+            - '(?i)iot.gateway'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)iot.gateway'
+            - '(?i)ot.bridge'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Industrial IoT Gateway with Network Bridging'
+      Category: 'IoT / OT'

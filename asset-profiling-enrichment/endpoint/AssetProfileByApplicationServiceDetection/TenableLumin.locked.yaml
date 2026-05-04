@@ -1,0 +1,20 @@
+id:        TenableLumin
+appliesTo: endpoint
+mode:      locked
+purpose:   'Tenable Lumin'
+category:  'Vulnerability Mgmt'
+description: ''
+displayNames:
+  - 'Tenable Lumin'
+
+detections:
+  - id: TenableLumin
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'lumin*'
+    set:
+      Tier:     1
+      Purpose:  'Vulnerability Mgmt'
+      Category: 'Vulnerability Mgmt'

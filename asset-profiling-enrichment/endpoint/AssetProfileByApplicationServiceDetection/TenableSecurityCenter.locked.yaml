@@ -1,0 +1,21 @@
+id:        TenableSecurityCenter
+appliesTo: endpoint
+mode:      locked
+purpose:   'Tenable Security Center'
+category:  'Vulnerability Mgmt'
+description: ''
+displayNames:
+  - 'Tenable Security Center'
+  - 'Tenable.sc'
+
+detections:
+  - id: TenableSecurityCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'security_center*'
+    set:
+      Tier:     1
+      Purpose:  'Vulnerability Mgmt'
+      Category: 'Vulnerability Mgmt'

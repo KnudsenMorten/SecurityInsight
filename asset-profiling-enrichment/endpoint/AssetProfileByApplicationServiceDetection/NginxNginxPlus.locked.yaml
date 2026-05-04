@@ -1,0 +1,20 @@
+id:        NginxNginxPlus
+appliesTo: endpoint
+mode:      locked
+purpose:   'NGINX Plus'
+category:  'Web Server'
+description: ''
+displayNames:
+  - 'NGINX Plus'
+
+detections:
+  - id: NginxNginxPlus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nginx_plus*'
+    set:
+      Tier:     2
+      Purpose:  'Web Server'
+      Category: 'Web Server'

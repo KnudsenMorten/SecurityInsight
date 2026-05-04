@@ -1,0 +1,20 @@
+id:        MicrosoftBiztalkServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft BizTalk Server'
+category:  'Integration'
+description: ''
+displayNames:
+  - 'Microsoft BizTalk Server'
+
+detections:
+  - id: MicrosoftBiztalkServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'biztalk_server*'
+    set:
+      Tier:     2
+      Purpose:  'Integration'
+      Category: 'Integration'

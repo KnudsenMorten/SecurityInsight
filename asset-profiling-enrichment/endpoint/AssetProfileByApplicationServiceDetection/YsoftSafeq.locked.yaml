@@ -1,0 +1,20 @@
+id:        YsoftSafeq
+appliesTo: endpoint
+mode:      locked
+purpose:   'YSoft SafeQ'
+category:  'Print'
+description: ''
+displayNames:
+  - 'YSoft SafeQ'
+
+detections:
+  - id: YsoftSafeq
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'safeq*'
+    set:
+      Tier:     3
+      Purpose:  'Print'
+      Category: 'Print'

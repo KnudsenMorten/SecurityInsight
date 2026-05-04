@@ -1,0 +1,20 @@
+id:        MicrosoftStorageMigrationService
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Storage Migration Service'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'Microsoft Storage Migration Service'
+
+detections:
+  - id: MicrosoftStorageMigrationService
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'storage_migration_service*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

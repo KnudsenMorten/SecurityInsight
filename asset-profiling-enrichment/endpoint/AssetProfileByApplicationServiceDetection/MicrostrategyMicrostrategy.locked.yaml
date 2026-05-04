@@ -1,0 +1,20 @@
+id:        MicrostrategyMicrostrategy
+appliesTo: endpoint
+mode:      locked
+purpose:   'MicroStrategy'
+category:  'BI'
+description: ''
+displayNames:
+  - 'MicroStrategy'
+
+detections:
+  - id: MicrostrategyMicrostrategy
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microstrategy*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

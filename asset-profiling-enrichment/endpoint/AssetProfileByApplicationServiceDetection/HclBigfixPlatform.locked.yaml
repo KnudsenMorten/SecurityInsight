@@ -1,0 +1,22 @@
+id:        HclBigfixPlatform
+appliesTo: endpoint
+mode:      locked
+purpose:   'BigFix Platform'
+category:  'Endpoint Mgmt'
+description: ''
+displayNames:
+  - 'BigFix Platform'
+  - 'IBM BigFix'
+  - 'HCL BigFix'
+
+detections:
+  - id: HclBigfixPlatform
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bigfix_platform*'
+    set:
+      Tier:     1
+      Purpose:  'Endpoint Mgmt'
+      Category: 'Endpoint Mgmt'

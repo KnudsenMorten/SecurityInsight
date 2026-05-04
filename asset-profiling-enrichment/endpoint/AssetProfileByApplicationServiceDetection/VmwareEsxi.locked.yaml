@@ -1,0 +1,21 @@
+id:        VmwareEsxi
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware ESXi'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'VMware ESXi'
+  - 'VMware ESX'
+
+detections:
+  - id: VmwareEsxi
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'esxi*'
+    set:
+      Tier:     0
+      Purpose:  'Hypervisor (running T0 VMs)'
+      Category: 'Virtualization'

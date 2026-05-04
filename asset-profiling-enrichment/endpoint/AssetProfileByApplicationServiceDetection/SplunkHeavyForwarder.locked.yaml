@@ -1,0 +1,20 @@
+id:        SplunkHeavyForwarder
+appliesTo: endpoint
+mode:      locked
+purpose:   'Splunk Heavy Forwarder'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'Splunk Heavy Forwarder'
+
+detections:
+  - id: SplunkHeavyForwarder
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'heavy_forwarder*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

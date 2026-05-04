@@ -1,0 +1,20 @@
+id:        DovecotDovecot
+appliesTo: endpoint
+mode:      locked
+purpose:   'Dovecot'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Dovecot'
+
+detections:
+  - id: DovecotDovecot
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dovecot*'
+    set:
+      Tier:     2
+      Purpose:  'Mail'
+      Category: 'Mail'

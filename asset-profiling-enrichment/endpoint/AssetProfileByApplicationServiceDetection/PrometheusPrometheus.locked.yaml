@@ -1,0 +1,20 @@
+id:        PrometheusPrometheus
+appliesTo: endpoint
+mode:      locked
+purpose:   'Prometheus'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Prometheus'
+
+detections:
+  - id: PrometheusPrometheus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'prometheus*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

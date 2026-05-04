@@ -1,0 +1,20 @@
+id:        MicrosoftServiceBusForWindowsServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Service Bus for Windows Server'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'Microsoft Service Bus for Windows Server'
+
+detections:
+  - id: MicrosoftServiceBusForWindowsServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'service_bus_for_windows_server*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

@@ -1,0 +1,21 @@
+id:        MicrosoftAzureAdApplicationProxyConnector
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Entra Application Proxy Connector'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Microsoft Entra Application Proxy Connector'
+  - 'Microsoft Azure AD Application Proxy Connector'
+
+detections:
+  - id: MicrosoftAzureAdApplicationProxyConnector
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_ad_application_proxy_connector*'
+    set:
+      Tier:     0
+      Purpose:  'Identity'
+      Category: 'Identity'

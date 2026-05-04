@@ -1,0 +1,21 @@
+id:        ElasticElasticsearch
+appliesTo: endpoint
+mode:      locked
+purpose:   'Elastic Stack'
+category:  'SIEM/Log'
+description: ''
+displayNames:
+  - 'Elastic Stack'
+  - 'Elasticsearch'
+
+detections:
+  - id: ElasticElasticsearch
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'elasticsearch*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM/Log'
+      Category: 'SIEM/Log'

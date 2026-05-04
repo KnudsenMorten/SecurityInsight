@@ -1,0 +1,21 @@
+id:        CitrixApplicationDeliveryManagement
+appliesTo: endpoint
+mode:      locked
+purpose:   'Citrix ADM'
+category:  'Load Balancer Mgmt'
+description: ''
+displayNames:
+  - 'Citrix ADM'
+  - 'NetScaler Application Delivery Management'
+
+detections:
+  - id: CitrixApplicationDeliveryManagement
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'application_delivery_management*'
+    set:
+      Tier:     1
+      Purpose:  'Load Balancer Mgmt'
+      Category: 'Load Balancer Mgmt'

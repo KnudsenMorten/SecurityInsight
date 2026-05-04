@@ -1,0 +1,20 @@
+id:        EpicorErp
+appliesTo: endpoint
+mode:      locked
+purpose:   'Epicor ERP'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Epicor ERP'
+
+detections:
+  - id: EpicorErp
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'erp*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

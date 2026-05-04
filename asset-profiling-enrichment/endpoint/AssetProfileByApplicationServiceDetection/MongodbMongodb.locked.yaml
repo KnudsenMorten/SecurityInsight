@@ -1,0 +1,22 @@
+id:        MongodbMongodb
+appliesTo: endpoint
+mode:      locked
+purpose:   'MongoDB Server'
+category:  'Database'
+description: ''
+displayNames:
+  - 'MongoDB Server'
+  - 'MongoDB Community Server'
+  - 'MongoDB Enterprise'
+
+detections:
+  - id: MongodbMongodb
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mongodb*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

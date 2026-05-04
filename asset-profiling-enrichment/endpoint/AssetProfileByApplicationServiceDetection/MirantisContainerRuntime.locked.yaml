@@ -1,0 +1,20 @@
+id:        MirantisContainerRuntime
+appliesTo: endpoint
+mode:      locked
+purpose:   'Mirantis Container Runtime'
+category:  'Containers'
+description: ''
+displayNames:
+  - 'Mirantis Container Runtime'
+
+detections:
+  - id: MirantisContainerRuntime
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'container_runtime*'
+    set:
+      Tier:     2
+      Purpose:  'Containers'
+      Category: 'Containers'

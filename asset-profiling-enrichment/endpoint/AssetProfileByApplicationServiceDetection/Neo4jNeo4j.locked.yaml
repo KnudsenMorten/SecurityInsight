@@ -1,0 +1,20 @@
+id:        Neo4jNeo4j
+appliesTo: endpoint
+mode:      locked
+purpose:   'Neo4j'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Neo4j'
+
+detections:
+  - id: Neo4jNeo4j
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'neo4j*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

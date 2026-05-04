@@ -1,0 +1,20 @@
+id:        SupermicroIpmiview
+appliesTo: endpoint
+mode:      locked
+purpose:   'Supermicro IPMIView'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'Supermicro IPMIView'
+
+detections:
+  - id: SupermicroIpmiview
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ipmiview*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

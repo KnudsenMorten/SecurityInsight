@@ -1,0 +1,20 @@
+id:        SplunkStream
+appliesTo: endpoint
+mode:      locked
+purpose:   'Splunk Stream'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'Splunk Stream'
+
+detections:
+  - id: SplunkStream
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'stream*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

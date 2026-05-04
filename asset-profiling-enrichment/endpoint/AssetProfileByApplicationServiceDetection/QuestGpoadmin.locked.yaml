@@ -1,0 +1,20 @@
+id:        QuestGpoadmin
+appliesTo: endpoint
+mode:      locked
+purpose:   'Quest GPOADmin'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Quest GPOADmin'
+
+detections:
+  - id: QuestGpoadmin
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'gpoadmin*'
+    set:
+      Tier:     0
+      Purpose:  'Identity'
+      Category: 'Identity'

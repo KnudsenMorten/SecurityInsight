@@ -1,0 +1,20 @@
+id:        OracleEBusinessSuite
+appliesTo: endpoint
+mode:      locked
+purpose:   'Oracle E-Business Suite'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Oracle E-Business Suite'
+
+detections:
+  - id: OracleEBusinessSuite
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'e-business_suite*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

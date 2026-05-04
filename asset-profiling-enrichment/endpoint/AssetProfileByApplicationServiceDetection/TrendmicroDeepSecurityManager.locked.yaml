@@ -1,0 +1,20 @@
+id:        TrendmicroDeepSecurityManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Trend Micro Deep Security Manager'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'Trend Micro Deep Security Manager'
+
+detections:
+  - id: TrendmicroDeepSecurityManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'deep_security_manager*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

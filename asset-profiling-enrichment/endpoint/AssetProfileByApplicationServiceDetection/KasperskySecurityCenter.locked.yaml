@@ -1,0 +1,20 @@
+id:        KasperskySecurityCenter
+appliesTo: endpoint
+mode:      locked
+purpose:   'Kaspersky Security Center'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'Kaspersky Security Center'
+
+detections:
+  - id: KasperskySecurityCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'security_center*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

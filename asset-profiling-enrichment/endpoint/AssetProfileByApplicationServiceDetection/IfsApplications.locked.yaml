@@ -1,0 +1,20 @@
+id:        IfsApplications
+appliesTo: endpoint
+mode:      locked
+purpose:   'IFS Applications'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'IFS Applications'
+
+detections:
+  - id: IfsApplications
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'applications*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

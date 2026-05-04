@@ -1,0 +1,20 @@
+id:        OctopusTentacle
+appliesTo: endpoint
+mode:      locked
+purpose:   'Octopus Tentacle'
+category:  'Deployment'
+description: ''
+displayNames:
+  - 'Octopus Tentacle'
+
+detections:
+  - id: OctopusTentacle
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'tentacle*'
+    set:
+      Tier:     2
+      Purpose:  'Deployment'
+      Category: 'Deployment'

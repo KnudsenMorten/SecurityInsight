@@ -1,0 +1,21 @@
+id:        MicrosoftRemoteDesktopServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Remote Desktop Services'
+category:  'Remote Access'
+description: 'T1 if used as admin jump; T2 for user RDS'
+displayNames:
+  - 'Microsoft Remote Desktop Services'
+  - 'RDS'
+
+detections:
+  - id: MicrosoftRemoteDesktopServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_desktop_services*'
+    set:
+      Tier:     2
+      Purpose:  'Remote Access'
+      Category: 'Remote Access'

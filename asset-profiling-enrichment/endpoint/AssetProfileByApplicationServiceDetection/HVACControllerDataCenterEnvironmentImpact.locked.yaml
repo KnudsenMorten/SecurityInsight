@@ -1,0 +1,31 @@
+id:        HVACControllerDataCenterEnvironmentImpact
+appliesTo: endpoint
+mode:      locked
+purpose:   'HVAC Controller (Data Center Environment Impact)'
+category:  'IoT / OT'
+description: 'Compromise can overheat the data center triggering thermal shutdowns.'
+
+detections:
+  - id: HVACControllerDataCenterEnvironmentImpact
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'siemens_apogee*'
+            - 'honeywell_excel*'
+            - 'johnson_controls_metasys*'
+            - 'trane_tracer*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^hvac\d'
+            - '(?i)^cooling\d'
+            - '(?i)hvac.controller'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)hvac'
+            - '(?i)cooling'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'HVAC Controller (Data Center Environment Impact)'
+      Category: 'IoT / OT'

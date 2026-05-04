@@ -1,0 +1,20 @@
+id:        HpeClearpass
+appliesTo: endpoint
+mode:      locked
+purpose:   'Aruba ClearPass'
+category:  'NAC'
+description: ''
+displayNames:
+  - 'Aruba ClearPass'
+
+detections:
+  - id: HpeClearpass
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'clearpass*'
+    set:
+      Tier:     1
+      Purpose:  'NAC'
+      Category: 'NAC'

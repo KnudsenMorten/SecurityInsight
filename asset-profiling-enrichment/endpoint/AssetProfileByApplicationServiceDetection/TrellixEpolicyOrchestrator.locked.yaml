@@ -1,0 +1,21 @@
+id:        TrellixEpolicyOrchestrator
+appliesTo: endpoint
+mode:      locked
+purpose:   'McAfee ePolicy Orchestrator'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'McAfee ePolicy Orchestrator'
+  - 'Trellix ePO'
+
+detections:
+  - id: TrellixEpolicyOrchestrator
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'epolicy_orchestrator*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

@@ -1,0 +1,20 @@
+id:        MicrosoftStorageReplica
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Storage Replica'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'Microsoft Storage Replica'
+
+detections:
+  - id: MicrosoftStorageReplica
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'storage_replica*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

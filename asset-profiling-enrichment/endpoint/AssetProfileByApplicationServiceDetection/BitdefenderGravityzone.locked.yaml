@@ -1,0 +1,20 @@
+id:        BitdefenderGravityzone
+appliesTo: endpoint
+mode:      locked
+purpose:   'Bitdefender GravityZone'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'Bitdefender GravityZone'
+
+detections:
+  - id: BitdefenderGravityzone
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'gravityzone*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

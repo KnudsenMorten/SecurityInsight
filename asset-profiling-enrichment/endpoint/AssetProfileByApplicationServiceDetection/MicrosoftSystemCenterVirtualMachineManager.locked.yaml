@@ -1,0 +1,22 @@
+id:        MicrosoftSystemCenterVirtualMachineManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft System Center Virtual Machine Manager'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'Microsoft System Center Virtual Machine Manager'
+  - 'SCVMM'
+  - 'Microsoft SCVMM Server'
+
+detections:
+  - id: MicrosoftSystemCenterVirtualMachineManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center_virtual_machine_manager*'
+    set:
+      Tier:     0
+      Purpose:  'SCVMM (managing T0 hypervisors)'
+      Category: 'Virtualization'

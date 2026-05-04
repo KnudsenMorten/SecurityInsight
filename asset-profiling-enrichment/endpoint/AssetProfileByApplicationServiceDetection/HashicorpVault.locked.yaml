@@ -1,0 +1,21 @@
+id:        HashicorpVault
+appliesTo: endpoint
+mode:      locked
+purpose:   'HashiCorp Vault Enterprise'
+category:  'Secrets'
+description: ''
+displayNames:
+  - 'HashiCorp Vault Enterprise'
+  - 'HashiCorp Vault'
+
+detections:
+  - id: HashicorpVault
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vault*'
+    set:
+      Tier:     0
+      Purpose:  'Secrets'
+      Category: 'Secrets'

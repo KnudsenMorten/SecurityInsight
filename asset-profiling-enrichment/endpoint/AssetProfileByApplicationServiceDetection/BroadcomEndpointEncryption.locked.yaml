@@ -1,0 +1,20 @@
+id:        BroadcomEndpointEncryption
+appliesTo: endpoint
+mode:      locked
+purpose:   'Symantec Endpoint Encryption'
+category:  'Encryption'
+description: ''
+displayNames:
+  - 'Symantec Endpoint Encryption'
+
+detections:
+  - id: BroadcomEndpointEncryption
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'endpoint_encryption*'
+    set:
+      Tier:     1
+      Purpose:  'Encryption'
+      Category: 'Encryption'

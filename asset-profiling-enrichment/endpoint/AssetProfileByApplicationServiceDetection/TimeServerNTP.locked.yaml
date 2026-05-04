@@ -1,0 +1,32 @@
+id:        TimeServerNTP
+appliesTo: endpoint
+mode:      locked
+purpose:   'Time Server (NTP)'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |S|e|c|o|n|d|a|r|y|/|n|o|n|-|p|r|i|m|a|r|y|\|\| |N|T|P|\|\| |s|o|u|r|c|e|;|\|\| |t|i|m|e|-|s|k|e|w|\|\| |i|m|p|a|c|t|\|\| |o|n|l|y|\|\| |a|t|\|\| |s|m|a|l|l|\|\| |s|c|a|l|e|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|e|i|n|b|e|r|g|/|n|t|p|
+
+detections:
+  - id: TimeServerNTP
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ntp_*'
+            - 'chrony*'
+            - 'ntp*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^ntp.*sec'
+            - '(?i)^time-srv'
+            - '(?i)ntp.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)ntp.server'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Time Server (NTP)'
+      Category: 'Server Roles'

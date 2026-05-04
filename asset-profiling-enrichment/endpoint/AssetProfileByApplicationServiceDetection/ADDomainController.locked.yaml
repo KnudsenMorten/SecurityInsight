@@ -1,0 +1,62 @@
+id:        ADDomainController
+appliesTo: endpoint
+mode:      locked
+purpose:   'Domain Controller'
+category:  'Server Roles'
+description: |
+  Active Directory Domain Controller. Single rule covers Primary (PDC),
+  Additional (BDC / RWDC), and Read-Only Domain Controller (RODC) variants
+  -- the operational distinction between PDC/BDC/RODC isn't security-relevant
+  for tier classification (any DC compromise = full forest compromise).
+
+detections:
+  - id: ADDomainController
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_server*domain_controller*'
+            - 'active_directory_domain_services*'
+        - kind: egDetectedRoles
+          egSignals:
+            - 'isDomainController'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^dc\d'
+            - '(?i)^pdc\d'
+            - '(?i)^bdc\d'
+            - '(?i)^addc\d'
+            - '(?i)^rodc\d'
+            - '(?i)domain.controller'
+            - '(?i)read.only.domain.controller'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)domain.controller'
+            - '(?i)tier.?0'
+            - '(?i)^pdc$'
+            - '(?i)rodc'
+            - '(?i)read.only.dc'
+        - kind: egKustoQuery
+          query: |
+            ExposureGraphNodes
+            | where NodeLabel has "device"
+                or NodeLabel has "microsoft.compute/virtualmachines"
+                or NodeLabel has "microsoft.hybridcompute/machines"
+            | extend rawData = todynamic(NodeProperties).rawData
+            | where tobool(rawData.isExcluded) == false
+            | where tostring(rawData.deviceType) == "Server"
+            | where tolower(tostring(rawData.onboardingStatus)) == "onboarded"
+            | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+            | extend
+                confidenceHigh = iff(isnull(rawData.criticalityConfidenceHigh), dynamic([]), todynamic(rawData.criticalityConfidenceHigh)),
+                confidenceLow  = iff(isnull(rawData.criticalityConfidenceLow),  dynamic([]), todynamic(rawData.criticalityConfidenceLow))
+            | extend
+                DetectedRoles  = strcat_array(array_concat(confidenceHigh, confidenceLow), ";")
+            | where DetectedRoles has "DomainController"
+    set:
+      Tier:     0
+      Purpose:  'Domain Controller'
+      Category: 'Server Roles'
+      cmdbId:   1
+      cmdbDataSensitivity: 'Restricted'
+

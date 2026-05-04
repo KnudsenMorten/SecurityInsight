@@ -1,0 +1,31 @@
+id:        WirelessLANControllerWLC
+appliesTo: endpoint
+mode:      locked
+purpose:   'Wireless LAN Controller (WLC)'
+category:  'Network Equipment'
+description: 'Owns RADIUS-fronted WLAN auth and AP config; compromise enables rogue WLAN admission.'
+
+detections:
+  - id: WirelessLANControllerWLC
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_wireless_lan_controller*'
+            - 'aruba_mobility_controller*'
+            - 'ruckus_smartzone*'
+            - 'extreme_wireless*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^wlc\d'
+            - '(?i)wireless.controller'
+            - '(?i)wlan.controller'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)wlc'
+            - '(?i)wlan.controller'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Wireless LAN Controller (WLC)'
+      Category: 'Network Equipment'

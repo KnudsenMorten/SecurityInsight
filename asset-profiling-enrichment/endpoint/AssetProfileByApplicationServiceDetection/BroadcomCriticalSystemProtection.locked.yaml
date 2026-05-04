@@ -1,0 +1,20 @@
+id:        BroadcomCriticalSystemProtection
+appliesTo: endpoint
+mode:      locked
+purpose:   'Symantec Critical System Protection'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'Symantec Critical System Protection'
+
+detections:
+  - id: BroadcomCriticalSystemProtection
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'critical_system_protection*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

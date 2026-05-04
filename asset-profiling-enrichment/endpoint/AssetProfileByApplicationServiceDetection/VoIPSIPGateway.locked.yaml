@@ -1,0 +1,37 @@
+id:        VoIPSIPGateway
+appliesTo: endpoint
+mode:      locked
+purpose:   'VoIP / SIP Gateway'
+category:  'Network Equipment'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |P|S|T|N|-|b|r|i|d|g|i|n|g|\|\| |t|e|l|e|p|h|o|n|y|\|\| |g|a|t|e|w|a|y|;|\|\| |t|o|l|l|\|\| |f|r|a|u|d|\|\| |a|n|d|\|\| |c|a|l|l|\|\| |i|n|t|e|r|c|e|p|t|i|o|n|\|\| |r|i|s|k|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |d|i|g|i|u|m|/|a|s|t|e|r|i|s|k|
+
+detections:
+  - id: VoIPSIPGateway
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_unified_communications*'
+            - 'cisco_cucm*'
+            - 'asterisk*'
+            - 'freepbx*'
+            - 'avaya_aura*'
+            - 'asterisk*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^voip\d'
+            - '(?i)^sipgw\d'
+            - '(?i)^cucm\d'
+            - '(?i)voice.gateway'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)voip'
+            - '(?i)sip.gateway'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'VoIP / SIP Gateway'
+      Category: 'Network Equipment'

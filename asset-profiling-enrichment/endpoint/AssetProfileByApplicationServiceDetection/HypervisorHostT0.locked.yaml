@@ -1,0 +1,48 @@
+id:        HypervisorHostT0
+appliesTo: endpoint
+mode:      locked
+purpose:   'Hypervisor Host (Tier 0 guest VMs)'
+category:  'Server Roles'
+description: |
+  Hypervisor host running Tier 0 guest VMs (DC, ADCS, AD FS, AAD Connect,
+  etc.). Single rule covers VMware ESXi, Microsoft Hyper-V, and Linux KVM
+  product variants -- the host is T0 regardless of hypervisor flavor when
+  it carries T0 guests, because root-on-the-hypervisor compromises every
+  guest VM running on it.
+
+detections:
+  - id: HypervisorHostT0
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vmware_esxi*'
+            - 'vmware_vsphere*'
+            - 'microsoft_hyper-v*'
+            - 'hyper-v_server*'
+            - 'windows_server*hyper-v*'
+            - 'kvm*'
+            - 'qemu_kvm*'
+            - 'libvirt*'
+            - 'redhat_virtualization*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^esxi.*t0'
+            - '(?i)^esx.*tier0'
+            - '(?i)^hv.*t0'
+            - '(?i)^hyperv.*tier0'
+            - '(?i)hyper.v.host'
+            - '(?i)^kvm.*t0'
+            - '(?i)^kvm.*tier0'
+            - '(?i)hypervisor.tier.?0'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)esxi.tier.?0'
+            - '(?i)hyperv.tier.?0'
+            - '(?i)kvm.tier.?0'
+            - '(?i)hypervisor.tier.?0'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Hypervisor Host (Tier 0 guest VMs)'
+      Category: 'Server Roles'

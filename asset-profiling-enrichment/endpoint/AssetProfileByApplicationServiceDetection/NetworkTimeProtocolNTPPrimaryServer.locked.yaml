@@ -1,0 +1,35 @@
+id:        NetworkTimeProtocolNTPPrimaryServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Network Time Protocol (NTP) Primary Server'
+category:  'Network Equipment'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |T|i|m|e|\|\| |s|k|e|w|\|\| |b|r|e|a|k|s|\|\| |K|e|r|b|e|r|o|s|;|\|\| |p|r|i|m|a|r|y|\|\| |N|T|P|\|\| |c|o|m|p|r|o|m|i|s|e|\|\| |e|n|a|b|l|e|s|\|\| |w|i|d|e|-|s|p|r|e|a|d|\|\| |a|u|t|h|\|\| |d|i|s|r|u|p|t|i|o|n|\|\| |o|r|\|\| |r|e|p|l|a|y|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|w|i|n|d|o|w|s|_|t|i|m|e|
+
+detections:
+  - id: NetworkTimeProtocolNTPPrimaryServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ntp_*'
+            - 'chrony*'
+            - 'windows_time_service*'
+            - 'meinberg*'
+            - 'windows_time*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^ntp\d'
+            - '(?i)^time-pri'
+            - '(?i)ntp.primary'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)ntp.primary'
+            - '(?i)time.server'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Network Time Protocol (NTP) Primary Server'
+      Category: 'Network Equipment'

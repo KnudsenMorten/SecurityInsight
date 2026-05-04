@@ -1,0 +1,30 @@
+id:        ArchivalColdStorageServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Archival / Cold Storage Server'
+category:  'Server Roles'
+description: 'Cold archive; data-retention impact, low live-system risk.'
+
+detections:
+  - id: ArchivalColdStorageServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'veeam_archive*'
+            - 'azure_archive*'
+            - 'aws_glacier*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^archive\d'
+            - '(?i)^cold\d'
+            - '(?i)archive.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)archive'
+            - '(?i)cold.storage'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Archival / Cold Storage Server'
+      Category: 'Server Roles'

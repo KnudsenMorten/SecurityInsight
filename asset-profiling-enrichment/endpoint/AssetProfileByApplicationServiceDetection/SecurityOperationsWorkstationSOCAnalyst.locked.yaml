@@ -1,0 +1,30 @@
+id:        SecurityOperationsWorkstationSOCAnalyst
+appliesTo: endpoint
+mode:      locked
+purpose:   'Security Operations Workstation (SOC Analyst)'
+category:  'Client Devices'
+description: 'SIEM/EDR console access from analyst workstation; pivot into security tooling.'
+
+detections:
+  - id: SecurityOperationsWorkstationSOCAnalyst
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'splunk_enterprise*'
+            - 'crowdstrike_falcon*'
+            - 'microsoft_sentinel*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^soc-wks'
+            - '(?i)^analyst-wks'
+            - '(?i)^secops'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)soc.analyst'
+            - '(?i)secops'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Security Operations Workstation (SOC Analyst)'
+      Category: 'Client Devices'

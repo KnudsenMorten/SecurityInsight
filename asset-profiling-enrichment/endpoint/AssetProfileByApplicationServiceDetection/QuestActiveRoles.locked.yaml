@@ -1,0 +1,20 @@
+id:        QuestActiveRoles
+appliesTo: endpoint
+mode:      locked
+purpose:   'Quest Active Roles'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Quest Active Roles'
+
+detections:
+  - id: QuestActiveRoles
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_roles*'
+    set:
+      Tier:     0
+      Purpose:  'Identity'
+      Category: 'Identity'

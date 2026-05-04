@@ -1,0 +1,20 @@
+id:        DockerEngine
+appliesTo: endpoint
+mode:      locked
+purpose:   'Docker Engine'
+category:  'Containers'
+description: ''
+displayNames:
+  - 'Docker Engine'
+
+detections:
+  - id: DockerEngine
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'engine*'
+    set:
+      Tier:     2
+      Purpose:  'Containers'
+      Category: 'Containers'

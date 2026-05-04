@@ -1,0 +1,24 @@
+id:        ConsumerIoTDeviceIsolatedGuestVLAN
+appliesTo: endpoint
+mode:      locked
+purpose:   'Consumer IoT Device (Isolated Guest VLAN)'
+category:  'IoT / OT'
+description: 'Consumer IoT on guest network; segmented from production.'
+
+detections:
+  - id: ConsumerIoTDeviceIsolatedGuestVLAN
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^iot-cons'
+            - '(?i)^smart.?home'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)consumer.iot'
+            - '(?i)guest.vlan'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Consumer IoT Device (Isolated Guest VLAN)'
+      Category: 'IoT / OT'

@@ -1,0 +1,36 @@
+id:        DNSResolverInternalRecursive
+appliesTo: endpoint
+mode:      locked
+purpose:   'DNS Resolver (Internal Recursive)'
+category:  'Network Equipment'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |F|o|r|c|e|d|\|\| |r|e|s|o|l|u|t|i|o|n|\|\| |p|a|t|h|\|\| |f|o|r|\|\| |t|h|e|\|\| |L|A|N|;|\|\| |c|a|c|h|e|\|\| |p|o|i|s|o|n|i|n|g|\|\| |e|n|a|b|l|e|s|\|\| |M|I|T|M|\|\| |a|t|\|\| |s|c|a|l|e|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |i|s|c|/|b|i|n|d|
+
+detections:
+  - id: DNSResolverInternalRecursive
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bind*'
+            - 'windows_dns_server*'
+            - 'infoblox_*'
+            - 'powerdns_recursor*'
+            - 'unbound*'
+            - 'bind*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^resolver\d'
+            - '(?i)^recurse\d'
+            - '(?i)^rdns\d'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)dns.resolver'
+            - '(?i)recursive.dns'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'DNS Resolver (Internal Recursive)'
+      Category: 'Network Equipment'

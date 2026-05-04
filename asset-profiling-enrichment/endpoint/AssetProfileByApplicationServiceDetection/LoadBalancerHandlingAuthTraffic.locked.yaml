@@ -1,0 +1,33 @@
+id:        LoadBalancerHandlingAuthTraffic
+appliesTo: endpoint
+mode:      locked
+purpose:   'Load Balancer (Handling Auth Traffic)'
+category:  'Network Equipment'
+description: 'Terminates TLS for ADFS/Exchange/IDP traffic; SSL key compromise exposes credentials.'
+
+detections:
+  - id: LoadBalancerHandlingAuthTraffic
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'f5_big-ip*'
+            - 'citrix_adc*'
+            - 'citrix_netscaler*'
+            - 'kemp_loadmaster*'
+            - 'a10_thunder*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^lb-auth'
+            - '(?i)^bigip-auth'
+            - '(?i)^netscaler.*auth'
+            - '(?i)load.balancer.*auth'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)lb.auth'
+            - '(?i)load.balancer.tier.?0'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Load Balancer (Handling Auth Traffic)'
+      Category: 'Network Equipment'

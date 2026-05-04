@@ -1,0 +1,21 @@
+id:        MicrosoftAzureAdConnectCloudProvisioningAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Entra Cloud Sync'
+category:  'Identity Sync'
+description: ''
+displayNames:
+  - 'Microsoft Entra Cloud Sync'
+  - 'Azure AD Connect cloud provisioning agent'
+
+detections:
+  - id: MicrosoftAzureAdConnectCloudProvisioningAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_ad_connect_cloud_provisioning_agent*'
+    set:
+      Tier:     0
+      Purpose:  'Entra Cloud Sync'
+      Category: 'Identity Sync'

@@ -1,0 +1,984 @@
+﻿{
+    "Metadata":  {
+                     "GeneratedAt":  "\u003cset by classifier at runtime\u003e",
+                     "GeneratedBy":  "SecurityInsight-PrivilegeTierClassifier.ps1 v2.0",
+                     "TenantId":  "\u003cyour-tenant-id\u003e",
+                     "TieringModel":  "Attacker-centric (0=immediate compromise, 3=low blast radius)",
+                     "AICallsUsed":  0,
+                     "_purpose":  "SAMPLE file. The privilege-tier-classifier engine REGENERATES privilege-tier-catalog.custom.json from your live tenant on every run -- you do NOT hand-edit this file. This sample only documents the structure customers see in their generated catalog."
+                 },
+    "AD_BuiltInPermissionGroups_Tier0":  [
+                                             {
+                                                 "Name":  "Administrators",
+                                                 "Tier":  0,
+                                                 "Reason":  "Full control over the domain and ability to assign roles or reset credentials, enabling immediate full environment compromise."
+                                             },
+                                             {
+                                                 "Name":  "Domain Admins",
+                                                 "Tier":  0,
+                                                 "Reason":  "Full domain control enabling immediate full environment compromise."
+                                             }
+                                         ],
+    "AD_BuiltInPermissionGroups_Tier1":  [
+                                             {
+                                                 "Name":  "Print Operators",
+                                                 "Tier":  1,
+                                                 "Reason":  "Can manage printers and potentially escalate privileges via print spooler vulnerabilities or local admin rights on servers."
+                                             },
+                                             {
+                                                 "Name":  "Backup Operators",
+                                                 "Tier":  1,
+                                                 "Reason":  "Can back up and restore files including sensitive data and potentially escalate privileges via backup restoration or SeBackupPrivilege."
+                                             }
+                                         ],
+    "AD_BuiltInPermissionGroups_Tier2":  [
+                                             {
+                                                 "Name":  "Hyper-V Administrators",
+                                                 "Tier":  2,
+                                                 "Reason":  "Can manage Hyper-V hosts and VMs, enabling potential data or workload impact but no direct identity plane control."
+                                             },
+                                             {
+                                                 "Name":  "Storage Replica Administrators",
+                                                 "Tier":  2,
+                                                 "Reason":  "Can manage storage replication, impacting workloads but no direct identity plane control."
+                                             }
+                                         ],
+    "AD_BuiltInPermissionGroups_Tier3":  [
+                                             {
+                                                 "Name":  "Users",
+                                                 "Tier":  3,
+                                                 "Reason":  "Default group for standard users with no direct path to identity plane control or tenant takeover."
+                                             },
+                                             {
+                                                 "Name":  "Guests",
+                                                 "Tier":  3,
+                                                 "Reason":  "Limited access group for guest accounts with no escalation path to identity plane control."
+                                             }
+                                         ],
+    "EntraID_BuiltInRoles_Tier0":  [
+                                       {
+                                           "Id":  "62e90394-69f5-4237-9190-012177145e10",
+                                           "DisplayName":  "Global Administrator",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  0,
+                                           "Reason":  "Direct full tenant control including role assignments and identity plane permissions enabling immediate full environment compromise.",
+                                           "Permissions":  [
+                                                               "microsoft.agentRegistry/allEntities/allProperties/allTasks",
+                                                               "microsoft.azure.advancedThreatProtection/allEntities/allTasks",
+                                                               "microsoft.azure.informationProtection/allEntities/allTasks",
+                                                               "microsoft.azure.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.azure.supportTickets/allEntities/allTasks",
+                                                               "microsoft.backup/allEntities/allProperties/allTasks",
+                                                               "microsoft.cloudPC/allEntities/allProperties/allTasks",
+                                                               "microsoft.commerce.billing/allEntities/allProperties/allTasks",
+                                                               "microsoft.commerce.billing/purchases/standard/read",
+                                                               "microsoft.commerce.tenantRelationships/customerDelegatedAdminPrivileges/allProperties/allTasks",
+                                                               "microsoft.directory/accessReviews/allProperties/allTasks",
+                                                               "microsoft.directory/accessReviews/definitions/allProperties/allTasks",
+                                                               "microsoft.directory/adminConsentRequestPolicy/allProperties/allTasks",
+                                                               "microsoft.directory/administrativeUnits/allProperties/allTasks",
+                                                               "microsoft.directory/appConsent/appConsentRequests/allProperties/read",
+                                                               "microsoft.directory/applications/allProperties/allTasks",
+                                                               "microsoft.directory/applications/disablement/update",
+                                                               "microsoft.directory/applications/synchronization/standard/read",
+                                                               "microsoft.directory/applicationTemplates/instantiate",
+                                                               "microsoft.directory/auditLogs/allProperties/read",
+                                                               "microsoft.directory/authorizationPolicy/allProperties/allTasks",
+                                                               "microsoft.directory/backup/preview/cancel",
+                                                               "microsoft.directory/backup/preview/create",
+                                                               "microsoft.directory/backup/recovery/cancel",
+                                                               "microsoft.directory/backup/recovery/create",
+                                                               "microsoft.directory/backup/standard/read",
+                                                               "microsoft.directory/bitlockerKeys/key/read",
+                                                               "microsoft.directory/bulkJobs/basic/update",
+                                                               "microsoft.directory/bulkJobs/create",
+                                                               "microsoft.directory/bulkJobs/standard/read",
+                                                               "microsoft.directory/cloudAppSecurity/allProperties/allTasks",
+                                                               "microsoft.directory/conditionalAccessPolicies/allProperties/allTasks",
+                                                               "microsoft.directory/connectorGroups/allProperties/read",
+                                                               "microsoft.directory/connectorGroups/allProperties/update",
+                                                               "microsoft.directory/connectorGroups/create",
+                                                               "microsoft.directory/connectorGroups/delete",
+                                                               "microsoft.directory/connectors/allProperties/read",
+                                                               "microsoft.directory/connectors/create",
+                                                               "microsoft.directory/contacts/allProperties/allTasks",
+                                                               "microsoft.directory/contracts/allProperties/allTasks",
+                                                               "microsoft.directory/crossTenantAccessPolicy/allowedCloudEndpoints/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/basic/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/default/b2bCollaboration/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/default/b2bDirectConnect/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/default/crossCloudMeetings/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/default/standard/read",
+                                                               "microsoft.directory/crossTenantAccessPolicy/default/tenantRestrictions/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/b2bCollaboration/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/b2bDirectConnect/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/create",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/crossCloudMeetings/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/delete",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/identitySynchronization/basic/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/identitySynchronization/create",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/identitySynchronization/standard/read",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/standard/read",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/templates/multiTenantOrganizationIdentitySynchronization/basic/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/templates/multiTenantOrganizationIdentitySynchronization/resetToDefaultSettings",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/templates/multiTenantOrganizationIdentitySynchronization/standard/read",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/templates/multiTenantOrganizationPartnerConfiguration/basic/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/templates/multiTenantOrganizationPartnerConfiguration/resetToDefaultSettings",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/templates/multiTenantOrganizationPartnerConfiguration/standard/read",
+                                                               "microsoft.directory/crossTenantAccessPolicy/partners/tenantRestrictions/update",
+                                                               "microsoft.directory/crossTenantAccessPolicy/standard/read",
+                                                               "microsoft.directory/customAuthenticationExtensions/allProperties/allTasks",
+                                                               "microsoft.directory/deletedItems/delete",
+                                                               "microsoft.directory/deletedItems/restore",
+                                                               "microsoft.directory/deviceLocalCredentials/password/read",
+                                                               "microsoft.directory/deviceManagementPolicies/basic/update",
+                                                               "microsoft.directory/deviceManagementPolicies/standard/read",
+                                                               "microsoft.directory/deviceRegistrationPolicy/basic/update",
+                                                               "microsoft.directory/deviceRegistrationPolicy/standard/read",
+                                                               "microsoft.directory/devices/allProperties/allTasks",
+                                                               "microsoft.directory/devices/permissions/update",
+                                                               "microsoft.directory/deviceTemplates/owners/read",
+                                                               "microsoft.directory/deviceTemplates/owners/update",
+                                                               "microsoft.directory/directoryRoles/allProperties/allTasks",
+                                                               "microsoft.directory/directoryRoleTemplates/allProperties/allTasks",
+                                                               "microsoft.directory/domains/allProperties/allTasks",
+                                                               "microsoft.directory/domains/federationConfiguration/basic/update",
+                                                               "microsoft.directory/domains/federationConfiguration/create",
+                                                               "microsoft.directory/domains/federationConfiguration/delete",
+                                                               "microsoft.directory/domains/federationConfiguration/standard/read",
+                                                               "microsoft.directory/entitlementManagement/allProperties/allTasks",
+                                                               "microsoft.directory/externalUserProfiles/basic/update",
+                                                               "microsoft.directory/externalUserProfiles/delete",
+                                                               "microsoft.directory/externalUserProfiles/standard/read",
+                                                               "microsoft.directory/groups/allProperties/allTasks",
+                                                               "microsoft.directory/groupsAssignableToRoles/allProperties/update",
+                                                               "microsoft.directory/groupsAssignableToRoles/assignLicense",
+                                                               "microsoft.directory/groupsAssignableToRoles/create",
+                                                               "microsoft.directory/groupsAssignableToRoles/delete",
+                                                               "microsoft.directory/groupsAssignableToRoles/reprocessLicenseAssignment",
+                                                               "microsoft.directory/groupsAssignableToRoles/restore",
+                                                               "microsoft.directory/groupSettings/allProperties/allTasks",
+                                                               "microsoft.directory/groupSettingTemplates/allProperties/allTasks",
+                                                               "microsoft.directory/hybridAuthenticationPolicy/allProperties/allTasks",
+                                                               "microsoft.directory/identityProtection/allProperties/allTasks",
+                                                               "microsoft.directory/lifecycleWorkflows/workflows/allProperties/allTasks",
+                                                               "microsoft.directory/loginOrganizationBranding/allProperties/allTasks",
+                                                               "microsoft.directory/multiTenantOrganization/basic/update",
+                                                               "microsoft.directory/multiTenantOrganization/create",
+                                                               "microsoft.directory/multiTenantOrganization/joinRequest/organizationDetails/update",
+                                                               "microsoft.directory/multiTenantOrganization/joinRequest/standard/read",
+                                                               "microsoft.directory/multiTenantOrganization/standard/read",
+                                                               "microsoft.directory/multiTenantOrganization/tenants/create",
+                                                               "microsoft.directory/multiTenantOrganization/tenants/delete",
+                                                               "microsoft.directory/multiTenantOrganization/tenants/organizationDetails/read",
+                                                               "microsoft.directory/multiTenantOrganization/tenants/organizationDetails/update",
+                                                               "microsoft.directory/multiTenantOrganization/tenants/standard/read",
+                                                               "microsoft.directory/namedLocations/basic/update",
+                                                               "microsoft.directory/namedLocations/create",
+                                                               "microsoft.directory/namedLocations/delete",
+                                                               "microsoft.directory/namedLocations/standard/read",
+                                                               "microsoft.directory/oAuth2PermissionGrants/allProperties/allTasks",
+                                                               "microsoft.directory/onPremisesSynchronization/basic/update",
+                                                               "microsoft.directory/onPremisesSynchronization/standard/read",
+                                                               "microsoft.directory/organization/allProperties/allTasks",
+                                                               "microsoft.directory/passwordHashSync/allProperties/allTasks",
+                                                               "microsoft.directory/pendingExternalUserProfiles/basic/update",
+                                                               "microsoft.directory/pendingExternalUserProfiles/create",
+                                                               "microsoft.directory/pendingExternalUserProfiles/delete",
+                                                               "microsoft.directory/pendingExternalUserProfiles/standard/read",
+                                                               "microsoft.directory/permissionGrantPolicies/basic/update",
+                                                               "microsoft.directory/permissionGrantPolicies/create",
+                                                               "microsoft.directory/permissionGrantPolicies/delete",
+                                                               "microsoft.directory/permissionGrantPolicies/standard/read",
+                                                               "microsoft.directory/policies/allProperties/allTasks",
+                                                               "microsoft.directory/privilegedIdentityManagement/allProperties/read",
+                                                               "microsoft.directory/provisioningLogs/allProperties/read",
+                                                               "microsoft.directory/resourceNamespaces/resourceActions/authenticationContext/update",
+                                                               "microsoft.directory/roleAssignments/allProperties/allTasks",
+                                                               "microsoft.directory/roleDefinitions/allProperties/allTasks",
+                                                               "microsoft.directory/scopedRoleMemberships/allProperties/allTasks",
+                                                               "microsoft.directory/serviceAction/activateService",
+                                                               "microsoft.directory/serviceAction/disableDirectoryFeature",
+                                                               "microsoft.directory/serviceAction/enableDirectoryFeature",
+                                                               "microsoft.directory/serviceAction/getAvailableExtentionProperties",
+                                                               "microsoft.directory/servicePrincipalCreationPolicies/basic/update",
+                                                               "microsoft.directory/servicePrincipalCreationPolicies/create",
+                                                               "microsoft.directory/servicePrincipalCreationPolicies/delete",
+                                                               "microsoft.directory/servicePrincipalCreationPolicies/standard/read",
+                                                               "microsoft.directory/servicePrincipals/allProperties/allTasks",
+                                                               "microsoft.directory/servicePrincipals/managePermissionGrantsForAll.microsoft-company-admin",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToCloudTenant/credentials/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToCloudTenant/jobs/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToCloudTenant/schema/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToExternalSystem/credentials/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToExternalSystem/jobs/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToExternalSystem/schema/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization/standard/read",
+                                                               "microsoft.directory/signInReports/allProperties/read",
+                                                               "microsoft.directory/subscribedSkus/allProperties/allTasks",
+                                                               "microsoft.directory/tenantManagement/tenants/create",
+                                                               "microsoft.directory/users/allProperties/allTasks",
+                                                               "microsoft.directory/users/authenticationMethods/basic/update",
+                                                               "microsoft.directory/users/authenticationMethods/create",
+                                                               "microsoft.directory/users/authenticationMethods/delete",
+                                                               "microsoft.directory/users/authenticationMethods/standard/read",
+                                                               "microsoft.directory/users/convertExternalToInternalMemberUser",
+                                                               "microsoft.directory/verifiableCredentials/configuration/allProperties/read",
+                                                               "microsoft.directory/verifiableCredentials/configuration/allProperties/update",
+                                                               "microsoft.directory/verifiableCredentials/configuration/contracts/allProperties/read",
+                                                               "microsoft.directory/verifiableCredentials/configuration/contracts/allProperties/update",
+                                                               "microsoft.directory/verifiableCredentials/configuration/contracts/cards/allProperties/read",
+                                                               "microsoft.directory/verifiableCredentials/configuration/contracts/cards/revoke",
+                                                               "microsoft.directory/verifiableCredentials/configuration/contracts/create",
+                                                               "microsoft.directory/verifiableCredentials/configuration/create",
+                                                               "microsoft.directory/verifiableCredentials/configuration/delete",
+                                                               "microsoft.dynamics365/allEntities/allTasks",
+                                                               "microsoft.edge/allEntities/allProperties/allTasks",
+                                                               "microsoft.flow/allEntities/allTasks",
+                                                               "microsoft.graph.dataConnect/allEntities/allProperties/allTasks",
+                                                               "microsoft.hardware.support/shippingAddress/allProperties/allTasks",
+                                                               "microsoft.hardware.support/shippingStatus/allProperties/read",
+                                                               "microsoft.hardware.support/warrantyClaims/allProperties/allTasks",
+                                                               "microsoft.healthPlatform/allEntities/allProperties/allTasks",
+                                                               "microsoft.insights/allEntities/allProperties/allTasks",
+                                                               "microsoft.intune/allEntities/allTasks",
+                                                               "microsoft.microsoft365.organizationalData/allEntities/allProperties/allTasks",
+                                                               "microsoft.networkAccess/allEntities/allProperties/allTasks",
+                                                               "microsoft.networkAccess/trafficLogs/standard/read",
+                                                               "microsoft.office365.complianceManager/allEntities/allTasks",
+                                                               "microsoft.office365.copilot/allEntities/allProperties/allTasks",
+                                                               "microsoft.office365.desktopAnalytics/allEntities/allTasks",
+                                                               "microsoft.office365.exchange/allEntities/basic/allTasks",
+                                                               "microsoft.office365.fileStorageContainers/allEntities/allProperties/allTasks",
+                                                               "microsoft.office365.knowledge/contentUnderstanding/allProperties/allTasks",
+                                                               "microsoft.office365.knowledge/contentUnderstanding/analytics/allProperties/read",
+                                                               "microsoft.office365.knowledge/knowledgeNetwork/allProperties/allTasks",
+                                                               "microsoft.office365.knowledge/knowledgeNetwork/topicVisibility/allProperties/allTasks",
+                                                               "microsoft.office365.knowledge/learningSources/allProperties/allTasks",
+                                                               "microsoft.office365.lockbox/allEntities/allTasks",
+                                                               "microsoft.office365.messageCenter/messages/read",
+                                                               "microsoft.office365.messageCenter/securityMessages/read",
+                                                               "microsoft.office365.migrations/allEntities/allProperties/allTasks",
+                                                               "microsoft.office365.network/performance/allProperties/read",
+                                                               "microsoft.office365.organizationalMessages/allEntities/allProperties/allTasks",
+                                                               "microsoft.office365.protectionCenter/allEntities/allProperties/allTasks",
+                                                               "microsoft.office365.search/content/manage",
+                                                               "microsoft.office365.securityComplianceCenter/allEntities/allTasks",
+                                                               "microsoft.office365.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.office365.sharePointAdvancedManagement/allEntities/allProperties/allTasks",
+                                                               "microsoft.office365.sharePoint/allEntities/allTasks",
+                                                               "microsoft.office365.skypeForBusiness/allEntities/allTasks",
+                                                               "microsoft.office365.supportTickets/allEntities/allTasks",
+                                                               "microsoft.office365.usageReports/allEntities/allProperties/read",
+                                                               "microsoft.office365.userCommunication/allEntities/allTasks",
+                                                               "microsoft.office365.webPortal/allEntities/standard/read",
+                                                               "microsoft.office365.yammer/allEntities/allProperties/allTasks",
+                                                               "microsoft.peopleAdmin/organization/allProperties/read",
+                                                               "microsoft.peopleAdmin/organization/allProperties/update",
+                                                               "microsoft.people/users/photo/read",
+                                                               "microsoft.people/users/photo/update",
+                                                               "microsoft.permissionsManagement/allEntities/allProperties/allTasks",
+                                                               "microsoft.powerApps/allEntities/allTasks",
+                                                               "microsoft.powerApps.powerBI/allEntities/allTasks",
+                                                               "microsoft.teams/allEntities/allProperties/allTasks",
+                                                               "microsoft.virtualVisits/allEntities/allProperties/allTasks",
+                                                               "microsoft.viva.glint/allEntities/allProperties/allTasks",
+                                                               "microsoft.viva.goals/allEntities/allProperties/allTasks",
+                                                               "microsoft.viva.pulse/allEntities/allProperties/allTasks",
+                                                               "microsoft.windows.defenderAdvancedThreatProtection/allEntities/allTasks",
+                                                               "microsoft.windows.updatesDeployments/allEntities/allProperties/allTasks"
+                                                           ]
+                                       },
+                                       {
+                                           "Id":  "d29b2b05-8046-44ba-8758-1e26182fcf32",
+                                           "DisplayName":  "Directory Synchronization Accounts",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  0,
+                                           "Reason":  "Has synchronization permissions that can be used to replicate credentials and control identity plane.",
+                                           "Permissions":  [
+                                                               "microsoft.directory/onPremisesSynchronization/standard/read"
+                                                           ]
+                                       }
+                                   ],
+    "EntraID_BuiltInRoles_Tier1":  [
+                                       {
+                                           "Id":  "729827e3-9c14-49f7-bb1b-9608f156bbb8",
+                                           "DisplayName":  "Helpdesk Administrator",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  1,
+                                           "Reason":  "Can reset passwords and invalidate refresh tokens for users including admins, enabling a reliable path to tenant takeover.",
+                                           "Permissions":  [
+                                                               "microsoft.azure.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.azure.supportTickets/allEntities/allTasks",
+                                                               "microsoft.directory/bitlockerKeys/key/read",
+                                                               "microsoft.directory/deviceLocalCredentials/standard/read",
+                                                               "microsoft.directory/users/invalidateAllRefreshTokens",
+                                                               "microsoft.directory/users/password/update",
+                                                               "microsoft.office365.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.office365.supportTickets/allEntities/allTasks",
+                                                               "microsoft.office365.webPortal/allEntities/standard/read"
+                                                           ]
+                                       },
+                                       {
+                                           "Id":  "b0f54661-2d74-4c50-afa3-1ec803f12efe",
+                                           "DisplayName":  "Billing Administrator",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  1,
+                                           "Reason":  "Can update organization info and billing settings, which can be leveraged in some escalation paths to tenant takeover.",
+                                           "Permissions":  [
+                                                               "microsoft.azure.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.azure.supportTickets/allEntities/allTasks",
+                                                               "microsoft.commerce.billing/allEntities/allProperties/allTasks",
+                                                               "microsoft.directory/organization/basic/update",
+                                                               "microsoft.office365.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.office365.supportTickets/allEntities/allTasks",
+                                                               "microsoft.office365.webPortal/allEntities/standard/read"
+                                                           ]
+                                       }
+                                   ],
+    "EntraID_BuiltInRoles_Tier2":  [
+                                       {
+                                           "Id":  "fe930be7-5e62-47db-91af-98c3a49a38b1",
+                                           "DisplayName":  "User Administrator",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  2,
+                                           "Reason":  "Can manage user accounts but no direct or reliable path to assign Global Administrator or control identity plane.",
+                                           "Permissions":  [
+                                                               "microsoft.azure.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.azure.supportTickets/allEntities/allTasks",
+                                                               "microsoft.directory/accessReviews/definitions.applications/allProperties/allTasks",
+                                                               "microsoft.directory/accessReviews/definitions.directoryRoles/allProperties/read",
+                                                               "microsoft.directory/accessReviews/definitions.entitlementManagement/allProperties/allTasks",
+                                                               "microsoft.directory/accessReviews/definitions.groups/allProperties/read",
+                                                               "microsoft.directory/accessReviews/definitions.groups/allProperties/update",
+                                                               "microsoft.directory/accessReviews/definitions.groups/create",
+                                                               "microsoft.directory/accessReviews/definitions.groups/delete",
+                                                               "microsoft.directory/contacts/basic/update",
+                                                               "microsoft.directory/contacts/create",
+                                                               "microsoft.directory/contacts/delete",
+                                                               "microsoft.directory/deletedItems.groups/restore",
+                                                               "microsoft.directory/deletedItems.users/restore",
+                                                               "microsoft.directory/entitlementManagement/allProperties/allTasks",
+                                                               "microsoft.directory/groups/assignLicense",
+                                                               "microsoft.directory/groups/basic/update",
+                                                               "microsoft.directory/groups/classification/update",
+                                                               "microsoft.directory/groups/create",
+                                                               "microsoft.directory/groups/delete",
+                                                               "microsoft.directory/groups/dynamicMembershipRule/update",
+                                                               "microsoft.directory/groups/groupType/update",
+                                                               "microsoft.directory/groups/hiddenMembers/read",
+                                                               "microsoft.directory/groups/members/update",
+                                                               "microsoft.directory/groups/onPremWriteBack/update",
+                                                               "microsoft.directory/groups/owners/update",
+                                                               "microsoft.directory/groups/reprocessLicenseAssignment",
+                                                               "microsoft.directory/groups/restore",
+                                                               "microsoft.directory/groups/settings/update",
+                                                               "microsoft.directory/groups.unified/assignedLabels/update",
+                                                               "microsoft.directory/groups/visibility/update",
+                                                               "microsoft.directory/oAuth2PermissionGrants/allProperties/allTasks",
+                                                               "microsoft.directory/onPremisesSynchronization/standard/read",
+                                                               "microsoft.directory/policies/standard/read",
+                                                               "microsoft.directory/servicePrincipals/appRoleAssignedTo/update",
+                                                               "microsoft.directory/users/assignLicense",
+                                                               "microsoft.directory/users/basic/update",
+                                                               "microsoft.directory/users/convertExternalToInternalMemberUser",
+                                                               "microsoft.directory/users/create",
+                                                               "microsoft.directory/users/delete",
+                                                               "microsoft.directory/users/disable",
+                                                               "microsoft.directory/users/enable",
+                                                               "microsoft.directory/users/invalidateAllRefreshTokens",
+                                                               "microsoft.directory/users/inviteGuest",
+                                                               "microsoft.directory/users/lifeCycleInfo/read",
+                                                               "microsoft.directory/users/manager/update",
+                                                               "microsoft.directory/users/password/update",
+                                                               "microsoft.directory/users/photo/update",
+                                                               "microsoft.directory/users/reprocessLicenseAssignment",
+                                                               "microsoft.directory/users/restore",
+                                                               "microsoft.directory/users/sponsors/update",
+                                                               "microsoft.directory/users/usageLocation/update",
+                                                               "microsoft.directory/users/userPrincipalName/update",
+                                                               "microsoft.office365.serviceHealth/allEntities/allTasks",
+                                                               "microsoft.office365.supportTickets/allEntities/allTasks",
+                                                               "microsoft.office365.webPortal/allEntities/standard/read"
+                                                           ]
+                                       },
+                                       {
+                                           "Id":  "9360feb5-f418-4baa-8175-e2a00bac4301",
+                                           "DisplayName":  "Directory Writers",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  2,
+                                           "Reason":  "Can modify groups and applications but no direct path to assign Global Administrator or control identity plane.",
+                                           "Permissions":  [
+                                                               "microsoft.directory/applications/extensionProperties/update",
+                                                               "microsoft.directory/contacts/create",
+                                                               "microsoft.directory/groups/assignedLabels/update",
+                                                               "microsoft.directory/groups/assignLicense",
+                                                               "microsoft.directory/groups/basic/update",
+                                                               "microsoft.directory/groups/classification/update",
+                                                               "microsoft.directory/groups/create",
+                                                               "microsoft.directory/groups/dynamicMembershipRule/update",
+                                                               "microsoft.directory/groupSettings/basic/update",
+                                                               "microsoft.directory/groupSettings/create",
+                                                               "microsoft.directory/groupSettings/delete",
+                                                               "microsoft.directory/groups/groupType/update",
+                                                               "microsoft.directory/groups/members/update",
+                                                               "microsoft.directory/groups/onPremWriteBack/update",
+                                                               "microsoft.directory/groups/owners/update",
+                                                               "microsoft.directory/groups/reprocessLicenseAssignment",
+                                                               "microsoft.directory/groups/settings/update",
+                                                               "microsoft.directory/groups/visibility/update",
+                                                               "microsoft.directory/oAuth2PermissionGrants/basic/update",
+                                                               "microsoft.directory/oAuth2PermissionGrants/create",
+                                                               "microsoft.directory/servicePrincipals/appRoleAssignedTo/update",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToCloudTenant/credentials/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToCloudTenant/jobs/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToCloudTenant/schema/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToExternalSystem/credentials/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToExternalSystem/jobs/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronization.cloudTenantToExternalSystem/schema/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronizationCredentials/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronizationJobs/manage",
+                                                               "microsoft.directory/servicePrincipals/synchronizationSchema/manage",
+                                                               "microsoft.directory/users/assignLicense",
+                                                               "microsoft.directory/users/basic/update",
+                                                               "microsoft.directory/users/create",
+                                                               "microsoft.directory/users/disable",
+                                                               "microsoft.directory/users/enable",
+                                                               "microsoft.directory/users/invalidateAllRefreshTokens",
+                                                               "microsoft.directory/users/inviteGuest",
+                                                               "microsoft.directory/users/manager/update",
+                                                               "microsoft.directory/users/photo/update",
+                                                               "microsoft.directory/users/reprocessLicenseAssignment",
+                                                               "microsoft.directory/users/sponsors/update",
+                                                               "microsoft.directory/users/userPrincipalName/update"
+                                                           ]
+                                       }
+                                   ],
+    "EntraID_BuiltInRoles_Tier3":  [
+                                       {
+                                           "Id":  "10dae51f-b6af-4016-8d66-8c2a99b929b3",
+                                           "DisplayName":  "Guest User",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  3,
+                                           "Reason":  "Read-only limited permissions with no path to identity plane control or tenant takeover.",
+                                           "Permissions":  [
+                                                               "microsoft.directory/applications/owners/limitedRead",
+                                                               "microsoft.directory/applications/policies/limitedRead",
+                                                               "microsoft.directory/applications/standard/limitedRead",
+                                                               "microsoft.directory/directoryRoleTemplates/allProperties/read",
+                                                               "microsoft.directory/domains/standard/read",
+                                                               "microsoft.directory/groups/appRoleAssignments/limitedRead",
+                                                               "microsoft.directory/groups/memberOf/limitedRead",
+                                                               "microsoft.directory/groups/members/limitedRead",
+                                                               "microsoft.directory/groups/owners/limitedRead",
+                                                               "microsoft.directory/groups/settings/limitedRead",
+                                                               "microsoft.directory/groups/standard/limitedRead",
+                                                               "microsoft.directory/multiTenantOrganization/standard/read",
+                                                               "microsoft.directory/multiTenantOrganization/tenants/standard/read",
+                                                               "microsoft.directory/organization/basicProfile/read",
+                                                               "microsoft.directory/servicePrincipals/appRoleAssignedTo/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/appRoleAssignments/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/memberOf/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/oAuth2PermissionGrants/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/ownedObjects/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/owners/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/policies/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/standard/limitedRead",
+                                                               "microsoft.directory/users/guestBasicProfile/limitedRead",
+                                                               "microsoft.directory/users/inviteGuest",
+                                                               "microsoft.directory/users/appRoleAssignments/read",
+                                                               "microsoft.directory/users/authenticationMethods/basic/update",
+                                                               "microsoft.directory/users/authenticationMethods/create",
+                                                               "microsoft.directory/users/authenticationMethods/delete",
+                                                               "microsoft.directory/users/authenticationMethods/standard/read",
+                                                               "microsoft.directory/users/authenticationMethods/standard/restrictedRead",
+                                                               "microsoft.directory/users/deviceForResourceAccount/read",
+                                                               "microsoft.directory/users/directReports/read",
+                                                               "microsoft.directory/users/eligibleMemberOf/read",
+                                                               "microsoft.directory/users/invitedBy/read",
+                                                               "microsoft.directory/users/licenseDetails/read",
+                                                               "microsoft.directory/users/manager/read",
+                                                               "microsoft.directory/users/memberOf/read",
+                                                               "microsoft.directory/users/oAuth2PermissionGrants/read",
+                                                               "microsoft.directory/users/ownedDevices/read",
+                                                               "microsoft.directory/users/ownedObjects/read",
+                                                               "microsoft.directory/users/password/update",
+                                                               "microsoft.directory/users/pendingMemberOf/read",
+                                                               "microsoft.directory/users/photo/read",
+                                                               "microsoft.directory/users/registeredDevices/read",
+                                                               "microsoft.directory/users/scopedRoleMemberOf/read",
+                                                               "microsoft.directory/users/sponsorOf/read",
+                                                               "microsoft.directory/users/sponsors/read",
+                                                               "microsoft.directory/users/standard/read"
+                                                           ]
+                                       },
+                                       {
+                                           "Id":  "2af84b1e-32c8-42b7-82bc-daa82404023b",
+                                           "DisplayName":  "Restricted Guest User",
+                                           "IsBuiltIn":  true,
+                                           "Tier":  3,
+                                           "Reason":  "Limited read permissions without any ability to modify identity or role assignments.",
+                                           "Permissions":  [
+                                                               "microsoft.directory/applications/owners/limitedRead",
+                                                               "microsoft.directory/applications/policies/limitedRead",
+                                                               "microsoft.directory/applications/standard/limitedRead",
+                                                               "microsoft.directory/directoryRoleTemplates/allProperties/read",
+                                                               "microsoft.directory/domains/standard/read",
+                                                               "microsoft.directory/organization/basicProfile/read",
+                                                               "microsoft.directory/servicePrincipals/appRoleAssignedTo/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/appRoleAssignments/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/memberOf/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/oAuth2PermissionGrants/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/ownedObjects/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/owners/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/policies/limitedRead",
+                                                               "microsoft.directory/servicePrincipals/standard/limitedRead",
+                                                               "microsoft.directory/users/appRoleAssignments/read",
+                                                               "microsoft.directory/users/authenticationMethods/basic/update",
+                                                               "microsoft.directory/users/authenticationMethods/create",
+                                                               "microsoft.directory/users/authenticationMethods/delete",
+                                                               "microsoft.directory/users/authenticationMethods/standard/read",
+                                                               "microsoft.directory/users/authenticationMethods/standard/restrictedRead",
+                                                               "microsoft.directory/users/deviceForResourceAccount/read",
+                                                               "microsoft.directory/users/directReports/read",
+                                                               "microsoft.directory/users/eligibleMemberOf/read",
+                                                               "microsoft.directory/users/invitedBy/read",
+                                                               "microsoft.directory/users/licenseDetails/read",
+                                                               "microsoft.directory/users/manager/read",
+                                                               "microsoft.directory/users/memberOf/read",
+                                                               "microsoft.directory/users/oAuth2PermissionGrants/read",
+                                                               "microsoft.directory/users/ownedDevices/read",
+                                                               "microsoft.directory/users/ownedObjects/read",
+                                                               "microsoft.directory/users/password/update",
+                                                               "microsoft.directory/users/pendingMemberOf/read",
+                                                               "microsoft.directory/users/photo/read",
+                                                               "microsoft.directory/users/registeredDevices/read",
+                                                               "microsoft.directory/users/scopedRoleMemberOf/read",
+                                                               "microsoft.directory/users/sponsorOf/read",
+                                                               "microsoft.directory/users/sponsors/read",
+                                                               "microsoft.directory/users/standard/read"
+                                                           ]
+                                       }
+                                   ],
+    "EntraID_CustomRoles_Tier0":  [
+
+                                  ],
+    "EntraID_CustomRoles_Tier1":  [
+
+                                  ],
+    "EntraID_CustomRoles_Tier2":  [
+
+                                  ],
+    "EntraID_CustomRoles_Tier3":  [
+                                      {
+                                          "Id":  "5fae9c61-3aef-49d2-b441-ae8471522219",
+                                          "DisplayName":  "Users_Read_All_As_Scoped_Role_Delegation_on_SP",
+                                          "IsBuiltIn":  false,
+                                          "Tier":  3,
+                                          "Reason":  "Read-only access to users without ability to assign roles or reset credentials.",
+                                          "Permissions":  [
+                                                              "microsoft.directory/users/standard/read"
+                                                          ]
+                                      }
+                                  ],
+    "EntraID_APIPermissions_Tier0":  [
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Application",
+                                             "Value":  "AppRoleAssignment.ReadWrite.All",
+                                             "DisplayName":  "Manage app permission grants and app role assignments",
+                                             "Description":  "Allows the app to manage permission grants for application permissions to any API (including Microsoft Graph) and application assignments for any app, without a signed-in user.",
+                                             "Tier":  0,
+                                             "Reason":  "Manage permission grants and app assignments for any app without signed-in user; direct role assignment control enabling full tenant takeover."
+                                         },
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Application",
+                                             "Value":  "Policy.ReadWrite.AuthenticationMethod",
+                                             "DisplayName":  "Read and write all authentication method policies ",
+                                             "Description":  "Allows the app to read and write all authentication method policies for the tenant, without a signed-in user. ",
+                                             "Tier":  0,
+                                             "Reason":  "Write access to authentication method policies allows resetting MFA and credential controls, enabling immediate full tenant compromise."
+                                         }
+                                     ],
+    "EntraID_APIPermissions_Tier1":  [
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Delegated",
+                                             "Value":  "APIConnectors.ReadWrite.All",
+                                             "DisplayName":  "Read and write API connectors for authentication flows",
+                                             "Description":  "Allows the app to read, create and manage the API connectors used in user authentication flows, on behalf of the signed-in user.",
+                                             "Tier":  1,
+                                             "Reason":  "Manage API connectors in authentication flows, enabling modification of authentication which can lead to identity plane control."
+                                         },
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Application",
+                                             "Value":  "AppCatalog.ReadWrite.All",
+                                             "DisplayName":  "Read and write to all app catalogs",
+                                             "Description":  "Allows the app to create, read, update, and delete apps in the app catalogs without a signed-in user.",
+                                             "Tier":  1,
+                                             "Reason":  "Create, update, delete apps in app catalog without signed-in user; can modify app registrations enabling privilege escalation."
+                                         }
+                                     ],
+    "EntraID_APIPermissions_Tier2":  [
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Delegated",
+                                             "Value":  "AccessReview.ReadWrite.All",
+                                             "DisplayName":  "Manage all access reviews that user can access",
+                                             "Description":  "Allows the app to read, update, delete and perform actions on access reviews, reviewers, decisions and settings that the signed-in user has access to in the organization.",
+                                             "Tier":  2,
+                                             "Reason":  "Can modify access reviews which may impact access governance but no direct path to identity plane control."
+                                         },
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Application",
+                                             "Value":  "AccessReview.ReadWrite.Membership",
+                                             "DisplayName":  "Manage access reviews for group and app memberships",
+                                             "Description":  "Allows the app to read, update, delete and perform actions on access reviews, reviewers, decisions and settings in the organization for group and app memberships, without a signed-in user.",
+                                             "Tier":  2,
+                                             "Reason":  "Application-level access to modify group and app membership reviews; potential for data impact but no direct identity plane control."
+                                         }
+                                     ],
+    "EntraID_APIPermissions_Tier3":  [
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Delegated",
+                                             "Value":  "AccessReview.Read.All",
+                                             "DisplayName":  "Read all access reviews that user can access",
+                                             "Description":  "Allows the app to read access reviews, reviewers, decisions and settings that the signed-in user has access to in the organization.",
+                                             "Tier":  3,
+                                             "Reason":  "Read-only access to access reviews limited to signed-in user\u0027s scope; no direct identity plane control."
+                                         },
+                                         {
+                                             "ServicePrincipal":  "Microsoft Graph",
+                                             "AppId":  "00000003-0000-0000-c000-000000000000",
+                                             "PermissionType":  "Application",
+                                             "Value":  "Acronym.Read.All",
+                                             "DisplayName":  "Read all acronyms",
+                                             "Description":  "Allows an app to read all acronyms without a signed-in user.",
+                                             "Tier":  3,
+                                             "Reason":  "Read-only access to acronyms; no identity or security impact."
+                                         }
+                                     ],
+    "EntraID_APIPermissions_Catalog":  [
+                                           {
+                                               "ServicePrincipal":  "Microsoft Graph",
+                                               "AppId":  "00000003-0000-0000-c000-000000000000",
+                                               "PermissionType":  "Application",
+                                               "Id":  "d07a8cc0-3d51-4b77-b3b0-32704d1f69fa",
+                                               "Value":  "AccessReview.Read.All",
+                                               "DisplayName":  "Read all access reviews",
+                                               "Description":  "Allows the app to read access reviews, reviewers, decisions and settings in the organization, without a signed-in user."
+                                           },
+                                           {
+                                               "ServicePrincipal":  "Microsoft Graph",
+                                               "AppId":  "00000003-0000-0000-c000-000000000000",
+                                               "PermissionType":  "Application",
+                                               "Id":  "ef5f7d5c-338f-44b0-86c3-351f46c8bb5f",
+                                               "Value":  "AccessReview.ReadWrite.All",
+                                               "DisplayName":  "Manage all access reviews",
+                                               "Description":  "Allows the app to read, update, delete and perform actions on access reviews, reviewers, decisions and settings in the organization, without a signed-in user."
+                                           }
+                                       ],
+    "Azure_BuiltInRoles_Tier0":  [
+                                     {
+                                         "Id":  "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                                         "Name":  "Owner",
+                                         "IsCustom":  false,
+                                         "Tier":  0,
+                                         "Reason":  "Full access including ability to assign roles in Azure RBAC, enabling immediate full tenant compromise.",
+                                         "Actions":  [
+                                                         "*"
+                                                     ],
+                                         "NotActions":  [
+
+                                                        ],
+                                         "DataActions":  [
+
+                                                         ]
+                                     },
+                                     {
+                                         "Id":  "18d7d88d-d35e-4fb5-a5c3-7773c20a72d9",
+                                         "Name":  "User Access Administrator",
+                                         "IsCustom":  false,
+                                         "Tier":  0,
+                                         "Reason":  "Can manage user access to Azure resources including role assignments, enabling direct identity plane control.",
+                                         "Actions":  [
+                                                         "*/read",
+                                                         "Microsoft.Authorization/*",
+                                                         "Microsoft.Support/*"
+                                                     ],
+                                         "NotActions":  [
+
+                                                        ],
+                                         "DataActions":  [
+
+                                                         ]
+                                     }
+                                 ],
+    "Azure_BuiltInRoles_Tier1":  [
+                                     {
+                                         "Id":  "a7ffa36f-339b-4b5c-8bdf-e2c188b2c0eb",
+                                         "Name":  "Azure Kubernetes Service RBAC Writer",
+                                         "IsCustom":  false,
+                                         "Tier":  1,
+                                         "Reason":  "Access to secrets and ability to run pods as any ServiceAccount enables privilege escalation to cluster admin.",
+                                         "Actions":  [
+                                                         "Microsoft.Authorization/*/read",
+                                                         "Microsoft.Resources/subscriptions/operationresults/read",
+                                                         "Microsoft.Resources/subscriptions/read",
+                                                         "Microsoft.Resources/subscriptions/resourceGroups/read"
+                                                     ],
+                                         "NotActions":  [
+
+                                                        ],
+                                         "DataActions":  [
+                                                             "Microsoft.ContainerService/managedClusters/apps/controllerrevisions/read",
+                                                             "Microsoft.ContainerService/managedClusters/apps/daemonsets/*",
+                                                             "Microsoft.ContainerService/managedClusters/apps/deployments/*",
+                                                             "Microsoft.ContainerService/managedClusters/apps/replicasets/*",
+                                                             "Microsoft.ContainerService/managedClusters/apps/statefulsets/*",
+                                                             "Microsoft.ContainerService/managedClusters/autoscaling/horizontalpodautoscalers/*",
+                                                             "Microsoft.ContainerService/managedClusters/batch/cronjobs/*",
+                                                             "Microsoft.ContainerService/managedClusters/coordination.k8s.io/leases/read",
+                                                             "Microsoft.ContainerService/managedClusters/coordination.k8s.io/leases/write",
+                                                             "Microsoft.ContainerService/managedClusters/coordination.k8s.io/leases/delete",
+                                                             "Microsoft.ContainerService/managedClusters/discovery.k8s.io/endpointslices/read",
+                                                             "Microsoft.ContainerService/managedClusters/batch/jobs/*",
+                                                             "Microsoft.ContainerService/managedClusters/configmaps/*",
+                                                             "Microsoft.ContainerService/managedClusters/endpoints/*",
+                                                             "Microsoft.ContainerService/managedClusters/events.k8s.io/events/read",
+                                                             "Microsoft.ContainerService/managedClusters/events/*",
+                                                             "Microsoft.ContainerService/managedClusters/extensions/daemonsets/*",
+                                                             "Microsoft.ContainerService/managedClusters/extensions/deployments/*",
+                                                             "Microsoft.ContainerService/managedClusters/extensions/ingresses/*",
+                                                             "Microsoft.ContainerService/managedClusters/extensions/networkpolicies/*",
+                                                             "Microsoft.ContainerService/managedClusters/extensions/replicasets/*",
+                                                             "Microsoft.ContainerService/managedClusters/limitranges/read",
+                                                             "Microsoft.ContainerService/managedClusters/metrics.k8s.io/pods/read",
+                                                             "Microsoft.ContainerService/managedClusters/metrics.k8s.io/nodes/read",
+                                                             "Microsoft.ContainerService/managedClusters/namespaces/read",
+                                                             "Microsoft.ContainerService/managedClusters/networking.k8s.io/ingresses/*",
+                                                             "Microsoft.ContainerService/managedClusters/networking.k8s.io/networkpolicies/*",
+                                                             "Microsoft.ContainerService/managedClusters/persistentvolumeclaims/*",
+                                                             "Microsoft.ContainerService/managedClusters/pods/*",
+                                                             "Microsoft.ContainerService/managedClusters/policy/poddisruptionbudgets/*",
+                                                             "Microsoft.ContainerService/managedClusters/replicationcontrollers/*",
+                                                             "Microsoft.ContainerService/managedClusters/resourcequotas/read",
+                                                             "Microsoft.ContainerService/managedClusters/secrets/*",
+                                                             "Microsoft.ContainerService/managedClusters/serviceaccounts/*",
+                                                             "Microsoft.ContainerService/managedClusters/services/*"
+                                                         ]
+                                     },
+                                     {
+                                         "Id":  "fb1c8493-542b-48eb-b624-b4c8fea62acd",
+                                         "Name":  "Security Admin",
+                                         "IsCustom":  false,
+                                         "Tier":  1,
+                                         "Reason":  "Can manage security policies and alerts, enabling reliable escalation to identity plane control via policy manipulation.",
+                                         "Actions":  [
+                                                         "Microsoft.Authorization/*/read",
+                                                         "Microsoft.Authorization/policyAssignments/*",
+                                                         "Microsoft.Authorization/policyDefinitions/*",
+                                                         "Microsoft.Authorization/policyExemptions/*",
+                                                         "Microsoft.Authorization/policySetDefinitions/*",
+                                                         "Microsoft.Insights/alertRules/*",
+                                                         "Microsoft.Management/managementGroups/read",
+                                                         "Microsoft.operationalInsights/workspaces/*/read",
+                                                         "Microsoft.Resources/deployments/*",
+                                                         "Microsoft.Resources/subscriptions/resourceGroups/read",
+                                                         "Microsoft.Security/*",
+                                                         "Microsoft.IoTSecurity/*",
+                                                         "Microsoft.IoTFirmwareDefense/*",
+                                                         "Microsoft.Support/*"
+                                                     ],
+                                         "NotActions":  [
+
+                                                        ],
+                                         "DataActions":  [
+
+                                                         ]
+                                     }
+                                 ],
+    "Azure_BuiltInRoles_Tier2":  [
+                                     {
+                                         "Id":  "b24988ac-6180-42a0-ab88-20f7382dd24c",
+                                         "Name":  "Contributor",
+                                         "IsCustom":  false,
+                                         "Tier":  2,
+                                         "Reason":  "Full resource management but cannot assign roles or modify identity plane objects; no direct path to tenant takeover.",
+                                         "Actions":  [
+                                                         "*"
+                                                     ],
+                                         "NotActions":  [
+                                                            "Microsoft.Authorization/*/Delete",
+                                                            "Microsoft.Authorization/*/Write",
+                                                            "Microsoft.Authorization/elevateAccess/Action",
+                                                            "Microsoft.Blueprint/blueprintAssignments/write",
+                                                            "Microsoft.Blueprint/blueprintAssignments/delete",
+                                                            "Microsoft.Compute/galleries/share/action",
+                                                            "Microsoft.Purview/consents/write",
+                                                            "Microsoft.Purview/consents/delete",
+                                                            "Microsoft.Resources/deploymentStacks/manageDenySetting/action",
+                                                            "Microsoft.Subscription/cancel/action",
+                                                            "Microsoft.Subscription/enable/action"
+                                                        ],
+                                         "DataActions":  [
+
+                                                         ]
+                                     },
+                                     {
+                                         "Id":  "8d8d5a11-05d3-4bda-a417-a08778121c7c",
+                                         "Name":  "HDInsight Domain Services Contributor",
+                                         "IsCustom":  false,
+                                         "Tier":  2,
+                                         "Reason":  "Can modify domain services related to HDInsight but no direct identity plane control or role assignment permissions.",
+                                         "Actions":  [
+                                                         "Microsoft.AAD/*/read",
+                                                         "Microsoft.AAD/domainServices/*/read",
+                                                         "Microsoft.AAD/domainServices/oucontainer/*"
+                                                     ],
+                                         "NotActions":  [
+
+                                                        ],
+                                         "DataActions":  [
+
+                                                         ]
+                                     }
+                                 ],
+    "Azure_BuiltInRoles_Tier3":  [
+                                     {
+                                         "Id":  "8311e382-0749-4cb8-b61a-304f252e45ec",
+                                         "Name":  "AcrPush",
+                                         "IsCustom":  false,
+                                         "Tier":  3,
+                                         "Reason":  "Permissions limited to container registry push and pull; no identity plane or role assignment capabilities.",
+                                         "Actions":  [
+                                                         "Microsoft.ContainerRegistry/registries/pull/read",
+                                                         "Microsoft.ContainerRegistry/registries/push/write"
+                                                     ],
+                                         "NotActions":  [
+
+                                                        ],
+                                         "DataActions":  [
+
+                                                         ]
+                                     },
+                                     {
+                                         "Id":  "312a565d-c81f-4fd8-895a-4e21e48d571c",
+                                         "Name":  "API Management Service Contributor",
+                                         "IsCustom":  false,
+                                         "Tier":  3,
+                                         "Reason":  "Can manage API services but lacks permissions to assign roles or modify identity plane objects.",
+                                         "Actions":  [
+                                                         "Microsoft.ApiManagement/service/*",
+                                                         "Microsoft.Authorization/*/read",
+                                                         "Microsoft.Insights/alertRules/*",
+                                                         "Microsoft.ResourceHealth/availabilityStatuses/read",
+                                                         "Microsoft.Resources/deployments/*",
+                                                         "Microsoft.Resources/subscriptions/resourceGroups/read",
+                                                         "Microsoft.Support/*"
+                                                     ],
+                                         "NotActions":  [
+
+                                                        ],
+                                         "DataActions":  [
+
+                                                         ]
+                                     }
+                                 ],
+    "Azure_CustomRoles_Tier0":  [
+
+                                ],
+    "Azure_CustomRoles_Tier1":  [
+
+                                ],
+    "Azure_CustomRoles_Tier2":  [
+
+                                ],
+    "Azure_CustomRoles_Tier3":  [
+
+                                ],
+    "Azure_Roles_Catalog":  [
+                                {
+                                    "Id":  "8311e382-0749-4cb8-b61a-304f252e45ec",
+                                    "Name":  "AcrPush",
+                                    "Description":  "acr push",
+                                    "IsCustom":  false,
+                                    "Actions":  [
+                                                    "Microsoft.ContainerRegistry/registries/pull/read",
+                                                    "Microsoft.ContainerRegistry/registries/push/write"
+                                                ],
+                                    "NotActions":  [
+
+                                                   ],
+                                    "DataActions":  [
+
+                                                    ]
+                                },
+                                {
+                                    "Id":  "312a565d-c81f-4fd8-895a-4e21e48d571c",
+                                    "Name":  "API Management Service Contributor",
+                                    "Description":  "Can manage service and the APIs",
+                                    "IsCustom":  false,
+                                    "Actions":  [
+                                                    "Microsoft.ApiManagement/service/*",
+                                                    "Microsoft.Authorization/*/read",
+                                                    "Microsoft.Insights/alertRules/*",
+                                                    "Microsoft.ResourceHealth/availabilityStatuses/read",
+                                                    "Microsoft.Resources/deployments/*",
+                                                    "Microsoft.Resources/subscriptions/resourceGroups/read",
+                                                    "Microsoft.Support/*"
+                                                ],
+                                    "NotActions":  [
+
+                                                   ],
+                                    "DataActions":  [
+
+                                                    ]
+                                }
+                            ],
+    "Summary":  {
+                    "AD_Groups":  {
+                                      "Tier0":  9,
+                                      "Tier1":  6,
+                                      "Tier2":  3,
+                                      "Tier3":  51,
+                                      "Untiered":  0,
+                                      "TotalGroups":  69
+                                  },
+                    "EntraRoles":  {
+                                       "Tier0":  5,
+                                       "Tier1":  23,
+                                       "Tier2":  20,
+                                       "Tier3":  96,
+                                       "Untiered":  0,
+                                       "TotalRoles":  144
+                                   },
+                    "APIPermissions":  {
+                                           "Tier0":  2,
+                                           "Tier1":  59,
+                                           "Tier2":  138,
+                                           "Tier3":  1027,
+                                           "Untiered":  0,
+                                           "TotalPermissions":  1226
+                                       },
+                    "AzureRoles":  {
+                                       "Tier0":  3,
+                                       "Tier1":  14,
+                                       "Tier2":  130,
+                                       "Tier3":  726,
+                                       "Untiered":  0,
+                                       "TotalRoles":  873
+                                   }
+                }
+}

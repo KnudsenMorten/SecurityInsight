@@ -1,0 +1,21 @@
+id:        QuestRecoveryManagerForActiveDirectory
+appliesTo: endpoint
+mode:      locked
+purpose:   'Quest Recovery Manager for Active Directory'
+category:  'Identity Backup'
+description: ''
+displayNames:
+  - 'Quest Recovery Manager for Active Directory'
+  - 'Recovery Manager for AD'
+
+detections:
+  - id: QuestRecoveryManagerForActiveDirectory
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'recovery_manager_for_active_directory*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Backup'
+      Category: 'Identity Backup'

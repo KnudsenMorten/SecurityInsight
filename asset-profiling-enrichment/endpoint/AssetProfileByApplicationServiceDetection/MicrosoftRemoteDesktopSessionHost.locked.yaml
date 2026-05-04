@@ -1,0 +1,21 @@
+id:        MicrosoftRemoteDesktopSessionHost
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Remote Desktop Session Host'
+category:  'Remote Access'
+description: ''
+displayNames:
+  - 'Microsoft Remote Desktop Session Host'
+  - 'RD Session Host'
+
+detections:
+  - id: MicrosoftRemoteDesktopSessionHost
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_desktop_session_host*'
+    set:
+      Tier:     2
+      Purpose:  'Remote Access'
+      Category: 'Remote Access'

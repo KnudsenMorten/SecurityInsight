@@ -1,0 +1,31 @@
+id:        NetworkMonitoringProbe
+appliesTo: endpoint
+mode:      locked
+purpose:   'Network Monitoring Probe'
+category:  'Management'
+description: 'Read-only network probe; no write access to monitored devices.'
+
+detections:
+  - id: NetworkMonitoringProbe
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nagios*'
+            - 'cacti*'
+            - 'munin*'
+            - 'smokeping*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^probe\d'
+            - '(?i)^netmon-probe'
+            - '(?i)monitoring.probe'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)monitoring.probe'
+            - '(?i)read.only.probe'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Network Monitoring Probe'
+      Category: 'Management'

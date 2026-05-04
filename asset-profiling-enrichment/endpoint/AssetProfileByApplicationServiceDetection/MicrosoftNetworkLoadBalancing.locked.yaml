@@ -1,0 +1,20 @@
+id:        MicrosoftNetworkLoadBalancing
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Network Load Balancing'
+category:  'Load Balancer'
+description: ''
+displayNames:
+  - 'Microsoft Network Load Balancing'
+
+detections:
+  - id: MicrosoftNetworkLoadBalancing
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'network_load_balancing*'
+    set:
+      Tier:     2
+      Purpose:  'Load Balancer'
+      Category: 'Load Balancer'

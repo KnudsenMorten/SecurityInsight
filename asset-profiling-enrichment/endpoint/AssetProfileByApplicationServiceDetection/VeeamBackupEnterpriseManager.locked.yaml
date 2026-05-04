@@ -1,0 +1,20 @@
+id:        VeeamBackupEnterpriseManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veeam Backup Enterprise Manager'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veeam Backup Enterprise Manager'
+
+detections:
+  - id: VeeamBackupEnterpriseManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'backup_enterprise_manager*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

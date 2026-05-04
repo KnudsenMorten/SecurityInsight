@@ -1,0 +1,20 @@
+id:        MicrosoftFailoverClustering
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Failover Clustering'
+category:  'HA/Cluster'
+description: ''
+displayNames:
+  - 'Microsoft Failover Clustering'
+
+detections:
+  - id: MicrosoftFailoverClustering
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'failover_clustering*'
+    set:
+      Tier:     1
+      Purpose:  'HA/Cluster'
+      Category: 'HA/Cluster'

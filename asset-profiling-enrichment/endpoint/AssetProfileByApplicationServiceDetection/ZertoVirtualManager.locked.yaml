@@ -1,0 +1,20 @@
+id:        ZertoVirtualManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Zerto Virtual Manager'
+category:  'DR/Replication'
+description: ''
+displayNames:
+  - 'Zerto Virtual Manager'
+
+detections:
+  - id: ZertoVirtualManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'virtual_manager*'
+    set:
+      Tier:     0
+      Purpose:  'DR/Replication'
+      Category: 'DR/Replication'

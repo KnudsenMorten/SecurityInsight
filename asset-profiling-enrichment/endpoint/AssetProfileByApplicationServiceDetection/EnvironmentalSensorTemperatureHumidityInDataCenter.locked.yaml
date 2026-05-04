@@ -1,0 +1,31 @@
+id:        EnvironmentalSensorTemperatureHumidityInDataCenter
+appliesTo: endpoint
+mode:      locked
+purpose:   'Environmental Sensor (Temperature, Humidity in Data Center)'
+category:  'IoT / OT'
+description: 'Telemetry-only sensor; data integrity attack can mask conditions but no direct compromise path.'
+
+detections:
+  - id: EnvironmentalSensorTemperatureHumidityInDataCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'apc_netbotz*'
+            - 'raritan_dominion*'
+            - 'geist_*'
+            - 'sensaphone*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^env\d'
+            - '(?i)^temp\d'
+            - '(?i)environmental.sensor'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)environmental'
+            - '(?i)dc.sensor'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Environmental Sensor (Temperature, Humidity in Data Center)'
+      Category: 'IoT / OT'

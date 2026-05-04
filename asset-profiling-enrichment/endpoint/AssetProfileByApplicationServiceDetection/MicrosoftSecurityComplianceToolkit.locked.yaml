@@ -1,0 +1,20 @@
+id:        MicrosoftSecurityComplianceToolkit
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Security Compliance Toolkit'
+category:  'Compliance'
+description: ''
+displayNames:
+  - 'Microsoft Security Compliance Toolkit'
+
+detections:
+  - id: MicrosoftSecurityComplianceToolkit
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'security_compliance_toolkit*'
+    set:
+      Tier:     1
+      Purpose:  'Compliance'
+      Category: 'Compliance'

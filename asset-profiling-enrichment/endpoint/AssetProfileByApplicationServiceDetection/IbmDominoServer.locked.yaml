@@ -1,0 +1,21 @@
+id:        IbmDominoServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Domino Server'
+category:  'Mail/Collaboration'
+description: ''
+displayNames:
+  - 'IBM Domino Server'
+  - 'Lotus Domino'
+
+detections:
+  - id: IbmDominoServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'domino_server*'
+    set:
+      Tier:     2
+      Purpose:  'Mail/Collaboration'
+      Category: 'Mail/Collaboration'

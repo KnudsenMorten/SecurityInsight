@@ -1,0 +1,21 @@
+id:        BroadcomDataLossPrevention
+appliesTo: endpoint
+mode:      locked
+purpose:   'Symantec DLP'
+category:  'DLP'
+description: ''
+displayNames:
+  - 'Symantec DLP'
+  - 'Broadcom Data Loss Prevention'
+
+detections:
+  - id: BroadcomDataLossPrevention
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'data_loss_prevention*'
+    set:
+      Tier:     1
+      Purpose:  'DLP'
+      Category: 'DLP'

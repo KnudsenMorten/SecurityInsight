@@ -1,0 +1,21 @@
+id:        MicrosoftBaselineSecurityAnalyzer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Baseline Security Analyzer'
+category:  'Compliance'
+description: 'Deprecated - flag for removal'
+displayNames:
+  - 'Microsoft Baseline Security Analyzer'
+  - 'MBSA'
+
+detections:
+  - id: MicrosoftBaselineSecurityAnalyzer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'baseline_security_analyzer*'
+    set:
+      Tier:     1
+      Purpose:  'Compliance'
+      Category: 'Compliance'

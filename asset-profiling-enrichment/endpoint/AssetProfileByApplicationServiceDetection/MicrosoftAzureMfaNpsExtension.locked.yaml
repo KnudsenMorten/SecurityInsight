@@ -1,0 +1,21 @@
+id:        MicrosoftAzureMfaNpsExtension
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Entra multifactor authentication NPS extension'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'Microsoft Entra multifactor authentication NPS extension'
+  - 'NPS Extension for Azure MFA'
+
+detections:
+  - id: MicrosoftAzureMfaNpsExtension
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_mfa_nps_extension*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

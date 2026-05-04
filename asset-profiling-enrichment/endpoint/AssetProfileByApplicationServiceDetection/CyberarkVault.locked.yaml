@@ -1,0 +1,20 @@
+id:        CyberarkVault
+appliesTo: endpoint
+mode:      locked
+purpose:   'CyberArk Vault'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'CyberArk Vault'
+
+detections:
+  - id: CyberarkVault
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vault*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

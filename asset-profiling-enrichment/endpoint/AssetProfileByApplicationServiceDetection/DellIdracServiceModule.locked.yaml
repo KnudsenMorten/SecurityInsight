@@ -1,0 +1,20 @@
+id:        DellIdracServiceModule
+appliesTo: endpoint
+mode:      locked
+purpose:   'Dell iDRAC Service Module'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'Dell iDRAC Service Module'
+
+detections:
+  - id: DellIdracServiceModule
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'idrac_service_module*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

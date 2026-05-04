@@ -1,0 +1,20 @@
+id:        MicrosoftPowerBiReportServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Power BI Report Server'
+category:  'BI'
+description: ''
+displayNames:
+  - 'Microsoft Power BI Report Server'
+
+detections:
+  - id: MicrosoftPowerBiReportServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'power_bi_report_server*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

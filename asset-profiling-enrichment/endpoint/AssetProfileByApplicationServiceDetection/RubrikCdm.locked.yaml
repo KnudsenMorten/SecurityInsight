@@ -1,0 +1,21 @@
+id:        RubrikCdm
+appliesTo: endpoint
+mode:      locked
+purpose:   'Rubrik Cluster'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Rubrik Cluster'
+  - 'Rubrik Connector'
+
+detections:
+  - id: RubrikCdm
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cdm*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

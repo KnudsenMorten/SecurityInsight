@@ -1,0 +1,21 @@
+id:        RedhatJbossEnterpriseApplicationPlatform
+appliesTo: endpoint
+mode:      locked
+purpose:   'JBoss Enterprise Application Platform'
+category:  'App Server'
+description: ''
+displayNames:
+  - 'JBoss Enterprise Application Platform'
+  - 'Red Hat JBoss EAP'
+
+detections:
+  - id: RedhatJbossEnterpriseApplicationPlatform
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'jboss_enterprise_application_platform*'
+    set:
+      Tier:     2
+      Purpose:  'App Server'
+      Category: 'App Server'

@@ -1,0 +1,20 @@
+id:        OneIdentitySafeguard
+appliesTo: endpoint
+mode:      locked
+purpose:   'One Identity Safeguard'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'One Identity Safeguard'
+
+detections:
+  - id: OneIdentitySafeguard
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'safeguard*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

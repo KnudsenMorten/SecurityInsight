@@ -1,0 +1,21 @@
+id:        CitrixAdc
+appliesTo: endpoint
+mode:      locked
+purpose:   'Citrix ADC'
+category:  'Load Balancer'
+description: ''
+displayNames:
+  - 'Citrix ADC'
+  - 'Citrix NetScaler'
+
+detections:
+  - id: CitrixAdc
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'adc*'
+    set:
+      Tier:     1
+      Purpose:  'Load Balancer'
+      Category: 'Load Balancer'

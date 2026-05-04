@@ -1,0 +1,20 @@
+id:        MicrosoftExchangeEdgeTransport
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Exchange Edge Transport'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Microsoft Exchange Edge Transport'
+
+detections:
+  - id: MicrosoftExchangeEdgeTransport
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'exchange_edge_transport*'
+    set:
+      Tier:     1
+      Purpose:  'Mail'
+      Category: 'Mail'

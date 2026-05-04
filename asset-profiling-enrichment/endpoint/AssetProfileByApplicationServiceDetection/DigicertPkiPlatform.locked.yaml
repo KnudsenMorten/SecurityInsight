@@ -1,0 +1,21 @@
+id:        DigicertPkiPlatform
+appliesTo: endpoint
+mode:      locked
+purpose:   'DigiCert PKI Platform'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'DigiCert PKI Platform'
+  - 'DigiCert PKI Client'
+
+detections:
+  - id: DigicertPkiPlatform
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'pki_platform*'
+    set:
+      Tier:     0
+      Purpose:  'PKI'
+      Category: 'PKI'

@@ -1,0 +1,2025 @@
+Reports:
+
+- ReportName: Identity_NewlyCreated_HighPrivilege_Detailed
+  ReportPurpose: '[Detailed companion] Identities created in the last 30 days that already hold high-risk app permissions OR an Entra role. Newly-onboarded shadow admin -- common path for compromised onboarding workflows.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 17
+  - Length: 25
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 20
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 15
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AccountEnabled == true
+    | extend _created = todatetime(CreatedDateTime)
+    | extend DaysSinceCreation = iff(isnull(_created), 9999, datetime_diff('day', now(), _created))
+    | where DaysSinceCreation <= 30
+    | where IsHighRiskPermissionGrant == true or array_length(todynamic(EntraRoles_Permanent)) > 0
+    | extend MoreInfoUrl = iff(IdentityType == "ServicePrincipal",
+        strcat("https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/", AppId),
+        strcat("https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/", coalesce(EntityIds, AppId)))
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Identity portal", "url", MoreInfoUrl),
+        pack("label", "Privileged Identity Mgmt", "url", "https://entra.microsoft.com/#view/Microsoft_Azure_PIMCommon/CommonMenuBlade")))
+    | project SecurityDomain="Identity", Category="Privilege drift", Subcategory="Newly created identity with high privilege",
+              ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn,AppId),
+              Impact=strcat("Identity created ", DaysSinceCreation, " days ago already holds privileged access"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysSinceCreation, IsHighRiskPermissionGrant, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Identity_SPN_OwnerMismatch_Detailed
+  ReportPurpose: '[Detailed companion] SPNs whose Owner is different from the Application Owner -- common in apps inherited from a departed employee where ownership got cleaned up only on one side.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 8
+  - Length: 8
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 20
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 25
+  - Length: 15
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where AccountEnabled == true
+    | where isnotempty(Owner) and isnotempty(AppOwnerOrganizationId)
+    | extend SpnOwner = tostring(Owner)
+    | extend AppOwner = tostring(AppOwnerOrganizationId)
+    | where tolower(SpnOwner) != tolower(AppOwner)
+    | extend MoreInfoUrl = strcat("https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Owners/appId/", AppId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "App registration owners", "url", MoreInfoUrl),
+        pack("label", "Enterprise app owners",   "url", strcat("https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Owners/objectId/", coalesce(EntityIds,AppId)))))
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="SPN owner != Application owner",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="SPN ownership not aligned with app registration ownership",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, SpnOwner, AppOwner, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Identity_Departed_AccountStillEnabled_Detailed
+  ReportPurpose: '[Detailed companion] Users whose EmployeeLeaveDateTime is in the past but the account is still enabled. HR off-boarding gap; common attack path.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 21
+  - Length: 14
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 20
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 25
+  - Length: 15
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | extend _leave = todatetime(EmployeeLeaveDateTime)
+    | where isnotnull(_leave) and _leave < now()
+    | extend DaysSinceLeave = datetime_diff('day', now(), _leave)
+    | extend MoreInfoUrl = strcat("https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/", coalesce(EntityIds,Upn))
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "User profile", "url", MoreInfoUrl),
+        pack("label", "Sign-in logs", "url", strcat("https://entra.microsoft.com/#view/Microsoft_AAD_IAM/SigninLogsMenuBlade/userId/", coalesce(EntityIds,Upn)))))
+    | project SecurityDomain="Identity", Category="Off-boarding hygiene", Subcategory="Departed user still enabled",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("User departed ", DaysSinceLeave, " days ago, account still enabled"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EmployeeLeaveDateTime=_leave, DaysSinceLeave, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Identity_PrivilegedRole_PermanentNotEligible_Detailed
+  ReportPurpose: '[Detailed companion] Users / SPNs holding PERMANENT (always-on) privileged role assignments instead of PIM-eligible. Standing privilege violates JIT/JEA.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 18
+  - Length: 17
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 20
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 25
+  - Length: 15
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AccountEnabled == true
+    | extend PermanentRoleCount = array_length(todynamic(EntraRoles_Permanent))
+    | extend EligibleRoleCount  = array_length(todynamic(EntraRoles_Eligible))
+    | where PermanentRoleCount > 0
+    | extend MoreInfoUrl = "https://entra.microsoft.com/#view/Microsoft_Azure_PIMCommon/CommonMenuBlade/~/quickStart"
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "PIM overview",     "url", MoreInfoUrl),
+        pack("label", "Role assignments", "url", "https://entra.microsoft.com/#view/Microsoft_AAD_IAM/RolesManagementMenuBlade/~/AllRoles")))
+    | project SecurityDomain="Identity", Category="Standing privilege", Subcategory="Permanent (non-PIM) privileged role",
+              ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn,AppId),
+              Impact=strcat(PermanentRoleCount, " always-on role(s) instead of PIM-eligible"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              PermanentRoleCount, EligibleRoleCount, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Identity_GuestWithPrivilegedRole_Detailed
+  ReportPurpose: '[Detailed companion] B2B Guest users (UserType=Guest) holding ANY Entra role -- guests should never have privileged roles.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 20
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 25
+  - Length: 15
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsExternalIdentity == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | extend MoreInfoUrl = strcat("https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/AssignedRoles/userId/", coalesce(EntityIds,Upn))
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Guest user",         "url", MoreInfoUrl),
+        pack("label", "External collaboration policy", "url", "https://entra.microsoft.com/#view/Microsoft_AAD_IAM/CompanyRelationshipsMenuBlade/~/Settings")))
+    | project SecurityDomain="Identity", Category="External access", Subcategory="Guest with Entra role",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="External guest holds Entra role assignment",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Identity_DisabledPrivilegedUser_Detailed
+  ReportPurpose: '[Detailed companion] Identities flagged DisabledPrivilegedUser by the engine -- account disabled but still carries privileged role assignment.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 22
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 20
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 25
+  - Length: 15
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where DisabledPrivilegedUser == true
+    | extend MoreInfoUrl = strcat("https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/", coalesce(EntityIds,Upn))
+    | extend Links = dynamic_to_json(pack_array(pack("label","User profile","url",MoreInfoUrl)))
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Disabled user retains privilege",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Disabled account still has privileged role -- re-enable resurrects access",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DisabledPrivilegedUser, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Identity_SPN_NoRecentSignIn_HighRisk_Detailed
+  ReportPurpose: '[Detailed companion] SPNs with high-risk app permissions AND zero sign-ins last 90 days. Stronger filter than the 180-day stale SPN report.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 12
+  - Length: 25
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 20
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 15
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where IsHighRiskPermissionGrant == true
+    | where DaysInactive >= 90
+    | extend MoreInfoUrl = strcat("https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Permissions/appId/", AppId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "App permissions", "url", MoreInfoUrl),
+        pack("label", "Enterprise app",  "url", strcat("https://entra.microsoft.com/#view/Microsoft_AAD_IAM/ManagedAppMenuBlade/~/Overview/objectId/", coalesce(EntityIds,AppId)))))
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="SPN with high-risk perms inactive 90d+",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("SPN with tenant-write perms inactive ", DaysInactive, " days"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, IsHighRiskPermissionGrant, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Identity_HighRiskFactorComposite4Plus_Detailed
+  ReportPurpose: '[Detailed companion] Identities with 4+ risk factors flagged. Above the I16 threshold (3+) -- these are the worst offenders.'
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 21
+  - Length: 14
+  - Length: 18
+  - Length: 26
+  - Length: 20
+  - Length: 19
+  - Length: 31
+  - Length: 8
+  - Length: 25
+  - Length: 8
+  - Length: 16
+  - Length: 10
+  - Length: 10
+  - Length: 7
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where RiskFactorCount >= 4
+    | extend MoreInfoUrl = iff(IdentityType == "ServicePrincipal",
+        strcat("https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/", AppId),
+        strcat("https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/", coalesce(EntityIds,Upn)))
+    | extend Links = dynamic_to_json(pack_array(pack("label","Identity portal","url",MoreInfoUrl)))
+    | project SecurityDomain="Identity", Category="Composite risk", Subcategory=strcat(RiskFactorCount, " concurrent risk factors"),
+              ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn,AppId),
+              Impact=strcat("Identity hits ", RiskFactorCount, " risk-factor flags simultaneously"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactorCount, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Endpoint_TPMOrSecureBootDisabled_Tier0_Detailed
+  ReportPurpose: '[Detailed companion] Tier-0/1 hosts with TPM or SecureBoot disabled -- weak boot integrity makes pre-boot attacks viable. Uses azure-engine SecureBootEnabled / VTpmEnabled cross-engine.'
+  SecurityDomain: Endpoint
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 17
+  - Length: 11
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 8
+  - Length: 10
+  - Length: 9
+  - Length: 12
+  - Length: 17
+  - Length: 16
+  - Length: 7
+  - Length: 9
+  - Length: 13
+  - Length: 10
+  - Length: 20
+  - Length: 8
+  - Length: 16
+  - Length: 21
+  - Length: 19
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    let _vmBoot =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _ta
+        | where ResourceType =~ "microsoft.compute/virtualmachines"
+        | project AzureResourceId, SecureBootEnabled, VTpmEnabled;
+    SI_Endpoint_Profile_CL
+    | where CollectionTime == _te
+    | join kind=inner _vmBoot on AzureResourceId
+    | where SecureBootEnabled == false or VTpmEnabled == false
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId, "/security")
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "VM security",  "url", MoreInfoUrl),
+        pack("label", "Trusted launch docs", "url", "https://learn.microsoft.com/en-us/azure/virtual-machines/trusted-launch")))
+    | project SecurityDomain="Endpoint", Category="Boot integrity", Subcategory="Tier-0/1 VM with SecureBoot or vTPM disabled",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("SecureBoot=", SecureBootEnabled, " vTPM=", VTpmEnabled),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              SecureBootEnabled, VTpmEnabled, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Endpoint_PublicIp_NonBusinessGeo_Detailed
+  ReportPurpose: '[Detailed companion] Endpoints whose PublicIp resolves to a country / ASN outside the tenant business geography. Indicates VPN-bypass, traveling staff using residential IPs, or compromised host.'
+  SecurityDomain: Endpoint
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 8
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 8
+  - Length: 10
+  - Length: 9
+  - Length: 12
+  - Length: 17
+  - Length: 16
+  - Length: 7
+  - Length: 9
+  - Length: 13
+  - Length: 10
+  - Length: 20
+  - Length: 16
+  - Length: 21
+  - Length: 19
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _t = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    // Customers override $global:SI_TrustedAsnPrefixes via custom config; default
+    // example here demos the pattern (RFC 1918 + tenant-published ranges).
+    let _trustedPrefixes = dynamic(["10.","192.168.","172.16.","172.17.","172.18.","172.19.","172.2","172.30.","172.31."]);
+    SI_Endpoint_Profile_CL
+    | where CollectionTime == _t
+    | where isnotempty(PublicIp)
+    | extend _isTrusted = iff(array_length(_trustedPrefixes) == 0, false,
+                               array_length(set_intersect(pack_array(PublicIp), _trustedPrefixes)) > 0)
+    | where _isTrusted == false
+    | extend MoreInfoUrl = strcat("https://security.microsoft.com/machines/", MdeDeviceId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Defender device",  "url", MoreInfoUrl),
+        pack("label", "IP whois",         "url", strcat("https://whois.arin.net/rest/ip/", PublicIp))))
+    | project SecurityDomain="Endpoint", Category="Network anomaly", Subcategory="Endpoint reporting from non-trusted public IP",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Endpoint PublicIp=", PublicIp, " not on trusted prefix list"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              PublicIp, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Endpoint_OffboardedRecently_StillReporting_Detailed
+  ReportPurpose: '[Detailed companion] Hosts whose OffboardedDateTime is in the last 7 days but still appearing in current MDE telemetry. Off-boarding state machine glitch -- common after sensor uninstall failure.'
+  SecurityDomain: Endpoint
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 18
+  - Length: 12
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 8
+  - Length: 10
+  - Length: 9
+  - Length: 12
+  - Length: 17
+  - Length: 16
+  - Length: 7
+  - Length: 9
+  - Length: 13
+  - Length: 10
+  - Length: 20
+  - Length: 8
+  - Length: 16
+  - Length: 21
+  - Length: 19
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where isnotempty(OffboardedDateTime)
+    | extend _off = todatetime(OffboardedDateTime)
+    | where datetime_diff('day', now(), _off) <= 7
+    | where DaysInactive < 7
+    | extend MoreInfoUrl = strcat("https://security.microsoft.com/machines/", MdeDeviceId)
+    | extend Links = dynamic_to_json(pack_array(pack("label","Defender device","url",MoreInfoUrl)))
+    | project SecurityDomain="Endpoint", Category="Lifecycle", Subcategory="Off-boarded host still reporting",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="Marked off-boarded but still active in MDE telemetry",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              OffboardedDateTime=_off, DaysInactive, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Endpoint_HighRiskScore_NotInHighRiskGroup_Detailed
+  ReportPurpose: '[Detailed companion] Endpoints whose MDE RiskScore is High/Critical but the MachineGroup name doesnt indicate high-risk scoping. Group membership drift -- the host should be moved into a tighter MachineGroup for stronger policy.'
+  SecurityDomain: Endpoint
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 9
+  - Length: 12
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 8
+  - Length: 10
+  - Length: 9
+  - Length: 17
+  - Length: 16
+  - Length: 7
+  - Length: 13
+  - Length: 10
+  - Length: 20
+  - Length: 8
+  - Length: 16
+  - Length: 21
+  - Length: 19
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where RiskScore in~ ("High","Critical")
+    | where isnotempty(MachineGroup) and MachineGroup !~ 'UnassignedGroup'
+    | where MachineGroup !contains "tier0"
+        and MachineGroup !contains "tier-0"
+        and MachineGroup !contains "high-risk"
+        and MachineGroup !contains "highrisk"
+    | extend MoreInfoUrl = strcat("https://security.microsoft.com/machines/", MdeDeviceId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Defender device",   "url", MoreInfoUrl),
+        pack("label", "Machine groups",    "url", "https://security.microsoft.com/preferences2/machine_groups")))
+    | project SecurityDomain="Endpoint", Category="Policy scoping", Subcategory="High RiskScore but group not flagged high-risk",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("RiskScore=", RiskScore, " but MachineGroup='", MachineGroup, "' isnt scoped high-risk"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              RiskScore, MachineGroup, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Endpoint_LinuxServer_NoSshKeyAuth_Detailed
+  ReportPurpose: '[Detailed companion] Linux server endpoints where SSH password auth is enabled (vs key-only). Brute-force attack surface; key-only is the baseline.'
+  SecurityDomain: Endpoint
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 10
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 8
+  - Length: 9
+  - Length: 12
+  - Length: 17
+  - Length: 16
+  - Length: 7
+  - Length: 9
+  - Length: 13
+  - Length: 10
+  - Length: 20
+  - Length: 8
+  - Length: 16
+  - Length: 21
+  - Length: 19
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _t = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    // EG signal: lookup deviceLinuxAuth in EG when present (currently rare;
+    // query degrades to "no rows" when the signal isn't ingested -- safe).
+    let _egSshAuth =
+        ExposureGraphNodes
+        | where NodeLabel == "device"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tostring(rawData.osPlatform) startswith "Linux"
+        | where tobool(rawData.linuxSshPasswordAuthEnabled) == true
+        | project AadDeviceId = tostring(rawData.aadDeviceId);
+    SI_Endpoint_Profile_CL
+    | where CollectionTime == _t
+    | where OsPlatform startswith "Linux"
+    | join kind=inner _egSshAuth on AadDeviceId
+    | extend MoreInfoUrl = strcat("https://security.microsoft.com/machines/", MdeDeviceId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Defender device", "url", MoreInfoUrl),
+        pack("label", "SSH hardening guide", "url", "https://learn.microsoft.com/en-us/azure/virtual-machines/linux/mac-create-ssh-keys")))
+    | project SecurityDomain="Endpoint", Category="Authentication", Subcategory="Linux server SSH password auth enabled",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="SSH password auth enabled (key-only is the baseline)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              OsPlatform, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Endpoint_HostDeviceId_PossibleMergeIssue_Detailed
+  ReportPurpose: '[Detailed companion] Endpoints with both HostDeviceId AND MergedToDeviceId set -- indicates the cross-source merge in MDE found dupes but didnt collapse them. Hygiene + risk-scoring accuracy.'
+  SecurityDomain: Endpoint
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 12
+  - Length: 16
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 8
+  - Length: 10
+  - Length: 9
+  - Length: 12
+  - Length: 17
+  - Length: 16
+  - Length: 7
+  - Length: 9
+  - Length: 13
+  - Length: 10
+  - Length: 20
+  - Length: 8
+  - Length: 16
+  - Length: 21
+  - Length: 19
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where isnotempty(HostDeviceId) and isnotempty(MergedToDeviceId)
+    | extend MoreInfoUrl = strcat("https://security.microsoft.com/machines/", MdeDeviceId)
+    | extend Links = dynamic_to_json(pack_array(pack("label","Defender device","url",MoreInfoUrl)))
+    | project SecurityDomain="Endpoint", Category="Asset hygiene", Subcategory="Possible merge issue (HostDeviceId+MergedToDeviceId)",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="MDE merge produced both Host and Merged ids -- duplicate device record",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              HostDeviceId, MergedToDeviceId, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_Storage_NoCmkEncryption_Detailed
+  ReportPurpose: '[Detailed companion] Storage accounts using SSE (Microsoft-managed key) instead of CMK on tier-0/1 subscriptions OR with sensitive data classification.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 19
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.storage/storageaccounts"
+    | where tolower(coalesce(cmdbDataSensitivity,'')) in ('confidential','restricted')
+    // Encryption.keySource missing/Microsoft.Storage = SSE; Microsoft.Keyvault = CMK
+    | extend _props = parse_json(Properties)
+    | extend _keySource = tostring(_props.collect.azure.encryption.keySource)
+    | where isempty(_keySource) or _keySource =~ "Microsoft.Storage"
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId, "/encryption")
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Storage encryption", "url", MoreInfoUrl),
+        pack("label", "CMK guidance",       "url", "https://learn.microsoft.com/en-us/azure/storage/common/customer-managed-keys-overview")))
+    | project SecurityDomain="Azure", Category="Encryption at rest", Subcategory="Storage without CMK on sensitive sub",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="Storage uses SSE (MS-managed key) -- CMK required for sensitive scope",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              cmdbDataSensitivity, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_Disk_UnencryptedOrSSE_Detailed
+  ReportPurpose: '[Detailed companion] OS / data disks without disk-encryption-at-rest with CMK. Tier-0/1 disks should use customer-managed keys.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.compute/disks"
+    | extend _props = parse_json(Properties)
+    | extend _enc = tostring(_props.collect.azure.encryption.type)
+    | where isempty(_enc) or _enc =~ "EncryptionAtRestWithPlatformKey"
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Disk overview", "url", MoreInfoUrl),
+        pack("label", "Disk encryption types", "url", "https://learn.microsoft.com/en-us/azure/virtual-machines/disk-encryption")))
+    | project SecurityDomain="Azure", Category="Encryption at rest", Subcategory="Tier-0/1 disk without CMK encryption",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="Disk uses platform-managed key (no CMK)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_Cosmos_LocalAuthEnabled_Tier01_Detailed
+  ReportPurpose: '[Detailed companion] Cosmos DB accounts where DisableLocalAuth is false on a tier-0/1 subscription. Local key auth bypasses Entra-based access control.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 16
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.documentdb/databaseaccounts"
+    | where DisableLocalAuth == false
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Cosmos DB",          "url", MoreInfoUrl),
+        pack("label", "Disable local auth", "url", "https://learn.microsoft.com/en-us/azure/cosmos-db/how-to-setup-rbac")))
+    | project SecurityDomain="Azure", Category="Authentication", Subcategory="Cosmos DB local-auth enabled (tier-0/1)",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="Cosmos DB allows local key auth",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DisableLocalAuth, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_LAW_RetentionTooShort_Tier01_Detailed
+  ReportPurpose: '[Detailed companion] Log Analytics Workspaces in tier-0/1 subscriptions with retention < 90 days. Compliance + IR investigation gap.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 18
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.operationalinsights/workspaces"
+    | where LawRetentionInDays < 90
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId, "/usage")
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Workspace usage",  "url", MoreInfoUrl),
+        pack("label", "Retention guidance","url", "https://learn.microsoft.com/en-us/azure/azure-monitor/logs/data-retention-archive")))
+    | project SecurityDomain="Azure", Category="Log retention", Subcategory="LAW retention < 90 days on tier-0/1",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat("LAW retention=", LawRetentionInDays, "d (recommend >=90d for compliance/IR)"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              LawRetentionInDays, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_VM_NoNsg_Detailed
+  ReportPurpose: '[Detailed companion] VMs whose attached NIC has NO Network Security Group bound. Default-allow networking on tier-0/1 = wide attack surface.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 8
+  - Length: 11
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.network/networkinterfaces"
+    | where isempty(NicNsgId) and isempty(SubnetNsgId)
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId)
+    | extend Links = dynamic_to_json(pack_array(pack("label","NIC overview","url",MoreInfoUrl)))
+    | project SecurityDomain="Azure", Category="Network exposure", Subcategory="VM NIC without any NSG",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="No NSG bound to NIC or its subnet -- default-allow",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              NicNsgId, SubnetNsgId, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_PIP_NoDdosProtection_Detailed
+  ReportPurpose: '[Detailed companion] Public IPs in tier-0/1 subscriptions without DDoS protection enabled. PIP without DDoS = volumetric-attack target.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 21
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.network/publicipaddresses"
+    | where isempty(PipDdosProtectionMode) or PipDdosProtectionMode =~ "VirtualNetworkInherited" or PipDdosProtectionMode =~ "Disabled"
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "Public IP",     "url", MoreInfoUrl),
+        pack("label", "DDoS overview", "url", "https://learn.microsoft.com/en-us/azure/ddos-protection/ddos-protection-overview")))
+    | project SecurityDomain="Azure", Category="DDoS", Subcategory="Public IP without DDoS plan (tier-0/1)",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat("PIP DDoS=", coalesce(PipDdosProtectionMode,'unset')),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              PipDdosProtectionMode, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_KV_TooManyAccessPolicies_Detailed
+  ReportPurpose: '[Detailed companion] Key Vaults still using legacy Access Policies (vs RBAC). KvEnableRbacAuthorization=false on tier-0/1 = drift from current best practice.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 25
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.keyvault/vaults"
+    | where KvEnableRbacAuthorization == false
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId, "/access_policies")
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "KV access policies", "url", MoreInfoUrl),
+        pack("label", "Migrate to RBAC", "url", "https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-migration")))
+    | project SecurityDomain="Azure", Category="Authorization model", Subcategory="Key Vault using legacy Access Policies",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="KV uses legacy access policies (RBAC is current best practice)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              KvEnableRbacAuthorization, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_AppGw_NoWaf_Detailed
+  ReportPurpose: '[Detailed companion] Application Gateways without WAF enabled OR running WAF in detection-only mode. Public-facing app gateway needs full WAF enforcement.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 13
+  - Length: 18
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.network/applicationgateways"
+    | where AgwWafEnabled == false or AgwWafFirewallMode =~ "Detection"
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId)
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "App Gateway", "url", MoreInfoUrl),
+        pack("label", "WAF docs",    "url", "https://learn.microsoft.com/en-us/azure/web-application-firewall/ag/ag-overview")))
+    | project SecurityDomain="Azure", Category="WAF", Subcategory="App Gateway no/audit-only WAF",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat("WAF enabled=", AgwWafEnabled, " mode=", coalesce(AgwWafFirewallMode,'-')),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              AgwWafEnabled, AgwWafFirewallMode, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_Vnet_NoDdosProtection_Detailed
+  ReportPurpose: '[Detailed companion] Virtual Networks without DDoS Protection (Standard) plan attached. Tier-0/1 vnets with public-facing resources need DDoS Standard.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 24
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.network/virtualnetworks"
+    | where VnetEnableDdosProtection == false
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId, "/ddosProtection")
+    | extend Links = dynamic_to_json(pack_array(pack("label","VNet DDoS","url",MoreInfoUrl)))
+    | project SecurityDomain="Azure", Category="DDoS", Subcategory="Vnet without DDoS Standard on tier-0/1",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="VNet without DDoS Standard plan",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              VnetEnableDdosProtection, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_RiskFactor4Plus_Composite_Detailed
+  ReportPurpose: '[Detailed companion] Azure resources with 4+ risk factors flagged. Above the A12 threshold (2+). Concentrate on these first.'
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where RiskFactorCount >= 4
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId)
+    | extend Links = dynamic_to_json(pack_array(pack("label","Resource portal","url",MoreInfoUrl)))
+    | project SecurityDomain="Azure", Category="Composite risk", Subcategory=strcat(RiskFactorCount, " concurrent risk factors"),
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat("Resource has ", RiskFactorCount, " independent risk factors fired"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              RiskFactorCount, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: CrossEngine_Server_OnlyInOneEngine_Detailed
+  ReportPurpose: '[Detailed companion] Server endpoints visible in MDE but NOT discoverable in Azure (or vice-versa). Coverage gap surfaces shadow IT, M&A inheritances, and Discover regressions.'
+  SecurityDomain: CrossEngine
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 9
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 6
+  - Length: 21
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    let _epServers =
+        SI_Endpoint_Profile_CL
+        | where CollectionTime == _te
+        | where DeviceType =~ "Server"
+        | project Source="endpoint", DisplayName, AzureResourceId, Tier, MdeDeviceId;
+    let _azVms =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _ta
+        | where ResourceType =~ "microsoft.compute/virtualmachines"
+        | project Source="azure", DisplayName=Name, AzureResourceId, Tier, MdeDeviceId="";
+    let _both = _epServers | summarize EpAzureResourceIds = make_set(AzureResourceId) | mv-expand AzureResourceId = EpAzureResourceIds | project AzureResourceId = tostring(AzureResourceId);
+    let _bothAz = _azVms | summarize AzAzureResourceIds = make_set(AzureResourceId) | mv-expand AzureResourceId = AzAzureResourceIds | project AzureResourceId = tostring(AzureResourceId);
+    union _epServers, _azVms
+    | summarize Engines = make_set(Source), Tiers = make_set(Tier), AnyDisplayName = take_any(DisplayName), AnyMde = take_any(MdeDeviceId) by AzureResourceId
+    | where array_length(Engines) == 1
+    | extend VisibleIn = tostring(Engines[0])
+    | extend Tier = toint(Tiers[0])
+    | extend MoreInfoUrl = iff(VisibleIn == "endpoint",
+        strcat("https://security.microsoft.com/machines/", AnyMde),
+        strcat("https://portal.azure.com/#resource", AzureResourceId))
+    | extend Links = dynamic_to_json(pack_array(pack("label","Asset detail","url",MoreInfoUrl)))
+    | project SecurityDomain="CrossEngine", Category="Coverage gap", Subcategory=strcat("Server visible in '", VisibleIn, "' only"),
+              ConfigurationName=AnyDisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Server seen by '", VisibleIn, "' but missing from the other engine"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              VisibleIn, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: CrossEngine_VmSensitive_NoDiagnostics_Detailed
+  ReportPurpose: '[Detailed companion] VMs tagged Critical or hosted in tier-0/1 sub WITHOUT diagnostic settings (no LAW shipping). IR blind spot on a high-value asset.'
+  SecurityDomain: CrossEngine
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 6
+  - Length: 21
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.compute/virtualmachines"
+    | where cmdbCriticality =~ "Critical"
+    | extend _props = parse_json(Properties)
+    // Diagnostics extension typically named "AzureMonitorWindowsAgent" / "OmsAgentForLinux"
+    | extend _exts = tostring(_props.collect.azure.extensions)
+    | where isempty(_exts) or (_exts !contains "Monitor" and _exts !contains "Oms")
+    | extend MoreInfoUrl = strcat("https://portal.azure.com/#resource", AzureResourceId, "/extensions")
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "VM extensions",       "url", MoreInfoUrl),
+        pack("label", "Diagnostic settings", "url", strcat("https://portal.azure.com/#resource", AzureResourceId, "/diagnostics"))))
+    | project SecurityDomain="CrossEngine", Category="Audit / IR", Subcategory="Sensitive VM without monitoring agent",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="Critical / tier-0/1 VM has no Azure Monitor / OMS agent extension",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              cmdbCriticality, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: CrossEngine_Identity_NoMfa_OnTier01_Resource_Detailed
+  ReportPurpose: '[Detailed companion] Identities without MFA who hold RBAC on tier-0/1 azure resources. Identity-resource cross-join exposes the highest-blast-radius MFA gaps.'
+  SecurityDomain: CrossEngine
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 21
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 6
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    let _tier01Resources =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _ta
+        | project LinkedAzureResourceId=AzureResourceId, ResourceTier=Tier;
+    SI_Identity_Profile_CL
+    | where CollectionTime == _ti
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where HasNoMfa == true
+    | mv-expand _role = todynamic(AzureRoles_Assignments)
+    | extend _scope = tostring(_role.scope)
+    | join kind=inner _tier01Resources on $left._scope == $right.LinkedAzureResourceId
+    | extend MoreInfoUrl = strcat("https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/AssignedRoles/userId/", coalesce(EntityIds,Upn))
+    | extend Links = dynamic_to_json(pack_array(
+        pack("label", "User profile",      "url", MoreInfoUrl),
+        pack("label", "Resource (target)", "url", strcat("https://portal.azure.com/#resource", LinkedAzureResourceId))))
+    | project SecurityDomain="CrossEngine", Category="Authentication", Subcategory="Identity without MFA holds RBAC on tier-0/1 resource",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Account without MFA has RBAC on a tier-0/1 azure resource",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              LinkedAzureResourceId, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: CrossEngine_DC_Endpoint_NoAzureVm_Detailed
+  ReportPurpose: '[Detailed companion] Endpoints flagged as DC (ADDomainController rule fired) that do NOT have a corresponding Azure VM record. Either: (a) DC is on-prem (expected), (b) DC is an Azure VM but ARG discovery missed it (gap).'
+  SecurityDomain: CrossEngine
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  - Length: 6
+  - Length: 21
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    let _azVms =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _ta
+        | where ResourceType =~ "microsoft.compute/virtualmachines"
+        | project AzureResourceId;
+    SI_Endpoint_Profile_CL
+    | where CollectionTime == _te
+    | where SIRules contains "ADDomainController"
+    | join kind=leftanti _azVms on AzureResourceId
+    | extend MoreInfoUrl = strcat("https://security.microsoft.com/machines/", MdeDeviceId)
+    | extend Links = dynamic_to_json(pack_array(pack("label","Defender device","url",MoreInfoUrl)))
+    | project SecurityDomain="CrossEngine", Category="Asset visibility", Subcategory="DC endpoint without azure VM record",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="DC role detected on endpoint but no matching Azure VM record (on-prem DC or ARG discovery gap)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Hygiene_AssetGroup_BlankRatio_Detailed
+  ReportPurpose: '[Detailed companion] Per-engine % of rows where AssetGroup is empty. > 20% means rules / classification arent producing a useful pivot column for grouping in dashboards.'
+  SecurityDomain: Hygiene
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 6
+  - Length: 10
+  - Length: 9
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    union
+      (SI_Endpoint_Profile_CL | where CollectionTime == _te | extend Engine="endpoint" | summarize TotalRows=count(), BlankRows=countif(isempty(AssetGroup)) by Engine),
+      (SI_Identity_Profile_CL | where CollectionTime == _ti | extend Engine="identity" | summarize TotalRows=count(), BlankRows=countif(isempty(AssetGroup)) by Engine),
+      (SI_Azure_Profile_CL    | where CollectionTime == _ta | extend Engine="azure"    | summarize TotalRows=count(), BlankRows=countif(isempty(Group))      by Engine)
+    | extend BlankRatio = toint(round(100.0 * BlankRows / TotalRows, 0))
+    | where BlankRatio >= 20
+    | extend MoreInfoUrl = "https://github.com/KnudsenMorten/AutomateIT/blob/main/SOLUTIONS/SecurityInsight/engine/risk-analysis/README.md"
+    | extend Links = dynamic_to_json(pack_array(pack("label","Risk-Analysis README","url",MoreInfoUrl)))
+    | project SecurityDomain="Hygiene", Category="Classification coverage", Subcategory=strcat(Engine, " AssetGroup blank ratio ", BlankRatio, "%"),
+              ConfigurationName=Engine, ConfigurationId=Engine,
+              Impact=strcat(BlankRows, " of ", TotalRows, " rows have empty AssetGroup"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              Engine, BlankRatio, TotalRows, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Hygiene_RiskFactor_DistributionDrift_Detailed
+  ReportPurpose: '[Detailed companion] Tier distribution shift between latest snapshot and prior snapshot. Big swings indicate classification drift or fleet churn that operators should review.'
+  SecurityDomain: Hygiene
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 6
+  - Length: 4
+  - Length: 11
+  - Length: 10
+  - Length: 8
+  - Length: 11
+  - Length: 5
+  - Length: 14
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _last2 = (Tbl: string, Eng: string) {
+        table(Tbl)
+        | summarize Rows=count() by CollectionTime, Tier
+        | summarize Latest = anyif(Rows, CollectionTime == toscalar(table(Tbl) | summarize max(CollectionTime))),
+                    Prior  = anyif(Rows, CollectionTime != toscalar(table(Tbl) | summarize max(CollectionTime))) by Tier
+        | extend Engine = Eng
+    };
+    union (_last2("SI_Endpoint_Profile_CL","endpoint")), (_last2("SI_Identity_Profile_CL","identity")), (_last2("SI_Azure_Profile_CL","azure"))
+    | extend LatestCount = coalesce(toint(Latest), 0)
+    | extend PriorCount  = coalesce(toint(Prior),  0)
+    | where PriorCount > 5
+    | extend DeltaPct = toint(round(100.0 * abs(LatestCount - PriorCount) / PriorCount, 0))
+    | where DeltaPct >= 25
+    | extend MoreInfoUrl = "https://github.com/KnudsenMorten/AutomateIT/blob/main/SOLUTIONS/SecurityInsight/engine/risk-analysis/README.md"
+    | extend Links = dynamic_to_json(pack_array(pack("label","Risk-Analysis README","url",MoreInfoUrl)))
+    | project SecurityDomain="Hygiene", Category="Classification drift", Subcategory=strcat(Engine, " Tier-", Tier, " count moved ", DeltaPct, "%"),
+              ConfigurationName=strcat(Engine, " Tier-", Tier), ConfigurationId=strcat(Engine, ":Tier:", Tier),
+              Impact=strcat("Tier ", Tier, " count: latest=", LatestCount, " prior=", PriorCount, " delta=", DeltaPct, "%"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              Engine, Tier, LatestCount, PriorCount, DeltaPct, MoreInfoUrl, Links, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+

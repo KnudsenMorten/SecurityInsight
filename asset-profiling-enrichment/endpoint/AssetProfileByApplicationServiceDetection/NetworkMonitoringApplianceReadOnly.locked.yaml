@@ -1,0 +1,37 @@
+id:        NetworkMonitoringApplianceReadOnly
+appliesTo: endpoint
+mode:      locked
+purpose:   'Network Monitoring Appliance (Read-Only)'
+category:  'Network Equipment'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |R|e|a|d|-|o|n|l|y|\|\| |n|e|t|w|o|r|k|\|\| |t|e|l|e|m|e|t|r|y|\|\| |c|o|n|s|u|m|e|r|;|\|\| |r|e|c|o|n|\|\| |v|a|l|u|e|\|\| |b|u|t|\|\| |l|i|m|i|t|e|d|\|\| |w|r|i|t|e|\|\| |i|m|p|a|c|t|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |p|a|e|s|s|l|e|r|/|p|r|t|g|_|n|e|t|w|o|r|k|_|m|o|n|i|t|o|r|,|\|\| |p|r|o|g|r|e|s|s|/|w|h|a|t|s|u|p|_|g|o|l|d|
+
+detections:
+  - id: NetworkMonitoringApplianceReadOnly
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'solarwinds_npm*'
+            - 'prtg*'
+            - 'whatsup_gold*'
+            - 'manageengine_opmanager*'
+            - 'darktrace*'
+            - 'prtg_network_monitor*'
+            - 'whatsup_gold*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^netmon\d'
+            - '(?i)^prtg\d'
+            - '(?i)network.monitor'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)network.monitoring'
+            - '(?i)read.only.monitor'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Network Monitoring Appliance (Read-Only)'
+      Category: 'Network Equipment'

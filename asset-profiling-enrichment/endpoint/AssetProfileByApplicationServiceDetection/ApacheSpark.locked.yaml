@@ -1,0 +1,20 @@
+id:        ApacheSpark
+appliesTo: endpoint
+mode:      locked
+purpose:   'Apache Spark'
+category:  'Analytics'
+description: ''
+displayNames:
+  - 'Apache Spark'
+
+detections:
+  - id: ApacheSpark
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'spark*'
+    set:
+      Tier:     2
+      Purpose:  'Analytics'
+      Category: 'Analytics'

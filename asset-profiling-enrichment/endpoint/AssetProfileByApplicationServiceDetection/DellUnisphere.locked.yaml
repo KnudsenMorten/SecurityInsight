@@ -1,0 +1,20 @@
+id:        DellUnisphere
+appliesTo: endpoint
+mode:      locked
+purpose:   'Dell EMC Unisphere'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'Dell EMC Unisphere'
+
+detections:
+  - id: DellUnisphere
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'unisphere*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

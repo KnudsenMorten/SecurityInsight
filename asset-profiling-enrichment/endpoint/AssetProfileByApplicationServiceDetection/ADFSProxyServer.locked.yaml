@@ -1,0 +1,34 @@
+id:        ADFSProxyServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'AD FS Proxy Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |I|n|t|e|r|n|e|t|-|e|x|p|o|s|e|d|\|\| |A|D|\|\| |F|S|\|\| |p|r|o|x|y|;|\|\| |p|i|v|o|t|\|\| |i|n|t|o|\|\| |t|h|e|\|\| |f|e|d|e|r|a|t|i|o|n|\|\| |t|o|k|e|n|-|s|i|g|n|i|n|g|\|\| |c|h|a|i|n|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|w|e|b|_|a|p|p|l|i|c|a|t|i|o|n|_|p|r|o|x|y|
+
+detections:
+  - id: ADFSProxyServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'web_application_proxy*'
+            - 'active_directory_federation_services_proxy*'
+            - 'web_application_proxy*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^adfsproxy'
+            - '(?i)^wap\d'
+            - '(?i)^fsproxy'
+            - '(?i)adfs.proxy'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)adfs.proxy'
+            - '(?i)wap'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'AD FS Proxy Server'
+      Category: 'Server Roles'

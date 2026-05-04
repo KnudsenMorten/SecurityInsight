@@ -1,0 +1,20 @@
+id:        InfluxdataInfluxdb
+appliesTo: endpoint
+mode:      locked
+purpose:   'InfluxDB'
+category:  'Database'
+description: ''
+displayNames:
+  - 'InfluxDB'
+
+detections:
+  - id: InfluxdataInfluxdb
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'influxdb*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

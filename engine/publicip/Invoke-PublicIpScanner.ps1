@@ -223,7 +223,17 @@ union _Endpoint, _Azure
         $wsCustomerId = (Get-AzOperationalInsightsWorkspace -ResourceGroupName $wsRg -Name $wsName -ErrorAction Stop).CustomerId
         $resp = Invoke-AzOperationalInsightsQuery -WorkspaceId $wsCustomerId -Query $kql -ErrorAction Stop
     } catch {
+        # Surface the real KQL error body when present ($.ErrorDetails.Message
+        # carries the JSON body from Invoke-AzOperationalInsightsQuery on
+        # BadRequest / NotFound responses; $.Exception.Message is just the HTTP
+        # status). Without this, "Operation returned an invalid status code
+        # 'BadRequest'" hides whether the cause was a missing table, a syntax
+        # error, or a permissions gap.
+        $errBody = $null
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $errBody = $_.ErrorDetails.Message }
         Write-Log "LA query failed: $($_.Exception.Message)" "ERROR"
+        if ($errBody) { Write-Log "LA error detail: $errBody" "ERROR" }
+        Write-Log ("Hint: BadRequest typically means SI_Endpoint_Profile_CL / SI_Azure_Profile_CL don't exist yet in the workspace -- run the endpoint + azure engines first to create the tables.") "INFO"
         return @()
     }
     $rows = @($resp.Results)

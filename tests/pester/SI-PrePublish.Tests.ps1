@@ -60,8 +60,13 @@ Describe 'RepoHygiene' {
     }
 
     It 'No customer .custom.json files tracked' {
+        # privilege-tier-catalog.custom.json is intentionally tracked as of v2.2.13 --
+        # it's generic Microsoft-roles -> tier mappings, not customer-specific.
+        # See SOLUTIONS/SecurityInsight/.gitignore for the rationale.
         $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/**/*.custom.json' 2>$null |
-                   Where-Object { $_ -notlike '*.custom.sample.json' -and $_ -notlike '*.exclude.json.sample' }
+                   Where-Object { $_ -notlike '*.custom.sample.json' `
+                                  -and $_ -notlike '*.exclude.json.sample' `
+                                  -and $_ -notlike '*privilege-tier-catalog/privilege-tier-catalog.custom.json' }
             $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
     }
 

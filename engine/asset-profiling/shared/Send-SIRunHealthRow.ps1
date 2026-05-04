@@ -82,8 +82,11 @@ function Send-SIRunHealthRow {
             @{ AzAppId = $spnAppId; AzAppSecret = $spnSecret; TenantId = $spnTenantId }
         }
 
+        # Table is workspace-scoped (no cross-sub collision), so the name stays.
+        # DCR is name-looked-up across all subs the SPN sees, so it MUST be
+        # unique when one SPN spans internal + community tenants.
         $tableName = 'SI_RunHealth'
-        $dcrName   = 'dcr-si-run-health'
+        $dcrName   = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RunHealth_DcrName)) { [string]$global:SI_RunHealth_DcrName } else { 'dcr-si-run-health' }
 
         # Provision/update DCR + table from the single-row schema sample. AzLogDcrIngestPS
         # is idempotent so the per-replica overhead after first-run is just a cache hit.

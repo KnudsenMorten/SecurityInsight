@@ -1,0 +1,20 @@
+id:        KongGateway
+appliesTo: endpoint
+mode:      locked
+purpose:   'Kong Gateway'
+category:  'API Gateway'
+description: ''
+displayNames:
+  - 'Kong Gateway'
+
+detections:
+  - id: KongGateway
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'gateway*'
+    set:
+      Tier:     2
+      Purpose:  'API Gateway'
+      Category: 'API Gateway'

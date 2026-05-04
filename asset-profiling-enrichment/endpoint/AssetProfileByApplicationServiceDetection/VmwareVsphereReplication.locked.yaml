@@ -1,0 +1,20 @@
+id:        VmwareVsphereReplication
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware vSphere Replication'
+category:  'DR/Replication'
+description: ''
+displayNames:
+  - 'VMware vSphere Replication'
+
+detections:
+  - id: VmwareVsphereReplication
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vsphere_replication*'
+    set:
+      Tier:     0
+      Purpose:  'DR/Replication'
+      Category: 'DR/Replication'

@@ -1,0 +1,21 @@
+id:        MicrosoftAzureBackupServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Azure Backup Server'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Microsoft Azure Backup Server'
+  - 'MABS'
+
+detections:
+  - id: MicrosoftAzureBackupServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_backup_server*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

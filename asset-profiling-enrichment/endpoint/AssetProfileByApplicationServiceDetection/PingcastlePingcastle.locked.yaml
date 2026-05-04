@@ -1,0 +1,20 @@
+id:        PingcastlePingcastle
+appliesTo: endpoint
+mode:      locked
+purpose:   'PingCastle'
+category:  'Identity Security'
+description: ''
+displayNames:
+  - 'PingCastle'
+
+detections:
+  - id: PingcastlePingcastle
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'pingcastle*'
+    set:
+      Tier:     1
+      Purpose:  'Identity Security'
+      Category: 'Identity Security'

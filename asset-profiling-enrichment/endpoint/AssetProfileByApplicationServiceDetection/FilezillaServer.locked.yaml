@@ -1,0 +1,20 @@
+id:        FilezillaServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'FileZilla Server'
+category:  'FTP'
+description: ''
+displayNames:
+  - 'FileZilla Server'
+
+detections:
+  - id: FilezillaServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     2
+      Purpose:  'FTP'
+      Category: 'FTP'

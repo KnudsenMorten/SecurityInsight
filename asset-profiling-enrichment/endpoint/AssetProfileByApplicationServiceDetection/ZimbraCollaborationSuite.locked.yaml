@@ -1,0 +1,20 @@
+id:        ZimbraCollaborationSuite
+appliesTo: endpoint
+mode:      locked
+purpose:   'Zimbra Collaboration Suite'
+category:  'Mail/Collaboration'
+description: ''
+displayNames:
+  - 'Zimbra Collaboration Suite'
+
+detections:
+  - id: ZimbraCollaborationSuite
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'collaboration_suite*'
+    set:
+      Tier:     2
+      Purpose:  'Mail/Collaboration'
+      Category: 'Mail/Collaboration'

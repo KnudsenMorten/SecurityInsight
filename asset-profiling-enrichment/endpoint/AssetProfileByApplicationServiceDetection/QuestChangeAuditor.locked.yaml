@@ -1,0 +1,20 @@
+id:        QuestChangeAuditor
+appliesTo: endpoint
+mode:      locked
+purpose:   'Quest Change Auditor'
+category:  'Identity Audit'
+description: ''
+displayNames:
+  - 'Quest Change Auditor'
+
+detections:
+  - id: QuestChangeAuditor
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'change_auditor*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Audit'
+      Category: 'Identity Audit'

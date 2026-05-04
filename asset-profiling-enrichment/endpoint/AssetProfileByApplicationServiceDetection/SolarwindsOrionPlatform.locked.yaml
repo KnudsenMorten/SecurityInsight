@@ -1,0 +1,20 @@
+id:        SolarwindsOrionPlatform
+appliesTo: endpoint
+mode:      locked
+purpose:   'SolarWinds Orion Platform'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'SolarWinds Orion Platform'
+
+detections:
+  - id: SolarwindsOrionPlatform
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'orion_platform*'
+    set:
+      Tier:     1
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

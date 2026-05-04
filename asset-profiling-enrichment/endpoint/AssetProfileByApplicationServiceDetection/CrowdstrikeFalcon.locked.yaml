@@ -1,0 +1,20 @@
+id:        CrowdstrikeFalcon
+appliesTo: endpoint
+mode:      locked
+purpose:   'CrowdStrike Falcon'
+category:  'EDR'
+description: ''
+displayNames:
+  - 'CrowdStrike Falcon'
+
+detections:
+  - id: CrowdstrikeFalcon
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'falcon*'
+    set:
+      Tier:     1
+      Purpose:  'EDR'
+      Category: 'EDR'

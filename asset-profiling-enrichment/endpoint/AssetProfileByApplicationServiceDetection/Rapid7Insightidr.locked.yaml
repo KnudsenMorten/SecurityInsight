@@ -1,0 +1,20 @@
+id:        Rapid7Insightidr
+appliesTo: endpoint
+mode:      locked
+purpose:   'Rapid7 InsightIDR'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'Rapid7 InsightIDR'
+
+detections:
+  - id: Rapid7Insightidr
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'insightidr*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

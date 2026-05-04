@@ -1,0 +1,33 @@
+id:        SmartMeetingRoomDeviceDisplayConferencingSystem
+appliesTo: endpoint
+mode:      locked
+purpose:   'Smart Meeting Room Device (Display, Conferencing System)'
+category:  'IoT / OT'
+description: 'Networked AV with calendar/account creds; eavesdropping potential, limited lateral movement.'
+
+detections:
+  - id: SmartMeetingRoomDeviceDisplayConferencingSystem
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'polycom*'
+            - 'logitech_rally*'
+            - 'cisco_webex_room*'
+            - 'microsoft_teams_room*'
+            - 'zoom_room*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^mtr\d'
+            - '(?i)^room-'
+            - '(?i)teams.room'
+            - '(?i)conf.room'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)meeting.room'
+            - '(?i)conferencing'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Smart Meeting Room Device (Display, Conferencing System)'
+      Category: 'IoT / OT'

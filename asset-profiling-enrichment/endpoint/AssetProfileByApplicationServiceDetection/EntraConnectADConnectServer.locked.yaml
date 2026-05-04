@@ -1,0 +1,43 @@
+id:        EntraConnectADConnectServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Entra Connect / AD Connect Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |S|y|n|c|h|r|o|n|i|z|e|s|\|\| |o|n|-|p|r|e|m|\|\| |A|D|\|\| |w|i|t|h|\|\| |E|n|t|r|a|\|\| |I|D|\|\| |w|i|t|h|\|\| |p|r|i|v|i|l|e|g|e|d|\|\| |c|r|e|d|e|n|t|i|a|l|s|\|\| |i|n|\|\| |b|o|t|h|\|\| |d|i|r|e|c|t|i|o|n|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|a|z|u|r|e|_|a|d|_|c|o|n|n|e|c|t|,|\|\| |m|i|c|r|o|s|o|f|t|/|a|z|u|r|e|_|a|d|_|c|o|n|n|e|c|t|_|c|l|o|u|d|_|p|r|o|v|i|s|i|o|n|i|n|g|_|a|g|e|n|t|,|\|\| |m|i|c|r|o|s|o|f|t|/|a|z|u|r|e|_|a|d|_|c|o|n|n|e|c|t|_|h|e|a|l|t|h|,|\|\| |m|i|c|r|o|s|o|f|t|/|a|z|u|r|e|_|a|d|_|c|o|n|n|e|c|t|_|h|e|a|l|t|h|_|a|d|_|d|s|,|\|\| |m|i|c|r|o|s|o|f|t|/|a|z|u|r|e|_|a|d|_|c|o|n|n|e|c|t|_|h|e|a|l|t|h|_|a|d|_|f|s|,|\|\| |m|i|c|r|o|s|o|f|t|/|a|z|u|r|e|_|a|d|_|c|o|n|n|e|c|t|_|s|y|n|c|
+
+detections:
+  - id: EntraConnectADConnectServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_ad_connect*'
+            - 'aad_connect*'
+            - 'entra_connect*'
+            - 'microsoft_azure_ad_connect*'
+            - 'microsoft_entra_connect*'
+            - 'azure_ad_connect_cloud_provisioning_agent*'
+            - 'azure_ad_connect_health_ad_ds*'
+            - 'azure_ad_connect_health_ad_fs*'
+            - 'azure_ad_connect_health*'
+            - 'azure_ad_connect_sync*'
+            - 'azure_ad_connect*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^aadc\d'
+            - '(?i)^aadconnect'
+            - '(?i)^entraconnect'
+            - '(?i)entra.connect'
+            - '(?i)ad.connect'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)aad.connect'
+            - '(?i)entra.connect'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Entra Connect / AD Connect Server'
+      Category: 'Server Roles'

@@ -1,0 +1,20 @@
+id:        AlteryxServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Alteryx Server'
+category:  'Analytics'
+description: ''
+displayNames:
+  - 'Alteryx Server'
+
+detections:
+  - id: AlteryxServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     2
+      Purpose:  'Analytics'
+      Category: 'Analytics'

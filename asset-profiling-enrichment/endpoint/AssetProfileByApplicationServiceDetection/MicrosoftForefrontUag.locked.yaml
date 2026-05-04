@@ -1,0 +1,21 @@
+id:        MicrosoftForefrontUag
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Forefront Unified Access Gateway'
+category:  'Remote Access'
+description: 'EOS - flag for removal'
+displayNames:
+  - 'Microsoft Forefront Unified Access Gateway'
+  - 'UAG'
+
+detections:
+  - id: MicrosoftForefrontUag
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'forefront_uag*'
+    set:
+      Tier:     1
+      Purpose:  'Remote Access'
+      Category: 'Remote Access'

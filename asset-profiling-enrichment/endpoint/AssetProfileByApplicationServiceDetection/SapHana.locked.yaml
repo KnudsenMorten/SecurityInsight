@@ -1,0 +1,21 @@
+id:        SapHana
+appliesTo: endpoint
+mode:      locked
+purpose:   'SAP HANA Server'
+category:  'Database'
+description: 'T1 when storing financial/PII at scale'
+displayNames:
+  - 'SAP HANA Server'
+  - 'SAP HANA Database'
+
+detections:
+  - id: SapHana
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hana*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

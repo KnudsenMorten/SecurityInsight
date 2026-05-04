@@ -1,0 +1,20 @@
+id:        PaloaltonetworksPanorama
+appliesTo: endpoint
+mode:      locked
+purpose:   'Palo Alto Networks Panorama'
+category:  'Firewall Mgmt'
+description: ''
+displayNames:
+  - 'Palo Alto Networks Panorama'
+
+detections:
+  - id: PaloaltonetworksPanorama
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'panorama*'
+    set:
+      Tier:     1
+      Purpose:  'Firewall Mgmt'
+      Category: 'Firewall Mgmt'

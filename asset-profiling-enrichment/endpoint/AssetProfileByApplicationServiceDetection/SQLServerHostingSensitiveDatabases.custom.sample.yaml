@@ -1,0 +1,129 @@
+# ============================================================================
+# SAMPLE / TEMPLATE -- not loaded by the engine (.sample.* files are skipped).
+#
+# To activate this rule with your own tier verdict / detection / metadata:
+#   1. Copy this file to a sibling without the `.sample` suffix:
+#        <RuleId>.custom.yaml      (in the same folder as this file)
+#   2. Edit the `set:` block (Tier / Purpose / Category / Tags / cmdbId).
+#   3. Optionally edit the `detections:` block to change the match logic.
+#   4. Keep `id:` unchanged -- the engine deduplicates by id and your custom
+#      file then overrides any sibling `<RuleId>.locked.yaml`.
+#
+# Field grammar reference:  docs/RULE-REFERENCE.md
+# Annotated full template:  ../_TEMPLATE.custom.sample.yaml
+#
+# IMPORTANT: never set `cmdbName`, `cmdbCriticality`, `cmdbDataSensitivity`
+# inline in `set:`. They are auto-stamped from CMDB.csv via the `cmdbId`
+# lookup at Reconcile. Inline values cause drift between rule and CSV.
+#
+# ----------------------------------------------------------------------------
+# QUICK SYNTAX REFERENCE -- every detect kind, with required + optional params
+# (full reference + per-engine availability in RULE-REFERENCE.md)
+# ----------------------------------------------------------------------------
+#
+#   nameMatches                     (all engines)
+#     namePatterns: [regex,...]     # required (alias: patterns)
+#
+#   osPlatform                      (endpoint)
+#     osPatterns:   [regex,...]     # required (alias: patterns)
+#
+#   hasMdeMachineGroupTag           (endpoint)
+#     machineTagPatterns: [regex,...]  # required (alias: patterns)
+#
+#   egDetectedRoles                 (endpoint, identity)
+#     egSignals:   [string,...]     # required (alias: roles)
+#
+#   hasEntraExtensionAttributeTag   (identity)
+#     attribute:   string           # required, e.g. extensionAttribute6
+#     value:       string           # required
+#     match:       exact | <other>  # optional, default exact (other = -like)
+#
+#   hasSoftwareInstalled            (endpoint)
+#     tvmSoftwareNames: [glob,...]  # required ('vendor/name' or '*/name')
+#
+#   groupMembership                 (identity)
+#     group:       string           # required (single name; CI exact)
+#
+#   hasAzureTagDirectOrParent       (azure; also endpoint when correlated)
+#     tag:         string           # required (key, CI exact)
+#     value:       string|list      # optional (presence-only if absent)
+#     match:       <operator>       # optional, default equal
+#
+#   egKustoQuery                    (escape hatch -- endpoint, identity, azure)
+#     kql:         string           # required, returns asset IDs
+#
+#   mostFrequentUserTier            (endpoint)
+#     tierValues:  [int,...]        # required, e.g. [0] or [0,1]
+#
+#   ipInRange                       (endpoint, azure)
+#     cidrs:       [CIDR,...]       # required (alias: cidr)
+#     fields:      [string,...]     # optional, restricts which fields to scan
+#
+#   hasTag                          (endpoint, identity, azure)
+#     tag:         string           # optional*  (key, CI exact)
+#     value:       string|list      # optional*  (depends on match)
+#     match:       <operator>       # optional, default equal
+#     sources:     [string,...]     # optional: mde,eg,entra,arm,cmdb,ad
+#     # *at least one of tag / value required; value-only equal is REFUSED
+#
+# Operators usable as `match:` (for hasTag, hasAzureTagDirectOrParent):
+#   equal (default) -- exact CI string match
+#   like            -- PowerShell -like wildcards ('*foo*', 'bar?')
+#   has             -- substring presence (CI)
+#   regex           -- .NET regex match
+#   matches         -- alias for regex
+#   in              -- value appears in a list
+#   startswith      -- prefix match (CI)
+#   endswith        -- suffix match (CI)
+#
+# `set:` block:
+#   Tier:        int 0..3 (0=Critical, 1=High, 2=Medium, 3=Low)
+#   Purpose:     string (human-readable role label)
+#   Category:    string (grouping bucket)
+#   Tags:        [string,...] (free-form, aggregated across rule matches)
+#   cmdbId:      string (foreign key into CMDB.csv -- auto-stamps cmdbName +
+#                       cmdbCriticality + cmdbDataSensitivity from the row)
+# ============================================================================
+id:        SQLServerHostingSensitiveDatabases
+appliesTo: endpoint
+mode:      locked
+purpose:   'SQL Server Hosting Sensitive Databases'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |S|e|n|s|i|t|i|v|e|\|\| |d|a|t|a|\|\| |s|t|o|r|e|;|\|\| |c|o|m|p|r|o|m|i|s|e|\|\| |e|n|a|b|l|e|s|\|\| |P|I|I|/|f|i|n|a|n|c|i|a|l|-|d|a|t|a|\|\| |t|h|e|f|t|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|s|q|l|_|s|e|r|v|e|r|,|\|\| |m|i|c|r|o|s|o|f|t|/|s|q|l|_|s|e|r|v|e|r|_|a|n|a|l|y|s|i|s|_|s|e|r|v|i|c|e|s|,|\|\| |m|i|c|r|o|s|o|f|t|/|s|q|l|_|s|e|r|v|e|r|_|i|n|t|e|g|r|a|t|i|o|n|_|s|e|r|v|i|c|e|s|,|\|\| |m|i|c|r|o|s|o|f|t|/|s|q|l|_|s|e|r|v|e|r|_|r|e|p|o|r|t|i|n|g|_|s|e|r|v|i|c|e|s|,|\|\| |o|r|a|c|l|e|/|m|y|s|q|l|_|s|e|r|v|e|r|,|\|\| |p|o|s|t|g|r|e|s|q|l|/|p|o|s|t|g|r|e|s|q|l|
+
+detections:
+  - id: SQLServerHostingSensitiveDatabases
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft_sql_server*'
+            - 'sql_server*'
+            - 'oracle_database*'
+            - 'mysql*'
+            - 'postgresql*'
+            - 'mariadb*'
+            - 'sql_server_analysis_services*'
+            - 'sql_server_integration_services*'
+            - 'sql_server_reporting_services*'
+            - 'sql_server*'
+            - 'mysql_server*'
+            - 'postgresql*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^sql\d'
+            - '(?i)^db\d'
+            - '(?i)^mssql\d'
+            - '(?i)database.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)sql.server'
+            - '(?i)database'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'SQL Server Hosting Sensitive Databases'
+      Category: 'Server Roles'

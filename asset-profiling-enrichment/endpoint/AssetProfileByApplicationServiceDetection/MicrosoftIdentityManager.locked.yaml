@@ -1,0 +1,22 @@
+id:        MicrosoftIdentityManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Identity Manager 2016'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Microsoft Identity Manager 2016'
+  - 'Microsoft Identity Manager'
+  - 'MIM Service and Portal'
+
+detections:
+  - id: MicrosoftIdentityManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'identity_manager*'
+    set:
+      Tier:     0
+      Purpose:  'MIM Service'
+      Category: 'Identity'

@@ -1,0 +1,21 @@
+id:        DigicertCertificateUtility
+appliesTo: endpoint
+mode:      locked
+purpose:   'DigiCert CertCentral'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'DigiCert CertCentral'
+  - 'DigiCert Certificate Utility'
+
+detections:
+  - id: DigicertCertificateUtility
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'certificate_utility*'
+    set:
+      Tier:     1
+      Purpose:  'PKI'
+      Category: 'PKI'

@@ -1,0 +1,20 @@
+id:        GlobalsignAtlas
+appliesTo: endpoint
+mode:      locked
+purpose:   'GlobalSign Atlas'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'GlobalSign Atlas'
+
+detections:
+  - id: GlobalsignAtlas
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'atlas*'
+    set:
+      Tier:     1
+      Purpose:  'PKI'
+      Category: 'PKI'

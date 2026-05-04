@@ -1,0 +1,20 @@
+id:        DruvaInsync
+appliesTo: endpoint
+mode:      locked
+purpose:   'Druva inSync'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Druva inSync'
+
+detections:
+  - id: DruvaInsync
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'insync*'
+    set:
+      Tier:     1
+      Purpose:  'Backup'
+      Category: 'Backup'

@@ -1,0 +1,21 @@
+id:        PapercutPapercut
+appliesTo: endpoint
+mode:      locked
+purpose:   'PaperCut MF'
+category:  'Print'
+description: ''
+displayNames:
+  - 'PaperCut MF'
+  - 'PaperCut NG'
+
+detections:
+  - id: PapercutPapercut
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'papercut*'
+    set:
+      Tier:     3
+      Purpose:  'Print'
+      Category: 'Print'

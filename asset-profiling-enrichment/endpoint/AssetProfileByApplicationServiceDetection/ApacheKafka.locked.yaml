@@ -1,0 +1,20 @@
+id:        ApacheKafka
+appliesTo: endpoint
+mode:      locked
+purpose:   'Apache Kafka'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'Apache Kafka'
+
+detections:
+  - id: ApacheKafka
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'kafka*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

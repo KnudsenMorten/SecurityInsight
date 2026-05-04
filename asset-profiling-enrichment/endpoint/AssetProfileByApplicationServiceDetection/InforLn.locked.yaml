@@ -1,0 +1,20 @@
+id:        InforLn
+appliesTo: endpoint
+mode:      locked
+purpose:   'Infor LN'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Infor LN'
+
+detections:
+  - id: InforLn
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ln*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

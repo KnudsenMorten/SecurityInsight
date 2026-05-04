@@ -1,0 +1,30 @@
+id:        HypervisorHostRunningTier1GuestVMs
+appliesTo: endpoint
+mode:      locked
+purpose:   'Hypervisor Host Running Tier 1 Guest VMs'
+category:  'Hypervisor'
+description: 'Hypervisor below tier 1 guests can access guest memory/disks bypassing OS isolation.'
+
+detections:
+  - id: HypervisorHostRunningTier1GuestVMs
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vmware_esxi*'
+            - 'microsoft_hyper-v*'
+            - 'kvm*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^esxi.*t1'
+            - '(?i)^hv.*t1'
+            - '(?i)hypervisor.tier.?1'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)hypervisor.tier.?1'
+            - '(?i)esxi.tier.?1'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Hypervisor Host Running Tier 1 Guest VMs'
+      Category: 'Hypervisor'

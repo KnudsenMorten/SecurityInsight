@@ -1,0 +1,20 @@
+id:        DigiumAsterisk
+appliesTo: endpoint
+mode:      locked
+purpose:   'Asterisk'
+category:  'VoIP'
+description: ''
+displayNames:
+  - 'Asterisk'
+
+detections:
+  - id: DigiumAsterisk
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'asterisk*'
+    set:
+      Tier:     3
+      Purpose:  'VoIP'
+      Category: 'VoIP'

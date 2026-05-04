@@ -1,0 +1,22 @@
+id:        MicrosoftInternetInformationServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Internet Information Services'
+category:  'Web Server'
+description: ''
+displayNames:
+  - 'Microsoft Internet Information Services'
+  - 'IIS'
+  - 'Microsoft IIS'
+
+detections:
+  - id: MicrosoftInternetInformationServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'internet_information_services*'
+    set:
+      Tier:     2
+      Purpose:  'Web Server'
+      Category: 'Web Server'

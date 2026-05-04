@@ -1,0 +1,31 @@
+id:        NetworkPacketBrokerTAPAggregator
+appliesTo: endpoint
+mode:      locked
+purpose:   'Network Packet Broker / TAP Aggregator'
+category:  'Network Equipment'
+description: 'Sees and routes copies of all monitored traffic; one device equals tap on the whole network.'
+
+detections:
+  - id: NetworkPacketBrokerTAPAggregator
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'gigamon*'
+            - 'ixia_visibility*'
+            - 'garland_packet_broker*'
+            - 'apcon*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^tap\d'
+            - '(?i)^npb\d'
+            - '(?i)packet.broker'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)packet.broker'
+            - '(?i)tap.aggregator'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Network Packet Broker / TAP Aggregator'
+      Category: 'Network Equipment'

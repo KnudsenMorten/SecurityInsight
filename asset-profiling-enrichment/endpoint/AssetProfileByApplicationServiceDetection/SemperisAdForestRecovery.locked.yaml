@@ -1,0 +1,21 @@
+id:        SemperisAdForestRecovery
+appliesTo: endpoint
+mode:      locked
+purpose:   'Semperis Active Directory Forest Recovery'
+category:  'Identity Backup'
+description: ''
+displayNames:
+  - 'Semperis Active Directory Forest Recovery'
+  - 'Semperis ADFR'
+
+detections:
+  - id: SemperisAdForestRecovery
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ad_forest_recovery*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Backup'
+      Category: 'Identity Backup'

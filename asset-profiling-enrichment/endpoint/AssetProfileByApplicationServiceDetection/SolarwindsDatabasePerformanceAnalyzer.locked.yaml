@@ -1,0 +1,20 @@
+id:        SolarwindsDatabasePerformanceAnalyzer
+appliesTo: endpoint
+mode:      locked
+purpose:   'SolarWinds Database Performance Analyzer'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'SolarWinds Database Performance Analyzer'
+
+detections:
+  - id: SolarwindsDatabasePerformanceAnalyzer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'database_performance_analyzer*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

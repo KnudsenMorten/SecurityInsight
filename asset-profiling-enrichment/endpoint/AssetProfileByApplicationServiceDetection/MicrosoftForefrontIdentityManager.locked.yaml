@@ -1,0 +1,20 @@
+id:        MicrosoftForefrontIdentityManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Forefront Identity Manager 2010'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Forefront Identity Manager 2010'
+
+detections:
+  - id: MicrosoftForefrontIdentityManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'forefront_identity_manager*'
+    set:
+      Tier:     0
+      Purpose:  'FIM Service'
+      Category: 'Identity'

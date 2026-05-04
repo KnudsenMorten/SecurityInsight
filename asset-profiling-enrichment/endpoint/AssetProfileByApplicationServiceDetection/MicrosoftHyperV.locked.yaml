@@ -1,0 +1,22 @@
+id:        MicrosoftHyperV
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Hyper-V'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'Microsoft Hyper-V'
+  - 'Hyper-V Manager'
+  - 'Hyper-V Server'
+
+detections:
+  - id: MicrosoftHyperV
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hyper-v*'
+    set:
+      Tier:     0
+      Purpose:  'Hypervisor (running T0 VMs)'
+      Category: 'Virtualization'

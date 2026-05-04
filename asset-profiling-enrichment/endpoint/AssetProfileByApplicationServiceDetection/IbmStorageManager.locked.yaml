@@ -1,0 +1,20 @@
+id:        IbmStorageManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Storage Manager'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'IBM Storage Manager'
+
+detections:
+  - id: IbmStorageManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'storage_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

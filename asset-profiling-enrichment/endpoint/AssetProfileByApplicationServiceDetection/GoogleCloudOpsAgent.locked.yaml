@@ -1,0 +1,20 @@
+id:        GoogleCloudOpsAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Google Cloud Ops Agent'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Google Cloud Ops Agent'
+
+detections:
+  - id: GoogleCloudOpsAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cloud_ops_agent*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

@@ -1,0 +1,20 @@
+id:        CitrixStudio
+appliesTo: endpoint
+mode:      locked
+purpose:   'Citrix Studio'
+category:  'VDI'
+description: ''
+displayNames:
+  - 'Citrix Studio'
+
+detections:
+  - id: CitrixStudio
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'studio*'
+    set:
+      Tier:     2
+      Purpose:  'VDI'
+      Category: 'VDI'

@@ -1,0 +1,20 @@
+id:        IbmTivoliDirectoryServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Tivoli Directory Server'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'IBM Tivoli Directory Server'
+
+detections:
+  - id: IbmTivoliDirectoryServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'tivoli_directory_server*'
+    set:
+      Tier:     1
+      Purpose:  'Identity'
+      Category: 'Identity'

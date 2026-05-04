@@ -1,0 +1,20 @@
+id:        ManageenginePam360
+appliesTo: endpoint
+mode:      locked
+purpose:   'ManageEngine PAM360'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'ManageEngine PAM360'
+
+detections:
+  - id: ManageenginePam360
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'pam360*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

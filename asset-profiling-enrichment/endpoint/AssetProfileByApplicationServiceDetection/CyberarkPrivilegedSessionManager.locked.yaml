@@ -1,0 +1,21 @@
+id:        CyberarkPrivilegedSessionManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'CyberArk Privileged Session Manager'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'CyberArk Privileged Session Manager'
+  - 'CyberArk PSM'
+
+detections:
+  - id: CyberarkPrivilegedSessionManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'privileged_session_manager*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

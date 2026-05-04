@@ -1,0 +1,20 @@
+id:        FortinetFortiauthenticator
+appliesTo: endpoint
+mode:      locked
+purpose:   'FortiAuthenticator'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'FortiAuthenticator'
+
+detections:
+  - id: FortinetFortiauthenticator
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'fortiauthenticator*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

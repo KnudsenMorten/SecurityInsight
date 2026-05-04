@@ -1,0 +1,20 @@
+id:        QuestKaceSma
+appliesTo: endpoint
+mode:      locked
+purpose:   'KACE Systems Management Appliance'
+category:  'Endpoint Mgmt'
+description: ''
+displayNames:
+  - 'KACE Systems Management Appliance'
+
+detections:
+  - id: QuestKaceSma
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'kace_sma*'
+    set:
+      Tier:     1
+      Purpose:  'Endpoint Mgmt'
+      Category: 'Endpoint Mgmt'

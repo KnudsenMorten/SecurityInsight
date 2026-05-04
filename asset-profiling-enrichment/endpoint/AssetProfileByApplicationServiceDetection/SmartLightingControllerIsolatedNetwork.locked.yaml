@@ -1,0 +1,30 @@
+id:        SmartLightingControllerIsolatedNetwork
+appliesTo: endpoint
+mode:      locked
+purpose:   'Smart Lighting Controller (Isolated Network)'
+category:  'IoT / OT'
+description: 'Lighting control on isolated VLAN; comfort impact only.'
+
+detections:
+  - id: SmartLightingControllerIsolatedNetwork
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'philips_hue*'
+            - 'lutron*'
+            - 'crestron*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^lighting\d'
+            - '(?i)^hue\d'
+            - '(?i)smart.lighting'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)smart.lighting'
+            - '(?i)lighting.controller'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Smart Lighting Controller (Isolated Network)'
+      Category: 'IoT / OT'

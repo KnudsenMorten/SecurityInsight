@@ -1,0 +1,22 @@
+id:        MicrosoftSystemCenterDataProtectionManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft System Center Data Protection Manager'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Microsoft System Center Data Protection Manager'
+  - 'System Center DPM'
+  - 'Microsoft DPM'
+
+detections:
+  - id: MicrosoftSystemCenterDataProtectionManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center_data_protection_manager*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

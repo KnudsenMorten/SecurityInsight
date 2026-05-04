@@ -1,0 +1,22 @@
+id:        MicrosoftActiveDirectory
+appliesTo: endpoint
+mode:      locked
+purpose:   'Active Directory Domain Services'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Active Directory Domain Services'
+  - 'AD DS'
+  - 'Remote Server Administration Tools - Active Directory Domain Services'
+
+detections:
+  - id: MicrosoftActiveDirectory
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory*'
+    set:
+      Tier:     0
+      Purpose:  'Domain Controller'
+      Category: 'Identity'

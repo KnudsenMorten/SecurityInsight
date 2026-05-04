@@ -1,0 +1,20 @@
+id:        LenovoXclarityProvisioningManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Lenovo XClarity Provisioning Manager'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'Lenovo XClarity Provisioning Manager'
+
+detections:
+  - id: LenovoXclarityProvisioningManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'xclarity_provisioning_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

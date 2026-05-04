@@ -1,0 +1,20 @@
+id:        HashicorpConsul
+appliesTo: endpoint
+mode:      locked
+purpose:   'HashiCorp Consul'
+category:  'Service Mesh'
+description: ''
+displayNames:
+  - 'HashiCorp Consul'
+
+detections:
+  - id: HashicorpConsul
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'consul*'
+    set:
+      Tier:     1
+      Purpose:  'Service Mesh'
+      Category: 'Service Mesh'

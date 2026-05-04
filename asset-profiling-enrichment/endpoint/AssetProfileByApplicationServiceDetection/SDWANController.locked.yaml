@@ -1,0 +1,31 @@
+id:        SDWANController
+appliesTo: endpoint
+mode:      locked
+purpose:   'SD-WAN Controller'
+category:  'Network Equipment'
+description: 'Centrally programs every WAN edge; compromise enables global traffic interception.'
+
+detections:
+  - id: SDWANController
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_vmanage*'
+            - 'vmware_velocloud*'
+            - 'fortinet_fortimanager*'
+            - 'silver_peak*'
+            - 'versa_director*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^sdwan\d'
+            - '(?i)^vmanage'
+            - '(?i)sd.wan.controller'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)sd.?wan'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'SD-WAN Controller'
+      Category: 'Network Equipment'

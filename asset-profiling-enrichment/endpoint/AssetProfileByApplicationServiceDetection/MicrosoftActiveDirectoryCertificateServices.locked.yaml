@@ -1,0 +1,21 @@
+id:        MicrosoftActiveDirectoryCertificateServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Active Directory Certificate Services'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'Active Directory Certificate Services'
+  - 'AD CS'
+
+detections:
+  - id: MicrosoftActiveDirectoryCertificateServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_certificate_services*'
+    set:
+      Tier:     0
+      Purpose:  'Root/Subordinate CA'
+      Category: 'PKI'

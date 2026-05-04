@@ -1,0 +1,21 @@
+id:        VmwareAriaOperations
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware vRealize Operations'
+category:  'Virtualization Mgmt'
+description: ''
+displayNames:
+  - 'VMware vRealize Operations'
+  - 'VMware Aria Operations'
+
+detections:
+  - id: VmwareAriaOperations
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'aria_operations*'
+    set:
+      Tier:     1
+      Purpose:  'Virtualization Mgmt'
+      Category: 'Virtualization Mgmt'

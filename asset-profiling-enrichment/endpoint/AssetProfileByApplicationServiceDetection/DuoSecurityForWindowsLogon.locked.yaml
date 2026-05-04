@@ -1,0 +1,20 @@
+id:        DuoSecurityForWindowsLogon
+appliesTo: endpoint
+mode:      locked
+purpose:   'Duo Security for Windows Logon'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'Duo Security for Windows Logon'
+
+detections:
+  - id: DuoSecurityForWindowsLogon
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'security_for_windows_logon*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

@@ -1,0 +1,20 @@
+id:        VeeamAgentForMicrosoftWindows
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veeam Agent for Microsoft Windows'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veeam Agent for Microsoft Windows'
+
+detections:
+  - id: VeeamAgentForMicrosoftWindows
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'agent_for_microsoft_windows*'
+    set:
+      Tier:     1
+      Purpose:  'Backup'
+      Category: 'Backup'

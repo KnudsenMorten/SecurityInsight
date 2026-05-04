@@ -1,0 +1,20 @@
+id:        PaesslerPrtgNetworkMonitor
+appliesTo: endpoint
+mode:      locked
+purpose:   'PRTG Network Monitor'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'PRTG Network Monitor'
+
+detections:
+  - id: PaesslerPrtgNetworkMonitor
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'prtg_network_monitor*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

@@ -1,0 +1,20 @@
+id:        ApacheZookeeper
+appliesTo: endpoint
+mode:      locked
+purpose:   'Apache ZooKeeper'
+category:  'Coordination'
+description: ''
+displayNames:
+  - 'Apache ZooKeeper'
+
+detections:
+  - id: ApacheZookeeper
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'zookeeper*'
+    set:
+      Tier:     2
+      Purpose:  'Coordination'
+      Category: 'Coordination'

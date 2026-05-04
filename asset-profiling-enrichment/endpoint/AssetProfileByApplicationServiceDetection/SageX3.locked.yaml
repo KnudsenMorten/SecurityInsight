@@ -1,0 +1,22 @@
+id:        SageX3
+appliesTo: endpoint
+mode:      locked
+purpose:   'Sage 100'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Sage 100'
+  - 'Sage 300'
+  - 'Sage X3'
+
+detections:
+  - id: SageX3
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'x3*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

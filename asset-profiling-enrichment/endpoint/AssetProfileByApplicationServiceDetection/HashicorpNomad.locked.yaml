@@ -1,0 +1,20 @@
+id:        HashicorpNomad
+appliesTo: endpoint
+mode:      locked
+purpose:   'HashiCorp Nomad'
+category:  'Orchestration'
+description: ''
+displayNames:
+  - 'HashiCorp Nomad'
+
+detections:
+  - id: HashicorpNomad
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nomad*'
+    set:
+      Tier:     1
+      Purpose:  'Orchestration'
+      Category: 'Orchestration'

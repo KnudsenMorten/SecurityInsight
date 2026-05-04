@@ -1,0 +1,30 @@
+id:        CoreSwitchSpanningAllVLANs
+appliesTo: endpoint
+mode:      locked
+purpose:   'Core Switch (Spanning All VLANs)'
+category:  'Network Equipment'
+description: 'Spans every VLAN; compromise enables cross-segment traffic capture/redirection.'
+
+detections:
+  - id: CoreSwitchSpanningAllVLANs
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_nx-os*'
+            - 'cisco_catalyst*'
+            - 'arista_eos*'
+            - 'juniper_junos*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^core-sw'
+            - '(?i)^coresw\d'
+            - '(?i)core.switch'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)core.switch'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Core Switch (Spanning All VLANs)'
+      Category: 'Network Equipment'

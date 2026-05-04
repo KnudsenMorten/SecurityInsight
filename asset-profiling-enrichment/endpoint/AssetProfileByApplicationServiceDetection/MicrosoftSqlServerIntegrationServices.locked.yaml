@@ -1,0 +1,21 @@
+id:        MicrosoftSqlServerIntegrationServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft SQL Server Integration Services'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Microsoft SQL Server Integration Services'
+  - 'SSIS'
+
+detections:
+  - id: MicrosoftSqlServerIntegrationServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sql_server_integration_services*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

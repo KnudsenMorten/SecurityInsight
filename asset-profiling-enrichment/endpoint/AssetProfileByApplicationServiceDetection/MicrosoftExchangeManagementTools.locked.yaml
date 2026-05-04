@@ -1,0 +1,21 @@
+id:        MicrosoftExchangeManagementTools
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Exchange Management Tools'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Microsoft Exchange Management Tools'
+  - 'Exchange Management Shell'
+
+detections:
+  - id: MicrosoftExchangeManagementTools
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'exchange_management_tools*'
+    set:
+      Tier:     1
+      Purpose:  'Mail'
+      Category: 'Mail'

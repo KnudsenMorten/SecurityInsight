@@ -1,0 +1,20 @@
+id:        VenafiEncryptionDirector
+appliesTo: endpoint
+mode:      locked
+purpose:   'Venafi Encryption Director'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'Venafi Encryption Director'
+
+detections:
+  - id: VenafiEncryptionDirector
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'encryption_director*'
+    set:
+      Tier:     0
+      Purpose:  'PKI'
+      Category: 'PKI'

@@ -1,0 +1,21 @@
+id:        DellOpenmanageServerAdministrator
+appliesTo: endpoint
+mode:      locked
+purpose:   'Dell OpenManage Server Administrator'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'Dell OpenManage Server Administrator'
+  - 'OMSA'
+
+detections:
+  - id: DellOpenmanageServerAdministrator
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'openmanage_server_administrator*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

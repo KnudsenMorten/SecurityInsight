@@ -1,0 +1,30 @@
+id:        BadgeReaderNonDomainIntegratedIsolated
+appliesTo: endpoint
+mode:      locked
+purpose:   'Badge Reader (Non-Domain Integrated, Isolated)'
+category:  'IoT / OT'
+description: 'Standalone access reader; bypass affects single door, no IT plane access.'
+
+detections:
+  - id: BadgeReaderNonDomainIntegratedIsolated
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hid_*'
+            - 'lenel_onguard*'
+            - 'honeywell_winpak*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^badge-rd'
+            - '(?i)^reader\d'
+            - '(?i)badge.reader'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)badge.reader'
+            - '(?i)isolated.access'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Badge Reader (Non-Domain Integrated, Isolated)'
+      Category: 'IoT / OT'

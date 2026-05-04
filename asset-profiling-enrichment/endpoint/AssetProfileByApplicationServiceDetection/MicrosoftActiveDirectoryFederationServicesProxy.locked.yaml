@@ -1,0 +1,20 @@
+id:        MicrosoftActiveDirectoryFederationServicesProxy
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Active Directory Federation Services Proxy'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Microsoft Active Directory Federation Services Proxy'
+
+detections:
+  - id: MicrosoftActiveDirectoryFederationServicesProxy
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'active_directory_federation_services_proxy*'
+    set:
+      Tier:     1
+      Purpose:  'Identity'
+      Category: 'Identity'

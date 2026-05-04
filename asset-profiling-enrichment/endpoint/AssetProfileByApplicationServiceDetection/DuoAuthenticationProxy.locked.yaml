@@ -1,0 +1,20 @@
+id:        DuoAuthenticationProxy
+appliesTo: endpoint
+mode:      locked
+purpose:   'Duo Authentication Proxy'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'Duo Authentication Proxy'
+
+detections:
+  - id: DuoAuthenticationProxy
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'authentication_proxy*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

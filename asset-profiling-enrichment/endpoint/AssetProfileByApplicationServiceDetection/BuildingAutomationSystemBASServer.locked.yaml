@@ -1,0 +1,30 @@
+id:        BuildingAutomationSystemBASServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Building Automation System (BAS) Server'
+category:  'IoT / OT'
+description: 'Operates lighting/access/HVAC; broad facility impact if compromised.'
+
+detections:
+  - id: BuildingAutomationSystemBASServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'tridium_niagara*'
+            - 'siemens_desigo_cc*'
+            - 'honeywell_ebi*'
+            - 'schneider_ecostruxure*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^bas\d'
+            - '(?i)building.automation'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)bas'
+            - '(?i)building.automation'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Building Automation System (BAS) Server'
+      Category: 'IoT / OT'

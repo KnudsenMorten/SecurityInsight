@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "schemaVersion": "2.3.0",
+  "lastModified": "2026-04-26",
+  "purpose": "Cross-cutting asset-profile schema. Per-engine details live in <engine>.schema.json sibling files. Engine reads SCHEMA.json + <engine>.schema.json at startup.",
+
+  "vocabularies": {
+    "engines": [
+      { "name": "identity", "table": "SI_Identity_Profile_CL", "schemaFile": "identity.schema.json" },
+      { "name": "endpoint", "table": "SI_Endpoint_Profile_CL", "schemaFile": "endpoint.schema.json" },
+      { "name": "azure",    "table": "SI_Azure_Profile_CL",    "schemaFile": "azure.schema.json" }
+    ],
+
+    "sources": [
+      { "name": "entra",         "kind": "builtin", "description": "Microsoft Graph", "primaryEndpoints": ["https://graph.microsoft.com/v1.0"], "docs": "https://learn.microsoft.com/en-us/graph/api/resources/user" },
+      { "name": "mde",           "kind": "builtin", "description": "Microsoft Defender for Endpoint", "primaryEndpoints": ["https://api.securitycenter.microsoft.com/api/machines", "table://DeviceInfo"], "docs": "https://learn.microsoft.com/en-us/defender-xdr/advanced-hunting-deviceinfo-table" },
+      { "name": "mdi",           "kind": "builtin", "description": "Microsoft Defender for Identity", "primaryEndpoints": ["table://IdentityInfo"] },
+      { "name": "azure",         "kind": "builtin", "description": "Azure Resource Manager / Resource Graph", "primaryEndpoints": ["https://management.azure.com", "table://authorizationresources"] },
+      { "name": "exposureGraph", "kind": "builtin", "description": "Microsoft Security Exposure Management graph", "primaryEndpoints": ["table://ExposureGraphNodes", "table://ExposureGraphEdges"] },
+      { "name": "signInLogs",    "kind": "builtin", "description": "Entra ID diagnostic — sign-in logs to LA", "primaryEndpoints": ["table://SigninLogs", "table://AADNonInteractiveUserSignInLogs", "table://AADServicePrincipalSignInLogs", "table://AADManagedIdentitySignInLogs"] },
+      { "name": "derived",       "kind": "internal", "description": "Computed by Stage Enrich/PostureAnalyze/Classify" }
+    ],
+
+    "stages": [
+      { "name": "bootstrap",       "ai": false, "description": "One-time setup (workspace IDs, DCR IDs, role grants)" },
+      { "name": "collect",         "ai": false, "description": "Raw fields, identity keys, freshness, lifecycle dates" },
+      { "name": "enrich",          "ai": false, "description": "Cross-source joins, time-window aggregates, transitive role expansion" },
+      { "name": "posture_analyze", "ai": true,  "description": "AssetType, AssetGroup, AI labels — AI lives only here" },
+      { "name": "classify",        "ai": false, "description": "Tier, Group, Verdict, TierProofs, hashes" }
+    ],
+
+    "purposes": [
+      { "name": "identity",    "storage": "flat-indexed", "description": "Primary or alternate key" },
+      { "name": "correlation", "storage": "flat-indexed", "description": "Cross-engine join key" },
+      { "name": "risk",        "storage": "flat",         "description": "Feeds tier-compute / risk score / verdict" },
+      { "name": "posture",     "storage": "flat",         "description": "Read by detection rules" },
+      { "name": "lifecycle",   "storage": "flat",         "description": "State transitions that drive alerts" },
+      { "name": "freshness",   "storage": "flat",         "description": "Data-quality / staleness signal" },
+      { "name": "pivot",       "storage": "flat",         "description": "summarize-by dimension" },
+      { "name": "kpi",         "storage": "flat",         "description": "Aggregated value on dashboards" },
+      { "name": "compliance",  "storage": "flat",         "description": "Audit/regulatory requirement" },
+      { "name": "attribution", "storage": "flat",         "description": "Owner / responsible party" },
+      { "name": "policy",      "storage": "flat",         "description": "Configured policy state" },
+      { "name": "enrichment",  "storage": "nested",       "description": "Descriptive context, never filtered" },
+      { "name": "forensic",    "storage": "nested",       "description": "Analyst-only deep payload" },
+      { "name": "raw",         "storage": "nested",       "description": "Verbatim upstream blob" }
+    ],
+
+    "entityTypes": [
+      { "name": "AadObjectId",              "carrier": "Entra user/group/SP/MI", "normalization": "EG emits 'tenantid=<guid>;objectid=<guid>'; canonicalize to bare <objectid> GUID; preserve original in Properties.collect.exposureGraph.EntityIds[*].id" },
+      { "name": "SecurityIdentifier",       "carrier": "AD object SID, Windows local SID" },
+      { "name": "ActiveDirectoryObjectGuid","carrier": "AD object GUID" },
+      { "name": "AzureResourceId",          "carrier": "ARM resource ID" },
+      { "name": "AzureSubscriptionId",      "carrier": "Subscription scope" },
+      { "name": "AzureManagementGroupId",   "carrier": "Management group scope" },
+      { "name": "AadDeviceId",              "carrier": "Entra-registered device" },
+      { "name": "MdeDeviceId",              "carrier": "Defender for Endpoint machine ID" },
+      { "name": "IntuneDeviceId",           "carrier": "Intune managed device ID" },
+      { "name": "MdiSensorId",              "carrier": "Defender for Identity sensor / unique entity ID" },
+      { "name": "ExposureGraphNodeId",      "carrier": "EG NodeId — last-resort hub" },
+      { "name": "Upn",                      "carrier": "Entra UPN", "normalization": "lowercase" },
+      { "name": "Mail",                     "carrier": "SMTP address", "normalization": "lowercase" },
+      { "name": "Hostname",                 "carrier": "DNS or NetBIOS name", "normalization": "lowercase" },
+      { "name": "SerialNumber",             "carrier": "Hardware serial" },
+      { "name": "Fqdn",                     "carrier": "Fully-qualified DNS" },
+      { "name": "MacAddress",               "carrier": "Normalized MAC aa:bb:cc:dd:ee:ff" },
+      { "name": "HardwareUuid",             "carrier": "Hardware UUID (DeviceInfo.HardwareUuid) — survives OS reinstall" },
+      { "name": "AzureVmId",                "carrier": "Azure VM unique ID (distinct from AzureResourceId)" },
+      { "name": "AwsResourceName",          "carrier": "AWS ARN (multi-cloud via Defender for Cloud)" },
+      { "name": "GcpFullResourceName",      "carrier": "GCP fully-qualified resource name" },
+      { "name": "HostDeviceId",             "carrier": "Parent device ID for WSL containers" }
+    ],
+
+    "identityTypes": [
+      { "name": "User",             "egNodeLabel": "user",             "description": "Human or human-like account in Entra and/or AD" },
+      { "name": "ServiceAccount",   "egNodeLabel": "user",             "description": "AD-side service account (gMSA, MSA, or regular SVC user). accountName ends in $; securityPrincipalType: MachineAccount" },
+      { "name": "Group",            "egNodeLabel": "group",            "description": "Security or distribution group" },
+      { "name": "ServicePrincipal", "egNodeLabel": "serviceprincipal", "description": "Entra service principal (app registration, enterprise app, MS first-party)" },
+      { "name": "ManagedIdentity",  "egNodeLabel": "managedidentity",  "description": "Azure system- or user-assigned managed identity" },
+      { "name": "Computer",         "egNodeLabel": "device",           "description": "AD computer account" }
+    ],
+
+    "securityPrincipalTypes": [
+      { "name": "UserObject",     "description": "Regular AD user (objectClass: user)" },
+      { "name": "MachineAccount", "description": "AD computer or managed service account (objectClass: computer or gMSA). accountName ends with $." },
+      { "name": "GroupObject",    "description": "AD security group" },
+      { "name": "ServiceObject",  "description": "Legacy/non-managed service account" }
+    ],
+
+    "primaryProviders": [
+      { "name": "AzureActiveDirectory", "hasAadIds": true,  "hasAdIds": false, "hasNestedAdGroupNames": false },
+      { "name": "ActiveDirectory",      "hasAadIds": false, "hasAdIds": true,  "hasNestedAdGroupNames": true },
+      { "name": "Hybrid",               "hasAadIds": true,  "hasAdIds": true,  "hasNestedAdGroupNames": true }
+    ],
+
+    "uacFlagInterpretation": {
+      "description": "Same UAC flag means different things per identityType. See catalog UacFlag_Tiering.json for full matrix.",
+      "examples": [
+        { "flag": "TrustedForDelegation",      "User": "T0", "ServiceAccount": "T0", "Computer": "T0", "note": "Kerberos unconstrained delegation = forest takeover" },
+        { "flag": "PreauthenticationDisabled", "User": "T1", "ServiceAccount": "T1", "Computer": "T1", "note": "AS-REP roastable" },
+        { "flag": "PasswordNeverExpires",      "User": "weak control", "ServiceAccount": "expected (gMSA managed)", "Computer": "expected" },
+        { "flag": "WorkstationTrustAccount",   "User": "violation (masquerading)", "ServiceAccount": "expected for legacy MSA", "Computer": "expected" }
+      ],
+      "catalog": "catalogs/UacFlag_Tiering.json"
+    }
+  },
+
+  "stageDag": {
+    "order": ["bootstrap", "collect", "enrich", "posture_analyze", "classify"],
+    "rules": [
+      "No back-flow: stage X cannot read fields from a later stage",
+      "AI contained in posture_analyze; classify is deterministic and replayable",
+      "Stage Collect MUST NOT filter on classification fields (see collectionInclusivity)"
+    ],
+    "skipFlags": [
+      { "flag": "-DisableEnrich",  "effect": "Stage Enrich no-ops; downstream sees null for stage:enrich fields" },
+      { "flag": "-DisableAI",      "effect": "PostureAnalyze runs but skips AI call; only shortcuts + heuristic verdicts" },
+      { "flag": "-DisablePosture", "effect": "PostureAnalyze no-ops entirely" },
+      { "flag": "-OnlyClassify",   "effect": "Skip collect/enrich/posture; classify re-runs against most recent snapshot" }
+    ]
+  },
+
+  "collectionInclusivity": {
+    "rule": "Stage Collect MUST NOT filter assets on the presence or value of any classification field",
+    "rationale": "Born of a real bug: filtering SPN discovery on hasCriticality==1 dropped thousands of unclassified SPNs. Tier compute can't tier what was never collected.",
+    "prohibited": [
+      "where hasCriticality == 1",
+      "where Tier <= 2",
+      "where accountEnabled == true",
+      "where lastSeen > ago(30d)"
+    ],
+    "allowed": [
+      "Scope-limiting: where subscriptionId in (allowed-list), where tenantId == ourTenant"
+    ],
+    "engineValidation": {
+      "metric": "Properties.collect.coverage.<source>",
+      "fields": ["expected_count", "received_count", "applied_filters", "dropped_due_to_predicate"],
+      "rule": "dropped_due_to_predicate must be 0 for security predicates; non-zero raises an error"
+    }
+  },
+
+  "namingConventions": {
+    "fieldNames":           "PascalCase. No SI_ prefix (table name carries it). No version numbers, no stage numbers.",
+    "sourceNamespaced":     "Prefix with source when clash possible: EntraRoles_Permanent, AzureRoles_HighestTier, Mde_LastSeen",
+    "booleans":             "Start with Is, Has, or Can: IsBreakGlass, HasLeakedCredentials",
+    "counts":               "Suffix Count: LastInteractiveSignIn30dCount",
+    "timestamps":           "Suffix DateTime (full) or Date (day-only): LastSignInDateTime",
+    "durations":            "Suffix Days/Hours: LastSignInDays",
+    "hashes":               "Suffix Hash: CollectHash, RiskHash",
+    "nestedJsonPaths":      "lowercase, dot-traversed: Properties.collect.entra.signInActivity.lastSignInDateTime",
+    "reserved": ["Tier", "Group", "Verdict", "AssetType", "AssetGroup", "AssetSubtype", "EntityIds", "PrimaryEntityId", "Properties", "CollectionTime", "RunId"]
+  },
+
+  "storageLayout": {
+    "flatColumnTarget": 65,
+    "laColumnCeiling": 500,
+    "propertiesGrouping": ["meta", "collect.<source>", "enrich", "posture", "classify"]
+  },
+
+  "hashesSpec": {
+    "algorithm": "SHA256(JCS-canonical-JSON(field-bag))",
+    "truncation": "16 hex chars (64-bit, negligible collision risk per snapshot)",
+    "computedAt": "classify",
+    "definitions": [
+      { "name": "CollectHash",  "overStages": ["collect"],         "purpose": "Did raw upstream data change?" },
+      { "name": "EnrichHash",   "overStages": ["enrich"],          "purpose": "Did correlation/aggregation change?" },
+      { "name": "PostureHash",  "overStages": ["posture_analyze"], "purpose": "Did AI/heuristic understanding change?" },
+      { "name": "ClassifyHash", "overStages": ["classify"], "excludesFields": ["CollectHash", "EnrichHash", "PostureHash", "ClassifyHash"], "purpose": "Did the verdict change?" }
+    ]
+  },
+
+  "subResourceRollupRules": [
+    { "subResourcePattern": "microsoft.compute/virtualmachines/extensions",        "parentNodeLabel": "microsoft.compute/virtualmachines",       "rollUpField": "Extensions",        "shape": "{name, type}" },
+    { "subResourcePattern": "microsoft.network/virtualnetworks/subnets",            "parentNodeLabel": "microsoft.network/virtualnetworks",       "rollUpField": "Subnets",           "shape": "{name, addressPrefix}" },
+    { "subResourcePattern": "microsoft.sql/servers/databases",                      "parentNodeLabel": "microsoft.sql/servers",                   "rollUpField": "Databases",         "shape": "{name, sku, exposedToInternet}", "note": "preserves per-DB exposure" },
+    { "subResourcePattern": "microsoft.sql/firewallrules",                          "parentNodeLabel": "microsoft.sql/servers",                   "rollUpField": "FirewallRules",     "shape": "{name, startIp, endIp}" },
+    { "subResourcePattern": "microsoft.cognitiveservices/accounts/deployments",     "parentNodeLabel": "microsoft.cognitiveservices/accounts",    "rollUpField": "Deployments",       "shape": "{name, model}" },
+    { "subResourcePattern": "microsoft.network/networkinterfaces",                  "parentNodeLabel": "linked compute",                          "rollUpField": "NetworkInterfaces", "shape": "{name, ipAddresses, securityRules[*]}", "note": "NIC securityRules[*] preserved" },
+    { "subResourcePattern": "microsoft.network/publicipaddresses",                  "parentNodeLabel": "linked compute / app gateway / LB",       "rollUpField": "PublicIpAddresses", "shape": "{name, ipAddress, sku}" }
+  ],
+
+  "crossEngineDuplication": {
+    "rule": "When EG node has Categories: contains 'device' AND NodeLabel is an Azure resource type (e.g. microsoft.compute/virtualmachines), the asset emits TWO rows in TWO tables linked via shared EntityIds",
+    "examples": [
+      { "egNodeLabel": "microsoft.compute/virtualmachines", "categoriesContains": "device", "rows": ["Azure_Profile_CL (AzureResourceId)", "Endpoint_Profile_CL (MdeDeviceId or DeviceInventoryId)"] }
+    ]
+  },
+
+  "entityIdsConflictResolution": [
+    { "pattern": "Multiple AzureResourceId (cross-subscription)", "decision": "Pick one matching discovered subscription scope; surface rest in Properties.collect.exposureGraph.id_conflicts.AzureResourceId[]" },
+    { "pattern": "Multiple DeviceInventoryId",                     "decision": "Pick one matching SenseDeviceId; surface rest as historical/merged" },
+    { "pattern": "DeviceInventoryId == SenseDeviceId",             "decision": "Drop duplicate, keep SenseDeviceId" },
+    { "pattern": "Multiple AadObjectId",                           "decision": "Hard error — same EG node mapped to two Entra principals = data corruption. Log and skip." }
+  ],
+
+  "catalogs": [
+    { "name": "SecurityInsight_PrivilegeTierClassifier", "path": "../privilege-tier-catalog/privilege-tier-catalog.custom.json", "refresh": "daily, separate process (SecurityInsight-PrivilegeTierClassifier.ps1 v2.0)", "consumedBy": ["entra_roles_permanent", "entra_roles_eligible", "entra_api_perms_application", "entra_api_perms_delegated", "ad_builtin_groups", "azure_roles"], "size": "~6.4MB / 77,931 lines" },
+    { "name": "Port_Risk_Catalog",               "path": "catalogs/Port_Risk_Catalog.json",                "refresh": "manual / quarterly", "consumedBy": ["nsg_internet_exposed_critical_port"] },
+    { "name": "UacFlag_Tiering",                 "path": "catalogs/UacFlag_Tiering.json",                  "refresh": "manual / quarterly", "consumedBy": ["ad_uac_flags"] },
+    { "name": "MS_Predefined_CriticalityRules",  "path": "catalogs/MS_Predefined_CriticalityRules.json",   "refresh": "quarterly (when MS adds new rules)", "consumedBy": ["eg_criticality_predefined"] }
+  ],
+
+  "aggregator": {
+    "algorithm": "weighted_tier_aggregator",
+    "supportedModes": [
+      { "mode": "min_floor",                                       "description": "Strictest tier across all contributors with weight > 0" },
+      { "mode": "weighted_min",                                    "description": "Strictest tier among contributors with weight >= threshold" },
+      { "mode": "forced_overrides_first_then_weighted_min",        "description": "Recommended default — apply override:forced first, then weighted_min on survivors" },
+      { "mode": "weighted_consensus",                              "description": "Round-down weighted average — for AssetType when no source is authoritative" }
+    ],
+    "proofShape": {
+      "final_tier": "int",
+      "algorithm": "string",
+      "aggregation_mode": "string",
+      "threshold_weight": "float",
+      "applied_overrides": "array",
+      "contributors": [
+        { "source": "string", "tier": "int|null", "weight": "float", "evidence": "any", "catalog_section": "string" }
+      ],
+      "tiering_catalog_version": "string"
+    }
+  },
+
+  "extensionModel": {
+    "description": "Schema is provider-agnostic. New providers (custom CL tables) add to vocabularies without engine code changes.",
+    "addNewSourceSteps": [
+      "Register source in vocabularies.sources[]",
+      "Add EntityType contributions if needed",
+      "Declare in engine's <engine>.schema.json sources_consumed[]",
+      "Add raw_payload.sources.<name>.{include_paths,exclude_paths}",
+      "Optionally add fields with source: <name>",
+      "Optionally add aggregator contributors referencing the new fields"
+    ],
+    "addNewDataSetSteps": [
+      "Add engine to vocabularies.engines[]",
+      "Create <engine>.schema.json (template: copy identity.schema.json)",
+      "Add data-set chapter to asset-profiling-schema.md (template: copy chapter 9/10/11 structure)",
+      "No engine-code change needed; validation runs at startup"
+    ]
+  },
+
+  "validation": {
+    "ruleSet": [
+      "purpose ∈ vocabularies.purposes",
+      "stage.written_by exactly one value from vocabularies.stages",
+      "source ∈ vocabularies.sources",
+      "If source == derived then derivation block required",
+      "derivation.inputs[*].field must reference fields whose stage.written_by ≤ this field's stage in DAG",
+      "used_by[*].posture_rule must reference a real posture YAML rule by ID",
+      "Field with purpose:risk and used_by:[] → warn (dead hot column)",
+      "Posture rule references a field not in schema → fail-fast",
+      "Stage X writes a field whose stage.written_by != X → fail-fast",
+      "ai_context.include:true on a field with purpose:raw → fail-fast",
+      "Provider declared in engines.<e>.sources_consumed[] must exist in vocabularies.sources"
+    ]
+  },
+
+  "openQuestions": [
+    "EntityIds source attribution per entry vs parallel array? Spec proposes inline source for forensics; cost ~10% larger blob.",
+    "MdeDeviceId and AadDeviceId ever the same? If never, two separate EntityType entries; if sometimes, dedup rule needed.",
+    "Properties vs Raw column name? Properties matches existing v2.2 behavior.",
+    "Hash truncation 16 vs 32 hex chars? Spec proposes 16 (64-bit collision risk negligible per snapshot).",
+    "Should ai_shortcuts allow forced_tier_floor? Spec allows for high-confidence patterns (DC → T0)."
+  ]
+}

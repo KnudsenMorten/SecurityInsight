@@ -1,0 +1,21 @@
+id:        IbmSpectrumProtect
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Spectrum Protect'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'IBM Spectrum Protect'
+  - 'Tivoli Storage Manager'
+
+detections:
+  - id: IbmSpectrumProtect
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'spectrum_protect*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

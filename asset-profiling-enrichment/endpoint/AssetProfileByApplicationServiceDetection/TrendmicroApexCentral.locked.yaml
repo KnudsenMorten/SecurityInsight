@@ -1,0 +1,20 @@
+id:        TrendmicroApexCentral
+appliesTo: endpoint
+mode:      locked
+purpose:   'Trend Micro Apex Central'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'Trend Micro Apex Central'
+
+detections:
+  - id: TrendmicroApexCentral
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'apex_central*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

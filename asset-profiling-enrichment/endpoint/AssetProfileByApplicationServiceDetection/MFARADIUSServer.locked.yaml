@@ -1,0 +1,38 @@
+id:        MFARADIUSServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'MFA / RADIUS Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |A|u|t|h|e|n|t|i|c|a|t|i|o|n|\|\| |b|r|o|k|e|r|;|\|\| |c|o|m|p|r|o|m|i|s|e|\|\| |c|a|n|\|\| |b|y|p|a|s|s|\|\| |s|e|c|o|n|d|\|\| |f|a|c|t|o|r|\|\| |f|o|r|\|\| |p|r|i|v|i|l|e|g|e|d|\|\| |u|s|e|r|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|n|e|t|w|o|r|k|_|p|o|l|i|c|y|_|s|e|r|v|e|r|
+
+detections:
+  - id: MFARADIUSServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'network_policy_server*'
+            - 'freeradius*'
+            - 'cisco_ise*'
+            - 'rsa_authentication_manager*'
+            - 'duo_authentication*'
+            - 'microsoft_nps*'
+            - 'network_policy_server*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^nps\d'
+            - '(?i)^radius\d'
+            - '(?i)^mfa\d'
+            - '(?i)^duo-'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)radius'
+            - '(?i)mfa.server'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'MFA / RADIUS Server'
+      Category: 'Server Roles'

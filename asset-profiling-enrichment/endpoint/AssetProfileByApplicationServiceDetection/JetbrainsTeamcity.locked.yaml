@@ -1,0 +1,21 @@
+id:        JetbrainsTeamcity
+appliesTo: endpoint
+mode:      locked
+purpose:   'TeamCity Server'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'TeamCity Server'
+  - 'JetBrains TeamCity'
+
+detections:
+  - id: JetbrainsTeamcity
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'teamcity*'
+    set:
+      Tier:     1
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

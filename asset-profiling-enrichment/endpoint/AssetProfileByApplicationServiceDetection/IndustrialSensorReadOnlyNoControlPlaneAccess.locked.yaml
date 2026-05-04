@@ -1,0 +1,29 @@
+id:        IndustrialSensorReadOnlyNoControlPlaneAccess
+appliesTo: endpoint
+mode:      locked
+purpose:   'Industrial Sensor (Read-Only, No Control Plane Access)'
+category:  'IoT / OT'
+description: 'Read-only telemetry; spoofed readings risk but no control output.'
+
+detections:
+  - id: IndustrialSensorReadOnlyNoControlPlaneAccess
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'modbus*'
+            - 'opc_ua*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^isensor\d'
+            - '(?i)^plc-ro'
+            - '(?i)industrial.sensor'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)industrial.sensor'
+            - '(?i)read.only.ot'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Industrial Sensor (Read-Only, No Control Plane Access)'
+      Category: 'IoT / OT'

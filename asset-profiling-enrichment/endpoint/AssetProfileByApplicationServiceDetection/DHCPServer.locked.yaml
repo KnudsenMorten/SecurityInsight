@@ -1,0 +1,28 @@
+id:        DHCPServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'DHCP Server'
+category:  'Server Roles'
+description: 'Standalone DHCP without domain integration; address allocation only.'
+
+detections:
+  - id: DHCPServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'isc_dhcp*'
+            - 'kea_dhcp*'
+            - 'windows_dhcp_server*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^dhcp-t3'
+            - '(?i)^dhcp\d'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)dhcp.server'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'DHCP Server'
+      Category: 'Server Roles'

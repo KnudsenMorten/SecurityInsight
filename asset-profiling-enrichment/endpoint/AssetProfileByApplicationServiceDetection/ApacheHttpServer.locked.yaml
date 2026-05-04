@@ -1,0 +1,21 @@
+id:        ApacheHttpServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Apache HTTP Server'
+category:  'Web Server'
+description: ''
+displayNames:
+  - 'Apache HTTP Server'
+  - 'Apache httpd'
+
+detections:
+  - id: ApacheHttpServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'http_server*'
+    set:
+      Tier:     2
+      Purpose:  'Web Server'
+      Category: 'Web Server'

@@ -1,0 +1,20 @@
+id:        MitelMivoiceBusiness
+appliesTo: endpoint
+mode:      locked
+purpose:   'Mitel MiVoice Business'
+category:  'VoIP'
+description: ''
+displayNames:
+  - 'Mitel MiVoice Business'
+
+detections:
+  - id: MitelMivoiceBusiness
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mivoice_business*'
+    set:
+      Tier:     3
+      Purpose:  'VoIP'
+      Category: 'VoIP'

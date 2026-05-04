@@ -1,0 +1,32 @@
+id:        RetailPOSTerminalIsolatedNetworkSegment
+appliesTo: endpoint
+mode:      locked
+purpose:   'Retail / POS Terminal (Isolated Network Segment)'
+category:  'IoT / OT'
+description: 'Payment terminal in isolated segment; compliance-relevant but contained.'
+
+detections:
+  - id: RetailPOSTerminalIsolatedNetworkSegment
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ncr_pos*'
+            - 'verifone*'
+            - 'ingenico*'
+            - 'micros_*'
+            - 'oracle_retail_xstore*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^pos\d'
+            - '(?i)^till\d'
+            - '(?i)^register\d'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)pos.terminal'
+            - '(?i)retail'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Retail / POS Terminal (Isolated Network Segment)'
+      Category: 'IoT / OT'

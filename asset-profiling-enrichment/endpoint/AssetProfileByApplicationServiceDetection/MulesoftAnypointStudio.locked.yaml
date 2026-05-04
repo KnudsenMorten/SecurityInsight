@@ -1,0 +1,20 @@
+id:        MulesoftAnypointStudio
+appliesTo: endpoint
+mode:      locked
+purpose:   'MuleSoft Anypoint Studio'
+category:  'Integration'
+description: ''
+displayNames:
+  - 'MuleSoft Anypoint Studio'
+
+detections:
+  - id: MulesoftAnypointStudio
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'anypoint_studio*'
+    set:
+      Tier:     2
+      Purpose:  'Integration'
+      Category: 'Integration'

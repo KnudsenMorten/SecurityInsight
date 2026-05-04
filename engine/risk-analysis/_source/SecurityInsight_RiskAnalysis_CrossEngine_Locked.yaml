@@ -1,0 +1,1307 @@
+Reports:
+- ReportPurpose: |-
+    End-to-end exposure path: Public IP attached to a VM, the VM has a
+    critical CVE older than 30 days, AND the VM is in a tier-0/1
+    subscription. Joins SI_Endpoint_Profile_CL (endpoint signals) +
+    SI_Azure_Profile_CL (PIP + sub tier) on AzureResourceId.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: CrossEngine_InternetExposed_VM_With_CVE_To_Tier0Sub
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - CriticalCveCount30d
+  - PipAddress
+  - LinkedSubscription
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    let _vmAzure =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _ta
+        | where ResourceType =~ "microsoft.compute/virtualmachines"
+        | project AzureResourceId, AzVmName=Name, AzVmTier=Tier, AzSub=AzureSubscriptionId;
+    let _pipAttached =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _ta
+        | where ResourceType =~ "microsoft.network/publicipaddresses"
+        | where isnotempty(PipAddress)
+        | project PipAddress, PipAttachedResourceId, PipSub=AzureSubscriptionId;
+    SI_Endpoint_Profile_CL
+    | where CollectionTime == _te
+    | where IsInternetFacing == true
+    | where CriticalCveCount30d > 0
+    | join kind=inner _vmAzure on AzureResourceId
+    | join kind=inner (_pipAttached | where isnotempty(PipAttachedResourceId)) on $left.AzureResourceId == $right.PipAttachedResourceId
+    | where AzVmTier <= 1 or Tier <= 1
+    | extend _t = min_of(Tier, AzVmTier)
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="PIP -> VM(CVE) -> tier-0/1 subscription",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Internet PIP ", PipAddress, " -> VM with ", CriticalCveCount30d, " CVEs in tier-", _t, " sub"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              CriticalCveCount30d, PipAddress, LinkedSubscription=AzSub, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    High-exposure (compromise candidate) endpoint where a privileged user
+    has signed in within the last 30 days. Join: endpoint with
+    ExposureLevel=High to SigninLogs filtered by the privileged-user list
+    from SI_Identity_Profile_CL.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: CrossEngine_CompromisedEndpoint_HostsAdminUser
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - ExposureLevel
+  - PrivilegedUsers
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _exposed =
+        SI_Endpoint_Profile_CL
+        | where CollectionTime == _te
+        | where ExposureLevel =~ 'High'
+        | project DeviceName=DisplayName, AzureResourceId, EndpointTier=Tier;
+    let _privUsers =
+        SI_Identity_Profile_CL
+        | where CollectionTime == _ti
+        | where IdentityType == "User" and AccountEnabled == true
+        | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+        | project Upn, UserTier=Tier;
+    SigninLogs
+    | where TimeGenerated > ago(30d)
+    | where ResultType == 0
+    | summarize PrivilegedUsers = make_set(UserPrincipalName) by DeviceDetail_displayName_s
+    | join kind=inner _exposed on $left.DeviceDetail_displayName_s == $right.DeviceName
+    | extend PrivilegedUsers = set_intersect(PrivilegedUsers, toscalar(_privUsers | summarize make_set(Upn)))
+    | where array_length(PrivilegedUsers) > 0
+    | project SecurityDomain="CrossEngine", Category="Lateral movement", Subcategory="Exposed endpoint hosted privileged sign-in (30d)",
+              ConfigurationName=DeviceName, ConfigurationId=AzureResourceId,
+              Impact=strcat(array_length(PrivilegedUsers), " privileged user(s) signed in on a high-exposure host"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, ExposureLevel="High", PrivilegedUsers, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Service principals that hold ownership / contributor RBAC on an
+    azure resource which is publicly exposed (IsPubliclyExposed=true)
+    AND the SPN has stale credentials or is itself privileged.
+    Identifies "hot" SPNs with maximum blast radius if compromised.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: CrossEngine_SPN_OwnsResourcePublicAccess
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - IsHighRiskPermissionGrant
+  - LinkedAzureResourceId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    let _publicResources =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _ta
+        | where IsPubliclyExposed == true
+        | project LinkedAzureResourceId=AzureResourceId, ResourceType, ResourceTier=Tier;
+    SI_Identity_Profile_CL
+    | where CollectionTime == _ti
+    | where IdentityType == "ServicePrincipal"
+    | where (DaysInactive >= 90) or (IsHighRiskPermissionGrant == true)
+    | mv-expand _role = todynamic(AzureRoles_Assignments)
+    | extend _scope = tostring(_role.scope)
+    | join kind=inner _publicResources on $left._scope == $right.LinkedAzureResourceId
+    | project SecurityDomain="CrossEngine", Category="Application risk", Subcategory="SPN with RBAC on publicly-exposed resource",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("SPN owns public resource (", ResourceType, "); inactive ", DaysInactive, "d"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, IsHighRiskPermissionGrant, LinkedAzureResourceId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Domain Controllers (SIRules contains ADDomainController) whose
+    EffectiveIpAddresses are NOT in the trusted DC subnets identified
+    by Cmdb*_DomainController IP-subnet rules. DC misplaced on
+    network = network-segmentation policy violation.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: CrossEngine_DC_NotOnTrustedSubnet
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EffectiveIpAddresses
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where SIRules contains "ADDomainController"
+    | extend _hasCmdbDcRule = SIRules contains "CmdbDomainController" or SIRules contains "Cmdb_DomainController"
+    | where _hasCmdbDcRule == false   // DC role detected but no CMDB-IP-subnet rule fired
+    | project SecurityDomain="CrossEngine", Category="Network segmentation", Subcategory="DC not on trusted DC subnet",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="DC role detected but device IPs are NOT in any trusted DC subnet (no CmdbDomainController IP rule fired)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, EffectiveIpAddresses, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Web app -> SQL DB attack path: a public-facing web app sits in the
+    same RG as a SQL DB tagged Confidential / Restricted. Compromising
+    the web app gives a foothold inside the network boundary that
+    hosts the sensitive database.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: CrossEngine_WebApp_To_SqlDb_SensitiveData
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - LinkedSqlServer
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _t = toscalar(SI_Azure_Profile_CL | summarize max(CollectionTime));
+    let _publicWeb =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _t
+        | where ResourceType in~ ("microsoft.web/sites","microsoft.web/sites/slots")
+        | where IsPubliclyExposed == true
+        | project AppId=AzureResourceId, AppName=Name, AppRG=ResourceGroup, AppSub=AzureSubscriptionId, AppTier=Tier;
+    let _sqlSensitive =
+        SI_Azure_Profile_CL
+        | where CollectionTime == _t
+        | where ResourceType in~ ("microsoft.sql/servers","microsoft.sql/servers/databases")
+        | where tolower(coalesce(cmdbDataSensitivity,'')) in ('confidential','restricted') or Tier <= 1
+        | project SqlId=AzureResourceId, SqlName=Name, SqlRG=ResourceGroup, SqlSub=AzureSubscriptionId, SqlTier=Tier;
+    _publicWeb
+    | join kind=inner _sqlSensitive on $left.AppRG == $right.SqlRG and $left.AppSub == $right.SqlSub
+    | extend _t = min_of(AppTier, SqlTier)
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="Public web app same-RG as sensitive SQL DB",
+              ConfigurationName=AppName, ConfigurationId=AppId,
+              Impact=strcat("Public web app -> sensitive SQL DB '", SqlName, "' in same RG"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, LinkedSqlServer=SqlId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Resources discovered via Exposure Graph but absent from ARG (azure
+    AzureResourceId starts with EG NodeId hex, not /subscriptions/...)
+    AND classified as sensitive via cmdbDataSensitivity. Indicates
+    data residency / discovery drift -- ARG-based scans miss them.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: CrossEngine_EgOnly_SensitiveTagged
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - cmdbDataSensitivity
+  - NodeLabel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AzureResourceId !startswith "/subscriptions/"   // EG-only -> hex NodeId
+    | where tolower(coalesce(cmdbDataSensitivity,'')) in ('confidential','restricted')
+    | project SecurityDomain="CrossEngine", Category="Discovery gap", Subcategory="EG-only resource with sensitive classification",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="ARG-blind sensitive resource (visible in EG only)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, cmdbDataSensitivity, NodeLabel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Tier-0/1 assets where CmdbMatchPhase == 'orphan' (no CMDB match).
+    A privileged asset that nobody owns is a governance gap. Spans
+    endpoint + identity + azure (union all 3 tables).
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Hygiene_HighTier_CmdbOrphan
+  SecurityDomain: Hygiene
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - Engine
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    union
+      (SI_Endpoint_Profile_CL | where CollectionTime == _te | extend SourceEngine="endpoint" | project DisplayName,Tier,IsCmdbOrphan,SourceEngine,ConfigId=AzureResourceId),
+      (SI_Identity_Profile_CL | where CollectionTime == _ti | extend SourceEngine="identity" | project DisplayName,Tier,IsCmdbOrphan,SourceEngine,ConfigId=coalesce(Upn, AppId)),
+      (SI_Azure_Profile_CL    | where CollectionTime == _ta | extend SourceEngine="azure"    | project DisplayName=Name,Tier,IsCmdbOrphan,SourceEngine,ConfigId=AzureResourceId)
+    | where IsCmdbOrphan == true
+    | project SecurityDomain="Hygiene", Category="CMDB coverage", Subcategory="High-tier asset not in CMDB (CmdbMatchPhase=orphan)",
+              ConfigurationName=DisplayName, ConfigurationId=ConfigId,
+              Impact=strcat("Tier-", Tier, " asset has no CMDB CI"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, Engine=SourceEngine, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Assets where SIRules contains a tier-0 detection but the row Tier > 0.
+    Indicates classification pipeline drift -- the rule fired but didn't
+    pin the tier. Surfaces engine bugs / rule-set misconfig.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Hygiene_ClassificationDrift_RuleVsTier
+  SecurityDomain: Hygiene
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - Tier
+  - Tier0Rules
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _te = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _ta = toscalar(SI_Azure_Profile_CL    | summarize max(CollectionTime));
+    union
+      (SI_Endpoint_Profile_CL | where CollectionTime == _te | extend SourceEngine="endpoint" | project DisplayName,Tier,SIRules,SourceEngine,ConfigId=AzureResourceId),
+      (SI_Identity_Profile_CL | where CollectionTime == _ti | extend SourceEngine="identity" | project DisplayName,Tier,SIRules,SourceEngine,ConfigId=coalesce(Upn, AppId)),
+      (SI_Azure_Profile_CL    | where CollectionTime == _ta | extend SourceEngine="azure"    | project DisplayName=Name,Tier,SIRules,SourceEngine,ConfigId=AzureResourceId)
+    | extend Tier0Rules = todynamic(SIRules)
+    | mv-apply r = Tier0Rules on (where toint(r.Tier) == 0 | summarize hits = count(), names = make_list(tostring(r.RuleId)))
+    | where hits > 0
+    | project SecurityDomain="Hygiene", Category="Classification drift", Subcategory="Tier-0 rule fired but row Tier > 0",
+              ConfigurationName=DisplayName, ConfigurationId=ConfigId,
+              Impact=strcat(hits, " tier-0 rule(s) fired but row Tier=", Tier),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, Tier, Tier0Rules=names, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Latest-snapshot row count per engine vs the previous snapshot.
+    Drop > 20% indicates a pipeline regression (Discover failure, auth
+    issue, schema drift, …) before reports go stale.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Hygiene_PipelineCoverageDrop
+  SecurityDomain: Hygiene
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - LatestRows
+  - PriorRows
+  - DropPct
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _last2 = (Tbl: string) {
+        table(Tbl)
+        | summarize Rows=count() by CollectionTime
+        | top 2 by CollectionTime desc
+        | extend rn = row_number()
+        | extend Engine = case(Tbl == "SI_Endpoint_Profile_CL", "endpoint",
+                                Tbl == "SI_Identity_Profile_CL", "identity",
+                                Tbl == "SI_Azure_Profile_CL", "azure", Tbl)
+    };
+    union (_last2("SI_Endpoint_Profile_CL")), (_last2("SI_Identity_Profile_CL")), (_last2("SI_Azure_Profile_CL"))
+    | summarize LatestRows = anyif(Rows, rn == 1), PriorRows = anyif(Rows, rn == 2) by Engine
+    | extend DropPct = iff(PriorRows == 0, 0, toint(round(100.0 * (PriorRows - LatestRows) / PriorRows, 0)))
+    | where DropPct >= 20
+    | project SecurityDomain="Hygiene", Category="Pipeline health", Subcategory=strcat(Engine, " row count dropped ", DropPct, "%"),
+              ConfigurationName=Engine, ConfigurationId=Engine,
+              Impact=strcat(Engine, " latest=", LatestRows, " prior=", PriorRows, " drop=", DropPct, "%"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, LatestRows, PriorRows, DropPct, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Endpoints flagged UnsupportedOSDetected=true AND still actively
+    onboarded (OnboardingStatus=Onboarded). Decommissioning gap --
+    EOL OS hosts that should be migrated or retired but are still in
+    production.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Hygiene_UnsupportedOS_StillEnabled
+  SecurityDomain: Hygiene
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UnsupportedOSReason
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where UnsupportedOSDetected == true
+    | where OnboardingStatus =~ 'Onboarded'
+    | where DaysInactive < 30   // still in active use
+    | project SecurityDomain="Hygiene", Category="Lifecycle management", Subcategory="EOL OS, still onboarded + active",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Active production EOL host: ", UnsupportedOSReason),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, UnsupportedOSReason, DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Attack paths from identity / group membership to privileged Azure
+    resources (tier-0/1). Walks ExposureGraph affecting-edges from user
+    / group nodes to Azure resource nodes. One row per source-target
+    pair, prioritised by target criticality.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EdgeLabel
+  - SourceNodeName
+  - TargetNodeName
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _edges = ExposureGraphEdges
+        | where tostring(EdgeLabel) contains 'affecting' or tostring(EdgeLabel) =~ 'has role on' or tostring(EdgeLabel) contains 'member of'
+        | project SourceNodeId, TargetNodeId, EdgeLabel;
+    let _src = ExposureGraphNodes
+        | where NodeLabel in~ ('user','group')
+        | project SrcNodeId=NodeId, SourceNodeName=NodeName, SourceNodeLabel=NodeLabel;
+    let _tgt = ExposureGraphNodes
+        | where NodeLabel in~ ('microsoft.compute/virtualmachines','microsoft.keyvault/vaults','microsoft.storage/storageaccounts','microsoft.sql/servers')
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend TargetTier = toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(rawData.criticalityLevel.criticalityLevel), '3'))
+        | project TgtNodeId=NodeId, TargetNodeName=NodeName, TargetNodeLabel=NodeLabel, TargetTier;
+    _edges
+    | join kind=inner _src on $left.SourceNodeId == $right.SrcNodeId
+    | join kind=inner _tgt on $left.TargetNodeId == $right.TgtNodeId
+    | extend CriticalityTier = TargetTier
+    | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", CriticalityTier == 2, "Medium - tier 2", CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+    | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
+    | extend RiskScoreTotal = (4 - CriticalityTier) * 25
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="Identity / group -> privileged Azure resource",
+              ConfigurationName=TargetNodeName, ConfigurationId=TgtNodeId,
+              Impact=strcat("Attack path: ", SourceNodeName, " -> ", TargetNodeName, " (", EdgeLabel, ")"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EdgeLabel, SourceNodeName, TargetNodeName, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Attack paths from data-sensitive resources (tagged Confidential /
+    Restricted via cmdbDataSensitivity) to exposed credentials. Walks
+    ExposureGraph from sensitive resource nodes to credential nodes
+    (Key Vault secrets, app credentials). Per-source-target row.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EdgeLabel
+  - SourceNodeName
+  - TargetNodeName
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _edges = ExposureGraphEdges
+        | where tostring(EdgeLabel) contains 'affecting' or tostring(EdgeLabel) contains 'has credentials'
+        | project SourceNodeId, TargetNodeId, EdgeLabel;
+    let _src = ExposureGraphNodes
+        | where NodeLabel in~ ('microsoft.sql/servers','microsoft.storage/storageaccounts','microsoft.cognitiveservices/accounts')
+        | project SrcNodeId=NodeId, SourceNodeName=NodeName, SourceNodeLabel=NodeLabel;
+    let _tgt = ExposureGraphNodes
+        | where NodeLabel in~ ('microsoft.keyvault/vaults','microsoft.keyvault/vaults/secrets','credential')
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend TargetTier = toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(rawData.criticalityLevel.criticalityLevel), '3'))
+        | project TgtNodeId=NodeId, TargetNodeName=NodeName, TargetNodeLabel=NodeLabel, TargetTier;
+    _edges
+    | join kind=inner _src on $left.SourceNodeId == $right.SrcNodeId
+    | join kind=inner _tgt on $left.TargetNodeId == $right.TgtNodeId
+    | extend CriticalityTier = TargetTier
+    | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", CriticalityTier == 2, "Medium - tier 2", CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+    | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
+    | extend RiskScoreTotal = (4 - CriticalityTier) * 25
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="Sensitive resource -> exposed credential",
+              ConfigurationName=TargetNodeName, ConfigurationId=TgtNodeId,
+              Impact=strcat("Attack path: ", SourceNodeName, " -> ", TargetNodeName, " (", EdgeLabel, ")"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EdgeLabel, SourceNodeName, TargetNodeName, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Attack paths from GitHub repos / workflows (treated as
+    Internet-exposed, low-trust) to Azure target resources. Walks
+    ExposureGraph from github.com nodes to Azure resource nodes via
+    credential / federated-identity edges. Final-target tier drives
+    priority.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Attack_Paths_Summary_Github_to_Azure_Resources
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EdgeLabel
+  - SourceNodeName
+  - TargetNodeName
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _edges = ExposureGraphEdges
+        | where tostring(EdgeLabel) contains 'affecting' or tostring(EdgeLabel) contains 'authenticate' or tostring(EdgeLabel) contains 'federated'
+        | project SourceNodeId, TargetNodeId, EdgeLabel;
+    let _src = ExposureGraphNodes
+        | where NodeLabel =~ 'githubrepo' or NodeLabel =~ 'githubworkflow' or tostring(NodeProperties.rawData.environmentName) contains 'GitHub'
+        | project SrcNodeId=NodeId, SourceNodeName=NodeName, SourceNodeLabel=NodeLabel;
+    let _tgt = ExposureGraphNodes
+        | where tostring(NodeProperties.rawData.environmentName) contains 'Azure'
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend TargetTier = toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(rawData.criticalityLevel.criticalityLevel), '3'))
+        | project TgtNodeId=NodeId, TargetNodeName=NodeName, TargetNodeLabel=NodeLabel, TargetTier;
+    _edges
+    | join kind=inner _src on $left.SourceNodeId == $right.SrcNodeId
+    | join kind=inner _tgt on $left.TargetNodeId == $right.TgtNodeId
+    | extend CriticalityTier = TargetTier
+    | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", CriticalityTier == 2, "Medium - tier 2", CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+    | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
+    | extend RiskScoreTotal = (4 - CriticalityTier) * 25
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="GitHub credential -> Azure resource",
+              ConfigurationName=TargetNodeName, ConfigurationId=TgtNodeId,
+              Impact=strcat("Attack path: ", SourceNodeName, " -> ", TargetNodeName, " (", EdgeLabel, ")"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EdgeLabel, SourceNodeName, TargetNodeName, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Public IP -> VM(CVE) attack path: Internet-exposed VMs whose
+    ExposureGraph node carries highRiskVulnerabilityInsights. End-to-end
+    exposure (PIP attached AND vulnerable software AND tier-0/1 sub).
+    Per-asset row anchored on the VM.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EdgeLabel
+  - SourceNodeName
+  - TargetNodeName
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _edges = ExposureGraphEdges
+        | where tostring(EdgeLabel) contains 'affecting' or tostring(EdgeLabel) contains 'exposes'
+        | project SourceNodeId, TargetNodeId, EdgeLabel;
+    let _src = ExposureGraphNodes
+        | where NodeLabel =~ 'microsoft.network/publicipaddresses'
+        | project SrcNodeId=NodeId, SourceNodeName=NodeName, SourceNodeLabel=NodeLabel;
+    let _tgt = ExposureGraphNodes
+        | where NodeLabel =~ 'microsoft.compute/virtualmachines' and tobool(NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical) == true
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend TargetTier = toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(rawData.criticalityLevel.criticalityLevel), '3'))
+        | project TgtNodeId=NodeId, TargetNodeName=NodeName, TargetNodeLabel=NodeLabel, TargetTier;
+    _edges
+    | join kind=inner _src on $left.SourceNodeId == $right.SrcNodeId
+    | join kind=inner _tgt on $left.TargetNodeId == $right.TgtNodeId
+    | extend CriticalityTier = TargetTier
+    | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", CriticalityTier == 2, "Medium - tier 2", CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+    | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
+    | extend RiskScoreTotal = (4 - CriticalityTier) * 25
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="Public IP -> VM with critical CVE",
+              ConfigurationName=TargetNodeName, ConfigurationId=TgtNodeId,
+              Impact=strcat("Attack path: ", SourceNodeName, " -> ", TargetNodeName, " (", EdgeLabel, ")"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EdgeLabel, SourceNodeName, TargetNodeName, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Credential-based lateral movement paths: user / SPN identities
+    with credentials cached on devices, joined to ExposureGraph
+    'can authenticate to' edges. Surfaces hop chains where a single
+    credential compromise enables movement to a privileged target.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Attack_Paths_Summary_Credential_Based_Lateral_Movement
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EdgeLabel
+  - SourceNodeName
+  - TargetNodeName
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _edges = ExposureGraphEdges
+        | where tostring(EdgeLabel) =~ 'can authenticate to' or tostring(EdgeLabel) =~ 'canAuthenticateTo' or tostring(EdgeLabel) contains 'has credentials of'
+        | project SourceNodeId, TargetNodeId, EdgeLabel;
+    let _src = ExposureGraphNodes
+        | where NodeLabel in~ ('user','serviceprincipal','device')
+        | project SrcNodeId=NodeId, SourceNodeName=NodeName, SourceNodeLabel=NodeLabel;
+    let _tgt = ExposureGraphNodes
+        | where NodeLabel in~ ('user','device','microsoft.compute/virtualmachines') and toint(coalesce(tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),'3')) <= 1
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend TargetTier = toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(rawData.criticalityLevel.criticalityLevel), '3'))
+        | project TgtNodeId=NodeId, TargetNodeName=NodeName, TargetNodeLabel=NodeLabel, TargetTier;
+    _edges
+    | join kind=inner _src on $left.SourceNodeId == $right.SrcNodeId
+    | join kind=inner _tgt on $left.TargetNodeId == $right.TgtNodeId
+    | extend CriticalityTier = TargetTier
+    | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", CriticalityTier == 2, "Medium - tier 2", CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+    | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
+    | extend RiskScoreTotal = (4 - CriticalityTier) * 25
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="Credential lateral-movement path",
+              ConfigurationName=TargetNodeName, ConfigurationId=TgtNodeId,
+              Impact=strcat("Attack path: ", SourceNodeName, " -> ", TargetNodeName, " (", EdgeLabel, ")"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EdgeLabel, SourceNodeName, TargetNodeName, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Devices with high / critical severity vulnerabilities that have
+    ExposureGraph 'can authenticate to' edges into Azure resources.
+    Compromising the vulnerable device gives a foothold that allows
+    lateral movement into the Azure plane.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EdgeLabel
+  - SourceNodeName
+  - TargetNodeName
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _edges = ExposureGraphEdges
+        | where tostring(EdgeLabel) =~ 'can authenticate to' or tostring(EdgeLabel) contains 'can interact with'
+        | project SourceNodeId, TargetNodeId, EdgeLabel;
+    let _src = ExposureGraphNodes
+        | where NodeLabel == 'device' and tobool(NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical) == true
+        | project SrcNodeId=NodeId, SourceNodeName=NodeName, SourceNodeLabel=NodeLabel;
+    let _tgt = ExposureGraphNodes
+        | where tostring(NodeProperties.rawData.environmentName) contains 'Azure'
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend TargetTier = toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(rawData.criticalityLevel.criticalityLevel), '3'))
+        | project TgtNodeId=NodeId, TargetNodeName=NodeName, TargetNodeLabel=NodeLabel, TargetTier;
+    _edges
+    | join kind=inner _src on $left.SourceNodeId == $right.SrcNodeId
+    | join kind=inner _tgt on $left.TargetNodeId == $right.TgtNodeId
+    | extend CriticalityTier = TargetTier
+    | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", CriticalityTier == 2, "Medium - tier 2", CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+    | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
+    | extend RiskScoreTotal = (4 - CriticalityTier) * 25
+    | project SecurityDomain="CrossEngine", Category="Attack path", Subcategory="Vulnerable device -> Azure resource lateral movement",
+              ConfigurationName=TargetNodeName, ConfigurationId=TgtNodeId,
+              Impact=strcat("Attack path: ", SourceNodeName, " -> ", TargetNodeName, " (", EdgeLabel, ")"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EdgeLabel, SourceNodeName, TargetNodeName, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users (permanent or eligible Tier 0/1 roles) with
+    ExposureGraph 'can authenticate to' edges into devices that are
+    Internet-facing. Privileged-credential exposure on a public-facing
+    host = high-impact compromise vector. Per-pair row (admin, device).
+    Severity fixed at Very High.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_Admin_LogonTo_InternetExposedDevice_Summary
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UserUpn
+  - TargetDeviceName
+  - DeviceRiskScore
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _privUsers = SI_Identity_Profile_CL
+        | where CollectionTime == _ti
+        | where IdentityType == "User" and AccountEnabled == true
+        | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+        | where Tier <= 1
+        | project UserUpn=Upn, UserDisplayName=DisplayName, UserPrimaryEntityId=PrimaryEntityId, Tier, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal;
+    let _users = ExposureGraphNodes
+        | where NodeLabel == "user"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend UserUpn = tolower(tostring(rawData.userPrincipalName))
+        | project UserNodeId=NodeId, UserUpn;
+    let _exposedDevices = ExposureGraphNodes
+        | where NodeLabel == "device"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | where isnotnull(rawData.exposedToInternet)
+        | project DeviceNodeId=NodeId, TargetDeviceName=tostring(rawData.deviceName), DeviceRiskScore=tostring(rawData.riskScore);
+    ExposureGraphEdges
+    | where EdgeLabel =~ "can authenticate to" or EdgeLabel =~ "canAuthenticateTo"
+    | join kind=inner _users on $left.SourceNodeId == $right.UserNodeId
+    | join kind=inner _exposedDevices on $left.TargetNodeId == $right.DeviceNodeId
+    | join kind=inner _privUsers on $left.UserUpn == $right.UserUpn
+    | project SecurityDomain="CrossEngine", Category="Privileged Access", Subcategory="Admin can logon to Internet-exposed device",
+              ConfigurationName=UserDisplayName, ConfigurationId=UserPrimaryEntityId,
+              Impact=strcat("Tier-", Tier, " admin can authenticate to Internet-facing device ", TargetDeviceName),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              UserUpn, TargetDeviceName, DeviceRiskScore, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users (Tier 0/1) authenticating to lower-tier devices
+    (Tier 2/3). Tier-violation: an admin token landing on a workstation
+    exposes the credential to malware that may already be on that
+    lower-tier asset. Per-pair row (admin, device).
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_Admin_LogonTo_LowTierDevice_Summary
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UserUpn
+  - TargetDeviceName
+  - TargetDeviceTier
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _privUsers = SI_Identity_Profile_CL
+        | where CollectionTime == _ti
+        | where IdentityType == "User" and AccountEnabled == true
+        | where Tier <= 1
+        | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+        | project UserUpn=Upn, UserDisplayName=DisplayName, UserPrimaryEntityId=PrimaryEntityId, AdminTier=Tier, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal;
+    let _users = ExposureGraphNodes
+        | where NodeLabel == "user"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend UserUpn = tolower(tostring(rawData.userPrincipalName))
+        | project UserNodeId=NodeId, UserUpn;
+    let _devices = ExposureGraphNodes
+        | where NodeLabel == "device"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend TargetDeviceTier = toint(coalesce(
+            tostring(NodeProperties.criticalityLevelProps[0].criticalityLevel),
+            tostring(rawData.criticalityLevel.criticalityLevel),"3"))
+        | where TargetDeviceTier >= 2
+        | project DeviceNodeId=NodeId, TargetDeviceName=tostring(rawData.deviceName), TargetDeviceTier;
+    ExposureGraphEdges
+    | where EdgeLabel =~ "can authenticate to" or EdgeLabel =~ "canAuthenticateTo"
+    | join kind=inner _users on $left.SourceNodeId == $right.UserNodeId
+    | join kind=inner _devices on $left.TargetNodeId == $right.DeviceNodeId
+    | join kind=inner _privUsers on $left.UserUpn == $right.UserUpn
+    | project SecurityDomain="CrossEngine", Category="Privileged Access", Subcategory="Admin authenticates to lower-tier device",
+              ConfigurationName=UserDisplayName, ConfigurationId=UserPrimaryEntityId,
+              Impact=strcat("Tier-", AdminTier, " admin authenticates to Tier-", TargetDeviceTier, " device ", TargetDeviceName),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              UserUpn, TargetDeviceName, TargetDeviceTier, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users (Tier 0/1, permanent or eligible) authenticating
+    to devices flagged with high or critical CVEs in Defender TVM /
+    ExposureGraph. Authenticating to a vulnerable host exposes the
+    privileged token to memory-dump / credential-theft attacks.
+    Severity fixed at Very High.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_Admin_LogonTo_VulnerableDevice_Summary
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UserUpn
+  - TargetDeviceName
+  - MaxCvssScore
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _privUsers = SI_Identity_Profile_CL
+        | where CollectionTime == _ti
+        | where IdentityType == "User" and AccountEnabled == true
+        | where Tier <= 1
+        | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+        | project UserUpn=Upn, UserDisplayName=DisplayName, UserPrimaryEntityId=PrimaryEntityId, Tier, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal;
+    let _users = ExposureGraphNodes
+        | where NodeLabel == "user"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend UserUpn = tolower(tostring(rawData.userPrincipalName))
+        | project UserNodeId=NodeId, UserUpn;
+    let _vulnDevices = ExposureGraphNodes
+        | where NodeLabel == "device"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | where tobool(rawData.highRiskVulnerabilityInsights.hasHighOrCritical) == true
+        | project DeviceNodeId=NodeId, TargetDeviceName=tostring(rawData.deviceName),
+                  MaxCvssScore=todouble(rawData.highRiskVulnerabilityInsights.maxCvssScore);
+    ExposureGraphEdges
+    | where EdgeLabel =~ "can authenticate to" or EdgeLabel =~ "canAuthenticateTo"
+    | join kind=inner _users on $left.SourceNodeId == $right.UserNodeId
+    | join kind=inner _vulnDevices on $left.TargetNodeId == $right.DeviceNodeId
+    | join kind=inner _privUsers on $left.UserUpn == $right.UserUpn
+    | project SecurityDomain="CrossEngine", Category="Privileged Access", Subcategory="Admin authenticates to vulnerable device",
+              ConfigurationName=UserDisplayName, ConfigurationId=UserPrimaryEntityId,
+              Impact=strcat("Tier-", Tier, " admin can authenticate to vulnerable device ", TargetDeviceName, " (CVSS ", MaxCvssScore, ")"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              UserUpn, TargetDeviceName, MaxCvssScore, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    PIM-eligible admins (not yet activated, but capable of activating
+    Tier 0/1 roles) authenticating to devices with active exploits
+    (hasExploit=true / isInExploitKit=true). Activation chain compromise:
+    attacker on the device captures the eligible admin's session,
+    elevates via PIM, takes over the tenant.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_EligibleAdmin_LogonTo_ExploitableDevice_Summary
+  SecurityDomain: CrossEngine
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UserUpn
+  - TargetDeviceName
+  - HasExploit
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _ti = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _eligible = SI_Identity_Profile_CL
+        | where CollectionTime == _ti
+        | where IdentityType == "User" and AccountEnabled == true
+        | where array_length(todynamic(EntraRoles_Eligible)) > 0
+        | where Tier <= 1
+        | project UserUpn=Upn, UserDisplayName=DisplayName, UserPrimaryEntityId=PrimaryEntityId, Tier, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal;
+    let _users = ExposureGraphNodes
+        | where NodeLabel == "user"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | extend UserUpn = tolower(tostring(rawData.userPrincipalName))
+        | project UserNodeId=NodeId, UserUpn;
+    let _exploitable = ExposureGraphNodes
+        | where NodeLabel == "device"
+        | extend rawData = todynamic(NodeProperties.rawData)
+        | where tobool(rawData.highRiskVulnerabilityInsights.hasHighOrCritical) == true
+        | extend HasExploit = tobool(coalesce(rawData.hasExploit, rawData.isInExploitKit, false))
+        | where HasExploit == true
+        | project DeviceNodeId=NodeId, TargetDeviceName=tostring(rawData.deviceName), HasExploit;
+    ExposureGraphEdges
+    | where EdgeLabel =~ "can authenticate to" or EdgeLabel =~ "canAuthenticateTo"
+    | join kind=inner _users on $left.SourceNodeId == $right.UserNodeId
+    | join kind=inner _exploitable on $left.TargetNodeId == $right.DeviceNodeId
+    | join kind=inner _eligible on $left.UserUpn == $right.UserUpn
+    | project SecurityDomain="CrossEngine", Category="Privileged Access", Subcategory="PIM-eligible admin authenticates to exploitable device",
+              ConfigurationName=UserDisplayName, ConfigurationId=UserPrimaryEntityId,
+              Impact=strcat("PIM-eligible Tier-", Tier, " admin can authenticate to exploitable device ", TargetDeviceName),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              UserUpn, TargetDeviceName, HasExploit, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal

@@ -1,0 +1,31 @@
+id:        OutOfBandConsoleServerIsolatedReadOnlyAccess
+appliesTo: endpoint
+mode:      locked
+purpose:   'Out-of-Band Console Server (Isolated, Read-Only Access)'
+category:  'Network Equipment'
+description: 'Isolated read-only console concentrator; no write to managed devices.'
+
+detections:
+  - id: OutOfBandConsoleServerIsolatedReadOnlyAccess
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'opengear*'
+            - 'lantronix*'
+            - 'perle_iolan*'
+            - 'digi_*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^console\d'
+            - '(?i)^termsrv\d'
+            - '(?i)console.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)console.server'
+            - '(?i)oob.read.only'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Out-of-Band Console Server (Isolated, Read-Only Access)'
+      Category: 'Network Equipment'

@@ -1,0 +1,20 @@
+id:        MicrosoftDirectaccess
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft DirectAccess Connectivity Assistant'
+category:  'VPN'
+description: ''
+displayNames:
+  - 'Microsoft DirectAccess Connectivity Assistant'
+
+detections:
+  - id: MicrosoftDirectaccess
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'directaccess*'
+    set:
+      Tier:     1
+      Purpose:  'VPN'
+      Category: 'VPN'

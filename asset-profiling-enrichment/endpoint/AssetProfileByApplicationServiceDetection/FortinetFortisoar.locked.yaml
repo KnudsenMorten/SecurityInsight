@@ -1,0 +1,20 @@
+id:        FortinetFortisoar
+appliesTo: endpoint
+mode:      locked
+purpose:   'FortiSOAR'
+category:  'SOAR'
+description: ''
+displayNames:
+  - 'FortiSOAR'
+
+detections:
+  - id: FortinetFortisoar
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'fortisoar*'
+    set:
+      Tier:     1
+      Purpose:  'SOAR'
+      Category: 'SOAR'

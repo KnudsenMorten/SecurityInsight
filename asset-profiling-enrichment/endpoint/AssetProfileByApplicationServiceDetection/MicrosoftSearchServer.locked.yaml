@@ -1,0 +1,20 @@
+id:        MicrosoftSearchServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Search Server'
+category:  'Search'
+description: ''
+displayNames:
+  - 'Microsoft Search Server'
+
+detections:
+  - id: MicrosoftSearchServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'search_server*'
+    set:
+      Tier:     2
+      Purpose:  'Search'
+      Category: 'Search'

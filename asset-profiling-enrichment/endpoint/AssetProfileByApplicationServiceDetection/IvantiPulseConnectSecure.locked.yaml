@@ -1,0 +1,20 @@
+id:        IvantiPulseConnectSecure
+appliesTo: endpoint
+mode:      locked
+purpose:   'Pulse Connect Secure Collaboration Suite'
+category:  'VPN'
+description: ''
+displayNames:
+  - 'Pulse Connect Secure Collaboration Suite'
+
+detections:
+  - id: IvantiPulseConnectSecure
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'pulse_connect_secure*'
+    set:
+      Tier:     1
+      Purpose:  'VPN'
+      Category: 'VPN'

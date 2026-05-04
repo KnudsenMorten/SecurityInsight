@@ -1,0 +1,754 @@
+Reports:
+- ReportPurpose: |-
+    Tier-0 / tier-1 hosts where Defender AV signatures are out of date.
+    An EDR with stale signatures is little better than no EDR for that
+    host -- and on tier-0 it's a P1.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_Tier0_DefenderAvOutOfDate
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DefenderAvStatus
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where DefenderAvOutOfDate == true
+    | project SecurityDomain="Endpoint", Category="EDR posture", Subcategory="Tier-0/1 host with out-of-date Defender AV",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Defender AV ", coalesce(DefenderAvStatus,'unknown'), " on Tier-", Tier, " host"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, DefenderAvStatus, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Tier-0/1 endpoints reachable from internet AND carrying critical
+    CVEs older than 30 days. Joins ExposureGraphNodes for EG criticality.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_InternetFacing_Tier01_With_CVE
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - CriticalCveCount30d
+  - ExposureLevel
+  - EgExposureScore
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _t = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+    let _eg =
+        ExposureGraphNodes
+        | where NodeLabel in~ ('device','microsoft.compute/virtualmachines','microsoft.hybridcompute/machines')
+        | extend rawData = todynamic(NodeProperties).rawData
+        | project AadDeviceId=tostring(rawData.aadDeviceId),
+                  EgExposureScore=tostring(rawData.exposureScore),
+                  EgCriticality=tostring(rawData.criticality);
+    SI_Endpoint_Profile_CL
+    | where CollectionTime == _t
+    | where IsInternetFacing == true
+    | where CriticalCveCount30d > 0
+    | join kind=leftouter _eg on AadDeviceId
+    | project SecurityDomain="Endpoint", Category="Vulnerability + exposure", Subcategory="Internet-facing tier-0/1 with critical CVE",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat(CriticalCveCount30d, " critical CVEs >30d on internet-facing host"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              CriticalCveCount30d, ExposureLevel, EgExposureScore, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Tier-0 hosts (DCs, jump servers, PAWs) not seen by EG / MDE in 7+ days.
+    A tier-0 host going dark is either decommissioned (still in inventory =
+    drift) or compromised + isolated.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_Tier0_Stale
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - EgLastSeen
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where DaysInactive >= 7 and DaysInactive < 9999
+    | project SecurityDomain="Endpoint", Category="Asset visibility", Subcategory="Tier-0 host gone dark (7d+)",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Tier-0 host last seen ", DaysInactive, " days ago"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, DaysInactive, EgLastSeen, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Tier-0/1 hosts whose Defender sensor isn't in 'Active' state. SensorHealth
+    enums: Active, Inactive, ImpairedCommunication, NoSensorData,
+    MisconfiguredOrFailed. Anything not Active = blind spot on a tier-0/1.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_Tier01_SensorNotActive
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - SensorHealthState
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where isnotempty(SensorHealthState) and SensorHealthState !~ 'Active'
+    | project SecurityDomain="Endpoint", Category="EDR posture", Subcategory="Tier-0/1 sensor not Active",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("SensorHealthState=", SensorHealthState, " on Tier-", Tier, " host"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, SensorHealthState, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Onboarded hosts with no MachineGroup. Means no MDE policy scopes them
+    -- they get only the global default policy. On a tier-0/1 host that's
+    a major hardening gap.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_NoMachineGroup
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where OnboardingStatus =~ 'Onboarded'
+    | where isempty(MachineGroup) or MachineGroup =~ 'UnassignedGroup'
+    | project SecurityDomain="Endpoint", Category="Policy scoping", Subcategory="Onboarded host with no MachineGroup",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="No MDE machine group -- only global default policy applies",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Hosts running an unsupported / EOL operating system (Windows 7/8/8.1,
+    Server 2008/2012 family, EOL Linux distros, macOS < 13). Vendor no
+    longer issues security patches -- open to public-disclosure CVEs.
+    Uses UnsupportedOSDetected flat column (legacy-OS list
+    lives in PowerShell, not in this query).
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_UnsupportedOS
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UnsupportedOSReason
+  - OsPlatform
+  - OsVersion
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where UnsupportedOSDetected == true
+    | project SecurityDomain="Endpoint", Category="Operating system", Subcategory="Unsupported / EOL operating system",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=UnsupportedOSReason,
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, UnsupportedOSReason, OsPlatform, OsVersion, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Workstations / IoT devices that landed on a tier-0/1 IP subnet (DC
+    subnet, automation subnet). Cross-tier device on privileged network
+    = lateral movement risk. Subnet-tier inferred from rule matches in
+    SIRules.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_WrongTier_OnPrivilegedSubnet
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DeviceCategory
+  - EffectiveIpAddresses
+  - SIRules
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where DeviceCategory in~ ("Workstation","IoT","Mobile")
+    | where SIRules contains "Cmdb"   // any CMDB IP-subnet rule fired
+    | extend _ruleIds = todynamic(SIRules)
+    | mv-expand _r = _ruleIds
+    | extend _ruleId = tostring(_r.RuleId), _setTier = toint(_r.Tier)
+    | summarize MinSubnetTier = min(_setTier), Rules = make_list(_ruleId)
+                by AzureResourceId, DisplayName, Tier, DeviceCategory, EffectiveIpAddresses=tostring(EffectiveIpAddresses), SIRules=tostring(SIRules)
+    | where MinSubnetTier <= 1   // on a tier-0 or tier-1 subnet
+    | project SecurityDomain="Endpoint", Category="Network segmentation", Subcategory="Workstation/IoT on tier-0/1 subnet",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat(DeviceCategory, " device sitting on a Tier-", MinSubnetTier, " subnet"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DeviceCategory, EffectiveIpAddresses, SIRules, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Hosts where EDR runs in audit-only mode (no enforcement / no block
+    on threats). Tier-0/1 hosts with audit-only EDR effectively run
+    without protection.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_EdrInAuditMode
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EdrMode
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where EdrMode =~ 'Audit'
+    | project SecurityDomain="Endpoint", Category="EDR posture", Subcategory="EDR in audit-only mode",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("EDR not enforcing on Tier-", Tier, " host"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, EdrMode, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Endpoints visible in MDE but with no Exposure Graph record.
+    Single-source visibility gap -- EG-driven posture rules and attack-
+    path queries can't see this host.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_NoEgVisibility
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where isempty(EgLastSeen) and isnotempty(MdeDeviceId)
+    | project SecurityDomain="Endpoint", Category="Asset visibility", Subcategory="Endpoint in MDE but not in Exposure Graph",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="EG-driven detections can't see this host",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Endpoints flagged by MDE as IsPotentialDuplication=true. The cross-
+    source merge couldn't fold these into a parent record. Hygiene +
+    reporting accuracy issue.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_PotentialDuplicate
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - MergedDeviceIds
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsPotentialDuplication == true
+    | project SecurityDomain="Endpoint", Category="Asset hygiene", Subcategory="Potential duplicate device record",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact="MDE flagged IsPotentialDuplication=true; hygiene + report accuracy issue",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, MergedDeviceIds, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Hosts NOT in 'Onboarded' state but with ExposureLevel >= Medium. The
+    tenant has visibility (EG / Entra) but no management. Common in
+    shadow IT or M&A inheritances.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_UnmanagedExposed
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - OnboardingStatus
+  - ExposureLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where OnboardingStatus !~ 'Onboarded' and isnotempty(OnboardingStatus)
+    | where ExposureLevel in~ ("High","Medium")
+    | project SecurityDomain="Endpoint", Category="Coverage gap", Subcategory="Exposed but unmanaged endpoint",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Visible in tenant (", coalesce(OnboardingStatus,'?'), ") but not managed; ExposureLevel=", ExposureLevel),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, OnboardingStatus, ExposureLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Endpoints with 3 or more risk factors flagged at profile time
+    (RiskFactorCount >= 3). Catches anything that hits multiple individual
+    rules even if no single one is "Very High".
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Endpoint_HighRiskFactor_Composite
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskFactorCount
+  - Flags
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where RiskFactorCount >= 3
+    | extend Flags = strcat(
+        iff(UnsupportedOSDetected==true,"UnsupportedOS ", ""),
+        iff(DefenderAvOutOfDate==true,"AvOutOfDate ", ""),
+        iff(IsStaleAsset==true, strcat("Stale(",DaysInactive,"d) "), ""),
+        iff(IsCmdbOrphan==true,"CmdbOrphan ", ""))
+    | project SecurityDomain="Endpoint", Category="Composite risk", Subcategory=strcat(RiskFactorCount, " risk factors"),
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=Flags,
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactorCount, Flags, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Non-compliant TVM secure-configuration controls on endpoints. Joins
+    DeviceTvmSecureConfigurationAssessment + KB enrichment to surface one
+    row per (device, configurationId). Filters out configs that don't
+    apply to Windows Server (scid-2090, scid-22) and only keeps controls
+    where IsApplicable=1 and IsCompliant=false. Per-asset variant of the
+    v2.1 BucketFilter aggregate.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Device_Recommendations_Summary
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - ConfigurationCategory
+  - ConfigurationSubcategory
+  - ImpactScore
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _excludeForWinSrv = dynamic(['scid-2090','scid-22']);
+    let _ep = SI_Endpoint_Profile_CL
+        | where TimeGenerated > ago(8d)
+        | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+        | project AzureResourceId, DisplayName, MdeDeviceId, OsPlatform, Tier, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal;
+    let _kb = DeviceTvmSecureConfigurationAssessmentKB
+        | project ConfigurationId,
+                  KB_ConfigurationName=ConfigurationName,
+                  KB_ConfigurationCategory=ConfigurationCategory,
+                  KB_ConfigurationSubcategory=ConfigurationSubcategory,
+                  KB_Impact=toint(ConfigurationImpact);
+    DeviceTvmSecureConfigurationAssessment
+    | where TimeGenerated > ago(30d)
+    | where IsApplicable == 1 and IsCompliant == 0
+    | join kind=leftouter _kb on ConfigurationId
+    | join kind=inner _ep on $left.DeviceId == $right.MdeDeviceId
+    | where not (OsPlatform contains "WindowsServer" and ConfigurationId in~ (_excludeForWinSrv))
+    | summarize arg_max(TimeGenerated, *) by DeviceId, ConfigurationId
+    | project SecurityDomain="Endpoint",
+              Category=coalesce(KB_ConfigurationCategory, ConfigurationCategory),
+              Subcategory=coalesce(KB_ConfigurationSubcategory, ConfigurationSubcategory),
+              ConfigurationName=coalesce(KB_ConfigurationName, tostring(ConfigurationId)),
+              ConfigurationId=AzureResourceId,
+              Impact=strcat("Non-compliant control ", ConfigurationId, " on ", DisplayName),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              ConfigurationCategory=coalesce(KB_ConfigurationCategory, ConfigurationCategory),
+              ConfigurationSubcategory=coalesce(KB_ConfigurationSubcategory, ConfigurationSubcategory),
+              ImpactScore=toint(coalesce(KB_Impact, toint(ConfigurationImpact))),
+              RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Endpoints with overdue CVEs older than 40 days, joined from MDE TVM /
+    ExposureGraph CVE findings. Per-asset variant: one row per affected
+    device. Excludes assets tagged --Excluded--SI. Severity = CVE
+    severity (Critical->Very High, High->High etc). Modern v2.2 query
+    uses CriticalCveCount30d flat column from SI_Endpoint_Profile_CL.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Device_Missing_CVEs_Summary
+  SecurityDomain: Endpoint
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - CriticalCveCount30d
+  - VulnerabilityCount
+  - ExposureLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where coalesce(CriticalCveCount30d, 0) > 0 or coalesce(VulnerabilityCount, 0) > 0
+    | project SecurityDomain="Endpoint", Category="Vulnerabilities", Subcategory="CVEs (Missing Updates)",
+              ConfigurationName=DisplayName, ConfigurationId=AzureResourceId,
+              Impact=strcat("Device has ", coalesce(CriticalCveCount30d, 0), " critical CVEs >30d, total vulns=", coalesce(VulnerabilityCount, 0)),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              CriticalCveCount30d, VulnerabilityCount, ExposureLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal

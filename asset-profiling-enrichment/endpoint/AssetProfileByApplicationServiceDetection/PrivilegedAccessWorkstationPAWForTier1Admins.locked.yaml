@@ -1,0 +1,25 @@
+id:        PrivilegedAccessWorkstationPAWForTier1Admins
+appliesTo: endpoint
+mode:      locked
+purpose:   'Privileged Access Workstation (PAW) for Tier 1 Admins'
+category:  'Management'
+description: 'PAW handling tier 1 server admin sessions; compromise gives attacker server-tier access.'
+
+detections:
+  - id: PrivilegedAccessWorkstationPAWForTier1Admins
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^paw-?t?1'
+            - '(?i)^pawt1'
+            - '(?i)paw.tier.?1'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)paw.tier.?1'
+            - '(?i)paw.t1'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Privileged Access Workstation (PAW) for Tier 1 Admins'
+      Category: 'Management'

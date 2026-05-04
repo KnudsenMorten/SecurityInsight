@@ -1,0 +1,20 @@
+id:        OmadaIdentity
+appliesTo: endpoint
+mode:      locked
+purpose:   'Omada Identity'
+category:  'Identity Governance'
+description: ''
+displayNames:
+  - 'Omada Identity'
+
+detections:
+  - id: OmadaIdentity
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'identity*'
+    set:
+      Tier:     1
+      Purpose:  'Identity Governance'
+      Category: 'Identity Governance'

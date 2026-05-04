@@ -1,0 +1,32 @@
+id:        OTICSControllerWithDirectNetworkAdjacencyToTier0Systems
+appliesTo: endpoint
+mode:      locked
+purpose:   'OT / ICS Controller with Direct Network Adjacency to Tier 0 Systems'
+category:  'IoT / OT'
+description: 'OT controller on the same broadcast domain as tier 0 assets enables L2 attacks against them.'
+
+detections:
+  - id: OTICSControllerWithDirectNetworkAdjacencyToTier0Systems
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'siemens_simatic*'
+            - 'rockwell_factorytalk*'
+            - 'schneider_modicon*'
+            - 'ge_proficy*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^ot-'
+            - '(?i)^ics-'
+            - '(?i)^plc\d'
+            - '(?i)^scada\d'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)ot.tier.?0'
+            - '(?i)ics.tier.?0'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'OT / ICS Controller with Direct Network Adjacency to Tier 0 Systems'
+      Category: 'IoT / OT'

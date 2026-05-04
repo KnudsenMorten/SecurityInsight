@@ -1,0 +1,21 @@
+id:        MicrosoftRemoteDesktopWebAccess
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Remote Desktop Web Access'
+category:  'Remote Access'
+description: ''
+displayNames:
+  - 'Microsoft Remote Desktop Web Access'
+  - 'RD Web Access'
+
+detections:
+  - id: MicrosoftRemoteDesktopWebAccess
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_desktop_web_access*'
+    set:
+      Tier:     2
+      Purpose:  'Remote Access'
+      Category: 'Remote Access'

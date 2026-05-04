@@ -1,0 +1,22 @@
+id:        MicrosoftSystemCenterOperationsManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft System Center Operations Manager'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Microsoft System Center Operations Manager'
+  - 'SCOM'
+  - 'Microsoft Monitoring Server'
+
+detections:
+  - id: MicrosoftSystemCenterOperationsManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center_operations_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

@@ -1,0 +1,20 @@
+id:        SpecteropsBloodhoundCommunity
+appliesTo: endpoint
+mode:      locked
+purpose:   'BloodHound Community Edition'
+category:  'Identity Security'
+description: ''
+displayNames:
+  - 'BloodHound Community Edition'
+
+detections:
+  - id: SpecteropsBloodhoundCommunity
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bloodhound_community*'
+    set:
+      Tier:     1
+      Purpose:  'Identity Security'
+      Category: 'Identity Security'

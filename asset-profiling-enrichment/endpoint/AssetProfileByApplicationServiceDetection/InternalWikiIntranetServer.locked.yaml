@@ -1,0 +1,38 @@
+id:        InternalWikiIntranetServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Internal Wiki / Intranet Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |I|n|t|e|r|n|a|l|\|\| |c|o|n|t|e|n|t|;|\|\| |m|i|n|o|r|\|\| |i|n|f|o|-|d|i|s|c|l|o|s|u|r|e|\|\| |r|i|s|k|,|\|\| |n|o|\|\| |p|r|i|v|i|l|e|g|e|d|\|\| |d|a|t|a|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |a|t|l|a|s|s|i|a|n|/|c|o|n|f|l|u|e|n|c|e|_|s|e|r|v|e|r|,|\|\| |m|e|d|i|a|w|i|k|i|/|m|e|d|i|a|w|i|k|i|,|\|\| |m|i|c|r|o|s|o|f|t|/|w|o|r|d|,|\|\| |w|o|r|d|p|r|e|s|s|/|w|o|r|d|p|r|e|s|s|
+
+detections:
+  - id: InternalWikiIntranetServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mediawiki*'
+            - 'confluence*'
+            - 'dokuwiki*'
+            - 'wordpress*'
+            - 'confluence_server*'
+            - 'mediawiki*'
+            - 'word*'
+            - 'wordpress*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^wiki\d'
+            - '(?i)^intranet\d'
+            - '(?i)internal.wiki'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)wiki'
+            - '(?i)intranet'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Internal Wiki / Intranet Server'
+      Category: 'Server Roles'

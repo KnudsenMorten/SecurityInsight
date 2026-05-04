@@ -1,0 +1,33 @@
+id:        HRAndIdentityLifecycleManagementServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'HR and Identity Lifecycle Management Server'
+category:  'Server Roles'
+description: 'Authoritative source for joiners/movers/leavers; compromise enables persistence via fake hires.'
+
+detections:
+  - id: HRAndIdentityLifecycleManagementServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sap_successfactors*'
+            - 'workday*'
+            - 'oracle_hcm*'
+            - 'microsoft_identity_manager*'
+            - 'sailpoint_iiq*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^hr\d'
+            - '(?i)^idm\d'
+            - '(?i)^hris\d'
+            - '(?i)identity.lifecycle'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)hr.system'
+            - '(?i)idm'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'HR and Identity Lifecycle Management Server'
+      Category: 'Server Roles'

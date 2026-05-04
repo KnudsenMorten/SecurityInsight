@@ -1,0 +1,21 @@
+id:        IvantiPatchForWindows
+appliesTo: endpoint
+mode:      locked
+purpose:   'Ivanti Patch for Windows'
+category:  'Patch Mgmt'
+description: ''
+displayNames:
+  - 'Ivanti Patch for Windows'
+  - 'Shavlik'
+
+detections:
+  - id: IvantiPatchForWindows
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'patch_for_windows*'
+    set:
+      Tier:     1
+      Purpose:  'Patch Mgmt'
+      Category: 'Patch Mgmt'

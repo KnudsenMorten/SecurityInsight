@@ -1,0 +1,24 @@
+id:        WearableSmartBadgeNoDomainIntegration
+appliesTo: endpoint
+mode:      locked
+purpose:   'Wearable / Smart Badge (No Domain Integration)'
+category:  'IoT / OT'
+description: 'Personal wearable; minor data risk, no enterprise auth.'
+
+detections:
+  - id: WearableSmartBadgeNoDomainIntegration
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^wearable\d'
+            - '(?i)^smart.?badge'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)wearable'
+            - '(?i)smart.badge'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Wearable / Smart Badge (No Domain Integration)'
+      Category: 'IoT / OT'

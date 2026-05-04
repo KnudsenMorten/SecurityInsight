@@ -1,0 +1,728 @@
+<#
+.SYNOPSIS
+    Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure - engine script in the SecurityInsight solution.
+
+================================================================================
+Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+================================================================================
+PURPOSE
+  Deploy (or reuse) an Azure OpenAI account (PAYG) and a model deployment using
+  ON-DEMAND / PAY-PER-USE where possible (NO PTU).
+
+USAGE
+  Preferred: run via the Step 4 launcher (no CLI args needed, reads auth + config
+  from LauncherConfig.custom.ps1 in the same folder):
+    .\LAUNCHERS\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure\launcher.community-vm.template.ps1
+
+  Direct invocation (rare -- engine defaults in $ScriptDefaults):
+    .\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+
+  Override params at invocation:
+    .\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -AccountName "security-insight-02" -DeploymentName "chat" -Verbose
+
+  Force a model (still tries SKUs if needed):
+    .\Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1 -ModelName "gpt-4" -ModelVersion "latest" -Verbose
+================================================================================
+
+.NOTES
+    Solution       : SecurityInsight
+    File           : Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure.ps1
+    Developed by   : Morten Knudsen, Microsoft MVP
+    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
+    GitHub         : https://github.com/KnudsenMorten
+    Support        : For public repos, open a GitHub Issue on that solution's repo.
+
+#>
+
+[CmdletBinding()]
+param(
+    [string]$SubscriptionId,
+    [string]$ResourceGroupName,
+    [string]$Location,
+    [string]$AccountName,
+    [string]$DeploymentName,
+
+    # Optional: if not passed, script auto-selects a supported model for the account + region
+    [string]$ModelName,
+    [string]$ModelVersion,
+
+    # If omitted, PS 5.1 may treat it as 0 => we treat 0 as "not provided"
+    [int]$Capacity,
+
+    [ValidateSet("Enabled","Disabled")]
+    [string]$PublicNetworkAccess,
+
+    [switch]$WaitForAccountReady,
+    [ValidateRange(2,120)]
+    [int]$WaitIntervalSeconds = 5,
+    [ValidateRange(30,1800)]
+    [int]$WaitTimeoutSeconds = 300,
+
+    # Which deployment SKUs to try, in order.
+    # Keep Standard first to prefer on-demand / pay-per-use.
+    [string[]]$DeploymentSkuOrder,
+
+    # If set, writes model dumps to disk when selection/deploy fails
+    [switch]$WriteModelDumps,
+
+    # When $true, no resources are created or modified -- the engine just
+    # verifies each resource exists and prints the same summary block you'd
+    # get after a real provisioning run. Useful for re-running Step3 as an
+    # ongoing "is my OpenAI still healthy?" check without making changes.
+    [switch]$ValidateOnly
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+#region ================= HOST / PATH SAFETY ======================
+# $PSScriptRoot is only populated when running from a .ps1 file context.
+# If this script is pasted into a console/ISE, it can be empty -> Join-Path fails.
+$ScriptRoot = if ($PSScriptRoot -and -not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+    $PSScriptRoot
+} else {
+    (Get-Location).Path
+}
+#endregion =======================================================
+
+# ----------------------------------------------------------------------
+#  Module dependencies -- centralized helper under _shared/
+# ----------------------------------------------------------------------
+. (Join-Path $ScriptRoot '_shared\Ensure-Module.ps1')
+Ensure-SecurityInsightModules
+#region ================= API VERSIONING ==========================
+# Management-plane API version (ARM) used for:
+# - accounts
+# - deployments
+# - models listing
+# - listKeys
+$ApiVersion = "2024-10-01"
+
+# Data-plane inference API version (Azure OpenAI inference endpoint).
+# This is NOT used for ARM calls. Kept separate for clarity/output.
+$InferenceApiVersion = "2025-01-01-preview"
+#endregion =======================================================
+
+#region ================= LAUNCHER-SUPPLIED DEFAULTS =================
+# This engine is launcher-driven. All customer-specific values
+# (SubscriptionId, ResourceGroupName, Location, AccountName, DeploymentName)
+# MUST be supplied by the launcher -- either as -SubscriptionId etc.
+# parameters, or by setting matching $global:* variables before the
+# engine is invoked.
+#
+# The defaults here are PLATFORM-NEUTRAL only -- model preference,
+# capacity, SKU order, etc. They are safe to ship to the community repo.
+$ScriptDefaults = @{
+    SubscriptionId      = $global:SubscriptionId
+    ResourceGroupName   = $global:ResourceGroupName
+    Location            = $global:Location
+    AccountName         = $global:AccountName
+    DeploymentName      = $global:DeploymentName
+
+    # Preferred default (may not be supported; script will try others)
+    ModelName           = if ($global:ModelName)    { $global:ModelName }    else { 'gpt-4.1-mini' }
+    ModelVersion        = if ($global:ModelVersion) { $global:ModelVersion } else { 'latest' }
+
+    Capacity            = if ($global:Capacity)            { [int]$global:Capacity }            else { 100 }
+    PublicNetworkAccess = if ($global:PublicNetworkAccess) { $global:PublicNetworkAccess }      else { 'Enabled' }
+    WaitForAccountReady = if ($null -ne $global:WaitForAccountReady) { [bool]$global:WaitForAccountReady } else { $true }
+
+    DeploymentSkuOrder  = if ($global:DeploymentSkuOrder) { @($global:DeploymentSkuOrder) } else { @('GlobalStandard') }
+
+    WriteModelDumps     = if ($null -ne $global:WriteModelDumps) { [bool]$global:WriteModelDumps } else { $true }
+}
+
+# Hard guard: customer-specific values must be present (from launcher or -param)
+foreach ($req in 'SubscriptionId','ResourceGroupName','Location','AccountName','DeploymentName') {
+    $fromParam = (Get-Variable -Name $req -Scope Local -ErrorAction SilentlyContinue).Value
+    $fromDefaults = $ScriptDefaults[$req]
+    if ([string]::IsNullOrWhiteSpace([string]$fromParam) -and [string]::IsNullOrWhiteSpace([string]$fromDefaults)) {
+        throw "Step3_OnboardValidate-SecurityInsight-OpenAI-PAYG-Instance-Azure: '$req' must be supplied by the launcher (set -$req or `$global:$req)."
+    }
+}
+
+$AlwaysVerbose = $true
+#endregion =======================================================
+
+#region ================= LOGGING HELPERS =========================
+function Write-Log {
+    param(
+        [Parameter(Mandatory=$true)][ValidateSet("INFO","WARN","ERROR","DEBUG")][string]$Level,
+        [Parameter(Mandatory=$true)][string]$Message
+    )
+    $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    switch ($Level) {
+        "INFO"  { Write-Host "[$ts] [INFO ] $Message" }
+        "WARN"  { Write-Host "[$ts] [WARN ] $Message" -ForegroundColor Yellow }
+        "ERROR" { Write-Host "[$ts] [ERROR] $Message" -ForegroundColor Red }
+        "DEBUG" {
+            if ($AlwaysVerbose -or $PSBoundParameters.ContainsKey('Verbose')) {
+                Write-Host "[$ts] [DEBUG] $Message" -ForegroundColor White
+            }
+        }
+    }
+}
+
+function Write-Section {
+    param([string]$Title)
+    Write-Host ""
+    Write-Host $Title
+    Write-Host ("-" * $Title.Length)
+}
+
+#endregion =======================================================
+
+#region ================= DEFAULT RESOLUTION ======================
+function Use-DefaultIfEmpty {
+    param([string]$Name, $Value)
+    if ($null -eq $Value) { return $ScriptDefaults[$Name] }
+    if ($Value -is [string] -and [string]::IsNullOrWhiteSpace($Value)) { return $ScriptDefaults[$Name] }
+    return $Value
+}
+function Use-DefaultIfNullOrZero {
+    param([string]$Name, $Value)
+    if ($null -eq $Value) { return $ScriptDefaults[$Name] }
+    if ($Value -is [ValueType] -and $Value -eq 0) { return $ScriptDefaults[$Name] }
+    return $Value
+}
+
+Write-Section "1) Parameter Resolution"
+
+$SubscriptionId      = Use-DefaultIfEmpty            "SubscriptionId"      $SubscriptionId
+$ResourceGroupName   = Use-DefaultIfEmpty            "ResourceGroupName"   $ResourceGroupName
+$Location            = Use-DefaultIfEmpty            "Location"            $Location
+$AccountName         = Use-DefaultIfEmpty            "AccountName"         $AccountName
+$DeploymentName      = Use-DefaultIfEmpty            "DeploymentName"      $DeploymentName
+$ModelName           = Use-DefaultIfEmpty            "ModelName"           $ModelName
+$ModelVersion        = Use-DefaultIfEmpty            "ModelVersion"        $ModelVersion
+$Capacity            = [int](Use-DefaultIfNullOrZero "Capacity"            $Capacity)
+$PublicNetworkAccess = Use-DefaultIfEmpty            "PublicNetworkAccess" $PublicNetworkAccess
+
+if (-not $PSBoundParameters.ContainsKey("WaitForAccountReady")) {
+    $WaitForAccountReady = [bool]$ScriptDefaults.WaitForAccountReady
+}
+
+if (-not $PSBoundParameters.ContainsKey("DeploymentSkuOrder") -or -not $DeploymentSkuOrder -or $DeploymentSkuOrder.Count -eq 0) {
+    $DeploymentSkuOrder = [string[]]$ScriptDefaults.DeploymentSkuOrder
+}
+
+if (-not $PSBoundParameters.ContainsKey("WriteModelDumps")) {
+    $WriteModelDumps = [bool]$ScriptDefaults.WriteModelDumps
+}
+
+Write-Log INFO  "SubscriptionId        : $SubscriptionId"
+Write-Log INFO  "ResourceGroupName     : $ResourceGroupName"
+Write-Log INFO  "Location              : $Location"
+Write-Log INFO  "AccountName           : $AccountName"
+Write-Log INFO  "DeploymentName        : $DeploymentName"
+Write-Log INFO  "Requested Model       : $ModelName ($ModelVersion)"
+Write-Log INFO  "Capacity              : $Capacity"
+Write-Log INFO  "PublicNetworkAccess   : $PublicNetworkAccess"
+Write-Log INFO  "WaitForAccountReady   : $WaitForAccountReady"
+Write-Log INFO  "SKU order             : $($DeploymentSkuOrder -join ', ')"
+Write-Log INFO  "WriteModelDumps       : $WriteModelDumps"
+Write-Log DEBUG "Mgmt ApiVersion (ARM) : $ApiVersion"
+Write-Log DEBUG "Infer ApiVersion      : $InferenceApiVersion"
+Write-Log DEBUG "ScriptRoot            : $ScriptRoot"
+#endregion =======================================================
+
+#region ================= SANITY CHECKS ===========================
+Write-Section "2) Sanity Checks"
+
+if ([string]::IsNullOrWhiteSpace($SubscriptionId))     { throw "SubscriptionId is empty." }
+if ([string]::IsNullOrWhiteSpace($ResourceGroupName))  { throw "ResourceGroupName is empty." }
+if ([string]::IsNullOrWhiteSpace($Location))           { throw "Location is empty." }
+if ([string]::IsNullOrWhiteSpace($AccountName))        { throw "AccountName is empty." }
+if ([string]::IsNullOrWhiteSpace($DeploymentName))     { throw "DeploymentName is empty." }
+if ($Capacity -lt 1)                                  { throw "Capacity must be >= 1." }
+if ($AccountName -notmatch '^[a-z0-9-]{2,63}$') {
+    throw "AccountName '$AccountName' is invalid. Use 2-63 chars: lowercase letters, numbers, hyphen."
+}
+Write-Log INFO "Sanity checks passed."
+#endregion =======================================================
+
+#region ================= AZURE HELPERS ===========================
+function Ensure-AzContext {
+    if (-not (Get-AzContext)) {
+        Write-Log INFO "No Azure context detected. Running Connect-AzAccount..."
+        Connect-AzAccount | Out-Null
+    }
+    Write-Log INFO "Selecting subscription: $SubscriptionId"
+    Select-AzSubscription -SubscriptionId $SubscriptionId | Out-Null
+}
+
+function Ensure-ResourceGroup {
+    $rg = Get-AzResourceGroup -Name $ResourceGroupName -ErrorAction SilentlyContinue
+    if (-not $rg) {
+        if ($ValidateOnly) {
+            Write-Log WARN "[ValidateOnly] Resource group '$ResourceGroupName' NOT FOUND in '$Location'. Skipping create."
+            $script:Status_ResourceGroup = 'MISSING'
+            return
+        }
+        Write-Log INFO "Resource group '$ResourceGroupName' not found. Creating in '$Location'..."
+        New-AzResourceGroup -Name $ResourceGroupName -Location $Location | Out-Null
+        $script:Status_ResourceGroup = 'CREATED'
+    } else {
+        Write-Log INFO "Resource group '$ResourceGroupName' already exists (location: $($rg.Location))."
+        $script:Status_ResourceGroup = 'REUSED'
+    }
+}
+
+# Use ${ResourceId} when appending ?api-version to avoid "$ResourceId?api" parsing
+function Invoke-Get {
+    param([string]$ResourceId, [string]$ApiVersion)
+    $path = "${ResourceId}?api-version=${ApiVersion}"
+    Write-Log DEBUG "GET  $path"
+    $res = Invoke-AzRestMethod -Method GET -Path $path -ErrorAction SilentlyContinue
+    if ($res.StatusCode -eq 404) { return $null }
+    if ($res.Content) { return ($res.Content | ConvertFrom-Json) }
+}
+
+function Invoke-Put {
+    param([string]$ResourceId, [string]$ApiVersion, $Body)
+    $json = $Body | ConvertTo-Json -Depth 80 -Compress
+    $path = "${ResourceId}?api-version=${ApiVersion}"
+    Write-Log DEBUG "PUT  $path"
+    Write-Log DEBUG "Body $json"
+    $res = Invoke-AzRestMethod -Method PUT -Path $path -Payload $json
+    Write-Log DEBUG "StatusCode: $($res.StatusCode)"
+    if ($res.StatusCode -notin 200,201) {
+        throw "PUT failed ($($res.StatusCode)): $($res.Content)"
+    }
+    if ($res.Content) { return ($res.Content | ConvertFrom-Json) }
+}
+
+function Invoke-Post {
+    param([string]$Path, [string]$Payload)
+    Write-Log DEBUG "POST $Path"
+    $res = Invoke-AzRestMethod -Method POST -Path $Path -Payload $Payload
+    Write-Log DEBUG "StatusCode: $($res.StatusCode)"
+    return $res
+}
+
+function Wait-ForProvisioningState {
+    param(
+        [string]$ResourceId,
+        [string]$ApiVersion,
+        [string]$DesiredState,
+        [int]$IntervalSeconds,
+        [int]$TimeoutSeconds
+    )
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ($true) {
+        $obj = Invoke-Get -ResourceId $ResourceId -ApiVersion $ApiVersion
+        $state = $null
+        if ($obj -and $obj.properties -and $obj.properties.provisioningState) {
+            $state = [string]$obj.properties.provisioningState
+        }
+        Write-Log INFO "ProvisioningState: $state (waiting for '$DesiredState')"
+        if ($state -eq $DesiredState) { return $obj }
+        if ((Get-Date) -ge $deadline) {
+            throw "Timeout waiting for provisioningState='$DesiredState' (last state: '$state')."
+        }
+        Start-Sleep -Seconds $IntervalSeconds
+    }
+}
+
+function Get-AccountKeys {
+    param([string]$AccountId, [string]$ApiVersion)
+    $path = "${AccountId}/listKeys?api-version=${ApiVersion}"
+    $res = Invoke-Post -Path $path -Payload "{}"
+    if ($res.StatusCode -notin 200,201) {
+        throw "listKeys failed ($($res.StatusCode)): $($res.Content)"
+    }
+    return ($res.Content | ConvertFrom-Json)
+}
+
+function Try-ParseAzureErrorMessage {
+    param([string]$ExceptionMessage)
+
+    # The thrown message usually contains the JSON body. Try to extract "message":"..."
+    if ($ExceptionMessage -match '"message"\s*:\s*"([^"]+)"') { return $matches[1] }
+    return $ExceptionMessage
+}
+#endregion =======================================================
+
+#region ================= ACCOUNT MODEL DISCOVERY =================
+function Get-AccountModels {
+    param([string]$AccountId, [string]$ApiVersion)
+
+    $rid = "${AccountId}/models"
+    Write-Log INFO "Querying supported models for this Azure OpenAI account..."
+    $result = Invoke-Get -ResourceId $rid -ApiVersion $ApiVersion
+
+    $models = @()
+    if ($result -and $result.value) { $models = @($result.value) }
+
+    Write-Log INFO ("Account models returned: " + $models.Count)
+
+    if (($AlwaysVerbose -or $PSBoundParameters.ContainsKey('Verbose')) -and $models.Count -gt 0) {
+        Write-Log DEBUG ("Sample account model item: " + (($models | Select-Object -First 1) | ConvertTo-Json -Depth 18))
+    }
+
+    return $models
+}
+
+function Normalize-AccountModelsToCandidates {
+    param([object[]]$AccountModels)
+
+    function Get-PropValue { param($Obj,[string]$PropName)
+        $p = $Obj.PSObject.Properties[$PropName]
+        if ($null -eq $p) { return $null }
+        return $p.Value
+    }
+
+    $norm = @()
+    foreach ($m in $AccountModels) {
+        $name = Get-PropValue $m "name"
+        $ver  = Get-PropValue $m "version"
+        $fmt  = Get-PropValue $m "format"
+
+        if ($name) {
+            $norm += [pscustomobject]@{
+                Name    = [string]$name
+                Version = if ($ver) { [string]$ver } else { $null }
+                Format  = if ($fmt) { [string]$fmt } else { $null }
+                Raw     = $m
+            }
+        }
+    }
+
+    return $norm
+}
+
+function Build-OrderedCandidates {
+    param(
+        [Parameter(Mandatory=$true)][object[]]$Candidates,
+        [Parameter(Mandatory=$true)][string[]]$PreferenceNames
+    )
+
+    # Prefer OpenAI format if present
+    $c = $Candidates
+    $openAiFmt = $Candidates | Where-Object { $_.Format -and $_.Format -ieq "OpenAI" }
+    if ($openAiFmt -and $openAiFmt.Count -gt 0) { $c = $openAiFmt }
+
+    $ordered = @()
+
+    foreach ($p in $PreferenceNames) {
+        $hit = $c | Where-Object { $_.Name -ieq $p } | Select-Object -First 1
+        if ($hit) { $ordered += $hit }
+    }
+
+    $restGpt = $c | Where-Object { $_.Name -match '^gpt' } | Where-Object { $ordered.Name -notcontains $_.Name }
+    $ordered += $restGpt
+
+    $restOther = $c | Where-Object { $ordered.Name -notcontains $_.Name }
+    $ordered += $restOther
+
+    return $ordered
+}
+#endregion =======================================================
+
+#region ================= DEPLOYMENT WITH FALLBACK =================
+function New-DeploymentWithSkuAndModelFallback {
+    param(
+        [Parameter(Mandatory=$true)][string]$DeploymentId,
+        [Parameter(Mandatory=$true)][string]$ApiVersion,
+        [Parameter(Mandatory=$true)][int]$Capacity,
+        [Parameter(Mandatory=$true)][object[]]$CandidateModels,
+        [Parameter(Mandatory=$true)][string[]]$SkuOrder
+    )
+
+    foreach ($skuName in $SkuOrder) {
+        foreach ($c in $CandidateModels) {
+
+            $mn = $c.Name
+            $mv = $c.Version
+            if ([string]::IsNullOrWhiteSpace($mv)) { $mv = "latest" }
+
+            Write-Log INFO "Attempting deployment: sku=$skuName, model=$mn ($mv), capacity=$Capacity"
+
+            try {
+                Invoke-Put -ResourceId $DeploymentId -ApiVersion $ApiVersion -Body @{
+                    properties = @{
+                        model = @{
+                            format  = "OpenAI"
+                            name    = $mn
+                            version = $mv
+                        }
+                    }
+                    sku = @{
+                        name     = $skuName
+                        capacity = $Capacity
+                    }
+                } | Out-Null
+
+                return [pscustomobject]@{
+                    Sku     = $skuName
+                    Name    = $mn
+                    Version = $mv
+                    Status  = "Succeeded"
+                }
+            }
+            catch {
+                $azMsg = Try-ParseAzureErrorMessage -ExceptionMessage $_.Exception.Message
+
+                # Continue for known "try next" errors
+                if ($azMsg -match "SKU '.*'.*not supported" -or
+                    $azMsg -match "not supported in this region" -or
+                    $azMsg -match "DeploymentModelNotSupported" -or
+                    $azMsg -match "InvalidResourceProperties") {
+
+                    Write-Log WARN "Rejected (will try next): sku=$skuName, model=$mn ($mv)"
+                    Write-Log WARN "Azure says: $azMsg"
+                    continue
+                }
+
+                # Unknown/critical error: stop immediately
+                Write-Log ERROR "Deployment failed with non-retryable error."
+                Write-Log ERROR "sku=$skuName, model=$mn ($mv)"
+                Write-Log ERROR "Azure says: $azMsg"
+                throw
+            }
+        }
+    }
+
+    throw "No candidate model could be deployed with the configured SKU order ($($SkuOrder -join ', ')) in region '$Location'."
+}
+#endregion =======================================================
+
+#region ================= MAIN ===============================
+Write-Section "3) Azure Auth + Subscription"
+Ensure-AzContext
+
+Write-Section "4) Resource Group"
+Ensure-ResourceGroup
+
+$AccountId    = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.CognitiveServices/accounts/$AccountName"
+$DeploymentId = "${AccountId}/deployments/${DeploymentName}"
+
+Write-Section "5) Azure OpenAI Account (PAYG)"
+Write-Log INFO "Account ResourceId: $AccountId"
+Write-Log INFO "Creating/reusing account: kind=OpenAI, sku=S0 (PAYG)"
+
+$account = Invoke-Get -ResourceId $AccountId -ApiVersion $ApiVersion
+if (-not $account) {
+    if ($ValidateOnly) {
+        Write-Log WARN "[ValidateOnly] Azure OpenAI account '$AccountName' NOT FOUND. Skipping create."
+        $script:Status_Account = 'MISSING'
+    } else {
+        Write-Log INFO "Account does not exist -> creating..."
+        Invoke-Put -ResourceId $AccountId -ApiVersion $ApiVersion -Body @{
+            location = $Location
+            kind     = "OpenAI"
+            sku      = @{ name = "S0" }
+            properties = @{
+                customSubDomainName = $AccountName
+                publicNetworkAccess = $PublicNetworkAccess
+                networkAcls = @{
+                    defaultAction       = "Allow"
+                    ipRules             = @()
+                    virtualNetworkRules = @()
+                }
+            }
+            tags = @{}
+        } | Out-Null
+        Write-Log INFO "Account create request sent."
+        $script:Status_Account = 'CREATED'
+    }
+} else {
+    Write-Log INFO "Account already exists -> skipping create."
+    $script:Status_Account = 'REUSED'
+}
+
+if ($WaitForAccountReady) {
+    Write-Section "5b) Wait for Account Ready"
+    $account = Wait-ForProvisioningState -ResourceId $AccountId -ApiVersion $ApiVersion -DesiredState "Succeeded" `
+        -IntervalSeconds $WaitIntervalSeconds -TimeoutSeconds $WaitTimeoutSeconds
+} else {
+    $account = Invoke-Get -ResourceId $AccountId -ApiVersion $ApiVersion
+}
+
+Write-Section "6) Model Discovery (Account Scoped)"
+$acctModels = Get-AccountModels -AccountId $AccountId -ApiVersion $ApiVersion
+
+if ($WriteModelDumps) {
+    # ensure target folder exists
+    if (-not (Test-Path -LiteralPath $ScriptRoot)) {
+        New-Item -ItemType Directory -Path $ScriptRoot -Force | Out-Null
+    }
+
+    $dumpRaw = Join-Path -Path $ScriptRoot -ChildPath ("account-models-raw-" + $AccountName + ".json")
+    $acctModels | ConvertTo-Json -Depth 30 | Out-File -FilePath $dumpRaw -Encoding utf8
+    Write-Log INFO "Wrote raw account models to: $dumpRaw"
+}
+
+$candidatesAll = Normalize-AccountModelsToCandidates -AccountModels $acctModels
+Write-Log INFO ("Normalized candidates: " + $candidatesAll.Count)
+
+Write-Section "7) Model Selection + Deployment (Fallback by SKU & Model)"
+
+$UserForcedModel = $false
+if ($PSBoundParameters.ContainsKey("ModelName") -or $PSBoundParameters.ContainsKey("ModelVersion")) {
+    $UserForcedModel = $true
+    Write-Log INFO "Model was provided via runtime parameters -> will deploy using that model (but still try SKU fallbacks)."
+}
+
+if ($UserForcedModel) {
+    $ordered = @([pscustomobject]@{ Name=$ModelName; Version=$ModelVersion; Format="OpenAI"; Raw=$null })
+} else {
+    # Preference list (edit freely)
+    $preference = @(
+        "gpt-4.1-mini",
+        "gpt-4.1",
+        "gpt-4",
+        "gpt-35-turbo"
+    )
+
+    $ordered = Build-OrderedCandidates -Candidates $candidatesAll -PreferenceNames $preference
+    $preview = $ordered | Select-Object -First 12
+    $previewText = ($preview | ForEach-Object {
+        if ($_.Version) { "$($_.Name) ($($_.Version))" } else { "$($_.Name) (latest)" }
+    }) -join ", "
+    Write-Log INFO ("Top candidates to try: " + $previewText)
+
+    if ($WriteModelDumps) {
+        if (-not (Test-Path -LiteralPath $ScriptRoot)) {
+            New-Item -ItemType Directory -Path $ScriptRoot -Force | Out-Null
+        }
+
+        $dumpNorm = Join-Path -Path $ScriptRoot -ChildPath ("account-models-normalized-" + $AccountName + ".json")
+        $ordered | Select-Object Name,Version,Format | ConvertTo-Json -Depth 5 | Out-File -FilePath $dumpNorm -Encoding utf8
+        Write-Log INFO "Wrote normalized candidate list to: $dumpNorm"
+    }
+}
+
+$DeploymentExists = Invoke-Get -ResourceId $DeploymentId -ApiVersion $ApiVersion
+if ($DeploymentExists) {
+    Write-Log INFO "Deployment already exists -> skipping create."
+    $script:Status_Deployment = 'REUSED'
+    # Capture the existing model info so the summary reflects reality, not the
+    # user's -ModelName/-ModelVersion request (which may not match what was deployed).
+    try {
+        $existingModel = $DeploymentExists.properties.model
+        if ($existingModel) {
+            $ModelName    = [string]$existingModel.name
+            $ModelVersion = [string]$existingModel.version
+        }
+    } catch { }
+} elseif ($ValidateOnly) {
+    Write-Log WARN "[ValidateOnly] Deployment '$DeploymentName' NOT FOUND. Skipping create."
+    $script:Status_Deployment = 'MISSING'
+} else {
+    Write-Log INFO "Deployment does not exist -> creating..."
+    $result = New-DeploymentWithSkuAndModelFallback -DeploymentId $DeploymentId -ApiVersion $ApiVersion -Capacity $Capacity `
+        -CandidateModels $ordered -SkuOrder $DeploymentSkuOrder
+
+    Write-Log INFO "Deployment succeeded!"
+    Write-Log INFO "Chosen SKU   : $($result.Sku)"
+    Write-Log INFO "Chosen Model : $($result.Name) ($($result.Version))"
+
+    # Update output variables to reflect what actually worked
+    $ModelName    = $result.Name
+    $ModelVersion = $result.Version
+    $script:Status_Deployment = 'CREATED'
+}
+
+Write-Section "8) Output (Endpoint + Keys)"
+$account = Invoke-Get -ResourceId $AccountId -ApiVersion $ApiVersion
+# Keys require the account to exist. In ValidateOnly mode when the account is
+# missing, skip the listKeys call so the summary can still render gracefully.
+$keys = $null
+if ($account) {
+    try { $keys = Get-AccountKeys -AccountId $AccountId -ApiVersion $ApiVersion } catch {
+        Write-Log WARN "Could not fetch account keys: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log WARN "Account not present -- skipping listKeys."
+}
+
+$__endpoint = if ($account -and $account.properties -and $account.properties.endpoint) { $account.properties.endpoint } else { '(not found)' }
+$__key1     = if ($keys -and $keys.key1) { $keys.key1 } else { '(not available)' }
+$__key2     = if ($keys -and $keys.key2) { $keys.key2 } else { '(not available)' }
+
+Write-Host ""
+Write-Host "==================== RESULT ===================="
+Write-Host "AccountName : $AccountName"
+Write-Host "ResourceId  : $AccountId"
+Write-Host "Endpoint    : $__endpoint"
+Write-Host "Deployment  : $DeploymentName"
+Write-Host "Model       : $ModelName ($ModelVersion)"
+Write-Host "Account SKU : S0 (PAYG)"
+Write-Host "Deploy SKUs : Tried => $($DeploymentSkuOrder -join ', ')"
+Write-Host "Key1        : $__key1"
+Write-Host "Key2        : $__key2"
+Write-Host "================================================"
+Write-Host ""
+
+Write-Host "Example API call (Responses API style):"
+Write-Host "POST ${__endpoint}openai/responses?api-version=$InferenceApiVersion"
+Write-Host "Header: api-key: <key>"
+Write-Host "Body: { `"model`": `"$DeploymentName`", `"input`": `"hello`" }"
+Write-Host ""
+#endregion =======================================================
+
+Write-Section "9) PowerShell Variable Output (SecurityInsight - Copy/Paste Ready)"
+
+$AI_apiKey     = if ($keys) { $keys.key1 } else { $null }
+$AI_endpoint   = if ($account -and $account.properties -and $account.properties.endpoint) { $account.properties.endpoint.TrimEnd('/') } else { '' }
+$AI_deployment = $DeploymentName
+$AI_apiVersion = $InferenceApiVersion
+
+# ----------------------------------------------------------------------------
+# Provisioning summary -- matches the Step1 OnboardValidate format so ops can
+# eyeball a re-run and see exactly what was CREATED vs. REUSED vs. MISSING.
+# ----------------------------------------------------------------------------
+if (-not $script:Status_ResourceGroup) { $script:Status_ResourceGroup = 'UNKNOWN' }
+if (-not $script:Status_Account)       { $script:Status_Account       = 'UNKNOWN' }
+if (-not $script:Status_Deployment)    { $script:Status_Deployment    = 'UNKNOWN' }
+
+$__modeLabel = if ($ValidateOnly) { 'VALIDATE-ONLY (no writes)' } else { 'PROVISION' }
+
+Write-Host ""
+Write-Host "  ========= SecurityInsight Step3 -- Azure OpenAI provisioning summary =========" -ForegroundColor Cyan
+Write-Host ""
+Write-Host ("  Mode                  : {0}" -f $__modeLabel)        -ForegroundColor White
+Write-Host ("  Subscription          : {0}" -f $SubscriptionId)     -ForegroundColor White
+Write-Host ("  Resource Group        : {0}  [{1}]" -f $ResourceGroupName, $script:Status_ResourceGroup) -ForegroundColor White
+Write-Host ("  Azure OpenAI account  : {0}  [{1}]" -f $AccountName,       $script:Status_Account)       -ForegroundColor White
+Write-Host ("  Deployment            : {0}  [{1}]" -f $DeploymentName,    $script:Status_Deployment)    -ForegroundColor White
+Write-Host ("  Model                 : {0} ({1})" -f $ModelName, $ModelVersion) -ForegroundColor White
+Write-Host ("  Location              : {0}" -f $Location)           -ForegroundColor White
+Write-Host ("  Endpoint              : {0}" -f $AI_endpoint)        -ForegroundColor White
+Write-Host ""
+Write-Host "  Copy into LauncherConfig.custom.ps1 (SecurityInsight_RiskAnalysis):" -ForegroundColor Yellow
+Write-Host "  (the BuildSummaryByAI master toggle is REQUIRED -- without it, the engine ignores the OpenAI_* values and skips the AI summary entirely)" -ForegroundColor Yellow
+Write-Host ""
+Write-Host  "    `$Global:BuildSummaryByAI           = `$true"                     -ForegroundColor Green
+Write-Host ("    `$Global:OpenAI_apiKey              = `"{0}`"" -f $AI_apiKey)     -ForegroundColor White
+Write-Host ("    `$Global:OpenAI_endpoint            = `"{0}`"" -f $AI_endpoint)   -ForegroundColor White
+Write-Host ("    `$Global:OpenAI_deployment          = `"{0}`"" -f $AI_deployment) -ForegroundColor White
+Write-Host ("    `$Global:OpenAI_apiVersion          = `"{0}`"" -f $AI_apiVersion) -ForegroundColor White
+Write-Host  "    `$Global:OpenAI_MaxTokensPerRequest = 16384"                      -ForegroundColor White
+Write-Host ""
+
+# v2.1.210 -- expose the values as $global:* so the InitialDeployment orchestrator
+# (or any other parent script that runs Step3 via & or dot-source) can auto-capture
+# them and write straight into config/SecurityInsight.custom.ps1 -- no manual
+# copy/paste of the printed paste-block above.
+$global:BuildSummaryByAI           = $true
+$global:OpenAI_apiKey              = $AI_apiKey
+$global:OpenAI_endpoint            = $AI_endpoint
+$global:OpenAI_deployment          = $AI_deployment
+$global:OpenAI_apiVersion          = $AI_apiVersion
+$global:OpenAI_MaxTokensPerRequest = 16384
+
+# ----------------------------------------------------------------------------
+# Exit code: non-zero if -ValidateOnly found any MISSING resource
+# ----------------------------------------------------------------------------
+if ($ValidateOnly) {
+    $missing = @('ResourceGroup','Account','Deployment') | Where-Object { (Get-Variable -Name ("Status_" + $_) -Scope Script -ValueOnly) -eq 'MISSING' }
+    if ($missing.Count -gt 0) {
+        Write-Host ("  [VALIDATE] {0} resource(s) missing: {1}" -f $missing.Count, ($missing -join ', ')) -ForegroundColor Red
+        Write-Host  "  Re-run Step3 without -ValidateOnly to provision the missing pieces."              -ForegroundColor Red
+        exit 2
+    }
+    Write-Host "  [VALIDATE] All 3 resources present -- tenant is ready for RiskAnalysis -BuildSummaryByAI." -ForegroundColor Green
+}
+

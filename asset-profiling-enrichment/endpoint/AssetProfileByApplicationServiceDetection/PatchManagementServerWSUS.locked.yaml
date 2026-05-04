@@ -1,0 +1,31 @@
+id:        PatchManagementServerWSUS
+appliesTo: endpoint
+mode:      locked
+purpose:   'Patch Management Server (WSUS)'
+category:  'Management'
+description: 'WSUS pushes signed updates to every Windows host; compromise enables fleet-wide payload delivery.'
+
+detections:
+  - id: PatchManagementServerWSUS
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_server_update_services*'
+            - 'wsus_*'
+            - 'ivanti_patch*'
+            - 'manageengine_patch_manager*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^wsus\d'
+            - '(?i)^patch\d'
+            - '(?i)patch.manager'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)wsus'
+            - '(?i)patch.management'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Patch Management Server (WSUS)'
+      Category: 'Management'

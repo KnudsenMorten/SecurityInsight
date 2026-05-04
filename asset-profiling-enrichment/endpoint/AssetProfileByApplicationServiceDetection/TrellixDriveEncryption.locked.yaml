@@ -1,0 +1,21 @@
+id:        TrellixDriveEncryption
+appliesTo: endpoint
+mode:      locked
+purpose:   'McAfee Drive Encryption'
+category:  'Encryption'
+description: ''
+displayNames:
+  - 'McAfee Drive Encryption'
+  - 'Trellix Drive Encryption'
+
+detections:
+  - id: TrellixDriveEncryption
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'drive_encryption*'
+    set:
+      Tier:     1
+      Purpose:  'Encryption'
+      Category: 'Encryption'

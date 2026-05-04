@@ -1,0 +1,32 @@
+id:        NetworkManagementServerCiscoDNASolarWindsWithFullNetworkWriteAccess
+appliesTo: endpoint
+mode:      locked
+purpose:   'Network Management Server (Cisco DNA, SolarWinds with Full Network Write Access)'
+category:  'Network Equipment'
+description: 'Holds privileged credentials to every managed device; one box configures the whole fabric.'
+
+detections:
+  - id: NetworkManagementServerCiscoDNASolarWindsWithFullNetworkWriteAccess
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_dna_center*'
+            - 'solarwinds_orion*'
+            - 'solarwinds_npm*'
+            - 'cisco_prime_infrastructure*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^dnac\d'
+            - '(?i)^solarwinds'
+            - '(?i)cisco.dna'
+            - '(?i)^npm-'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)dna.center'
+            - '(?i)solarwinds'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Network Management Server (Cisco DNA, SolarWinds with Full Network Write Access)'
+      Category: 'Network Equipment'

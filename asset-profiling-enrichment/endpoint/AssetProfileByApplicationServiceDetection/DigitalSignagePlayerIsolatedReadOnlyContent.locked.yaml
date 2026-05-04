@@ -1,0 +1,31 @@
+id:        DigitalSignagePlayerIsolatedReadOnlyContent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Digital Signage Player (Isolated, Read-Only Content)'
+category:  'IoT / OT'
+description: 'Display-only content player; defacement risk, limited pivot.'
+
+detections:
+  - id: DigitalSignagePlayerIsolatedReadOnlyContent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'brightsign*'
+            - 'samsung_magicinfo*'
+            - 'scala*'
+            - 'navori*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^signage\d'
+            - '(?i)^display\d'
+            - '(?i)digital.signage'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)digital.signage'
+            - '(?i)display.player'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Digital Signage Player (Isolated, Read-Only Content)'
+      Category: 'IoT / OT'

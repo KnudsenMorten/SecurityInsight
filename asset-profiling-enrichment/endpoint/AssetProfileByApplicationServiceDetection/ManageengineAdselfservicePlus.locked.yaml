@@ -1,0 +1,20 @@
+id:        ManageengineAdselfservicePlus
+appliesTo: endpoint
+mode:      locked
+purpose:   'ManageEngine ADSelfService Plus'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'ManageEngine ADSelfService Plus'
+
+detections:
+  - id: ManageengineAdselfservicePlus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'adselfservice_plus*'
+    set:
+      Tier:     1
+      Purpose:  'Identity'
+      Category: 'Identity'

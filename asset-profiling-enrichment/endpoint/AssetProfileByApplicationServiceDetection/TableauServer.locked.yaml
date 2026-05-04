@@ -1,0 +1,20 @@
+id:        TableauServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Tableau Server'
+category:  'BI'
+description: ''
+displayNames:
+  - 'Tableau Server'
+
+detections:
+  - id: TableauServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

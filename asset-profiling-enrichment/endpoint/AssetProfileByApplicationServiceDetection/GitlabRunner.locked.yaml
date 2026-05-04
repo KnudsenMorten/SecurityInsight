@@ -1,0 +1,20 @@
+id:        GitlabRunner
+appliesTo: endpoint
+mode:      locked
+purpose:   'GitLab Runner'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'GitLab Runner'
+
+detections:
+  - id: GitlabRunner
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'runner*'
+    set:
+      Tier:     2
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

@@ -1,0 +1,20 @@
+id:        LenovoXclarityAdministrator
+appliesTo: endpoint
+mode:      locked
+purpose:   'Lenovo XClarity Administrator'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'Lenovo XClarity Administrator'
+
+detections:
+  - id: LenovoXclarityAdministrator
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'xclarity_administrator*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

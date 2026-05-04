@@ -1,0 +1,23 @@
+id:        MicrosoftSharepointServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft SharePoint Server 2019'
+category:  'Collaboration'
+description: ''
+displayNames:
+  - 'Microsoft SharePoint Server 2019'
+  - 'Microsoft SharePoint Server 2016'
+  - 'Microsoft SharePoint Server Subscription Edition'
+  - 'Microsoft SharePoint Server'
+
+detections:
+  - id: MicrosoftSharepointServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sharepoint_server*'
+    set:
+      Tier:     2
+      Purpose:  'Collaboration'
+      Category: 'Collaboration'

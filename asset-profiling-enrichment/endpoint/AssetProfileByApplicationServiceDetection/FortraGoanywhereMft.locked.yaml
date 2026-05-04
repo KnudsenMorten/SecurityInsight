@@ -1,0 +1,20 @@
+id:        FortraGoanywhereMft
+appliesTo: endpoint
+mode:      locked
+purpose:   'GoAnywhere MFT'
+category:  'MFT'
+description: ''
+displayNames:
+  - 'GoAnywhere MFT'
+
+detections:
+  - id: FortraGoanywhereMft
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'goanywhere_mft*'
+    set:
+      Tier:     2
+      Purpose:  'MFT'
+      Category: 'MFT'

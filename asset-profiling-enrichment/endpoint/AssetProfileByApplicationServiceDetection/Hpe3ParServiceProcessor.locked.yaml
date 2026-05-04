@@ -1,0 +1,20 @@
+id:        Hpe3ParServiceProcessor
+appliesTo: endpoint
+mode:      locked
+purpose:   'HPE 3PAR Service Processor'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'HPE 3PAR Service Processor'
+
+detections:
+  - id: Hpe3ParServiceProcessor
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - '3par_service_processor*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

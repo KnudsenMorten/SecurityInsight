@@ -1,0 +1,29 @@
+id:        HypervisorHostRunningTier2GuestVMs
+appliesTo: endpoint
+mode:      locked
+purpose:   'Hypervisor Host Running Tier 2 Guest VMs'
+category:  'Hypervisor'
+description: 'Hypervisor below tier 2 guests; compromise affects all hosted workloads.'
+
+detections:
+  - id: HypervisorHostRunningTier2GuestVMs
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vmware_esxi*'
+            - 'microsoft_hyper-v*'
+            - 'kvm*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^esxi.*t2'
+            - '(?i)^hv.*t2'
+            - '(?i)hypervisor.tier.?2'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)hypervisor.tier.?2'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Hypervisor Host Running Tier 2 Guest VMs'
+      Category: 'Hypervisor'

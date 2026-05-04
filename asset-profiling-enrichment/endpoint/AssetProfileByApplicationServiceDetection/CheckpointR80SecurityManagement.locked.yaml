@@ -1,0 +1,20 @@
+id:        CheckpointR80SecurityManagement
+appliesTo: endpoint
+mode:      locked
+purpose:   'Check Point R80 Security Management'
+category:  'Firewall Mgmt'
+description: ''
+displayNames:
+  - 'Check Point R80 Security Management'
+
+detections:
+  - id: CheckpointR80SecurityManagement
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'r80_security_management*'
+    set:
+      Tier:     1
+      Purpose:  'Firewall Mgmt'
+      Category: 'Firewall Mgmt'

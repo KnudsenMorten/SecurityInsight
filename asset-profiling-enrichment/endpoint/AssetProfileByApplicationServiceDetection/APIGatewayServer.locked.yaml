@@ -1,0 +1,35 @@
+id:        APIGatewayServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'API Gateway Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |A|g|g|r|e|g|a|t|e|s|\|\| |i|n|t|e|r|n|a|l|\|\| |A|P|I|s|;|\|\| |c|o|m|p|r|o|m|i|s|e|\|\| |l|e|a|k|s|\|\| |t|o|k|e|n|s|\|\| |u|s|e|d|\|\| |a|c|r|o|s|s|\|\| |s|e|r|v|i|c|e|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |g|o|o|g|l|e|/|a|p|i|g|e|e|_|e|d|g|e|
+
+detections:
+  - id: APIGatewayServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'kong*'
+            - 'apigee*'
+            - 'mulesoft*'
+            - 'tyk*'
+            - 'wso2_api_manager*'
+            - 'apigee_edge*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^apigw\d'
+            - '(?i)^api-gw'
+            - '(?i)api.gateway'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)api.gateway'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'API Gateway Server'
+      Category: 'Server Roles'

@@ -1,0 +1,20 @@
+id:        MicrosoftSystemCenterServiceManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft System Center Service Manager'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'Microsoft System Center Service Manager'
+
+detections:
+  - id: MicrosoftSystemCenterServiceManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center_service_manager*'
+    set:
+      Tier:     1
+      Purpose:  'ITSM'
+      Category: 'ITSM'

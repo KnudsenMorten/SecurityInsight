@@ -1,0 +1,20 @@
+id:        ProofpointSendmail
+appliesTo: endpoint
+mode:      locked
+purpose:   'Sendmail'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Sendmail'
+
+detections:
+  - id: ProofpointSendmail
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sendmail*'
+    set:
+      Tier:     2
+      Purpose:  'Mail'
+      Category: 'Mail'

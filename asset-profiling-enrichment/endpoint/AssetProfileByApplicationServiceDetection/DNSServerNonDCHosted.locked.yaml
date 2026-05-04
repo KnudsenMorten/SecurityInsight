@@ -1,0 +1,30 @@
+id:        DNSServerNonDCHosted
+appliesTo: endpoint
+mode:      locked
+purpose:   'DNS Server (Non-DC Hosted)'
+category:  'Server Roles'
+description: 'Standalone DNS controls name resolution; attacker can MITM auth/services.'
+
+detections:
+  - id: DNSServerNonDCHosted
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_dns_server*'
+            - 'bind*'
+            - 'infoblox_*'
+            - 'powerdns*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^dns\d'
+            - '(?i)^ns\d'
+            - '(?i)dns.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)dns.server'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'DNS Server (Non-DC Hosted)'
+      Category: 'Server Roles'

@@ -1,0 +1,30 @@
+id:        HSMAttachedServerStoringRootCAPrivateKeys
+appliesTo: endpoint
+mode:      locked
+purpose:   'HSM-Attached Server (Storing Root CA Private Keys)'
+category:  'Infrastructure'
+description: 'HSM-attached host holds keys to the kingdom; compromise enables certificate forgery.'
+
+detections:
+  - id: HSMAttachedServerStoringRootCAPrivateKeys
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'thales_luna*'
+            - 'safenet_*'
+            - 'entrust_nshield*'
+            - 'yubihsm*'
+            - 'utimaco*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^hsm\d'
+            - '(?i)hardware.security.module'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)hsm'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'HSM-Attached Server (Storing Root CA Private Keys)'
+      Category: 'Infrastructure'

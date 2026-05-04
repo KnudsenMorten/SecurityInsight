@@ -1,0 +1,21 @@
+id:        ManageengineEndpointCentral
+appliesTo: endpoint
+mode:      locked
+purpose:   'ManageEngine Endpoint Central'
+category:  'Endpoint Mgmt'
+description: ''
+displayNames:
+  - 'ManageEngine Endpoint Central'
+  - 'ManageEngine Desktop Central'
+
+detections:
+  - id: ManageengineEndpointCentral
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'endpoint_central*'
+    set:
+      Tier:     1
+      Purpose:  'Endpoint Mgmt'
+      Category: 'Endpoint Mgmt'

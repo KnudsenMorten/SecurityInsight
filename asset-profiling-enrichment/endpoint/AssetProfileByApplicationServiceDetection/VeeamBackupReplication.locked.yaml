@@ -1,0 +1,23 @@
+id:        VeeamBackupReplication
+appliesTo: endpoint
+mode:      locked
+purpose:   'Veeam Backup & Replication'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Veeam Backup & Replication'
+  - 'Veeam Backup and Replication'
+  - 'Veeam Backup & Replication Server'
+  - 'Veeam Backup & Replication Console'
+
+detections:
+  - id: VeeamBackupReplication
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'backup_&_replication*'
+    set:
+      Tier:     0
+      Purpose:  'Backup server (DC/CA backups -> T0)'
+      Category: 'Backup'

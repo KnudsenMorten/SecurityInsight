@@ -1,0 +1,20 @@
+id:        ZabbixServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Zabbix Server'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Zabbix Server'
+
+detections:
+  - id: ZabbixServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

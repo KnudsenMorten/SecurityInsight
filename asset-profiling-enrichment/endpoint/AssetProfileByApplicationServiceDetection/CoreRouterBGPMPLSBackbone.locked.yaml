@@ -1,0 +1,32 @@
+id:        CoreRouterBGPMPLSBackbone
+appliesTo: endpoint
+mode:      locked
+purpose:   'Core Router (BGP, MPLS Backbone)'
+category:  'Network Equipment'
+description: 'Owns inter-site routing; compromise enables traffic redirection and MITM at backbone scale.'
+
+detections:
+  - id: CoreRouterBGPMPLSBackbone
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_ios*'
+            - 'cisco_nx-os*'
+            - 'juniper_junos*'
+            - 'arista_eos*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^core-rtr'
+            - '(?i)^bgp-rtr'
+            - '(?i)^backbone-rtr'
+            - '(?i)core.router'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)core.router'
+            - '(?i)backbone'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Core Router (BGP, MPLS Backbone)'
+      Category: 'Network Equipment'

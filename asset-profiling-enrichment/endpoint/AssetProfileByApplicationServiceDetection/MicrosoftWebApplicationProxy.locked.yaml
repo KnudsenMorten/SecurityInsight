@@ -1,0 +1,21 @@
+id:        MicrosoftWebApplicationProxy
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Web Application Proxy'
+category:  'Identity'
+description: ''
+displayNames:
+  - 'Microsoft Web Application Proxy'
+  - 'Web Application Proxy'
+
+detections:
+  - id: MicrosoftWebApplicationProxy
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'web_application_proxy*'
+    set:
+      Tier:     1
+      Purpose:  'Identity'
+      Category: 'Identity'

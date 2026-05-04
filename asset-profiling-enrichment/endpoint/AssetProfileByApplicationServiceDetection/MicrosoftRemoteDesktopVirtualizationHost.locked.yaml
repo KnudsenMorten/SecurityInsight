@@ -1,0 +1,20 @@
+id:        MicrosoftRemoteDesktopVirtualizationHost
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Remote Desktop Virtualization Host'
+category:  'Remote Access'
+description: ''
+displayNames:
+  - 'Microsoft Remote Desktop Virtualization Host'
+
+detections:
+  - id: MicrosoftRemoteDesktopVirtualizationHost
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_desktop_virtualization_host*'
+    set:
+      Tier:     2
+      Purpose:  'Remote Access'
+      Category: 'Remote Access'

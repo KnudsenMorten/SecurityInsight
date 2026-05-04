@@ -1,0 +1,21 @@
+id:        MicrosoftIsaServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Internet Security and Acceleration Server'
+category:  'Proxy'
+description: 'EOS - flag for removal'
+displayNames:
+  - 'Microsoft Internet Security and Acceleration Server'
+  - 'ISA Server'
+
+detections:
+  - id: MicrosoftIsaServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'isa_server*'
+    set:
+      Tier:     1
+      Purpose:  'Proxy'
+      Category: 'Proxy'

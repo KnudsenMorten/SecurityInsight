@@ -1,0 +1,20 @@
+id:        Wso2ApiManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'WSO2 API Manager'
+category:  'API Gateway'
+description: ''
+displayNames:
+  - 'WSO2 API Manager'
+
+detections:
+  - id: Wso2ApiManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'api_manager*'
+    set:
+      Tier:     2
+      Purpose:  'API Gateway'
+      Category: 'API Gateway'

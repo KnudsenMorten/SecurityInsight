@@ -1,0 +1,21 @@
+id:        MicrosoftNetworkPolicyServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Network Policy Server'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'Microsoft Network Policy Server'
+  - 'Microsoft NPS'
+
+detections:
+  - id: MicrosoftNetworkPolicyServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'network_policy_server*'
+    set:
+      Tier:     1
+      Purpose:  'RADIUS'
+      Category: 'Authentication'

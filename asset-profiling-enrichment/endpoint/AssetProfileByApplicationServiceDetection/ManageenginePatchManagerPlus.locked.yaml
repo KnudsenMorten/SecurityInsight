@@ -1,0 +1,20 @@
+id:        ManageenginePatchManagerPlus
+appliesTo: endpoint
+mode:      locked
+purpose:   'ManageEngine Patch Manager Plus'
+category:  'Patch Mgmt'
+description: ''
+displayNames:
+  - 'ManageEngine Patch Manager Plus'
+
+detections:
+  - id: ManageenginePatchManagerPlus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'patch_manager_plus*'
+    set:
+      Tier:     1
+      Purpose:  'Patch Mgmt'
+      Category: 'Patch Mgmt'

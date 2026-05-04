@@ -1,0 +1,21 @@
+id:        MicrosoftSqlServerAnalysisServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft SQL Server Analysis Services'
+category:  'Database'
+description: ''
+displayNames:
+  - 'Microsoft SQL Server Analysis Services'
+  - 'SSAS'
+
+detections:
+  - id: MicrosoftSqlServerAnalysisServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sql_server_analysis_services*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

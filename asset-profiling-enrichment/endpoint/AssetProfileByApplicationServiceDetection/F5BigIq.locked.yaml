@@ -1,0 +1,20 @@
+id:        F5BigIq
+appliesTo: endpoint
+mode:      locked
+purpose:   'F5 BIG-IQ'
+category:  'Load Balancer Mgmt'
+description: ''
+displayNames:
+  - 'F5 BIG-IQ'
+
+detections:
+  - id: F5BigIq
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'big-iq*'
+    set:
+      Tier:     1
+      Purpose:  'Load Balancer Mgmt'
+      Category: 'Load Balancer Mgmt'

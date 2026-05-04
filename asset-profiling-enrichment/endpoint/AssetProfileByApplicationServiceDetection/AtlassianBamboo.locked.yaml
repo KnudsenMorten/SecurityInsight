@@ -1,0 +1,20 @@
+id:        AtlassianBamboo
+appliesTo: endpoint
+mode:      locked
+purpose:   'Atlassian Bamboo'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'Atlassian Bamboo'
+
+detections:
+  - id: AtlassianBamboo
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bamboo*'
+    set:
+      Tier:     1
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

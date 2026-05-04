@@ -1,0 +1,20 @@
+id:        SapBusinessobjects
+appliesTo: endpoint
+mode:      locked
+purpose:   'SAP BusinessObjects'
+category:  'BI'
+description: ''
+displayNames:
+  - 'SAP BusinessObjects'
+
+detections:
+  - id: SapBusinessobjects
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'businessobjects*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

@@ -1,0 +1,33 @@
+id:        JumpServerBastionHost
+appliesTo: endpoint
+mode:      locked
+purpose:   'Jump Server / Bastion Host'
+category:  'Management'
+description: 'Concentration point for admin sessions; credential theft target with broad downstream access.'
+
+detections:
+  - id: JumpServerBastionHost
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'guacamole*'
+            - 'teleport*'
+            - 'thycotic_secret_server_session*'
+            - 'cyberark_psm*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^jump\d'
+            - '(?i)^bastion\d'
+            - '(?i)^jmp\d'
+            - '(?i)jump.server'
+            - '(?i)bastion.host'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)jump.server'
+            - '(?i)bastion'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Jump Server / Bastion Host'
+      Category: 'Management'

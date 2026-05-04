@@ -1,0 +1,1552 @@
+{
+    "Metadata": {
+        "GeneratedAt": "2026-04-26T18:23:17Z",
+        "Source": "https://github.com/KnudsenMorten/SecurityInsight#44-asset-classification-endpoint",
+        "Description": "Endpoint asset classification catalog -- attacker-centric tier (0=immediate compromise, 3=low blast radius).",
+        "TierModel": "Attacker-centric (0=immediate compromise via single asset, 3=low blast radius)"
+    },
+    "Endpoint_AssetClasses_Tier0": [
+        {
+            "Name": "Domain Controller (Primary)",
+            "Tier": 0,
+            "Category": "Server Roles",
+            "Reason": "Primary domain controller holds the AD database; full environment compromise if taken.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_server*domain_controller*", "active_directory_domain_services*" ],
+                "EgSignals": [ "isDomainController" ],
+                "NamePatterns": [ "(?i)^dc\\d", "(?i)^pdc\\d", "(?i)domain.controller", "(?i)^addc\\d" ],
+                "MachineTagPatterns": [ "(?i)domain.controller", "(?i)tier.?0", "(?i)^pdc$" ]
+            }
+        },
+        {
+            "Name": "Domain Controller (Additional)",
+            "Tier": 0,
+            "Category": "Server Roles",
+            "Reason": "Additional/secondary domain controller; full environment compromise if taken.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_server*domain_controller*", "active_directory_domain_services*" ],
+                "EgSignals": [ "isDomainController" ],
+                "NamePatterns": [ "(?i)^dc\\d", "(?i)^addc\\d", "(?i)^bdc\\d", "(?i)domain.controller" ],
+                "MachineTagPatterns": [ "(?i)domain.controller", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Read-Only Domain Controller (RODC)",
+            "Tier": 0,
+            "Category": "Server Roles",
+            "Reason": "Cached credentials in branch sites enable credential theft and DC trust abuse.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_server*domain_controller*", "active_directory_domain_services*" ],
+                "EgSignals": [ "isDomainController" ],
+                "NamePatterns": [ "(?i)^rodc\\d", "(?i)read.only.domain.controller" ],
+                "MachineTagPatterns": [ "(?i)rodc", "(?i)read.only.dc", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "AD CS Server (Root Certificate Authority)",
+            "Tier": 0,
+            "Category": "Server Roles",
+            "Reason": "Root CA private key compromise enables forging certificates trusted across the entire forest.",
+            "Detection": {
+                "TvmSoftwareNames": [ "active_directory_certificate_services*", "adcs_*", "certificate_services*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^rootca", "(?i)^ca-root", "(?i)root.certificate.authority", "(?i)^pki-root" ],
+                "MachineTagPatterns": [ "(?i)root.ca", "(?i)adcs.root", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "AD CS Server (Subordinate Certificate Authority)",
+            "Tier": 0,
+            "Category": "Server Roles",
+            "Reason": "Subordinate CA can issue certificates trusted across the domain enabling identity forgery.",
+            "Detection": {
+                "TvmSoftwareNames": [ "active_directory_certificate_services*", "adcs_*", "certificate_services*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^subca", "(?i)^ca-sub", "(?i)issuing.ca", "(?i)^pki-issuing" ],
+                "MachineTagPatterns": [ "(?i)sub.?ca", "(?i)issuing.ca", "(?i)adcs.sub", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Entra Connect / AD Connect Server",
+            "Tier": 0,
+            "Category": "Server Roles",
+            "Reason": "Synchronizes on-prem AD with Entra ID with privileged credentials in both directions.",
+            "Detection": {
+                "TvmSoftwareNames": [ "azure_ad_connect*", "aad_connect*", "entra_connect*", "microsoft_azure_ad_connect*", "microsoft_entra_connect*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^aadc\\d", "(?i)^aadconnect", "(?i)^entraconnect", "(?i)entra.connect", "(?i)ad.connect" ],
+                "MachineTagPatterns": [ "(?i)aad.connect", "(?i)entra.connect", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Federation Server (AD FS Primary)",
+            "Tier": 0,
+            "Category": "Server Roles",
+            "Reason": "Holds token signing key; compromise enables forged SAML/OIDC tokens for the entire tenant.",
+            "Detection": {
+                "TvmSoftwareNames": [ "active_directory_federation_services*", "adfs*", "ad_fs*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^adfs\\d", "(?i)federation.service", "(?i)^fs-primary", "(?i)^sts\\d" ],
+                "MachineTagPatterns": [ "(?i)adfs", "(?i)federation", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Privileged Access Workstation (PAW) for Tier 0 Admins",
+            "Tier": 0,
+            "Category": "Management",
+            "Reason": "Workstation handling tier 0 admin sessions; compromise gives attacker direct DA/EA access.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^paw-?t?0", "(?i)^pawt0", "(?i)paw.tier.?0", "(?i)^paw\\d.*t0" ],
+                "MachineTagPatterns": [ "(?i)paw.tier.?0", "(?i)paw.t0", "(?i)tier.?0.paw", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Backup Server with DC/CA Backup Data",
+            "Tier": 0,
+            "Category": "Management",
+            "Reason": "Backups of DCs/CAs contain ntds.dit and CA private keys enabling full identity-plane compromise.",
+            "Detection": {
+                "TvmSoftwareNames": [ "veeam_backup*", "commvault*", "veritas_netbackup*", "microsoft_data_protection_manager*", "azure_backup*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^backup.*t0", "(?i)backup.tier.?0", "(?i)^bkp.*dc", "(?i)dc.backup" ],
+                "MachineTagPatterns": [ "(?i)backup.tier.?0", "(?i)dc.backup", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Monitoring Server with Domain-Level Agent Credentials",
+            "Tier": 0,
+            "Category": "Management",
+            "Reason": "Agents installed on DCs run with domain admin context; central server compromise pivots into AD.",
+            "Detection": {
+                "TvmSoftwareNames": [ "system_center_operations_manager*", "scom*", "solarwinds_orion*", "nagios*", "zabbix*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^scom\\d", "(?i)^mgmt-mon", "(?i)monitoring.tier.?0" ],
+                "MachineTagPatterns": [ "(?i)monitoring.tier.?0", "(?i)scom.management", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Key Management Services (KMS) Server with Domain-Joined Credential Store",
+            "Tier": 0,
+            "Category": "Management",
+            "Reason": "Activation server holding domain-joined service account credentials usable for lateral movement.",
+            "Detection": {
+                "TvmSoftwareNames": [ "key_management_service*", "windows_kms*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^kms\\d", "(?i)key.management.service" ],
+                "MachineTagPatterns": [ "(?i)kms", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "HSM-Attached Server (Storing Root CA Private Keys)",
+            "Tier": 0,
+            "Category": "Infrastructure",
+            "Reason": "HSM-attached host holds keys to the kingdom; compromise enables certificate forgery.",
+            "Detection": {
+                "TvmSoftwareNames": [ "thales_luna*", "safenet_*", "entrust_nshield*", "yubihsm*", "utimaco*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^hsm\\d", "(?i)hardware.security.module" ],
+                "MachineTagPatterns": [ "(?i)hsm", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "SAN / Storage Controller Backing Tier 0 VMs",
+            "Tier": 0,
+            "Category": "Infrastructure",
+            "Reason": "Storage admin can clone or detach tier 0 VM disks granting full data access offline.",
+            "Detection": {
+                "TvmSoftwareNames": [ "netapp_ontap*", "dell_emc_unity*", "hpe_3par*", "pure_storage*", "ibm_storwize*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^san\\d", "(?i)^storagectl", "(?i)storage.controller" ],
+                "MachineTagPatterns": [ "(?i)san.controller", "(?i)storage.tier.?0", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Hypervisor Host Running Tier 0 Guest VMs (VMware ESXi)",
+            "Tier": 0,
+            "Category": "Hypervisor",
+            "Reason": "Hypervisor below tier 0 guests can access guest memory/disks bypassing OS-level isolation.",
+            "Detection": {
+                "TvmSoftwareNames": [ "vmware_esxi*", "vmware_vsphere*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^esxi.*t0", "(?i)^esx.*tier0", "(?i)hypervisor.tier.?0" ],
+                "MachineTagPatterns": [ "(?i)esxi.tier.?0", "(?i)hypervisor.tier.?0", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Hypervisor Host Running Tier 0 Guest VMs (Hyper-V)",
+            "Tier": 0,
+            "Category": "Hypervisor",
+            "Reason": "Hyper-V host below tier 0 guests can access guest memory/disks bypassing OS isolation.",
+            "Detection": {
+                "TvmSoftwareNames": [ "microsoft_hyper-v*", "hyper-v_server*", "windows_server*hyper-v*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^hv.*t0", "(?i)^hyperv.*tier0", "(?i)hyper.v.host" ],
+                "MachineTagPatterns": [ "(?i)hyperv.tier.?0", "(?i)hypervisor.tier.?0", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Hypervisor Host Running Tier 0 Guest VMs (KVM)",
+            "Tier": 0,
+            "Category": "Hypervisor",
+            "Reason": "KVM host below tier 0 guests can access guest memory/disks bypassing OS isolation.",
+            "Detection": {
+                "TvmSoftwareNames": [ "kvm*", "qemu_kvm*", "libvirt*", "redhat_virtualization*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^kvm.*t0", "(?i)^kvm.*tier0" ],
+                "MachineTagPatterns": [ "(?i)kvm.tier.?0", "(?i)hypervisor.tier.?0", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "vCenter / SCVMM Management Server (Managing Tier 0 Hypervisors)",
+            "Tier": 0,
+            "Category": "Hypervisor",
+            "Reason": "Central hypervisor management plane; one console controls all tier 0 hosts and guests.",
+            "Detection": {
+                "TvmSoftwareNames": [ "vmware_vcenter*", "vcenter_server*", "system_center_virtual_machine_manager*", "scvmm*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^vcenter\\d", "(?i)^vcsa\\d", "(?i)^scvmm\\d", "(?i)vcenter.server" ],
+                "MachineTagPatterns": [ "(?i)vcenter", "(?i)scvmm", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Core Router (BGP, MPLS Backbone)",
+            "Tier": 0,
+            "Category": "Network Equipment",
+            "Reason": "Owns inter-site routing; compromise enables traffic redirection and MITM at backbone scale.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_ios*", "cisco_nx-os*", "juniper_junos*", "arista_eos*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^core-rtr", "(?i)^bgp-rtr", "(?i)^backbone-rtr", "(?i)core.router" ],
+                "MachineTagPatterns": [ "(?i)core.router", "(?i)backbone", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Core Switch (Spanning All VLANs)",
+            "Tier": 0,
+            "Category": "Network Equipment",
+            "Reason": "Spans every VLAN; compromise enables cross-segment traffic capture/redirection.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_nx-os*", "cisco_catalyst*", "arista_eos*", "juniper_junos*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^core-sw", "(?i)^coresw\\d", "(?i)core.switch" ],
+                "MachineTagPatterns": [ "(?i)core.switch", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Firewall Cluster (Perimeter and Internal Segmentation)",
+            "Tier": 0,
+            "Category": "Network Equipment",
+            "Reason": "Controls every trust boundary in the network; rule changes can expose any segment.",
+            "Detection": {
+                "TvmSoftwareNames": [ "palo_alto_pan-os*", "fortinet_fortios*", "checkpoint_gaia*", "cisco_asa*", "cisco_firepower*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^fw\\d", "(?i)^fw-perim", "(?i)^fw-core", "(?i)firewall" ],
+                "MachineTagPatterns": [ "(?i)firewall.tier.?0", "(?i)perimeter.fw", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Out-of-Band Management Network Device (iDRAC, iLO, IPMI)",
+            "Tier": 0,
+            "Category": "Network Equipment",
+            "Reason": "OOB management gives bare-metal control of every host on the management LAN.",
+            "Detection": {
+                "TvmSoftwareNames": [ "dell_idrac*", "hpe_ilo*", "hp_ilo*", "supermicro_ipmi*", "lenovo_xclarity*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^idrac\\d", "(?i)^ilo\\d", "(?i)^ipmi\\d", "(?i)^oob-" ],
+                "MachineTagPatterns": [ "(?i)oob", "(?i)idrac", "(?i)ilo", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Network Management Server (Cisco DNA, SolarWinds with Full Network Write Access)",
+            "Tier": 0,
+            "Category": "Network Equipment",
+            "Reason": "Holds privileged credentials to every managed device; one box configures the whole fabric.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_dna_center*", "solarwinds_orion*", "solarwinds_npm*", "cisco_prime_infrastructure*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dnac\\d", "(?i)^solarwinds", "(?i)cisco.dna", "(?i)^npm-" ],
+                "MachineTagPatterns": [ "(?i)dna.center", "(?i)solarwinds", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "SD-WAN Controller",
+            "Tier": 0,
+            "Category": "Network Equipment",
+            "Reason": "Centrally programs every WAN edge; compromise enables global traffic interception.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_vmanage*", "vmware_velocloud*", "fortinet_fortimanager*", "silver_peak*", "versa_director*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^sdwan\\d", "(?i)^vmanage", "(?i)sd.wan.controller" ],
+                "MachineTagPatterns": [ "(?i)sd.?wan", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Load Balancer (Handling Auth Traffic)",
+            "Tier": 0,
+            "Category": "Network Equipment",
+            "Reason": "Terminates TLS for ADFS/Exchange/IDP traffic; SSL key compromise exposes credentials.",
+            "Detection": {
+                "TvmSoftwareNames": [ "f5_big-ip*", "citrix_adc*", "citrix_netscaler*", "kemp_loadmaster*", "a10_thunder*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^lb-auth", "(?i)^bigip-auth", "(?i)^netscaler.*auth", "(?i)load.balancer.*auth" ],
+                "MachineTagPatterns": [ "(?i)lb.auth", "(?i)load.balancer.tier.?0", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Building Management System (BMS) Controller with Domain Integration",
+            "Tier": 0,
+            "Category": "IoT / OT",
+            "Reason": "Domain-joined OT controller bridges IT/OT trust enabling lateral movement from the OT side.",
+            "Detection": {
+                "TvmSoftwareNames": [ "siemens_desigo*", "honeywell_ebi*", "schneider_ecostruxure*", "johnson_controls_metasys*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^bms\\d", "(?i)building.management" ],
+                "MachineTagPatterns": [ "(?i)bms", "(?i)building.management", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "Physical Security Controller (Badge Access, CCTV Management) with Domain Integration",
+            "Tier": 0,
+            "Category": "IoT / OT",
+            "Reason": "Domain-joined physical security controller can be pivoted into AD or used to disable physical defences.",
+            "Detection": {
+                "TvmSoftwareNames": [ "lenel_onguard*", "genetec_security_center*", "milestone_xprotect*", "honeywell_pro-watch*", "software_house_ccure*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^badge\\d", "(?i)^cctv\\d", "(?i)^accesscontrol", "(?i)physical.security" ],
+                "MachineTagPatterns": [ "(?i)badge.access", "(?i)cctv.management", "(?i)tier.?0" ]
+            }
+        },
+        {
+            "Name": "OT / ICS Controller with Direct Network Adjacency to Tier 0 Systems",
+            "Tier": 0,
+            "Category": "IoT / OT",
+            "Reason": "OT controller on the same broadcast domain as tier 0 assets enables L2 attacks against them.",
+            "Detection": {
+                "TvmSoftwareNames": [ "siemens_simatic*", "rockwell_factorytalk*", "schneider_modicon*", "ge_proficy*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^ot-", "(?i)^ics-", "(?i)^plc\\d", "(?i)^scada\\d" ],
+                "MachineTagPatterns": [ "(?i)ot.tier.?0", "(?i)ics.tier.?0", "(?i)tier.?0" ]
+            }
+        }
+    ],
+    "Endpoint_AssetClasses_Tier1": [
+        {
+            "Name": "Exchange Server",
+            "Tier": 1,
+            "Category": "Server Roles",
+            "Reason": "Mail flow + extensive AD privileges historically; well-known escalation paths to DA.",
+            "Detection": {
+                "TvmSoftwareNames": [ "microsoft_exchange_server*", "exchange_server*" ],
+                "EgSignals": [ "isExchangeServerDnsName", "isTaggedAsExchangeServer" ],
+                "NamePatterns": [ "(?i)^exch\\d", "(?i)^mbx\\d", "(?i)^cas\\d", "(?i)exchange" ],
+                "MachineTagPatterns": [ "(?i)exchange", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "MFA / RADIUS Server",
+            "Tier": 1,
+            "Category": "Server Roles",
+            "Reason": "Authentication broker; compromise can bypass second factor for privileged users.",
+            "Detection": {
+                "TvmSoftwareNames": [ "network_policy_server*", "freeradius*", "cisco_ise*", "rsa_authentication_manager*", "duo_authentication*", "microsoft_nps*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^nps\\d", "(?i)^radius\\d", "(?i)^mfa\\d", "(?i)^duo-" ],
+                "MachineTagPatterns": [ "(?i)radius", "(?i)mfa.server", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "PKI Subordinate CA Server",
+            "Tier": 1,
+            "Category": "Server Roles",
+            "Reason": "Subordinate CA can issue trusted certificates; one pivot from issuing identity-bearing certs.",
+            "Detection": {
+                "TvmSoftwareNames": [ "active_directory_certificate_services*", "adcs_*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^subca\\d", "(?i)^pki-issuing", "(?i)issuing.ca" ],
+                "MachineTagPatterns": [ "(?i)issuing.ca", "(?i)sub.?ca", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "DNS Server (Non-DC Hosted)",
+            "Tier": 1,
+            "Category": "Server Roles",
+            "Reason": "Standalone DNS controls name resolution; attacker can MITM auth/services.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_dns_server*", "bind*", "infoblox_*", "powerdns*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dns\\d", "(?i)^ns\\d", "(?i)dns.server" ],
+                "MachineTagPatterns": [ "(?i)dns.server", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "AD FS Proxy Server",
+            "Tier": 1,
+            "Category": "Server Roles",
+            "Reason": "Internet-exposed AD FS proxy; pivot into the federation token-signing chain.",
+            "Detection": {
+                "TvmSoftwareNames": [ "web_application_proxy*", "active_directory_federation_services_proxy*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^adfsproxy", "(?i)^wap\\d", "(?i)^fsproxy", "(?i)adfs.proxy" ],
+                "MachineTagPatterns": [ "(?i)adfs.proxy", "(?i)wap", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Privileged Access Workstation (PAW) for Tier 1 Admins",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "PAW handling tier 1 server admin sessions; compromise gives attacker server-tier access.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^paw-?t?1", "(?i)^pawt1", "(?i)paw.tier.?1" ],
+                "MachineTagPatterns": [ "(?i)paw.tier.?1", "(?i)paw.t1", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Jump Server / Bastion Host",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "Concentration point for admin sessions; credential theft target with broad downstream access.",
+            "Detection": {
+                "TvmSoftwareNames": [ "guacamole*", "teleport*", "thycotic_secret_server_session*", "cyberark_psm*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^jump\\d", "(?i)^bastion\\d", "(?i)^jmp\\d", "(?i)jump.server", "(?i)bastion.host" ],
+                "MachineTagPatterns": [ "(?i)jump.server", "(?i)bastion", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "SIEM Server",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "Holds collection credentials and forwarder secrets across the estate.",
+            "Detection": {
+                "TvmSoftwareNames": [ "splunk_enterprise*", "ibm_qradar*", "logrhythm*", "arcsight*", "elastic_security*", "microsoft_sentinel*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^siem\\d", "(?i)^splunk\\d", "(?i)^qradar\\d", "(?i)^sentinel\\d" ],
+                "MachineTagPatterns": [ "(?i)siem", "(?i)splunk", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Endpoint Detection and Response (EDR) Management Server",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "EDR console can push code to every managed endpoint; compromise enables fleet-wide RCE.",
+            "Detection": {
+                "TvmSoftwareNames": [ "crowdstrike_falcon*", "sentinelone*", "carbon_black*", "trellix_edr*", "cybereason*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^edr-mgmt", "(?i)^crowdstrike-mgr", "(?i)edr.console" ],
+                "MachineTagPatterns": [ "(?i)edr.management", "(?i)edr.console", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "SCCM / MECM Primary Site Server",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "Configuration manager push installs as SYSTEM on every managed device.",
+            "Detection": {
+                "TvmSoftwareNames": [ "system_center_configuration_manager*", "microsoft_endpoint_configuration_manager*", "sccm_*", "mecm*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^sccm\\d", "(?i)^mecm\\d", "(?i)^cmsite", "(?i)config.manager" ],
+                "MachineTagPatterns": [ "(?i)sccm", "(?i)mecm", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Privileged Identity Management (PIM) Approval Workflow Server",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "Mediates JIT activation of privileged roles; compromise enables stealth role assignments.",
+            "Detection": {
+                "TvmSoftwareNames": [ "microsoft_identity_manager*", "saviynt*", "sailpoint_identityiq*", "oracle_identity_manager*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^pim\\d", "(?i)^mim\\d", "(?i)pim.approval" ],
+                "MachineTagPatterns": [ "(?i)pim", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Secret Management Server (HashiCorp Vault, Azure Key Vault Private Endpoint)",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "Centralised secret store; compromise leaks every consumer's credential at once.",
+            "Detection": {
+                "TvmSoftwareNames": [ "hashicorp_vault*", "cyberark_*", "thycotic_secret_server*", "delinea_secret_server*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^vault\\d", "(?i)^secret\\d", "(?i)hashicorp.vault", "(?i)cyberark" ],
+                "MachineTagPatterns": [ "(?i)vault", "(?i)secret.server", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Password Manager with Admin Credential Stores",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "Vaults of admin passwords; compromise yields a credential firehose.",
+            "Detection": {
+                "TvmSoftwareNames": [ "passwordstate*", "keepass*", "lastpass*", "1password*", "bitwarden*", "thycotic*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^pwdmgr", "(?i)^pass-srv", "(?i)password.manager" ],
+                "MachineTagPatterns": [ "(?i)password.manager", "(?i)pwdmgr", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Patch Management Server (WSUS)",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "WSUS pushes signed updates to every Windows host; compromise enables fleet-wide payload delivery.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_server_update_services*", "wsus_*", "ivanti_patch*", "manageengine_patch_manager*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^wsus\\d", "(?i)^patch\\d", "(?i)patch.manager" ],
+                "MachineTagPatterns": [ "(?i)wsus", "(?i)patch.management", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Admin Workstation Used by Tier 1 Staff Without PAW Controls",
+            "Tier": 1,
+            "Category": "Management",
+            "Reason": "Mixed-use workstation handling tier 1 admin tasks without PAW hardening; high credential exposure.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^admin-wks", "(?i)^adm-ws\\d", "(?i)^t1-admin" ],
+                "MachineTagPatterns": [ "(?i)admin.workstation", "(?i)t1.admin", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Network Access Control (NAC) Server",
+            "Tier": 1,
+            "Category": "Infrastructure",
+            "Reason": "Decides who joins the network at L2; bypass enables unauthorized device admission.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_ise*", "aruba_clearpass*", "forescout_*", "fortinac*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^nac\\d", "(?i)^ise\\d", "(?i)^clearpass", "(?i)network.access.control" ],
+                "MachineTagPatterns": [ "(?i)nac", "(?i)cisco.ise", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "VPN Concentrator / Remote Access Server",
+            "Tier": 1,
+            "Category": "Infrastructure",
+            "Reason": "Internet-edge auth point; compromise opens trusted tunnels into the internal network.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_anyconnect*", "palo_alto_globalprotect*", "fortinet_fortigate_ssl_vpn*", "pulse_secure*", "ivanti_connect_secure*", "openvpn*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^vpn\\d", "(?i)^ras\\d", "(?i)^anyconnect", "(?i)remote.access" ],
+                "MachineTagPatterns": [ "(?i)vpn", "(?i)remote.access", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Azure Arc-Connected Server with High-Privilege Managed Identity",
+            "Tier": 1,
+            "Category": "Infrastructure",
+            "Reason": "Cloud-attached host with Azure RBAC; compromise pivots from on-prem to cloud privileges.",
+            "Detection": {
+                "TvmSoftwareNames": [ "azure_arc*", "azure_connected_machine_agent*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^arc\\d", "(?i)^arc-server" ],
+                "MachineTagPatterns": [ "(?i)azure.arc", "(?i)arc.connected", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Privileged Developer Machine with Production Secrets or Pipeline Credentials",
+            "Tier": 1,
+            "Category": "Infrastructure",
+            "Reason": "Holds CI/CD secrets and prod-deploy tokens; pivot into supply-chain compromise.",
+            "Detection": {
+                "TvmSoftwareNames": [ "azure_devops*", "jenkins*", "github_actions*", "gitlab_runner*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dev-priv", "(?i)^build-admin", "(?i)^pipeline-dev" ],
+                "MachineTagPatterns": [ "(?i)privileged.dev", "(?i)pipeline.creds", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Hypervisor Host Running Tier 1 Guest VMs",
+            "Tier": 1,
+            "Category": "Hypervisor",
+            "Reason": "Hypervisor below tier 1 guests can access guest memory/disks bypassing OS isolation.",
+            "Detection": {
+                "TvmSoftwareNames": [ "vmware_esxi*", "microsoft_hyper-v*", "kvm*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^esxi.*t1", "(?i)^hv.*t1", "(?i)hypervisor.tier.?1" ],
+                "MachineTagPatterns": [ "(?i)hypervisor.tier.?1", "(?i)esxi.tier.?1", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "vCenter / SCVMM Management Server (Managing Tier 1 Hypervisors)",
+            "Tier": 1,
+            "Category": "Hypervisor",
+            "Reason": "Centralised management of tier 1 hypervisors; one console, many hosts.",
+            "Detection": {
+                "TvmSoftwareNames": [ "vmware_vcenter*", "system_center_virtual_machine_manager*", "scvmm*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^vcenter.*t1", "(?i)^scvmm.*t1" ],
+                "MachineTagPatterns": [ "(?i)vcenter.tier.?1", "(?i)scvmm.tier.?1", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Distribution Switch",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Aggregates many access switches; compromise affects multiple user/server segments.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_ios*", "cisco_catalyst*", "arista_eos*", "juniper_junos*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dist-sw", "(?i)^distsw\\d", "(?i)distribution.switch" ],
+                "MachineTagPatterns": [ "(?i)distribution.switch", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Wireless LAN Controller (WLC)",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Owns RADIUS-fronted WLAN auth and AP config; compromise enables rogue WLAN admission.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_wireless_lan_controller*", "aruba_mobility_controller*", "ruckus_smartzone*", "extreme_wireless*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^wlc\\d", "(?i)wireless.controller", "(?i)wlan.controller" ],
+                "MachineTagPatterns": [ "(?i)wlc", "(?i)wlan.controller", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Proxy Server (SSL Inspection — Credential Visibility)",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "TLS-terminating proxy sees plaintext credentials in every outbound HTTPS session.",
+            "Detection": {
+                "TvmSoftwareNames": [ "bluecoat_proxysg*", "symantec_proxy*", "zscaler_*", "mcafee_web_gateway*", "forcepoint_web_security*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^proxy\\d", "(?i)^proxysg", "(?i)^webgw", "(?i)ssl.proxy" ],
+                "MachineTagPatterns": [ "(?i)ssl.inspection", "(?i)web.proxy", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "RADIUS / TACACS+ Network Authentication Server",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Authenticates network device admin sessions; compromise yields network device access.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_acs*", "cisco_ise*", "freeradius*", "tacacs+*", "tac_plus*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^tacacs\\d", "(?i)^acs\\d", "(?i)tacacs\\+?", "(?i)network.aaa" ],
+                "MachineTagPatterns": [ "(?i)tacacs", "(?i)network.aaa", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Network Packet Broker / TAP Aggregator",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Sees and routes copies of all monitored traffic; one device equals tap on the whole network.",
+            "Detection": {
+                "TvmSoftwareNames": [ "gigamon*", "ixia_visibility*", "garland_packet_broker*", "apcon*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^tap\\d", "(?i)^npb\\d", "(?i)packet.broker" ],
+                "MachineTagPatterns": [ "(?i)packet.broker", "(?i)tap.aggregator", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Remote Access Concentrator (Citrix ADC, F5 BIG-IP)",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Edge ADC handles auth and SSL termination for remote admin and apps; high-value target.",
+            "Detection": {
+                "TvmSoftwareNames": [ "citrix_adc*", "citrix_netscaler*", "f5_big-ip*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^netscaler", "(?i)^bigip", "(?i)^adc\\d", "(?i)citrix.adc" ],
+                "MachineTagPatterns": [ "(?i)netscaler", "(?i)big.?ip", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "DNS Resolver (Internal Recursive)",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Forced resolution path for the LAN; cache poisoning enables MITM at scale.",
+            "Detection": {
+                "TvmSoftwareNames": [ "bind*", "windows_dns_server*", "infoblox_*", "powerdns_recursor*", "unbound*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^resolver\\d", "(?i)^recurse\\d", "(?i)^rdns\\d" ],
+                "MachineTagPatterns": [ "(?i)dns.resolver", "(?i)recursive.dns", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "DHCP Server (Domain-Integrated)",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Domain-joined DHCP can register DDNS records; combined with DNS attacks enables impersonation.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_dhcp_server*", "isc_dhcp*", "infoblox_dhcp*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dhcp\\d", "(?i)dhcp.server" ],
+                "MachineTagPatterns": [ "(?i)dhcp.server", "(?i)domain.joined.dhcp", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Network Time Protocol (NTP) Primary Server",
+            "Tier": 1,
+            "Category": "Network Equipment",
+            "Reason": "Time skew breaks Kerberos; primary NTP compromise enables wide-spread auth disruption or replay.",
+            "Detection": {
+                "TvmSoftwareNames": [ "ntp_*", "chrony*", "windows_time_service*", "meinberg*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^ntp\\d", "(?i)^time-pri", "(?i)ntp.primary" ],
+                "MachineTagPatterns": [ "(?i)ntp.primary", "(?i)time.server", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "SCADA / ICS Server (Non-Tier 0 Adjacent)",
+            "Tier": 1,
+            "Category": "IoT / OT",
+            "Reason": "Supervises industrial processes; compromise has safety/operational impact even if not adjacent to tier 0.",
+            "Detection": {
+                "TvmSoftwareNames": [ "wonderware*", "ge_ifix*", "siemens_wincc*", "rockwell_factorytalk*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^scada\\d", "(?i)^ics-srv", "(?i)scada.server" ],
+                "MachineTagPatterns": [ "(?i)scada", "(?i)ics.server", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Industrial IoT Gateway with Network Bridging",
+            "Tier": 1,
+            "Category": "IoT / OT",
+            "Reason": "Bridges OT and IT networks; compromise creates a path between segmentation zones.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_iot_gateway*", "moxa*", "hms_ewon*", "advantech_iot*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^iot-gw", "(?i)^otgw\\d", "(?i)iot.gateway" ],
+                "MachineTagPatterns": [ "(?i)iot.gateway", "(?i)ot.bridge", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "UPS Management Controller (Power Disruption Potential)",
+            "Tier": 1,
+            "Category": "IoT / OT",
+            "Reason": "Compromise enables timed power loss to data center equipment.",
+            "Detection": {
+                "TvmSoftwareNames": [ "apc_powerchute*", "eaton_intelligent_power_manager*", "vertiv_*", "schneider_powerchute*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^ups\\d", "(?i)^ups-mgmt", "(?i)ups.controller" ],
+                "MachineTagPatterns": [ "(?i)ups", "(?i)power.management", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "HVAC Controller (Data Center Environment Impact)",
+            "Tier": 1,
+            "Category": "IoT / OT",
+            "Reason": "Compromise can overheat the data center triggering thermal shutdowns.",
+            "Detection": {
+                "TvmSoftwareNames": [ "siemens_apogee*", "honeywell_excel*", "johnson_controls_metasys*", "trane_tracer*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^hvac\\d", "(?i)^cooling\\d", "(?i)hvac.controller" ],
+                "MachineTagPatterns": [ "(?i)hvac", "(?i)cooling", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Building Automation System (BAS) Server",
+            "Tier": 1,
+            "Category": "IoT / OT",
+            "Reason": "Operates lighting/access/HVAC; broad facility impact if compromised.",
+            "Detection": {
+                "TvmSoftwareNames": [ "tridium_niagara*", "siemens_desigo_cc*", "honeywell_ebi*", "schneider_ecostruxure*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^bas\\d", "(?i)building.automation" ],
+                "MachineTagPatterns": [ "(?i)bas", "(?i)building.automation", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Medical Device Management Server",
+            "Tier": 1,
+            "Category": "IoT / OT",
+            "Reason": "Manages patient-affecting medical devices; safety-critical systems with regulatory exposure.",
+            "Detection": {
+                "TvmSoftwareNames": [ "philips_intellispace*", "ge_centricity*", "siemens_syngo*", "medtronic_*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^med\\d", "(?i)^pacs\\d", "(?i)medical.device" ],
+                "MachineTagPatterns": [ "(?i)medical.device", "(?i)pacs", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Surveillance / CCTV Management Server (Non-Domain Integrated)",
+            "Tier": 1,
+            "Category": "IoT / OT",
+            "Reason": "Camera management with footage and physical security visibility; useful for recon/attack staging.",
+            "Detection": {
+                "TvmSoftwareNames": [ "milestone_xprotect*", "genetec_security_center*", "axis_camera_station*", "avigilon*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^cctv-mgmt", "(?i)^vms\\d", "(?i)video.management" ],
+                "MachineTagPatterns": [ "(?i)cctv.management", "(?i)video.management", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "IT Staff Personal Workstation (Helpdesk, Sysadmin, Network Engineer)",
+            "Tier": 1,
+            "Category": "Client Devices",
+            "Reason": "Cached credentials, admin tools, RDP session history; compromise yields broad lateral movement.",
+            "Detection": {
+                "TvmSoftwareNames": [ "remote_server_administration_tools*", "rsat*", "putty*", "winscp*", "mremoteng*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^it-wks", "(?i)^helpdesk", "(?i)^sysadmin", "(?i)^netadmin" ],
+                "MachineTagPatterns": [ "(?i)it.staff", "(?i)helpdesk", "(?i)sysadmin", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "IT Management Laptop (Used for Remote Administration Without PAW)",
+            "Tier": 1,
+            "Category": "Client Devices",
+            "Reason": "Mobile admin platform without PAW protections; high credential exposure off-network.",
+            "Detection": {
+                "TvmSoftwareNames": [ "remote_server_administration_tools*", "rsat*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^itadmin-lt", "(?i)^itmgr-lt", "(?i)^admin-laptop" ],
+                "MachineTagPatterns": [ "(?i)admin.laptop", "(?i)it.management", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Security Operations Workstation (SOC Analyst)",
+            "Tier": 1,
+            "Category": "Client Devices",
+            "Reason": "SIEM/EDR console access from analyst workstation; pivot into security tooling.",
+            "Detection": {
+                "TvmSoftwareNames": [ "splunk_enterprise*", "crowdstrike_falcon*", "microsoft_sentinel*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^soc-wks", "(?i)^analyst-wks", "(?i)^secops" ],
+                "MachineTagPatterns": [ "(?i)soc.analyst", "(?i)secops", "(?i)tier.?1" ]
+            }
+        },
+        {
+            "Name": "Senior IT Personal Workstation (IT Manager, Architect)",
+            "Tier": 1,
+            "Category": "Client Devices",
+            "Reason": "Broad cross-domain access scope and approval rights; spear-phishing target.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^itmgr-wks", "(?i)^architect-wks", "(?i)^itlead" ],
+                "MachineTagPatterns": [ "(?i)it.manager", "(?i)architect", "(?i)tier.?1" ]
+            }
+        }
+    ],
+    "Endpoint_AssetClasses_Tier2": [
+        {
+            "Name": "File Server",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Holds business data and shares; data exfiltration/ransomware target with workload-level impact.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_file_server*", "samba*", "netapp_ontap*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^fs\\d", "(?i)^file\\d", "(?i)file.server" ],
+                "MachineTagPatterns": [ "(?i)file.server", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "SharePoint Server",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Collaboration platform with sensitive content; exploitable for data theft and webshell deployment.",
+            "Detection": {
+                "TvmSoftwareNames": [ "microsoft_sharepoint_server*", "sharepoint_server*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^sp\\d", "(?i)^sharepoint\\d", "(?i)sharepoint.server" ],
+                "MachineTagPatterns": [ "(?i)sharepoint", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "SQL Server Hosting Sensitive Databases",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Sensitive data store; compromise enables PII/financial-data theft.",
+            "Detection": {
+                "TvmSoftwareNames": [ "microsoft_sql_server*", "sql_server*", "oracle_database*", "mysql*", "postgresql*", "mariadb*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^sql\\d", "(?i)^db\\d", "(?i)^mssql\\d", "(?i)database.server" ],
+                "MachineTagPatterns": [ "(?i)sql.server", "(?i)database", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Citrix / RDS Session Host",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Multi-user shared sessions; one compromised host yields multiple users' tokens/credentials.",
+            "Detection": {
+                "TvmSoftwareNames": [ "citrix_virtual_apps_and_desktops*", "citrix_xenapp*", "citrix_xendesktop*", "remote_desktop_services*", "windows_terminal_services*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^rds\\d", "(?i)^citrix\\d", "(?i)^xenapp\\d", "(?i)session.host" ],
+                "MachineTagPatterns": [ "(?i)rds", "(?i)citrix.session", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Web Application Server with Entra Integrated Auth",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Entra-integrated app surface; SSRF/token theft can pivot to identity scope.",
+            "Detection": {
+                "TvmSoftwareNames": [ "microsoft_iis*", "apache_http_server*", "nginx*", "tomcat*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^web\\d", "(?i)^app\\d", "(?i)^webapp\\d", "(?i)web.server" ],
+                "MachineTagPatterns": [ "(?i)webapp", "(?i)entra.auth", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "API Gateway Server",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Aggregates internal APIs; compromise leaks tokens used across services.",
+            "Detection": {
+                "TvmSoftwareNames": [ "kong*", "apigee*", "mulesoft*", "tyk*", "wso2_api_manager*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^apigw\\d", "(?i)^api-gw", "(?i)api.gateway" ],
+                "MachineTagPatterns": [ "(?i)api.gateway", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Collaboration Server (Teams On-Prem, Skype for Business)",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Enterprise comms platform with credential and message visibility.",
+            "Detection": {
+                "TvmSoftwareNames": [ "microsoft_skype_for_business*", "skype_for_business*", "microsoft_teams*", "lync_server*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^sfb\\d", "(?i)^lync\\d", "(?i)^teams-srv", "(?i)skype.for.business" ],
+                "MachineTagPatterns": [ "(?i)skype.business", "(?i)teams.server", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "HR and Identity Lifecycle Management Server",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Authoritative source for joiners/movers/leavers; compromise enables persistence via fake hires.",
+            "Detection": {
+                "TvmSoftwareNames": [ "sap_successfactors*", "workday*", "oracle_hcm*", "microsoft_identity_manager*", "sailpoint_iiq*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^hr\\d", "(?i)^idm\\d", "(?i)^hris\\d", "(?i)identity.lifecycle" ],
+                "MachineTagPatterns": [ "(?i)hr.system", "(?i)idm", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Internal Certificate Registration Authority (RA) Server",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "Approves certificate requests; compromise enables issuance of low-tier identity certs.",
+            "Detection": {
+                "TvmSoftwareNames": [ "active_directory_certificate_services*", "ndes*", "scep*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^ra\\d", "(?i)^ndes\\d", "(?i)^scep\\d", "(?i)registration.authority" ],
+                "MachineTagPatterns": [ "(?i)cert.ra", "(?i)ndes", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "IT Service Management Server (ServiceNow, Jira)",
+            "Tier": 2,
+            "Category": "Server Roles",
+            "Reason": "ITSM holds change/approval data and integration credentials to many systems.",
+            "Detection": {
+                "TvmSoftwareNames": [ "servicenow*", "atlassian_jira*", "bmc_remedy*", "ivanti_service_manager*", "manageengine_servicedesk*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^itsm\\d", "(?i)^snow\\d", "(?i)^jira\\d", "(?i)service.desk" ],
+                "MachineTagPatterns": [ "(?i)itsm", "(?i)servicenow", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Log Aggregation Server",
+            "Tier": 2,
+            "Category": "Management",
+            "Reason": "Holds collected logs and forwarder credentials; data integrity target.",
+            "Detection": {
+                "TvmSoftwareNames": [ "logstash*", "fluentd*", "graylog*", "rsyslog*", "syslog-ng*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^log\\d", "(?i)^syslog\\d", "(?i)^logagg" ],
+                "MachineTagPatterns": [ "(?i)log.aggregation", "(?i)syslog", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "DevOps / CI-CD Build Agent",
+            "Tier": 2,
+            "Category": "Management",
+            "Reason": "Builds and deploys code; supply-chain risk with scoped credentials.",
+            "Detection": {
+                "TvmSoftwareNames": [ "jenkins*", "gitlab_runner*", "azure_devops_agent*", "github_actions_runner*", "teamcity*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^build\\d", "(?i)^agent\\d", "(?i)^jenkins-agent", "(?i)^gh-runner" ],
+                "MachineTagPatterns": [ "(?i)build.agent", "(?i)ci.cd", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Container Orchestration Node (Kubernetes Worker)",
+            "Tier": 2,
+            "Category": "Management",
+            "Reason": "Runs application workloads; container escape gives node-level access.",
+            "Detection": {
+                "TvmSoftwareNames": [ "kubernetes*", "kubelet*", "containerd*", "docker*", "openshift*", "rancher*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^k8s-worker", "(?i)^aks-node", "(?i)^worker\\d", "(?i)^kube-node" ],
+                "MachineTagPatterns": [ "(?i)k8s.worker", "(?i)kubernetes.node", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Hypervisor Host Running Tier 2 Guest VMs",
+            "Tier": 2,
+            "Category": "Hypervisor",
+            "Reason": "Hypervisor below tier 2 guests; compromise affects all hosted workloads.",
+            "Detection": {
+                "TvmSoftwareNames": [ "vmware_esxi*", "microsoft_hyper-v*", "kvm*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^esxi.*t2", "(?i)^hv.*t2", "(?i)hypervisor.tier.?2" ],
+                "MachineTagPatterns": [ "(?i)hypervisor.tier.?2", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Access Layer Switch (User-Facing VLAN)",
+            "Tier": 2,
+            "Category": "Network Equipment",
+            "Reason": "Edge switch on user VLAN; L2 attacks limited to its broadcast domain.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_ios*", "cisco_catalyst*", "hp_procurve*", "aruba_cx*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^acc-sw", "(?i)^accsw\\d", "(?i)access.switch" ],
+                "MachineTagPatterns": [ "(?i)access.switch", "(?i)user.vlan", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Wireless Access Point (Managed)",
+            "Tier": 2,
+            "Category": "Network Equipment",
+            "Reason": "Managed AP exposes wireless edge; compromise limited to local RF coverage.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_aironet*", "aruba_ap*", "ruckus_ap*", "meraki_mr*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^ap\\d", "(?i)^wap\\d", "(?i)wireless.ap", "(?i)access.point" ],
+                "MachineTagPatterns": [ "(?i)access.point", "(?i)wireless.ap", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Network Monitoring Appliance (Read-Only)",
+            "Tier": 2,
+            "Category": "Network Equipment",
+            "Reason": "Read-only network telemetry consumer; recon value but limited write impact.",
+            "Detection": {
+                "TvmSoftwareNames": [ "solarwinds_npm*", "prtg*", "whatsup_gold*", "manageengine_opmanager*", "darktrace*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^netmon\\d", "(?i)^prtg\\d", "(?i)network.monitor" ],
+                "MachineTagPatterns": [ "(?i)network.monitoring", "(?i)read.only.monitor", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Standalone DHCP Server (Non-Domain Integrated)",
+            "Tier": 2,
+            "Category": "Network Equipment",
+            "Reason": "Non-domain DHCP; address allocation impact, no AD pivot.",
+            "Detection": {
+                "TvmSoftwareNames": [ "isc_dhcp*", "kea_dhcp*", "infoblox_dhcp*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dhcp-sa", "(?i)^standalone.?dhcp" ],
+                "MachineTagPatterns": [ "(?i)standalone.dhcp", "(?i)non.domain.dhcp", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Content Filtering / Web Proxy Appliance",
+            "Tier": 2,
+            "Category": "Network Equipment",
+            "Reason": "Outbound URL filter without TLS inspection; bypassable but useful for egress control.",
+            "Detection": {
+                "TvmSoftwareNames": [ "websense*", "forcepoint*", "barracuda_web_filter*", "smoothwall*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^webfilter\\d", "(?i)^contentfilter", "(?i)web.proxy" ],
+                "MachineTagPatterns": [ "(?i)content.filter", "(?i)web.filter", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "VoIP / SIP Gateway",
+            "Tier": 2,
+            "Category": "Network Equipment",
+            "Reason": "PSTN-bridging telephony gateway; toll fraud and call interception risk.",
+            "Detection": {
+                "TvmSoftwareNames": [ "cisco_unified_communications*", "cisco_cucm*", "asterisk*", "freepbx*", "avaya_aura*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^voip\\d", "(?i)^sipgw\\d", "(?i)^cucm\\d", "(?i)voice.gateway" ],
+                "MachineTagPatterns": [ "(?i)voip", "(?i)sip.gateway", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Smart Meeting Room Device (Display, Conferencing System)",
+            "Tier": 2,
+            "Category": "IoT / OT",
+            "Reason": "Networked AV with calendar/account creds; eavesdropping potential, limited lateral movement.",
+            "Detection": {
+                "TvmSoftwareNames": [ "polycom*", "logitech_rally*", "cisco_webex_room*", "microsoft_teams_room*", "zoom_room*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^mtr\\d", "(?i)^room-", "(?i)teams.room", "(?i)conf.room" ],
+                "MachineTagPatterns": [ "(?i)meeting.room", "(?i)conferencing", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Environmental Sensor (Temperature, Humidity in Data Center)",
+            "Tier": 2,
+            "Category": "IoT / OT",
+            "Reason": "Telemetry-only sensor; data integrity attack can mask conditions but no direct compromise path.",
+            "Detection": {
+                "TvmSoftwareNames": [ "apc_netbotz*", "raritan_dominion*", "geist_*", "sensaphone*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^env\\d", "(?i)^temp\\d", "(?i)environmental.sensor" ],
+                "MachineTagPatterns": [ "(?i)environmental", "(?i)dc.sensor", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Badge Reader (Non-Domain Integrated, Isolated)",
+            "Tier": 2,
+            "Category": "IoT / OT",
+            "Reason": "Standalone access reader; bypass affects single door, no IT plane access.",
+            "Detection": {
+                "TvmSoftwareNames": [ "hid_*", "lenel_onguard*", "honeywell_winpak*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^badge-rd", "(?i)^reader\\d", "(?i)badge.reader" ],
+                "MachineTagPatterns": [ "(?i)badge.reader", "(?i)isolated.access", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Laboratory Equipment with Network Interface",
+            "Tier": 2,
+            "Category": "IoT / OT",
+            "Reason": "Specialized lab gear with embedded OS; data tampering risk, limited pivot value.",
+            "Detection": {
+                "TvmSoftwareNames": [ "labview*", "agilent_*", "thermo_fisher_*", "shimadzu_*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^lab\\d", "(?i)^lab-eq", "(?i)laboratory" ],
+                "MachineTagPatterns": [ "(?i)lab.equipment", "(?i)laboratory", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "IP Camera (Isolated VLAN, No Domain Integration)",
+            "Tier": 2,
+            "Category": "IoT / OT",
+            "Reason": "Isolated camera; espionage potential but limited pivot.",
+            "Detection": {
+                "TvmSoftwareNames": [ "axis_camera*", "hikvision*", "dahua*", "bosch_ip_camera*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^cam\\d", "(?i)^ipcam\\d", "(?i)ip.camera" ],
+                "MachineTagPatterns": [ "(?i)ip.camera", "(?i)cctv.isolated", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Industrial Sensor (Read-Only, No Control Plane Access)",
+            "Tier": 2,
+            "Category": "IoT / OT",
+            "Reason": "Read-only telemetry; spoofed readings risk but no control output.",
+            "Detection": {
+                "TvmSoftwareNames": [ "modbus*", "opc_ua*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^isensor\\d", "(?i)^plc-ro", "(?i)industrial.sensor" ],
+                "MachineTagPatterns": [ "(?i)industrial.sensor", "(?i)read.only.ot", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Retail / POS Terminal (Isolated Network Segment)",
+            "Tier": 2,
+            "Category": "IoT / OT",
+            "Reason": "Payment terminal in isolated segment; compliance-relevant but contained.",
+            "Detection": {
+                "TvmSoftwareNames": [ "ncr_pos*", "verifone*", "ingenico*", "micros_*", "oracle_retail_xstore*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^pos\\d", "(?i)^till\\d", "(?i)^register\\d" ],
+                "MachineTagPatterns": [ "(?i)pos.terminal", "(?i)retail", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Production Workstation",
+            "Tier": 2,
+            "Category": "Client Devices",
+            "Reason": "Standard production workstation with business data and credentials; ransomware/data theft target.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^prod-wks", "(?i)^pw\\d", "(?i)production.workstation" ],
+                "MachineTagPatterns": [ "(?i)production.workstation", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Lab Workstation",
+            "Tier": 2,
+            "Category": "Client Devices",
+            "Reason": "Lab workstation with specialised software and possibly experimental data.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^lab-wks", "(?i)^labpc\\d", "(?i)lab.workstation" ],
+                "MachineTagPatterns": [ "(?i)lab.workstation", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Shared Device",
+            "Tier": 2,
+            "Category": "Client Devices",
+            "Reason": "Multi-user shared device; cached creds from many users on one box.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^shared\\d", "(?i)^shared-pc", "(?i)shared.device" ],
+                "MachineTagPatterns": [ "(?i)shared.device", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Developer Workstation",
+            "Tier": 2,
+            "Category": "Client Devices",
+            "Reason": "Developer workstation with source code, package registries, possibly low-tier prod creds.",
+            "Detection": {
+                "TvmSoftwareNames": [ "visual_studio*", "visual_studio_code*", "intellij*", "git*", "docker_desktop*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dev-wks", "(?i)^dev\\d", "(?i)developer" ],
+                "MachineTagPatterns": [ "(?i)developer", "(?i)dev.workstation", "(?i)tier.?2" ]
+            }
+        },
+        {
+            "Name": "Power User Workstation (Finance, Legal, HR)",
+            "Tier": 2,
+            "Category": "Client Devices",
+            "Reason": "User has access to sensitive business data; spear-phishing target.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^fin-wks", "(?i)^legal-wks", "(?i)^hr-wks", "(?i)^poweruser" ],
+                "MachineTagPatterns": [ "(?i)power.user", "(?i)finance.user", "(?i)legal.user", "(?i)hr.user", "(?i)tier.?2" ]
+            }
+        }
+    ],
+    "Endpoint_AssetClasses_Tier3": [
+        {
+            "Name": "Print Server",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Hosts print queues; limited business impact, narrow lateral-movement value.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_print_server*", "papercut*", "cups*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^print\\d", "(?i)^prtsrv\\d", "(?i)print.server" ],
+                "MachineTagPatterns": [ "(?i)print.server", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "DHCP Server",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Standalone DHCP without domain integration; address allocation only.",
+            "Detection": {
+                "TvmSoftwareNames": [ "isc_dhcp*", "kea_dhcp*", "windows_dhcp_server*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dhcp-t3", "(?i)^dhcp\\d" ],
+                "MachineTagPatterns": [ "(?i)dhcp.server", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Time Server (NTP)",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Secondary/non-primary NTP source; time-skew impact only at small scale.",
+            "Detection": {
+                "TvmSoftwareNames": [ "ntp_*", "chrony*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^ntp.*sec", "(?i)^time-srv", "(?i)ntp.server" ],
+                "MachineTagPatterns": [ "(?i)ntp.server", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "VoIP Server",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Voice service server; outage impact, limited security pivot.",
+            "Detection": {
+                "TvmSoftwareNames": [ "asterisk*", "freepbx*", "3cx*", "elastix*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^voip-srv", "(?i)^pbx\\d", "(?i)voip.server" ],
+                "MachineTagPatterns": [ "(?i)voip.server", "(?i)pbx", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Internal Wiki / Intranet Server",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Internal content; minor info-disclosure risk, no privileged data.",
+            "Detection": {
+                "TvmSoftwareNames": [ "mediawiki*", "confluence*", "dokuwiki*", "wordpress*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^wiki\\d", "(?i)^intranet\\d", "(?i)internal.wiki" ],
+                "MachineTagPatterns": [ "(?i)wiki", "(?i)intranet", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Archival / Cold Storage Server",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Cold archive; data-retention impact, low live-system risk.",
+            "Detection": {
+                "TvmSoftwareNames": [ "veeam_archive*", "azure_archive*", "aws_glacier*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^archive\\d", "(?i)^cold\\d", "(?i)archive.server" ],
+                "MachineTagPatterns": [ "(?i)archive", "(?i)cold.storage", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Physical Access Control Server",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Standalone physical access controller; door-management impact only.",
+            "Detection": {
+                "TvmSoftwareNames": [ "lenel_onguard*", "software_house_ccure*", "honeywell_winpak*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^pacs\\d", "(?i)^doors\\d", "(?i)access.control.server" ],
+                "MachineTagPatterns": [ "(?i)physical.access", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Test / Sandbox Server",
+            "Tier": 3,
+            "Category": "Server Roles",
+            "Reason": "Non-production sandbox without sensitive data.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^test\\d", "(?i)^sandbox\\d", "(?i)^lab-srv\\d", "(?i)^poc\\d" ],
+                "MachineTagPatterns": [ "(?i)sandbox", "(?i)test.server", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Network Monitoring Probe",
+            "Tier": 3,
+            "Category": "Management",
+            "Reason": "Read-only network probe; no write access to monitored devices.",
+            "Detection": {
+                "TvmSoftwareNames": [ "nagios*", "cacti*", "munin*", "smokeping*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^probe\\d", "(?i)^netmon-probe", "(?i)monitoring.probe" ],
+                "MachineTagPatterns": [ "(?i)monitoring.probe", "(?i)read.only.probe", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Unmanaged Access Switch",
+            "Tier": 3,
+            "Category": "Network Equipment",
+            "Reason": "Dumb L2 switch; no admin plane to compromise.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^unmsw\\d", "(?i)unmanaged.switch" ],
+                "MachineTagPatterns": [ "(?i)unmanaged.switch", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Consumer-Grade Wireless Access Point",
+            "Tier": 3,
+            "Category": "Network Equipment",
+            "Reason": "Consumer AP; limited features and small RF footprint.",
+            "Detection": {
+                "TvmSoftwareNames": [ "tp-link*", "netgear*", "linksys*", "asus_router*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^consumer.?ap", "(?i)^home.?wifi" ],
+                "MachineTagPatterns": [ "(?i)consumer.ap", "(?i)home.wifi", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Out-of-Band Console Server (Isolated, Read-Only Access)",
+            "Tier": 3,
+            "Category": "Network Equipment",
+            "Reason": "Isolated read-only console concentrator; no write to managed devices.",
+            "Detection": {
+                "TvmSoftwareNames": [ "opengear*", "lantronix*", "perle_iolan*", "digi_*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^console\\d", "(?i)^termsrv\\d", "(?i)console.server" ],
+                "MachineTagPatterns": [ "(?i)console.server", "(?i)oob.read.only", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Standalone Print Server (Network-Connected, No Domain Join)",
+            "Tier": 3,
+            "Category": "Network Equipment",
+            "Reason": "Non-domain print server; no AD pivot.",
+            "Detection": {
+                "TvmSoftwareNames": [ "papercut*", "cups*", "hp_jetdirect*", "ricoh_streamline*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^print-sa", "(?i)^standalone.?print" ],
+                "MachineTagPatterns": [ "(?i)standalone.print", "(?i)non.domain.print", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Smart Lighting Controller (Isolated Network)",
+            "Tier": 3,
+            "Category": "IoT / OT",
+            "Reason": "Lighting control on isolated VLAN; comfort impact only.",
+            "Detection": {
+                "TvmSoftwareNames": [ "philips_hue*", "lutron*", "crestron*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^lighting\\d", "(?i)^hue\\d", "(?i)smart.lighting" ],
+                "MachineTagPatterns": [ "(?i)smart.lighting", "(?i)lighting.controller", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Consumer IoT Device (Isolated Guest VLAN)",
+            "Tier": 3,
+            "Category": "IoT / OT",
+            "Reason": "Consumer IoT on guest network; segmented from production.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^iot-cons", "(?i)^smart.?home" ],
+                "MachineTagPatterns": [ "(?i)consumer.iot", "(?i)guest.vlan", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Non-Networked or Air-Gapped Sensor",
+            "Tier": 3,
+            "Category": "IoT / OT",
+            "Reason": "No network exposure; only physical access matters.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^airgap", "(?i)^offline.?sensor" ],
+                "MachineTagPatterns": [ "(?i)air.gapped", "(?i)offline.sensor", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Vending Machine / Coffee Machine with Network Connectivity",
+            "Tier": 3,
+            "Category": "IoT / OT",
+            "Reason": "Networked appliance; minimal lateral pivot value.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^vending\\d", "(?i)^coffee\\d", "(?i)^kettle\\d" ],
+                "MachineTagPatterns": [ "(?i)vending", "(?i)appliance", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Digital Signage Player (Isolated, Read-Only Content)",
+            "Tier": 3,
+            "Category": "IoT / OT",
+            "Reason": "Display-only content player; defacement risk, limited pivot.",
+            "Detection": {
+                "TvmSoftwareNames": [ "brightsign*", "samsung_magicinfo*", "scala*", "navori*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^signage\\d", "(?i)^display\\d", "(?i)digital.signage" ],
+                "MachineTagPatterns": [ "(?i)digital.signage", "(?i)display.player", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Wearable / Smart Badge (No Domain Integration)",
+            "Tier": 3,
+            "Category": "IoT / OT",
+            "Reason": "Personal wearable; minor data risk, no enterprise auth.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^wearable\\d", "(?i)^smart.?badge" ],
+                "MachineTagPatterns": [ "(?i)wearable", "(?i)smart.badge", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "USB-Only Peripheral with Firmware Update Capability",
+            "Tier": 3,
+            "Category": "IoT / OT",
+            "Reason": "USB-only device with updatable firmware; supply-chain risk vector but low blast radius.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [],
+                "MachineTagPatterns": [ "(?i)usb.peripheral", "(?i)firmware.updatable", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Standard Employee Workstation",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "Standard end-user device with user-tier privileges; ransomware target but contained.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^emp-wks", "(?i)^user-wks", "(?i)^pc\\d", "(?i)^lt\\d" ],
+                "MachineTagPatterns": [ "(?i)standard.workstation", "(?i)employee", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Student Workstation",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "Education-tier device; restricted access, low-value target.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^stu-wks", "(?i)^student\\d" ],
+                "MachineTagPatterns": [ "(?i)student", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Kiosk Machine",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "Locked-down kiosk; single-purpose device with limited credentials.",
+            "Detection": {
+                "TvmSoftwareNames": [ "windows_kiosk*", "kiosk_browser*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^kiosk\\d", "(?i)kiosk.machine" ],
+                "MachineTagPatterns": [ "(?i)kiosk", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Guest PC",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "Guest-network device with minimal access; low blast radius.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^guest\\d", "(?i)^gst-pc", "(?i)guest.pc" ],
+                "MachineTagPatterns": [ "(?i)guest.pc", "(?i)guest.device", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Shared Classroom / Library Computer",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "Multi-user education-tier device; restricted role, minor data exposure.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^classroom\\d", "(?i)^library\\d", "(?i)^lib-pc" ],
+                "MachineTagPatterns": [ "(?i)classroom", "(?i)library.pc", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Development Workstation (Non-Privileged, Isolated, No Production Access)",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "Dev workstation isolated from prod; supply-chain risk capped by network segmentation.",
+            "Detection": {
+                "TvmSoftwareNames": [ "visual_studio_code*", "git*" ],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^dev-iso", "(?i)^devnp\\d", "(?i)^isolated.dev" ],
+                "MachineTagPatterns": [ "(?i)isolated.dev", "(?i)non.priv.dev", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Personally-Owned BYOD Device",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "User-owned device on guest/BYOD VLAN; limited corporate footprint.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^byod\\d", "(?i)^personal-" ],
+                "MachineTagPatterns": [ "(?i)byod", "(?i)personal.device", "(?i)tier.?3" ]
+            }
+        },
+        {
+            "Name": "Retired / Decommissioned Machine",
+            "Tier": 3,
+            "Category": "Client Devices",
+            "Reason": "Pending-decommission device; should be powered off/removed but flagged for cleanup.",
+            "Detection": {
+                "TvmSoftwareNames": [],
+                "EgSignals": [],
+                "NamePatterns": [ "(?i)^retired\\d", "(?i)^decom\\d", "(?i)^old-" ],
+                "MachineTagPatterns": [ "(?i)retired", "(?i)decommissioned", "(?i)tier.?3" ]
+            }
+        }
+    ]
+}

@@ -1,0 +1,21 @@
+id:        AtlassianBitbucketServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Atlassian Bitbucket Server'
+category:  'SCM'
+description: ''
+displayNames:
+  - 'Atlassian Bitbucket Server'
+  - 'Atlassian Bitbucket Data Center'
+
+detections:
+  - id: AtlassianBitbucketServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bitbucket_server*'
+    set:
+      Tier:     1
+      Purpose:  'SCM'
+      Category: 'SCM'

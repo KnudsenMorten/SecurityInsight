@@ -1,0 +1,513 @@
+# ============================================================================
+# SAMPLE / TEMPLATE -- not loaded by the engine (.sample.* files are skipped).
+#
+# To activate this rule with your own tier verdict / detection / metadata:
+#   1. Copy this file to a sibling without the `.sample` suffix:
+#        <RuleId>.custom.yaml      (in the same folder as this file)
+#   2. Edit the `set:` block (Tier / Purpose / Category / Tags / cmdbId).
+#   3. Optionally edit the `detections:` block to change the match logic.
+#   4. Keep `id:` unchanged -- the engine deduplicates by id and your custom
+#      file then overrides any sibling `<RuleId>.locked.yaml`.
+#
+# Field grammar reference:  docs/RULE-REFERENCE.md
+# Annotated full template:  ../_TEMPLATE.custom.sample.yaml
+#
+# IMPORTANT: never set `cmdbName`, `cmdbCriticality`, `cmdbDataSensitivity`
+# inline in `set:`. They are auto-stamped from CMDB.csv via the `cmdbId`
+# lookup at Reconcile. Inline values cause drift between rule and CSV.
+#
+# ----------------------------------------------------------------------------
+# QUICK SYNTAX REFERENCE -- every detect kind, with required + optional params
+# (full reference + per-engine availability in RULE-REFERENCE.md)
+# ----------------------------------------------------------------------------
+#
+#   nameMatches                     (all engines)
+#     namePatterns: [regex,...]     # required (alias: patterns)
+#
+#   osPlatform                      (endpoint)
+#     osPatterns:   [regex,...]     # required (alias: patterns)
+#
+#   hasMdeMachineGroupTag           (endpoint)
+#     machineTagPatterns: [regex,...]  # required (alias: patterns)
+#
+#   egDetectedRoles                 (endpoint, identity)
+#     egSignals:   [string,...]     # required (alias: roles)
+#
+#   hasEntraExtensionAttributeTag   (identity)
+#     attribute:   string           # required, e.g. extensionAttribute6
+#     value:       string           # required
+#     match:       exact | <other>  # optional, default exact (other = -like)
+#
+#   hasSoftwareInstalled            (endpoint)
+#     tvmSoftwareNames: [glob,...]  # required ('vendor/name' or '*/name')
+#
+#   groupMembership                 (identity)
+#     group:       string           # required (single name; CI exact)
+#
+#   hasAzureTagDirectOrParent       (azure; also endpoint when correlated)
+#     tag:         string           # required (key, CI exact)
+#     value:       string|list      # optional (presence-only if absent)
+#     match:       <operator>       # optional, default equal
+#
+#   egKustoQuery                    (escape hatch -- endpoint, identity, azure)
+#     kql:         string           # required, returns asset IDs
+#
+#   mostFrequentUserTier            (endpoint)
+#     tierValues:  [int,...]        # required, e.g. [0] or [0,1]
+#
+#   ipInRange                       (endpoint, azure)
+#     cidrs:       [CIDR,...]       # required (alias: cidr)
+#     fields:      [string,...]     # optional, restricts which fields to scan
+#
+#   hasTag                          (endpoint, identity, azure)
+#     tag:         string           # optional*  (key, CI exact)
+#     value:       string|list      # optional*  (depends on match)
+#     match:       <operator>       # optional, default equal
+#     sources:     [string,...]     # optional: mde,eg,entra,arm,cmdb,ad
+#     # *at least one of tag / value required; value-only equal is REFUSED
+#
+# Operators usable as `match:` (for hasTag, hasAzureTagDirectOrParent):
+#   equal (default) -- exact CI string match
+#   like            -- PowerShell -like wildcards ('*foo*', 'bar?')
+#   has             -- substring presence (CI)
+#   regex           -- .NET regex match
+#   matches         -- alias for regex
+#   in              -- value appears in a list
+#   startswith      -- prefix match (CI)
+#   endswith        -- suffix match (CI)
+#
+# `set:` block:
+#   Tier:        int 0..3 (0=Critical, 1=High, 2=Medium, 3=Low)
+#   Purpose:     string (human-readable role label)
+#   Category:    string (grouping bucket)
+#   Tags:        [string,...] (free-form, aggregated across rule matches)
+#   cmdbId:      string (foreign key into CMDB.csv -- auto-stamps cmdbName +
+#                       cmdbCriticality + cmdbDataSensitivity from the row)
+# ============================================================================
+id:        AssetProfileByExtensionAttributes
+appliesTo: identity
+mode:      locked
+purpose:   'Persona classification via Entra extensionAttribute6'
+category:  'Classification'
+description: |
+  Maps Entra identities to a persona type via extensionAttribute6 (the
+  customer-defined classification slot). All matches are EXACT (case-
+  sensitive, full-string) to disambiguate similarly-named values like
+  'Internal_User' vs 'Internal_User_Developer'.
+
+  Tier defaults are best-guess from MITRE attacker-centric posture:
+    * Break_Glass_Account                                  -> Tier 0 (highest privilege, must alert on use)
+    * Internal_Admin / External_Admin                      -> Tier 1 (admin accounts)
+    * Internal_User_Developer / External_User_Developer    -> Tier 1 (devs typically hold prod credentials / pipeline access)
+    * Service_Account                                      -> Tier 1 (service accounts often hold elevated rights)
+    * Everything else (standard users, mailboxes, contacts) -> Tier 3
+  Customer overrides via rules-custom/identity/AssetProfileByExtensionAttributes.yaml.
+
+detections:
+  - id: InternalUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Internal_User'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Internal employee, user account'
+      Category: 'Classification'
+
+  - id: InternalAdmin
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Internal_Admin'
+          match:     exact
+    set:
+      Tier:     1
+      Purpose:  'Internal employee, admin account'
+      Category: 'Classification'
+
+  - id: ExternalUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'External_User'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'External user'
+      Category: 'Classification'
+
+  - id: ExternalAdmin
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'External_Admin'
+          match:     exact
+    set:
+      Tier:     1
+      Purpose:  'External admin'
+      Category: 'Classification'
+
+  - id: ExternalGuest
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'External_Guest'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'External guest'
+      Category: 'Classification'
+
+  - id: InternalUserDeveloper
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Internal_User_Developer'
+          match:     exact
+    set:
+      Tier:     1
+      Purpose:  'Internal employee, developer account'
+      Category: 'Classification'
+
+  - id: ExternalUserDeveloper
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'External_User_Developer'
+          match:     exact
+    set:
+      Tier:     1
+      Purpose:  'External developer account'
+      Category: 'Classification'
+
+  - id: AppSystemTestUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'AppSystem_Test_User'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'App & System Test User'
+      Category: 'Classification'
+
+  - id: ServiceAccount
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Service_Account'
+          match:     exact
+    set:
+      Tier:     1
+      Purpose:  'Service Account'
+      Category: 'Classification'
+
+  - id: SharedMailUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Shared_Mail_User'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Shared Mail User (Exchange user mailbox with shared usage)'
+      Category: 'Classification'
+
+  - id: TeamsRoom
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Teams_Room'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Teams Room'
+      Category: 'Classification'
+
+  - id: SharedDeviceUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Shared_Device_User'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Shared Device User'
+      Category: 'Classification'
+
+  - id: BreakGlassAccount
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Break_Glass_Account'
+          match:     exact
+    set:
+      Tier:     0
+      Purpose:  'Break Glass Account'
+      Category: 'Classification'
+
+  - id: NonManagedCloudUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'NonManaged_Cloud_User'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Cloud-only User in Entra ID (NonManaged)'
+      Category: 'Classification'
+
+  - id: NonManagedAdSyncedUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'NonManaged_AD_Synced_User'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'AD-synced User in Entra ID (NonManaged)'
+      Category: 'Classification'
+
+  - id: Contact
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Contact'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Contact'
+      Category: 'Classification'
+
+  - id: FacilityAccessOnly
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'FacilityAccessOnly'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Facility Access Only'
+      Category: 'Classification'
+
+  - id: ExchangeLinkedMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_LinkedMailBox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Linked Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeSharedMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_SharedMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Shared Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeLegacyMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_LegacyMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Legacy Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeRoomMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_RoomMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Room Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeEquipmentMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_EquipmentMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Equipment Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeMailContact
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_MailContact'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Mail Contact'
+      Category: 'Classification'
+
+  - id: ExchangeMailUser
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_MailUser'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Mail User'
+      Category: 'Classification'
+
+  - id: ExchangeSystemAttendant
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_SystemAttendant'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, System Attendant'
+      Category: 'Classification'
+
+  - id: ExchangeSystemMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_SystemMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, System Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeMailForestContact
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_MailForestContact'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Mail Forest Contact'
+      Category: 'Classification'
+
+  - id: ExchangeContact
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_Contact'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Contact'
+      Category: 'Classification'
+
+  - id: ExchangeArbitrationMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_ArbitrationMailBox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Arbitration Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeDiscoveryMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_DiscoveryMailBox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Discovery Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeRemoteRoomMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_RemoteRoomMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Remote Room Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeRemoteSchedulingMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_RemoteSchedulingMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Remote Scheduling Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeRemoteSharedMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_RemoteSharedMailbox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Remote Shared Mailbox'
+      Category: 'Classification'
+
+  - id: ExchangeTeamMailbox
+    detect:
+      any:
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Exchange_TeamMailBox'
+          match:     exact
+    set:
+      Tier:     3
+      Purpose:  'Exchange, Team Mailbox'
+      Category: 'Classification'

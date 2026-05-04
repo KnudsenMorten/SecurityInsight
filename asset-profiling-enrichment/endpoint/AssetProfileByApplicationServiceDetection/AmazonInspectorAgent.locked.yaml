@@ -1,0 +1,20 @@
+id:        AmazonInspectorAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'Amazon Inspector Agent'
+category:  'Vulnerability Mgmt'
+description: ''
+displayNames:
+  - 'Amazon Inspector Agent'
+
+detections:
+  - id: AmazonInspectorAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'inspector_agent*'
+    set:
+      Tier:     2
+      Purpose:  'Vulnerability Mgmt'
+      Category: 'Vulnerability Mgmt'

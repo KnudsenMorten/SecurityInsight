@@ -1,0 +1,21 @@
+id:        GreenboneSecurityManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Greenbone Security Manager'
+category:  'Vulnerability Mgmt'
+description: ''
+displayNames:
+  - 'Greenbone Security Manager'
+  - 'OpenVAS'
+
+detections:
+  - id: GreenboneSecurityManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'security_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Vulnerability Mgmt'
+      Category: 'Vulnerability Mgmt'

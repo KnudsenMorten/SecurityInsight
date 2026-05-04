@@ -1,0 +1,37 @@
+id:        CitrixRDSSessionHost
+appliesTo: endpoint
+mode:      locked
+purpose:   'Citrix / RDS Session Host'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |M|u|l|t|i|-|u|s|e|r|\|\| |s|h|a|r|e|d|\|\| |s|e|s|s|i|o|n|s|;|\|\| |o|n|e|\|\| |c|o|m|p|r|o|m|i|s|e|d|\|\| |h|o|s|t|\|\| |y|i|e|l|d|s|\|\| |m|u|l|t|i|p|l|e|\|\| |u|s|e|r|s|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|r|e|m|o|t|e|_|d|e|s|k|t|o|p|_|s|e|r|v|i|c|e|s|'| |t|o|k|e|n|s|/|c|r|e|d|e|n|t|i|a|l|s|.|'|
+
+detections:
+  - id: CitrixRDSSessionHost
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'citrix_virtual_apps_and_desktops*'
+            - 'citrix_xenapp*'
+            - 'citrix_xendesktop*'
+            - 'remote_desktop_services*'
+            - 'windows_terminal_services*'
+            - 'remote_desktop_services*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^rds\d'
+            - '(?i)^citrix\d'
+            - '(?i)^xenapp\d'
+            - '(?i)session.host'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)rds'
+            - '(?i)citrix.session'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Citrix / RDS Session Host'
+      Category: 'Server Roles'

@@ -1,0 +1,20 @@
+id:        MicrosoftPerformancePointServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Performance Point Server'
+category:  'BI'
+description: ''
+displayNames:
+  - 'Microsoft Performance Point Server'
+
+detections:
+  - id: MicrosoftPerformancePointServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'performance_point_server*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

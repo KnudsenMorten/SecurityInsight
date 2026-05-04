@@ -1,0 +1,21 @@
+id:        IscBind
+appliesTo: endpoint
+mode:      locked
+purpose:   'BIND'
+category:  'Network'
+description: ''
+displayNames:
+  - 'BIND'
+  - 'ISC BIND'
+
+detections:
+  - id: IscBind
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'bind*'
+    set:
+      Tier:     1
+      Purpose:  'Network'
+      Category: 'Network'

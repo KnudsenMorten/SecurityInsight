@@ -1,0 +1,21 @@
+id:        MicrosoftDefenderForCloudApps
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Defender for Cloud Apps'
+category:  'CASB'
+description: ''
+displayNames:
+  - 'Microsoft Defender for Cloud Apps'
+  - 'Cloud App Security'
+
+detections:
+  - id: MicrosoftDefenderForCloudApps
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'defender_for_cloud_apps*'
+    set:
+      Tier:     1
+      Purpose:  'CASB'
+      Category: 'CASB'

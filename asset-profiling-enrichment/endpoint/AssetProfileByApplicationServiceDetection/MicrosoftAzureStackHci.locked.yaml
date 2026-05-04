@@ -1,0 +1,20 @@
+id:        MicrosoftAzureStackHci
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Azure Stack HCI'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'Microsoft Azure Stack HCI'
+
+detections:
+  - id: MicrosoftAzureStackHci
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'azure_stack_hci*'
+    set:
+      Tier:     1
+      Purpose:  'Virtualization'
+      Category: 'Virtualization'

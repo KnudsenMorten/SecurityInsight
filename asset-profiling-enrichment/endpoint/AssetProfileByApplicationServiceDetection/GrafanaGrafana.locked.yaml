@@ -1,0 +1,20 @@
+id:        GrafanaGrafana
+appliesTo: endpoint
+mode:      locked
+purpose:   'Grafana'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'Grafana'
+
+detections:
+  - id: GrafanaGrafana
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'grafana*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

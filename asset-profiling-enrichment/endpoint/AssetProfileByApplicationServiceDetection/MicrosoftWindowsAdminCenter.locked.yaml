@@ -1,0 +1,20 @@
+id:        MicrosoftWindowsAdminCenter
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Windows Admin Center'
+category:  'Server Mgmt'
+description: ''
+displayNames:
+  - 'Microsoft Windows Admin Center'
+
+detections:
+  - id: MicrosoftWindowsAdminCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_admin_center*'
+    set:
+      Tier:     1
+      Purpose:  'Server Mgmt'
+      Category: 'Server Mgmt'

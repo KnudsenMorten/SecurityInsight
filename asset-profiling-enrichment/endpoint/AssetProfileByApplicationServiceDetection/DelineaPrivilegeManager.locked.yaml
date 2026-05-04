@@ -1,0 +1,21 @@
+id:        DelineaPrivilegeManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Delinea Privilege Manager'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'Delinea Privilege Manager'
+  - 'Thycotic Privilege Manager'
+
+detections:
+  - id: DelineaPrivilegeManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'privilege_manager*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

@@ -1,0 +1,37 @@
+id:        RADIUSTACACSNetworkAuthenticationServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'RADIUS / TACACS+ Network Authentication Server'
+category:  'Network Equipment'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |A|u|t|h|e|n|t|i|c|a|t|e|s|\|\| |n|e|t|w|o|r|k|\|\| |d|e|v|i|c|e|\|\| |a|d|m|i|n|\|\| |s|e|s|s|i|o|n|s|;|\|\| |c|o|m|p|r|o|m|i|s|e|\|\| |y|i|e|l|d|s|\|\| |n|e|t|w|o|r|k|\|\| |d|e|v|i|c|e|\|\| |a|c|c|e|s|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |f|r|e|e|r|a|d|i|u|s|/|f|r|e|e|r|a|d|i|u|s|
+
+detections:
+  - id: RADIUSTACACSNetworkAuthenticationServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_acs*'
+            - 'cisco_ise*'
+            - 'freeradius*'
+            - 'tacacs+*'
+            - 'tac_plus*'
+            - 'freeradius*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^tacacs\d'
+            - '(?i)^acs\d'
+            - '(?i)tacacs\+?'
+            - '(?i)network.aaa'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)tacacs'
+            - '(?i)network.aaa'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'RADIUS / TACACS+ Network Authentication Server'
+      Category: 'Network Equipment'

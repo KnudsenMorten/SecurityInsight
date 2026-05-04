@@ -1,0 +1,32 @@
+id:        WirelessAccessPointManaged
+appliesTo: endpoint
+mode:      locked
+purpose:   'Wireless Access Point (Managed)'
+category:  'Network Equipment'
+description: 'Managed AP exposes wireless edge; compromise limited to local RF coverage.'
+
+detections:
+  - id: WirelessAccessPointManaged
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_aironet*'
+            - 'aruba_ap*'
+            - 'ruckus_ap*'
+            - 'meraki_mr*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^ap\d'
+            - '(?i)^wap\d'
+            - '(?i)wireless.ap'
+            - '(?i)access.point'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)access.point'
+            - '(?i)wireless.ap'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Wireless Access Point (Managed)'
+      Category: 'Network Equipment'

@@ -1,0 +1,26 @@
+id:        TestSandboxServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Test / Sandbox Server'
+category:  'Server Roles'
+description: 'Non-production sandbox without sensitive data.'
+
+detections:
+  - id: TestSandboxServer
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^test\d'
+            - '(?i)^sandbox\d'
+            - '(?i)^lab-srv\d'
+            - '(?i)^poc\d'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)sandbox'
+            - '(?i)test.server'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Test / Sandbox Server'
+      Category: 'Server Roles'

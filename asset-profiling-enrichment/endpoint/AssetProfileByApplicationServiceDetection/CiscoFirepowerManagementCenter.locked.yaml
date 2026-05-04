@@ -1,0 +1,20 @@
+id:        CiscoFirepowerManagementCenter
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cisco Firepower Management Center'
+category:  'Firewall Mgmt'
+description: ''
+displayNames:
+  - 'Cisco Firepower Management Center'
+
+detections:
+  - id: CiscoFirepowerManagementCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'firepower_management_center*'
+    set:
+      Tier:     1
+      Purpose:  'Firewall Mgmt'
+      Category: 'Firewall Mgmt'

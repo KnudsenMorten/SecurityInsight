@@ -1,0 +1,8 @@
+{
+  "_purpose": "Global exclusions applied across ALL endpoint RA reports. Per-report .exclude.custom.json wins on the same property name. Drop this at SettingsPath/RiskAnalysisGlobalExclusions.custom.json (gitignored) and the engine reads it at startup. Add tags to ExcludedAssetTags to drop devices carrying any of them; the MDE IsExcluded portal flag is ALWAYS honored regardless of this file.",
+  "ExcludedAssetTags": ["--Excluded--SI"],
+  "_examples": {
+    "_AutopilotTempNames": "Tag --Excluded--SI on transient MDE devices (e.g. Autopilot temp names that get renamed) -- this stops them flagging in RA reports without you needing to remove from MDE",
+    "_MaintenanceDevices": "You can also add --Maintenance--SI etc. and tag them on demand"
+  }
+}

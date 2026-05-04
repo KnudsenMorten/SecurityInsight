@@ -1,0 +1,20 @@
+id:        MariadbServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'MariaDB Server'
+category:  'Database'
+description: ''
+displayNames:
+  - 'MariaDB Server'
+
+detections:
+  - id: MariadbServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'server*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

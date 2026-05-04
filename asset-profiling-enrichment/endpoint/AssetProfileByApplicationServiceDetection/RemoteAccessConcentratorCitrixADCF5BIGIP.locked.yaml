@@ -1,0 +1,31 @@
+id:        RemoteAccessConcentratorCitrixADCF5BIGIP
+appliesTo: endpoint
+mode:      locked
+purpose:   'Remote Access Concentrator (Citrix ADC, F5 BIG-IP)'
+category:  'Network Equipment'
+description: 'Edge ADC handles auth and SSL termination for remote admin and apps; high-value target.'
+
+detections:
+  - id: RemoteAccessConcentratorCitrixADCF5BIGIP
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'citrix_adc*'
+            - 'citrix_netscaler*'
+            - 'f5_big-ip*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^netscaler'
+            - '(?i)^bigip'
+            - '(?i)^adc\d'
+            - '(?i)citrix.adc'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)netscaler'
+            - '(?i)big.?ip'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Remote Access Concentrator (Citrix ADC, F5 BIG-IP)'
+      Category: 'Network Equipment'

@@ -1,0 +1,34 @@
+id:        ContainerOrchestrationNodeKubernetesWorker
+appliesTo: endpoint
+mode:      locked
+purpose:   'Container Orchestration Node (Kubernetes Worker)'
+category:  'Management'
+description: 'Runs application workloads; container escape gives node-level access.'
+
+detections:
+  - id: ContainerOrchestrationNodeKubernetesWorker
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'kubernetes*'
+            - 'kubelet*'
+            - 'containerd*'
+            - 'docker*'
+            - 'openshift*'
+            - 'rancher*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^k8s-worker'
+            - '(?i)^aks-node'
+            - '(?i)^worker\d'
+            - '(?i)^kube-node'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)k8s.worker'
+            - '(?i)kubernetes.node'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Container Orchestration Node (Kubernetes Worker)'
+      Category: 'Management'

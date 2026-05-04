@@ -1,0 +1,21 @@
+id:        VmwareAriaAutomation
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware vRealize Automation'
+category:  'Virtualization Mgmt'
+description: ''
+displayNames:
+  - 'VMware vRealize Automation'
+  - 'VMware Aria Automation'
+
+detections:
+  - id: VmwareAriaAutomation
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'aria_automation*'
+    set:
+      Tier:     0
+      Purpose:  'Virtualization Mgmt'
+      Category: 'Virtualization Mgmt'

@@ -1,0 +1,20 @@
+id:        MicrosoftSkypeForBusinessServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Skype for Business Server'
+category:  'Collaboration'
+description: ''
+displayNames:
+  - 'Microsoft Skype for Business Server'
+
+detections:
+  - id: MicrosoftSkypeForBusinessServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'skype_for_business_server*'
+    set:
+      Tier:     2
+      Purpose:  'Collaboration'
+      Category: 'Collaboration'

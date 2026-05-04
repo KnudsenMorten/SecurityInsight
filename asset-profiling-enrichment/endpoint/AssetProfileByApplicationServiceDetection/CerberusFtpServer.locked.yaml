@@ -1,0 +1,20 @@
+id:        CerberusFtpServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cerberus FTP Server'
+category:  'FTP'
+description: ''
+displayNames:
+  - 'Cerberus FTP Server'
+
+detections:
+  - id: CerberusFtpServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ftp_server*'
+    set:
+      Tier:     2
+      Purpose:  'FTP'
+      Category: 'FTP'

@@ -1,0 +1,20 @@
+id:        VmwareTanzuApplicationService
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware Tanzu Application Service'
+category:  'Containers'
+description: ''
+displayNames:
+  - 'VMware Tanzu Application Service'
+
+detections:
+  - id: VmwareTanzuApplicationService
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'tanzu_application_service*'
+    set:
+      Tier:     2
+      Purpose:  'Containers'
+      Category: 'Containers'

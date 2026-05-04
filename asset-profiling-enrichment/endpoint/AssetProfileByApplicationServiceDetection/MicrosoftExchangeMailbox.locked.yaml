@@ -1,0 +1,20 @@
+id:        MicrosoftExchangeMailbox
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Exchange Mailbox Role'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Microsoft Exchange Mailbox Role'
+
+detections:
+  - id: MicrosoftExchangeMailbox
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'exchange_mailbox*'
+    set:
+      Tier:     1
+      Purpose:  'Mail'
+      Category: 'Mail'

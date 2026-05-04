@@ -1,0 +1,21 @@
+id:        MicrosoftUserExperienceVirtualization
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft User Experience Virtualization'
+category:  'Profile Mgmt'
+description: ''
+displayNames:
+  - 'Microsoft User Experience Virtualization'
+  - 'UE-V'
+
+detections:
+  - id: MicrosoftUserExperienceVirtualization
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'user_experience_virtualization*'
+    set:
+      Tier:     2
+      Purpose:  'Profile Mgmt'
+      Category: 'Profile Mgmt'

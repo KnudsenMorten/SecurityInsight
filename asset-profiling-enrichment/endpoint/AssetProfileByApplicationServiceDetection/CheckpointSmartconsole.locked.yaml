@@ -1,0 +1,20 @@
+id:        CheckpointSmartconsole
+appliesTo: endpoint
+mode:      locked
+purpose:   'Check Point SmartConsole'
+category:  'Firewall Mgmt'
+description: ''
+displayNames:
+  - 'Check Point SmartConsole'
+
+detections:
+  - id: CheckpointSmartconsole
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'smartconsole*'
+    set:
+      Tier:     1
+      Purpose:  'Firewall Mgmt'
+      Category: 'Firewall Mgmt'

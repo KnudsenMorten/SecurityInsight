@@ -1,0 +1,20 @@
+id:        HmailserverHmailserver
+appliesTo: endpoint
+mode:      locked
+purpose:   'hMailServer'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'hMailServer'
+
+detections:
+  - id: HmailserverHmailserver
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hmailserver*'
+    set:
+      Tier:     2
+      Purpose:  'Mail'
+      Category: 'Mail'

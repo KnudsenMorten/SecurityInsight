@@ -1,0 +1,20 @@
+id:        IcewarpMailServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'IceWarp Mail Server'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'IceWarp Mail Server'
+
+detections:
+  - id: IcewarpMailServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mail_server*'
+    set:
+      Tier:     2
+      Purpose:  'Mail'
+      Category: 'Mail'

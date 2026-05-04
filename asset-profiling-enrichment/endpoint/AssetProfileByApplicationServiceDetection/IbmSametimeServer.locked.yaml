@@ -1,0 +1,20 @@
+id:        IbmSametimeServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Sametime Server'
+category:  'Collaboration'
+description: ''
+displayNames:
+  - 'IBM Sametime Server'
+
+detections:
+  - id: IbmSametimeServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sametime_server*'
+    set:
+      Tier:     2
+      Purpose:  'Collaboration'
+      Category: 'Collaboration'

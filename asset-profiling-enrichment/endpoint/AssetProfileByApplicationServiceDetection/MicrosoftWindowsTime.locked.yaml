@@ -1,0 +1,20 @@
+id:        MicrosoftWindowsTime
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Windows Time Service'
+category:  'Time Sync'
+description: ''
+displayNames:
+  - 'Microsoft Windows Time Service'
+
+detections:
+  - id: MicrosoftWindowsTime
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_time*'
+    set:
+      Tier:     3
+      Purpose:  'Time Sync'
+      Category: 'Time Sync'

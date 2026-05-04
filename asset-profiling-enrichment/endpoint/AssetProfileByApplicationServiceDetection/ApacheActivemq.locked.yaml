@@ -1,0 +1,20 @@
+id:        ApacheActivemq
+appliesTo: endpoint
+mode:      locked
+purpose:   'Apache ActiveMQ'
+category:  'Messaging'
+description: ''
+displayNames:
+  - 'Apache ActiveMQ'
+
+detections:
+  - id: ApacheActivemq
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'activemq*'
+    set:
+      Tier:     2
+      Purpose:  'Messaging'
+      Category: 'Messaging'

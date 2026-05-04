@@ -1,0 +1,20 @@
+id:        ApacheSolr
+appliesTo: endpoint
+mode:      locked
+purpose:   'Apache Solr'
+category:  'Search'
+description: ''
+displayNames:
+  - 'Apache Solr'
+
+detections:
+  - id: ApacheSolr
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'solr*'
+    set:
+      Tier:     2
+      Purpose:  'Search'
+      Category: 'Search'

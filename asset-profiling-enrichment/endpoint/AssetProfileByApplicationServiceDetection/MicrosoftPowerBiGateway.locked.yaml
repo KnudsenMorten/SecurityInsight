@@ -1,0 +1,21 @@
+id:        MicrosoftPowerBiGateway
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Power BI Gateway'
+category:  'BI'
+description: 'Often holds privileged service-account credentials'
+displayNames:
+  - 'Microsoft Power BI Gateway'
+  - 'On-premises data gateway'
+
+detections:
+  - id: MicrosoftPowerBiGateway
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'power_bi_gateway*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

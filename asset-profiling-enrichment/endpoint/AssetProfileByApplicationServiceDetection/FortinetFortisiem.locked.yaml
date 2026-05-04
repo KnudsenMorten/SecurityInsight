@@ -1,0 +1,20 @@
+id:        FortinetFortisiem
+appliesTo: endpoint
+mode:      locked
+purpose:   'FortiSIEM'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'FortiSIEM'
+
+detections:
+  - id: FortinetFortisiem
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'fortisiem*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

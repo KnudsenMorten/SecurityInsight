@@ -1,0 +1,21 @@
+id:        QlikSense
+appliesTo: endpoint
+mode:      locked
+purpose:   'Qlik Sense Enterprise'
+category:  'BI'
+description: ''
+displayNames:
+  - 'Qlik Sense Enterprise'
+  - 'Qlik Sense'
+
+detections:
+  - id: QlikSense
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sense*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

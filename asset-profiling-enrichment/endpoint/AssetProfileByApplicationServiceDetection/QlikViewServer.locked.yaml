@@ -1,0 +1,20 @@
+id:        QlikViewServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'QlikView Server'
+category:  'BI'
+description: ''
+displayNames:
+  - 'QlikView Server'
+
+detections:
+  - id: QlikViewServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'view_server*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

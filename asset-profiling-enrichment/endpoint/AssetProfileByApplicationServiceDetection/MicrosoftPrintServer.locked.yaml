@@ -1,0 +1,21 @@
+id:        MicrosoftPrintServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Print Server'
+category:  'Print'
+description: ''
+displayNames:
+  - 'Microsoft Print Server'
+  - 'Print and Document Services'
+
+detections:
+  - id: MicrosoftPrintServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'print_server*'
+    set:
+      Tier:     3
+      Purpose:  'Print'
+      Category: 'Print'

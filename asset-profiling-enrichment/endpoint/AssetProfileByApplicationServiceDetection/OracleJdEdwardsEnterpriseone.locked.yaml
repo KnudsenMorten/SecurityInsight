@@ -1,0 +1,20 @@
+id:        OracleJdEdwardsEnterpriseone
+appliesTo: endpoint
+mode:      locked
+purpose:   'Oracle JD Edwards EnterpriseOne'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Oracle JD Edwards EnterpriseOne'
+
+detections:
+  - id: OracleJdEdwardsEnterpriseone
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'jd_edwards_enterpriseone*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

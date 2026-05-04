@@ -1,0 +1,20 @@
+id:        3CxPhoneSystem
+appliesTo: endpoint
+mode:      locked
+purpose:   '3CX Phone System Server'
+category:  'VoIP'
+description: ''
+displayNames:
+  - '3CX Phone System Server'
+
+detections:
+  - id: 3CxPhoneSystem
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'phone_system*'
+    set:
+      Tier:     3
+      Purpose:  'VoIP'
+      Category: 'VoIP'

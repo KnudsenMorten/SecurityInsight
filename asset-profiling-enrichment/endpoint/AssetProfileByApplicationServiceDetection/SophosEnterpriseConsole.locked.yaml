@@ -1,0 +1,20 @@
+id:        SophosEnterpriseConsole
+appliesTo: endpoint
+mode:      locked
+purpose:   'Sophos Enterprise Console'
+category:  'EDR/AV'
+description: ''
+displayNames:
+  - 'Sophos Enterprise Console'
+
+detections:
+  - id: SophosEnterpriseConsole
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'enterprise_console*'
+    set:
+      Tier:     1
+      Purpose:  'EDR/AV'
+      Category: 'EDR/AV'

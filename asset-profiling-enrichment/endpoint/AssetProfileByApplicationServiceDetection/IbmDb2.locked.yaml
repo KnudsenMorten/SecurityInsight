@@ -1,0 +1,20 @@
+id:        IbmDb2
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Db2'
+category:  'Database'
+description: ''
+displayNames:
+  - 'IBM Db2'
+
+detections:
+  - id: IbmDb2
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'db2*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

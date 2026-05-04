@@ -1,0 +1,20 @@
+id:        QualysScannerAppliance
+appliesTo: endpoint
+mode:      locked
+purpose:   'Qualys Scanner Appliance'
+category:  'Vulnerability Mgmt'
+description: ''
+displayNames:
+  - 'Qualys Scanner Appliance'
+
+detections:
+  - id: QualysScannerAppliance
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'scanner_appliance*'
+    set:
+      Tier:     1
+      Purpose:  'Vulnerability Mgmt'
+      Category: 'Vulnerability Mgmt'

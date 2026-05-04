@@ -1,0 +1,20 @@
+id:        TopdeskTopdesk
+appliesTo: endpoint
+mode:      locked
+purpose:   'TOPdesk'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'TOPdesk'
+
+detections:
+  - id: TopdeskTopdesk
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'topdesk*'
+    set:
+      Tier:     2
+      Purpose:  'ITSM'
+      Category: 'ITSM'

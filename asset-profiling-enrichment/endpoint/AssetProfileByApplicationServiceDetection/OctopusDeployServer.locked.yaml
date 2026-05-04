@@ -1,0 +1,20 @@
+id:        OctopusDeployServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Octopus Deploy Server'
+category:  'Deployment'
+description: ''
+displayNames:
+  - 'Octopus Deploy Server'
+
+detections:
+  - id: OctopusDeployServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'deploy_server*'
+    set:
+      Tier:     2
+      Purpose:  'Deployment'
+      Category: 'Deployment'

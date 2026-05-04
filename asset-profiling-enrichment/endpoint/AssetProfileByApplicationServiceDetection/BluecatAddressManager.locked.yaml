@@ -1,0 +1,20 @@
+id:        BluecatAddressManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'BlueCat Address Manager'
+category:  'Network'
+description: ''
+displayNames:
+  - 'BlueCat Address Manager'
+
+detections:
+  - id: BluecatAddressManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'address_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Network'
+      Category: 'Network'

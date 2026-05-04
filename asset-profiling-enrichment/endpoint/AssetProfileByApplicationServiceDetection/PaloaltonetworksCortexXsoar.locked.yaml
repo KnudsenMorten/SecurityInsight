@@ -1,0 +1,20 @@
+id:        PaloaltonetworksCortexXsoar
+appliesTo: endpoint
+mode:      locked
+purpose:   'Palo Alto Networks Cortex XSOAR'
+category:  'SOAR'
+description: ''
+displayNames:
+  - 'Palo Alto Networks Cortex XSOAR'
+
+detections:
+  - id: PaloaltonetworksCortexXsoar
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cortex_xsoar*'
+    set:
+      Tier:     1
+      Purpose:  'SOAR'
+      Category: 'SOAR'

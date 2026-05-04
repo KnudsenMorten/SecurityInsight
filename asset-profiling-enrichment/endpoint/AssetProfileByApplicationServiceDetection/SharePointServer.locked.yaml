@@ -1,0 +1,32 @@
+id:        SharePointServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'SharePoint Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |C|o|l|l|a|b|o|r|a|t|i|o|n|\|\| |p|l|a|t|f|o|r|m|\|\| |w|i|t|h|\|\| |s|e|n|s|i|t|i|v|e|\|\| |c|o|n|t|e|n|t|;|\|\| |e|x|p|l|o|i|t|a|b|l|e|\|\| |f|o|r|\|\| |d|a|t|a|\|\| |t|h|e|f|t|\|\| |a|n|d|\|\| |w|e|b|s|h|e|l|l|\|\| |d|e|p|l|o|y|m|e|n|t|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|s|h|a|r|e|p|o|i|n|t|_|s|e|r|v|e|r|
+
+detections:
+  - id: SharePointServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft_sharepoint_server*'
+            - 'sharepoint_server*'
+            - 'sharepoint_server*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^sp\d'
+            - '(?i)^sharepoint\d'
+            - '(?i)sharepoint.server'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)sharepoint'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'SharePoint Server'
+      Category: 'Server Roles'

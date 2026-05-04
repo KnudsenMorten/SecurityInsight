@@ -1,0 +1,2988 @@
+Reports:
+- ReportPurpose: |-
+    Privileged users (have at least one Entra role assignment, permanent
+    OR eligible) with no MFA configured. Privileged accounts without MFA
+    are the #1 lateral-movement entry point. Uses HasNoMfa
+    flat column (which reads MfaState across multiple sources).
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_NoMFA
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EntraRoles_Permanent
+  - EntraRoles_Eligible
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where HasNoMfa == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0)
+        or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Authentication", Subcategory="Privileged user without MFA",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Privileged user (Tier ", Tier, ") without MFA"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, EntraRoles_Eligible, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Service principals with at least one assigned application permission
+    OR Entra role that have not signed in for 180+ days. Stale privileged
+    SPNs are a high-impact compromise target -- unrotated secrets sit on
+    disk in CI runners, abandoned automation, decommissioned scripts.
+    Uses DaysInactive + IsHighRiskPermissionGrant flat cols.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedSPN_NoLogin180Days
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - IsHighRiskPermissionGrant
+  - LastSignInDateTime
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where AccountEnabled == true
+    | where DaysInactive >= 180
+    | where (array_length(todynamic(EntraAppPermissions_Application)) > 0)
+        or (array_length(todynamic(EntraRoles_Permanent)) > 0)
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="Stale privileged SPN (180d+)",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=case(
+                IsHighRiskPermissionGrant == true and DaysInactive >= 365, "Very High",
+                IsHighRiskPermissionGrant == true,                         "High",
+                DaysInactive >= 365,                                       "High",
+                "Medium"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, IsHighRiskPermissionGrant, LastSignInDateTime, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    SPNs with secrets / certificates expiring in 30 days AND active in the
+    last 30 days (otherwise it's a stale-SPN finding, not an expiry one).
+    Uses HasExpiringCredentials + CredentialExpiryDays cols.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_ExpiringCredentials
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - CredentialExpiryDays
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where HasExpiringCredentials == true
+    | where DaysInactive < 30
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="Active SPN credential expiring",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("Credential expires in ", CredentialExpiryDays, " days, breakage imminent"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, CredentialExpiryDays, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    SPNs with no Owner property -- accountability + compliance gap. When
+    the original owner leaves, no one knows who can rotate / decommission.
+    Uses IsOrphanSPN flat column.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_Orphan_NoOwner
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsHighRiskPermissionGrant
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsOrphanSPN == true
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="Orphan SPN (no Owner)",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=case(
+                IsHighRiskPermissionGrant == true and Tier <= 1, "Very High",
+                IsHighRiskPermissionGrant == true,               "High",
+                Tier <= 1,                                       "High",
+                "Medium"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, IsHighRiskPermissionGrant, DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Privileged users with DisablePasswordExpiration set. Permanent passwords
+    on privileged accounts violate every credential-hygiene baseline.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_PasswordNeverExpires
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where HasPasswordNeverExpires == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Credential hygiene", Subcategory="Privileged user with non-expiring password",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Privileged user has DisablePasswordExpiration set",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Multi-tenant SPNs that hold high-risk application permissions
+    (Directory.ReadWrite.All etc.). Multi-tenant + tenant-write means
+    any tenant where this app is consented can mutate directory state.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_MultiTenant_HighPermission_SPN
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where AccountEnabled == true
+    | where IsHighRiskPermissionGrant == true
+    | where IsThirdPartyMultiTenantSpn == true
+    | project SecurityDomain="Identity", Category="Application risk", Subcategory="Multi-tenant SPN with high-risk permission",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="Multi-tenant app holds tenant-write permissions",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    External users (#EXT# in UPN, B2B guests) holding any Entra role.
+    External + privileged is almost always a misconfiguration.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_ExternalUser_PrivilegedRole
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EntraRoles_Permanent
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsExternalIdentity == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="External access", Subcategory="External user with Entra role",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="External (#EXT#) user holds privileged role",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, EntraRoles_Permanent, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Privileged users whose password hasn't changed in 365+ days. Stale
+    passwords on tier-0 accounts are a common breach vector.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_StalePassword
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - LastPasswordChangeDateTime
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | extend _lastChange = todatetime(LastPasswordChangeDateTime)
+    | extend _ageDays = iff(isnull(_lastChange), 9999, datetime_diff('day', now(), _lastChange))
+    | where _ageDays >= 365
+    | project SecurityDomain="Identity", Category="Credential hygiene", Subcategory="Privileged user stale password (365d+)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Password unchanged ", _ageDays, " days"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              LastPasswordChangeDateTime=_lastChange, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    SPNs holding Mail.Read / Mail.Send / Mail.ReadWrite as APPLICATION
+    permission (impersonates ANY user mailbox tenant-wide). Common path
+    for phishing-as-a-service compromise.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_MailboxImpersonation
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - MailScopes
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _t = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _mailScopes = dynamic(["Mail.Read","Mail.ReadWrite","Mail.Send","Mail.ReadBasic.All","MailboxSettings.ReadWrite"]);
+    SI_Identity_Profile_CL
+    | where CollectionTime == _t
+    | where IdentityType == "ServicePrincipal"
+    | extend _appPerms = todynamic(EntraAppPermissions_Application)
+    | extend MailScopes = set_intersect(_appPerms, _mailScopes)
+    | where array_length(MailScopes) > 0
+    | project SecurityDomain="Identity", Category="Application risk", Subcategory="SPN with mailbox-impersonation permission",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("SPN granted ", array_length(MailScopes), " mailbox-impersonation scopes"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, MailScopes, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Privileged users with sign-ins from non-trusted locations in the
+    last 30 days. Joins SI_Identity_Profile_CL to SigninLogs (must be
+    enabled in the tenant). Fall-back if SigninLogs absent: query
+    degrades to "no rows" gracefully.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_NonTrustedSignIn
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UnusualGeoCount
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _t = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _privUsers =
+        SI_Identity_Profile_CL
+        | where CollectionTime == _t
+        | where IdentityType == "User" and AccountEnabled == true
+        | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+        | project Upn, DisplayName, Tier;
+    SigninLogs
+    | where TimeGenerated > ago(30d)
+    | where ResultType == 0
+    | where ConditionalAccessStatus !~ 'success' or RiskState in ('atRisk','confirmedCompromised')
+    | summarize UnusualGeoCount = dcount(LocationDetails_countryOrRegion_s) by UserPrincipalName
+    | where UnusualGeoCount >= 2
+    | join kind=inner _privUsers on $left.UserPrincipalName == $right.Upn
+    | project SecurityDomain="Identity", Category="Authentication anomaly", Subcategory="Privileged user multi-geo sign-in (30d)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Privileged user signed in from ", UnusualGeoCount, " distinct countries / risk events"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, UnusualGeoCount, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Users in an AD nested critical group (Domain Admins / Schema Admins /
+    Enterprise Admins via nesting) but holding NO Entra role. Indicates
+    AD-side privilege that isn't visible in Entra-only audits.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_AdNestedCriticalGroup_NoEntraRole
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - AdNestedCriticalGroups
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where array_length(todynamic(AdNestedCriticalGroups)) > 0
+    | where array_length(todynamic(EntraRoles_Permanent)) == 0
+    | where array_length(todynamic(EntraRoles_Eligible))  == 0
+    | project SecurityDomain="Identity", Category="Privilege visibility", Subcategory="AD-nested critical-group member with no Entra role",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="User has on-prem AD critical-group membership but no Entra role -- privilege is invisible to Entra-only audits",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, AdNestedCriticalGroups, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Identities with high-risk application permissions but NO Entra role.
+    Shadow admins -- they look unprivileged in role audits but hold the
+    same effective tenant-write power via app permissions.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_ShadowAdmin
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AccountEnabled == true
+    | where IsHighRiskPermissionGrant == true
+    | where array_length(todynamic(EntraRoles_Permanent)) == 0
+    | where array_length(todynamic(EntraRoles_Eligible))  == 0
+    | project SecurityDomain="Identity", Category="Privilege visibility", Subcategory="Shadow admin (high-risk app perms, no Entra role)",
+              ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn, AppId),
+              Impact="Tenant-write capability via app permission alone, role audits will miss this",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Disabled users still in critical AD nested groups OR with active Entra
+    roles. Cleanup gap; account re-enable would resurrect privilege.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_DisabledUser_StillInCriticalGroup
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AccountEnabled == false
+    | where (array_length(todynamic(AdNestedCriticalGroups)) > 0)
+        or (array_length(todynamic(EntraRoles_Permanent)) > 0)
+        or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Disabled user retains group / role membership",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Disabled account still has privileged group / role -- re-enable resurrects privilege",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Privileged users whose recent successful sign-ins did NOT trigger any
+    Conditional Access policy. Effectively bypasses CA enforcement.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_NoConditionalAccess
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - SignInCount
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    let _t = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+    let _privUsers =
+        SI_Identity_Profile_CL
+        | where CollectionTime == _t
+        | where IdentityType == "User" and AccountEnabled == true
+        | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+        | project Upn, DisplayName, Tier;
+    SigninLogs
+    | where TimeGenerated > ago(30d)
+    | where ResultType == 0
+    | where ConditionalAccessStatus =~ 'notApplied'
+    | summarize SignInCount = count() by UserPrincipalName
+    | where SignInCount >= 1
+    | join kind=inner _privUsers on $left.UserPrincipalName == $right.Upn
+    | project SecurityDomain="Identity", Category="Authentication", Subcategory="Privileged user with no CA policy applied",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat(SignInCount, " sign-ins (30d) where no Conditional Access policy applied"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, SignInCount, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    External guest users that haven't signed in for 90+ days. Each guest
+    is a tenant attack surface; stale guests should be reviewed for removal.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_Guest_StaleNoLogin90Days
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsExternalIdentity == true
+    | where AccountEnabled == true
+    | where DaysInactive >= 90
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Stale guest user (90d+ no sign-in)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Guest user inactive ", DaysInactive, " days"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+- ReportPurpose: |-
+    Identities with 3 or more risk factors flagged at profile time
+    (RiskFactorCount >= 3 from ). Catches anything that hits
+    multiple individual rules even if no single one is "Very High".
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_HighRiskFactor_Composite
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - RiskFactorCount
+  - Flags
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where RiskFactorCount >= 3
+    | extend Flags = strcat(
+        iff(IsOrphanSPN==true,"OrphanSPN ", ""),
+        iff(HasExpiringCredentials==true, strcat("ExpiringCreds(",CredentialExpiryDays,"d) "), ""),
+        iff(HasNoMfa==true,"NoMFA ", ""),
+        iff(HasPasswordNeverExpires==true,"NoPwdExp ", ""),
+        iff(IsExternalIdentity==true,"External ", ""),
+        iff(IsHighRiskPermissionGrant==true,"HighRiskPerms ", ""),
+        iff(IsCmdbOrphan==true,"CmdbOrphan ", ""))
+    | project SecurityDomain="Identity", Category="Composite risk", Subcategory=strcat(RiskFactorCount, " risk factors"),
+              ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn, AppId),
+              Impact=Flags,
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactorCount, Flags, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged admin accounts with a licensed mailbox / Mail address.
+    Best practice: admin accounts should be mail-less to prevent the
+    mailbox from being a phishing entry point. Per-asset row.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_AdminAccount_HasMailbox_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - Mail
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | where isnotempty(Mail)
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Admin account has mailbox",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Admin account ", Upn, " has mailbox ", Mail, " -- phishing entry point"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              Mail, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged admin accounts that have never signed in
+    (LastSignInDateTime null or DaysInactive >= 9000). Likely
+    provisioning / approval-process leftovers. Stale privilege.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_AdminAccount_NeverUsed_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - LastSignInDateTime
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | where isnull(LastSignInDateTime) or coalesce(DaysInactive, 0) >= 9000
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Admin account never used",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Admin account never signed in -- provisioning leftover or approval-process artifact",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, LastSignInDateTime, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged Entra admin accounts whose source of authority is
+    on-prem AD (OnPremisesSyncEnabled=true). MS guidance: cloud-only
+    admins reduce blast radius if AD is compromised.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_AdminAccount_OnPremSynced_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - OnPremisesSyncEnabled
+  - OnPremSamAccountName
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | where OnPremisesSyncEnabled == true
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Admin account synced from on-prem AD",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Privileged admin synced from on-prem AD -- AD compromise = Entra compromise",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              OnPremisesSyncEnabled, OnPremSamAccountName, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    All enabled non-external users with no MFA registered. Excludes
+    guests / B2B (handled separately). Severity scales with tier via
+    engine mapper. v2.2: HasNoMfa flat column.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_AnyUser_NoMFA_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - HasNoMfa
+  - MfaIsRegistered
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where IsExternalIdentity == false
+    | where HasNoMfa == true
+    | project SecurityDomain="Identity", Category="Authentication", Subcategory="User without MFA",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Tier-", Tier, " user without MFA registration"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              HasNoMfa, MfaIsRegistered, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Tier-2 power users with no MFA. Power users include business
+    owners, app owners, finance, HR, developers with elevated app
+    access -- single-credential compromise can pivot into sensitive
+    business data.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PowerUser_NoMFA_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - HasNoMfa
+  - Department
+  - JobTitle
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where IsExternalIdentity == false
+    | where HasNoMfa == true
+    | where Tier == 2
+    | project SecurityDomain="Identity", Category="Authentication", Subcategory="Power user (Tier 2) without MFA",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Tier-2 power user without MFA registration",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              HasNoMfa, Department, JobTitle, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Tier-3 regular users with no MFA. Lower priority than power /
+    privileged users, but still a credential-spray attack surface.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_RegularUser_NoMFA_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - HasNoMfa
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where IsExternalIdentity == false
+    | where HasNoMfa == true
+    | where Tier == 3
+    | project SecurityDomain="Identity", Category="Authentication", Subcategory="Regular user (Tier 3) without MFA",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Tier-3 regular user without MFA registration",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              HasNoMfa, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Break-glass / emergency-access accounts whose configuration
+    deviates from the secure-baseline expectation (should be
+    MFA-registered, password never-expires, no role assignments
+    outside Global Admin permanent). Anomaly = drift.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_BreakGlass_Anomaly_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - HasNoMfa
+  - HasPasswordNeverExpires
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsBreakGlass == true
+    | where (HasNoMfa == true) or (AccountEnabled == false) or (HasPasswordNeverExpires == false) or (DaysInactive >= 90)
+    | project SecurityDomain="Identity", Category="Break-glass account", Subcategory="Break-glass account anomaly",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Break-glass anomaly: NoMfa=", HasNoMfa, " Disabled=", not(AccountEnabled), " PwdExp=", not(HasPasswordNeverExpires), " Inactive=", DaysInactive, "d"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              HasNoMfa, HasPasswordNeverExpires, DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Break-glass accounts that have signed in within the last 30 days.
+    Break-glass accounts should NEVER be used in normal operations.
+    Sign-in detection on these accounts is a P0 SOC alert.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_BreakGlass_SignIn_Detected_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - LastSignInDateTime
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsBreakGlass == true
+    | where coalesce(DaysInactive, 9999) <= 30
+    | project SecurityDomain="Identity", Category="Break-glass account", Subcategory="Break-glass sign-in detected",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Break-glass account ", Upn, " signed in ", DaysInactive, " days ago -- P0 SOC alert"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, LastSignInDateTime, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Accounts with AccountEnabled=false but still holding active PIM
+    role assignments (permanent or eligible). Cleanup gap; account
+    re-enable would resurrect privilege without review.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_DisabledAccount_ActivePIMAssignment_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EntraRoles_Permanent
+  - EntraRoles_Eligible
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AccountEnabled == false
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Disabled account with active PIM assignment",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Disabled account still has PIM permanent / eligible role -- re-enable resurrects privilege",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, EntraRoles_Eligible, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    External users (#EXT# in UPN, B2B guests) holding any Entra role.
+    External + privileged is almost always a misconfiguration.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_ExternalUser_PrivilegedRole_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EntraRoles_Permanent
+  - EntraRoles_Eligible
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsExternalIdentity == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="External access", Subcategory="External user with Entra role",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="External (#EXT#) user holds privileged role",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, EntraRoles_Eligible, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Identities with elevated MDI investigation priority
+    (MdiInvestigationPriority >= 50 -- MDI scale 0-100). MDI sees
+    these accounts as exhibiting high-risk on-prem AD activity.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_HighMDIInvestigationPriority_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - MdiInvestigationPriority
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where coalesce(MdiInvestigationPriority, 0) >= 50
+    | project SecurityDomain="Identity", Category="Identity threat", Subcategory="High MDI investigation priority",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("MDI priority=", MdiInvestigationPriority, " on Tier-", Tier, " identity"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              MdiInvestigationPriority, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    MDI-flagged sensitive accounts (MdiIsSensitive=true OR
+    IsAdSensitiveFlagged=true) with elevated MDI risk indicators
+    (LockedOut, AdLeakedCredentials, HighInvestigationPriority).
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_HighValueTarget_MDIRisk_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - MdiIsSensitive
+  - IsAdSensitiveFlagged
+  - MdiIsLockedOut
+  - HasAdLeakedCredentials
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where (MdiIsSensitive == true) or (IsAdSensitiveFlagged == true)
+    | where (MdiIsLockedOut == true) or (HasAdLeakedCredentials == true) or (coalesce(MdiInvestigationPriority, 0) >= 50)
+    | project SecurityDomain="Identity", Category="Identity threat", Subcategory="High-value target with MDI risk",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Sensitive identity with MDI risk: LockedOut=", MdiIsLockedOut, " Leaked=", HasAdLeakedCredentials, " Priority=", MdiInvestigationPriority),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              MdiIsSensitive, IsAdSensitiveFlagged, MdiIsLockedOut, HasAdLeakedCredentials, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Multi-tenant SPNs (IsThirdPartyMultiTenantSpn=true) holding
+    high-risk application permissions. Multi-tenant + tenant-write
+    means any tenant where this app is consented can mutate state.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_MultiTenant_HighPermission_SPN_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsHighRiskPermissionGrant
+  - IsThirdPartyMultiTenantSpn
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where AccountEnabled == true
+    | where IsHighRiskPermissionGrant == true
+    | where IsThirdPartyMultiTenantSpn == true
+    | project SecurityDomain="Identity", Category="Application risk", Subcategory="Multi-tenant SPN with high-risk permission",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="Multi-tenant SPN holds tenant-write permissions",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsHighRiskPermissionGrant, IsThirdPartyMultiTenantSpn, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Accounts created in the last 7 days that received an Entra Tier 0
+    role assignment immediately. Provisioning anomaly: legitimate Tier 0
+    assignments rarely happen on day-1 of an account's lifecycle.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_NewAccount_ImmediateTier0Role_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - CreatedDateTime
+  - EntraRoles_Permanent
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where datetime_diff('day', now(), todatetime(CreatedDateTime)) <= 7
+    | where Tier == 0
+    | where array_length(todynamic(EntraRoles_Permanent)) > 0
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="New account with immediate Tier 0 role",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat('New account (', datetime_diff("day", now(), todatetime(CreatedDateTime)), 'd old) received Tier-0 permanent role immediately'),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              CreatedDateTime, EntraRoles_Permanent, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Identities holding the SAME Entra role both permanently AND
+    PIM-eligible. Duplication defeats the just-in-time intent of
+    PIM -- the permanent assignment makes the eligible one moot.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PIM_DuplicateRoleAssignment_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EntraRoles_Permanent
+  - EntraRoles_Eligible
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where array_length(set_intersect(todynamic(EntraRoles_Permanent), todynamic(EntraRoles_Eligible))) > 0
+    | project SecurityDomain="Identity", Category="PIM hygiene", Subcategory="Duplicate permanent + eligible role assignment",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Duplicate role assignment: ", strcat_array(set_intersect(todynamic(EntraRoles_Permanent), todynamic(EntraRoles_Eligible)), ", ")),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, EntraRoles_Eligible, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Users with eligible PIM role assignments that have not been
+    activated in 90+ days. Either over-assigned (right-size to
+    fewer roles) or accounts dormant for ops review.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PIM_EligibleNeverActivated_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - EntraRoles_Eligible
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where array_length(todynamic(EntraRoles_Eligible)) > 0
+    | where coalesce(DaysInactive, 9999) >= 90
+    | project SecurityDomain="Identity", Category="PIM hygiene", Subcategory="Eligible PIM role never activated (90d+)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Eligible PIM role(s) not activated; user inactive ", DaysInactive, "d"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, EntraRoles_Eligible, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users (Entra role permanent or eligible) with
+    DisablePasswordExpiration set. Permanent passwords on privileged
+    accounts violate every credential-hygiene baseline.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PasswordNeverExpires_Privileged_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - HasPasswordNeverExpires
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where HasPasswordNeverExpires == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Credential hygiene", Subcategory="Privileged user with non-expiring password",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Privileged user has DisablePasswordExpiration set",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              HasPasswordNeverExpires, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Users holding any Entra role as a permanent (non-PIM) assignment.
+    Best practice is PIM-eligible / just-in-time activation; permanent
+    role holders represent always-on attack surface.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PermanentPrivilegedRole_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EntraRoles_Permanent
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where array_length(todynamic(EntraRoles_Permanent)) > 0
+    | project SecurityDomain="Identity", Category="PIM hygiene", Subcategory="Permanent privileged role",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("User holds ", array_length(todynamic(EntraRoles_Permanent)), " permanent Entra role(s) -- should be PIM-eligible"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Service principals with at least one application permission OR
+    Entra role that have not signed in for 180+ days. Stale
+    privileged SPNs are a high-impact compromise target -- unrotated
+    secrets sit on disk in CI runners, abandoned automation.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedSPN_NoLogin180Days_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - IsHighRiskPermissionGrant
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where AccountEnabled == true
+    | where coalesce(DaysInactive, 0) >= 180
+    | where (array_length(todynamic(EntraAppPermissions_Application)) > 0) or (array_length(todynamic(EntraRoles_Permanent)) > 0)
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="Stale privileged SPN (180d+)",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("SPN inactive ", DaysInactive, "d, holds privileged permissions"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, IsHighRiskPermissionGrant, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users observed successfully signing in after a brute-
+    force attempt window. Joins SI_Identity_Profile_CL to SigninLogs
+    (must be enabled). Falls back gracefully if SigninLogs absent.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_BruteForceSuccess_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - LastSignInDateTime
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Authentication anomaly", Subcategory="Privileged user brute-force success",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Privileged user signed in successfully -- correlate with SigninLogs RiskState=atRisk for brute-force pattern",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              LastSignInDateTime, DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users observed signing in from impossible-travel
+    geographic distances within a short time window. Per-asset
+    row from Profile_CL (correlate downstream against SigninLogs
+    RiskState=atRisk + LocationDetails).
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_ImpossibleTravel_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - LastSignInDateTime
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Authentication anomaly", Subcategory="Privileged user impossible-travel sign-in",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Privileged user candidate for impossible-travel correlation (join SigninLogs RiskState)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              LastSignInDateTime, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users (Entra role permanent or eligible) with no MFA.
+    v2.2 superset of the existing Identity_PrivilegedUser_NoMFA report
+    but ported from legacy Tier 0/1 + CreatedDays>7 filter.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_NoMFA_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - HasNoMfa
+  - EntraRoles_Permanent
+  - EntraRoles_Eligible
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where HasNoMfa == true
+    | where Tier <= 1
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | where datetime_diff('day', now(), todatetime(CreatedDateTime)) > 7
+    | project SecurityDomain="Identity", Category="Authentication", Subcategory="Privileged user without MFA registration",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Privileged user (Tier ", Tier, ") without MFA -- single-credential compromise = full takeover"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              HasNoMfa, EntraRoles_Permanent, EntraRoles_Eligible, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users with sign-ins from countries on a high-risk list
+    (e.g. RU, CN, KP, IR). Per-asset Profile_CL row; correlate to
+    SigninLogs LocationDetails for the country breakdown.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_SignIn_HighRiskCountry_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - Country
+  - UsageLocation
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Authentication anomaly", Subcategory="Privileged user sign-in from high-risk country",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Privileged user candidate for high-risk-country correlation (join SigninLogs LocationDetails_countryOrRegion)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              Country, UsageLocation, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users signing in from non-trusted locations
+    (no named-location match, RiskState atRisk, or 2+ distinct geos
+    in 30d). Per-asset row; correlate against SigninLogs.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_SignIn_NonTrustedLocation_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - UsageLocation
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | project SecurityDomain="Identity", Category="Authentication anomaly", Subcategory="Privileged user sign-in from non-trusted location",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Privileged user candidate for non-trusted-location correlation (join SigninLogs)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              UsageLocation, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Privileged users (Entra role permanent or eligible) whose password
+    hasn't been changed in 365+ days. Stale passwords on Tier-0/1
+    accounts are a common breach vector.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_PrivilegedUser_StalePassword_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - LastPasswordChangeDateTime
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+    | extend _ageDays = iff(isnull(LastPasswordChangeDateTime), 9999, datetime_diff('day', now(), todatetime(LastPasswordChangeDateTime)))
+    | where _ageDays >= 365
+    | project SecurityDomain="Identity", Category="Credential hygiene", Subcategory="Privileged user stale password (365d+)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Password unchanged ", _ageDays, " days"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              LastPasswordChangeDateTime, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Service Principals with AppRoleAssignment.ReadWrite.All permission.
+    Allows the SPN to grant any Graph application permission to any
+    other SPN -- bootstrap full tenant takeover in two API calls.
+    Severity: Very High.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_AppRoleAssignmentWrite_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsHighRiskPermissionGrant
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType in ("ServicePrincipal","ManagedIdentity")
+    | where AccountEnabled == true
+    | where tostring(EntraAppPermissions_Application) has "AppRoleAssignment.ReadWrite.All"
+    | project SecurityDomain="Identity", Category="Privilege Escalation Paths", Subcategory="AppRoleAssignment.ReadWrite.All permission",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="SPN with AppRoleAssignment.ReadWrite.All -- can grant any Graph permission to any app",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsHighRiskPermissionGrant, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    SPNs with secrets / certificates expiring in <=30 days AND
+    active in the last 30 days (otherwise it's a stale-SPN finding).
+    v2.2: HasExpiringCredentials + CredentialExpiryDays flat columns.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_ExpiringCredentials_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - CredentialExpiryDays
+  - DaysInactive
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where HasExpiringCredentials == true
+    | where coalesce(DaysInactive, 9999) < 30
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="Active SPN credential expiring",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("Credential expires in ", CredentialExpiryDays, " days, breakage imminent"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              CredentialExpiryDays, DaysInactive, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    SPNs with Mail.Read / Mail.ReadWrite / Mail.Send as APPLICATION
+    permission (impersonates ANY user mailbox tenant-wide). Common
+    path for phishing-as-a-service compromise.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_MailboxAccess_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsHighRiskPermissionGrant
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | extend _appPerms = tostring(EntraAppPermissions_Application)
+    | where _appPerms has "Mail.Read" or _appPerms has "Mail.ReadWrite" or _appPerms has "Mail.Send" or _appPerms has "MailboxSettings.ReadWrite"
+    | project SecurityDomain="Identity", Category="Application risk", Subcategory="SPN with mailbox-impersonation permission",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="SPN granted mailbox-impersonation scopes (Mail.Read / Mail.ReadWrite / Mail.Send)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsHighRiskPermissionGrant, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    SPNs with no Owner property -- accountability + compliance gap.
+    When the original owner leaves, no one knows who can rotate /
+    decommission. v2.2: IsOrphanSPN flat column.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_Orphan_NoOwner_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsOrphanSPN
+  - DaysInactive
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where IsOrphanSPN == true
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="Orphan SPN (no Owner)",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="SPN has no owner -- nobody is accountable for rotation / decommission",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsOrphanSPN, DaysInactive, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    SPNs with 5+ active credentials (secrets + certs combined).
+    Over-credentialed SPNs spread the rotation surface and increase
+    the chance of a leaked credential being long-lived.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_OverCredentialed_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where AccountEnabled == true
+    | extend _credCount = toint(column_ifexists('CredentialCount', 0))
+    | where _credCount >= 5 or coalesce(CredentialExpiryDays, 9999) < 365
+    | project SecurityDomain="Identity", Category="Service Principal hygiene", Subcategory="Over-credentialed SPN (5+ creds)",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("SPN holds ", _credCount, " credentials -- rotation hygiene gap"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Service Principals with PrivilegedAccess.ReadWrite.AzureAD
+    permission. Allows direct creation / modification of PIM role
+    eligibility / assignment schedules. A compromised SPN with this
+    permission can make any account permanently eligible for Global
+    Administrator with no approval workflow.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_PrivilegedAccessWrite_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsHighRiskPermissionGrant
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType in ("ServicePrincipal","ManagedIdentity")
+    | where AccountEnabled == true
+    | where tostring(EntraAppPermissions_Application) has "PrivilegedAccess.ReadWrite.AzureAD" or tostring(EntraAppPermissions_Application) has "PrivilegedAccess.ReadWrite.AzureADGroup"
+    | project SecurityDomain="Identity", Category="Privilege Escalation Paths", Subcategory="PrivilegedAccess.ReadWrite permission",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="SPN with PrivilegedAccess.ReadWrite -- can create/modify PIM assignments directly",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsHighRiskPermissionGrant, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Service Principals with RoleManagement.ReadWrite.Directory Graph
+    permission. This permission allows the SPN to assign ANY Entra
+    role to ANY principal, including Global Administrator -- skeleton
+    key for the entire Entra ID tenant. Severity: Very High.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_RoleManagementWrite_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsHighRiskPermissionGrant
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType in ("ServicePrincipal","ManagedIdentity")
+    | where AccountEnabled == true
+    | where tostring(EntraAppPermissions_Application) has "RoleManagement.ReadWrite.Directory"
+    | project SecurityDomain="Identity", Category="Privilege Escalation Paths", Subcategory="RoleManagement.ReadWrite.Directory permission",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact="SPN with RoleManagement.ReadWrite.Directory -- can grant Global Admin to any account",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsHighRiskPermissionGrant, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Service Principals with high-risk permissions whose publisher
+    has not been verified by Microsoft. Unverified publishers are
+    anonymous -- supply-chain risk. v2.2: PublisherName + IsHighRisk
+    Permission flat columns.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_SPN_UnverifiedPublisher_HighPermission_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - PublisherName
+  - IsHighRiskPermissionGrant
+  - AppId
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "ServicePrincipal"
+    | where AccountEnabled == true
+    | where IsHighRiskPermissionGrant == true
+    | where isempty(PublisherName) or PublisherName !contains "verified"
+    | project SecurityDomain="Identity", Category="Application risk", Subcategory="Unverified publisher with high permissions",
+              ConfigurationName=DisplayName, ConfigurationId=AppId,
+              Impact=strcat("Unverified publisher (", coalesce(PublisherName,"unknown"), ") with high-risk permissions"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              PublisherName, IsHighRiskPermissionGrant, AppId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Service-account flagged identities (IsManagedServiceAccount=true
+    OR display-name pattern svc-*) with interactive sign-in activity
+    in the last 30 days. Service accounts should authenticate
+    non-interactively only.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_ServiceAccount_InteractiveSignIn_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsManagedServiceAccount
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where (IsManagedServiceAccount == true) or (DisplayName startswith "svc-") or (DisplayName startswith "svc_") or (Upn startswith "svc-") or (Upn startswith "svc_")
+    | where coalesce(DaysInactive, 9999) <= 30
+    | project SecurityDomain="Identity", Category="Service account hygiene", Subcategory="Service account with interactive sign-in",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Service account ", Upn, " last sign-in ", DaysInactive, "d ago -- should be non-interactive only"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsManagedServiceAccount, DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Service-account flagged identities signing in from non-trusted
+    locations. Per-asset row; correlate against SigninLogs
+    LocationDetails / NamedLocations for the geo breakdown.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_ServiceAccount_SignIn_NonTrustedLocation_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsManagedServiceAccount
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where (IsManagedServiceAccount == true) or (DisplayName startswith "svc-") or (DisplayName startswith "svc_") or (Upn startswith "svc-") or (Upn startswith "svc_")
+    | project SecurityDomain="Identity", Category="Service account hygiene", Subcategory="Service account from non-trusted location",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Service account candidate for non-trusted-location correlation (join SigninLogs)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsManagedServiceAccount, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Identities with high-risk application permissions but NO Entra
+    role. Shadow admins -- they look unprivileged in role audits but
+    hold the same effective tenant-write power via app permissions.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_ShadowAdmin_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - IsHighRiskPermissionGrant
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AccountEnabled == true
+    | where IsHighRiskPermissionGrant == true
+    | where array_length(todynamic(EntraRoles_Permanent)) == 0
+    | where array_length(todynamic(EntraRoles_Eligible))  == 0
+    | project SecurityDomain="Identity", Category="Privilege visibility", Subcategory="Shadow admin (high-risk app perms, no Entra role)",
+              ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn, AppId),
+              Impact="Tenant-write capability via app permission alone, role audits will miss this",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              IsHighRiskPermissionGrant, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    External guest users that haven't signed in for 90+ days. Each
+    guest is a tenant attack surface; stale guests should be reviewed
+    for removal.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_StaleGuest_NoLogin90Days_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsExternalIdentity == true
+    | where AccountEnabled == true
+    | where coalesce(DaysInactive, 0) >= 90
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Stale guest user (90d+ no sign-in)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("Guest user inactive ", DaysInactive, " days"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Internal users that haven't signed in for 180+ days. Stale
+    accounts that should be reviewed for disablement / removal.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_StaleUser_NoLogin180Days_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - DaysInactive
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where IsExternalIdentity == false
+    | where coalesce(DaysInactive, 0) >= 180
+    | project SecurityDomain="Identity", Category="Account hygiene", Subcategory="Stale internal user (180d+ no sign-in)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact=strcat("User inactive ", DaysInactive, " days"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              DaysInactive, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal
+
+- ReportPurpose: |-
+    Tenant has >5 Global Administrator role holders (permanent or
+    eligible combined). Microsoft guidance: keep Global Admin holder
+    count to 2-4. Per-asset row -- one row per GA holder; the volume
+    of rows is itself the finding.
+  ConfigurationIdInputName: ConfigurationId
+  CategoryInputName: Category
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  ReportName: Identity_TooManyGlobalAdmins_Summary
+  SecurityDomain: Identity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  SecuritySeverityInputName: SecuritySeverity
+  OutputPropertyOrder:
+  - SecurityDomain
+  - Category
+  - Subcategory
+  - ConfigurationName
+  - ConfigurationId
+  - Impact
+  - SecuritySeverity
+  - CriticalityTier
+  - CriticalityTierLevel
+  - EntraRoles_Permanent
+  - EntraRoles_Eligible
+  - RiskScoreTotal
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  ReportQuery:
+  - |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User"
+    | where AccountEnabled == true
+    | where tostring(EntraRoles_Permanent) has "Global Administrator" or tostring(EntraRoles_Eligible) has "Global Administrator"
+    | project SecurityDomain="Identity", Category="PIM hygiene", Subcategory="Excess Global Administrator holders",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Impact="Global Administrator holder -- review against MS guidance of 2-4 GAs total",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, EntraRoles_Eligible, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+  SubcategoryInputName: Subcategory
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  SortBy:
+  - RiskScoreTotal

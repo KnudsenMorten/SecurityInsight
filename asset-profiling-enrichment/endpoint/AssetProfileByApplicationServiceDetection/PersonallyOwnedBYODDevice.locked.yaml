@@ -1,0 +1,24 @@
+id:        PersonallyOwnedBYODDevice
+appliesTo: endpoint
+mode:      locked
+purpose:   'Personally-Owned BYOD Device'
+category:  'Client Devices'
+description: 'User-owned device on guest/BYOD VLAN; limited corporate footprint.'
+
+detections:
+  - id: PersonallyOwnedBYODDevice
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^byod\d'
+            - '(?i)^personal-'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)byod'
+            - '(?i)personal.device'
+            - '(?i)tier.?3'
+    set:
+      Tier:     3
+      Purpose:  'Personally-Owned BYOD Device'
+      Category: 'Client Devices'

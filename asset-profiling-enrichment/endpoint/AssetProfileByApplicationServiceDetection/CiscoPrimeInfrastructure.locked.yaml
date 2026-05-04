@@ -1,0 +1,20 @@
+id:        CiscoPrimeInfrastructure
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cisco Prime Infrastructure'
+category:  'Network Mgmt'
+description: ''
+displayNames:
+  - 'Cisco Prime Infrastructure'
+
+detections:
+  - id: CiscoPrimeInfrastructure
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'prime_infrastructure*'
+    set:
+      Tier:     1
+      Purpose:  'Network Mgmt'
+      Category: 'Network Mgmt'

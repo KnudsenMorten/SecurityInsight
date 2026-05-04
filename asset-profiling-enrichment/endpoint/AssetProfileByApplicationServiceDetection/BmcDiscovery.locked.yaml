@@ -1,0 +1,21 @@
+id:        BmcDiscovery
+appliesTo: endpoint
+mode:      locked
+purpose:   'BMC Discovery'
+category:  'ITSM/CMDB'
+description: ''
+displayNames:
+  - 'BMC Discovery'
+  - 'BMC Atrium Discovery'
+
+detections:
+  - id: BmcDiscovery
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'discovery*'
+    set:
+      Tier:     1
+      Purpose:  'ITSM/CMDB'
+      Category: 'ITSM/CMDB'

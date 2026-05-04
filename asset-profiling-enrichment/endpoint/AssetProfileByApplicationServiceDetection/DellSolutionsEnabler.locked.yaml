@@ -1,0 +1,20 @@
+id:        DellSolutionsEnabler
+appliesTo: endpoint
+mode:      locked
+purpose:   'Dell EMC Solutions Enabler'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'Dell EMC Solutions Enabler'
+
+detections:
+  - id: DellSolutionsEnabler
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'solutions_enabler*'
+    set:
+      Tier:     1
+      Purpose:  'Storage'
+      Category: 'Storage'

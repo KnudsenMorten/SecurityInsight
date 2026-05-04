@@ -1,0 +1,20 @@
+id:        SplunkSplunk
+appliesTo: endpoint
+mode:      locked
+purpose:   'Splunk Enterprise'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'Splunk Enterprise'
+
+detections:
+  - id: SplunkSplunk
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'splunk*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

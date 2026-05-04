@@ -1,0 +1,21 @@
+id:        MicrosoftRemoteDesktopConnectionBroker
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Remote Desktop Connection Broker'
+category:  'Remote Access'
+description: ''
+displayNames:
+  - 'Microsoft Remote Desktop Connection Broker'
+  - 'RD Connection Broker'
+
+detections:
+  - id: MicrosoftRemoteDesktopConnectionBroker
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_desktop_connection_broker*'
+    set:
+      Tier:     1
+      Purpose:  'Remote Access'
+      Category: 'Remote Access'

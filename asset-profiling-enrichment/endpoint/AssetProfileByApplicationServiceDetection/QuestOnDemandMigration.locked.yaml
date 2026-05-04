@@ -1,0 +1,20 @@
+id:        QuestOnDemandMigration
+appliesTo: endpoint
+mode:      locked
+purpose:   'Quest On Demand Migration'
+category:  'Identity Migration'
+description: ''
+displayNames:
+  - 'Quest On Demand Migration'
+
+detections:
+  - id: QuestOnDemandMigration
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'on_demand_migration*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Migration'
+      Category: 'Identity Migration'

@@ -1,0 +1,38 @@
+id:        EndpointDetectionAndResponseEDRManagementServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Endpoint Detection and Response (EDR) Management Server'
+category:  'Management'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |E|D|R|\|\| |c|o|n|s|o|l|e|\|\| |c|a|n|\|\| |p|u|s|h|\|\| |c|o|d|e|\|\| |t|o|\|\| |e|v|e|r|y|\|\| |m|a|n|a|g|e|d|\|\| |e|n|d|p|o|i|n|t|;|\|\| |c|o|m|p|r|o|m|i|s|e|\|\| |e|n|a|b|l|e|s|\|\| |f|l|e|e|t|-|w|i|d|e|\|\| |R|C|E|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |a|t|l|a|s|s|i|a|n|/|c|r|o|w|d|,|\|\| |m|i|c|r|o|s|o|f|t|/|s|e|n|t|i|n|e|l|,|\|\| |v|m|w|a|r|e|/|c|a|r|b|o|n|_|b|l|a|c|k|_|a|p|p|_|c|o|n|t|r|o|l|
+
+detections:
+  - id: EndpointDetectionAndResponseEDRManagementServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'crowdstrike_falcon*'
+            - 'sentinelone*'
+            - 'carbon_black*'
+            - 'trellix_edr*'
+            - 'cybereason*'
+            - 'crowd*'
+            - 'sentinel*'
+            - 'carbon_black_app_control*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^edr-mgmt'
+            - '(?i)^crowdstrike-mgr'
+            - '(?i)edr.console'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)edr.management'
+            - '(?i)edr.console'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Endpoint Detection and Response (EDR) Management Server'
+      Category: 'Management'

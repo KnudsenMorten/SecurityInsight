@@ -1,0 +1,32 @@
+id:        NetworkAccessControlNACServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Network Access Control (NAC) Server'
+category:  'Infrastructure'
+description: 'Decides who joins the network at L2; bypass enables unauthorized device admission.'
+
+detections:
+  - id: NetworkAccessControlNACServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_ise*'
+            - 'aruba_clearpass*'
+            - 'forescout_*'
+            - 'fortinac*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^nac\d'
+            - '(?i)^ise\d'
+            - '(?i)^clearpass'
+            - '(?i)network.access.control'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)nac'
+            - '(?i)cisco.ise'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Network Access Control (NAC) Server'
+      Category: 'Infrastructure'

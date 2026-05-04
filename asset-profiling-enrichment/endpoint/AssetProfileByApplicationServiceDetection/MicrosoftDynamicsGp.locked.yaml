@@ -1,0 +1,20 @@
+id:        MicrosoftDynamicsGp
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Dynamics GP'
+category:  'ERP'
+description: ''
+displayNames:
+  - 'Microsoft Dynamics GP'
+
+detections:
+  - id: MicrosoftDynamicsGp
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dynamics_gp*'
+    set:
+      Tier:     2
+      Purpose:  'ERP'
+      Category: 'ERP'

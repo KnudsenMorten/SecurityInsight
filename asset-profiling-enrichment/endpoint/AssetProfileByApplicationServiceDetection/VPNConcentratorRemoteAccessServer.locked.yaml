@@ -1,0 +1,34 @@
+id:        VPNConcentratorRemoteAccessServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'VPN Concentrator / Remote Access Server'
+category:  'Infrastructure'
+description: 'Internet-edge auth point; compromise opens trusted tunnels into the internal network.'
+
+detections:
+  - id: VPNConcentratorRemoteAccessServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_anyconnect*'
+            - 'palo_alto_globalprotect*'
+            - 'fortinet_fortigate_ssl_vpn*'
+            - 'pulse_secure*'
+            - 'ivanti_connect_secure*'
+            - 'openvpn*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^vpn\d'
+            - '(?i)^ras\d'
+            - '(?i)^anyconnect'
+            - '(?i)remote.access'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)vpn'
+            - '(?i)remote.access'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'VPN Concentrator / Remote Access Server'
+      Category: 'Infrastructure'

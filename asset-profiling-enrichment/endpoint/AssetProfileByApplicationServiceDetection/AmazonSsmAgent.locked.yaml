@@ -1,0 +1,21 @@
+id:        AmazonSsmAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'AWS Systems Manager Agent'
+category:  'Cloud Mgmt'
+description: ''
+displayNames:
+  - 'AWS Systems Manager Agent'
+  - 'SSM Agent'
+
+detections:
+  - id: AmazonSsmAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'ssm_agent*'
+    set:
+      Tier:     1
+      Purpose:  'Cloud Mgmt'
+      Category: 'Cloud Mgmt'

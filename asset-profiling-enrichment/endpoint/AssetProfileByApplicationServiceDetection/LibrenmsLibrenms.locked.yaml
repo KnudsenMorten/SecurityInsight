@@ -1,0 +1,20 @@
+id:        LibrenmsLibrenms
+appliesTo: endpoint
+mode:      locked
+purpose:   'LibreNMS'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'LibreNMS'
+
+detections:
+  - id: LibrenmsLibrenms
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'librenms*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

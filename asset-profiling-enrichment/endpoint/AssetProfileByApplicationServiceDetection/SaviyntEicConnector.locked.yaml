@@ -1,0 +1,20 @@
+id:        SaviyntEicConnector
+appliesTo: endpoint
+mode:      locked
+purpose:   'Saviynt Enterprise Identity Cloud Connector'
+category:  'Identity Governance'
+description: ''
+displayNames:
+  - 'Saviynt Enterprise Identity Cloud Connector'
+
+detections:
+  - id: SaviyntEicConnector
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'eic_connector*'
+    set:
+      Tier:     1
+      Purpose:  'Identity Governance'
+      Category: 'Identity Governance'

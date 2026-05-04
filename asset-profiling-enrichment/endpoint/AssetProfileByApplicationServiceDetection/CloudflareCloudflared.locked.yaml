@@ -1,0 +1,20 @@
+id:        CloudflareCloudflared
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cloudflared'
+category:  'ZTNA'
+description: ''
+displayNames:
+  - 'Cloudflared'
+
+detections:
+  - id: CloudflareCloudflared
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cloudflared*'
+    set:
+      Tier:     2
+      Purpose:  'ZTNA'
+      Category: 'ZTNA'

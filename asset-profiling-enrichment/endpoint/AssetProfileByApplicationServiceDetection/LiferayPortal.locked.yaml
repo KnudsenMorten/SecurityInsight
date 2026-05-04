@@ -1,0 +1,20 @@
+id:        LiferayPortal
+appliesTo: endpoint
+mode:      locked
+purpose:   'Liferay Portal'
+category:  'Portal'
+description: ''
+displayNames:
+  - 'Liferay Portal'
+
+detections:
+  - id: LiferayPortal
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'portal*'
+    set:
+      Tier:     2
+      Purpose:  'Portal'
+      Category: 'Portal'

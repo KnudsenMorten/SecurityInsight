@@ -1,0 +1,20 @@
+id:        OpensearchOpensearch
+appliesTo: endpoint
+mode:      locked
+purpose:   'OpenSearch'
+category:  'Search/SIEM'
+description: ''
+displayNames:
+  - 'OpenSearch'
+
+detections:
+  - id: OpensearchOpensearch
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'opensearch*'
+    set:
+      Tier:     2
+      Purpose:  'Search/SIEM'
+      Category: 'Search/SIEM'

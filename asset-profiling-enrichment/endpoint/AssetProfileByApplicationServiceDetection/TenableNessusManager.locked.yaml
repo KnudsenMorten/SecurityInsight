@@ -1,0 +1,20 @@
+id:        TenableNessusManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Tenable Nessus Manager'
+category:  'Vulnerability Mgmt'
+description: ''
+displayNames:
+  - 'Tenable Nessus Manager'
+
+detections:
+  - id: TenableNessusManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nessus_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Vulnerability Mgmt'
+      Category: 'Vulnerability Mgmt'

@@ -1,0 +1,24 @@
+id:        MicrosoftSystemCenterConfigurationManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Endpoint Configuration Manager'
+category:  'Endpoint Mgmt'
+description: ''
+displayNames:
+  - 'Microsoft Endpoint Configuration Manager'
+  - 'Microsoft System Center Configuration Manager'
+  - 'Configuration Manager Console'
+  - 'SCCM Console'
+  - 'MECM Console'
+
+detections:
+  - id: MicrosoftSystemCenterConfigurationManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center_configuration_manager*'
+    set:
+      Tier:     1
+      Purpose:  'SCCM/MECM site server'
+      Category: 'Endpoint Mgmt'

@@ -1,0 +1,20 @@
+id:        SectigoCertificateManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Sectigo Certificate Manager'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'Sectigo Certificate Manager'
+
+detections:
+  - id: SectigoCertificateManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'certificate_manager*'
+    set:
+      Tier:     1
+      Purpose:  'PKI'
+      Category: 'PKI'

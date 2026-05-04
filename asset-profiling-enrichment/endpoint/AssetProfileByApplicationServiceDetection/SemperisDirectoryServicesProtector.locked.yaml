@@ -1,0 +1,21 @@
+id:        SemperisDirectoryServicesProtector
+appliesTo: endpoint
+mode:      locked
+purpose:   'Semperis Directory Services Protector'
+category:  'Identity Backup'
+description: ''
+displayNames:
+  - 'Semperis Directory Services Protector'
+  - 'Semperis DSP'
+
+detections:
+  - id: SemperisDirectoryServicesProtector
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'directory_services_protector*'
+    set:
+      Tier:     0
+      Purpose:  'Identity Backup'
+      Category: 'Identity Backup'

@@ -1,0 +1,20 @@
+id:        NetiqAdvancedAuthentication
+appliesTo: endpoint
+mode:      locked
+purpose:   'NetIQ Advanced Authentication'
+category:  'Authentication'
+description: ''
+displayNames:
+  - 'NetIQ Advanced Authentication'
+
+detections:
+  - id: NetiqAdvancedAuthentication
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'advanced_authentication*'
+    set:
+      Tier:     1
+      Purpose:  'Authentication'
+      Category: 'Authentication'

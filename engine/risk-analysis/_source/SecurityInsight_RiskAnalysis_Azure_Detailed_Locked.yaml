@@ -1,0 +1,870 @@
+Reports:
+
+- ReportName: Azure_PublicStorage_HoldsSensitiveData_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Storage accounts with public-blob access OR shared-key auth enabled,
+    AND a CMDB criticality / data-sensitivity classification of
+    Confidential / Restricted (set at profile time by hasTag rule).
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 8
+  - Length: 19
+  - Length: 21
+  - Length: 20
+  - Length: 21
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 15
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.storage/storageaccounts"
+    | where (AllowBlobPublicAccess == true) or (AllowSharedKeyAccess == true) or (StPublicNetworkAccess !~ "Disabled")
+    | extend _sensitivity = tolower(coalesce(cmdbDataSensitivity, ''))
+    | where _sensitivity in ('confidential','restricted') or Tier <= 1
+    | project SecurityDomain="Azure", Category="Public exposure + data sensitivity", Subcategory="Public-blob storage holding sensitive data",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=case(
+                _sensitivity == 'restricted'   and AllowBlobPublicAccess == true, "Very High",
+                _sensitivity == 'confidential' and AllowBlobPublicAccess == true, "High",
+                AllowBlobPublicAccess == true,                                     "High",
+                "Medium"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              cmdbName, cmdbDataSensitivity, AllowBlobPublicAccess, AllowSharedKeyAccess, StPublicNetworkAccess, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_KeyVault_NoSoftDelete_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Key Vaults without soft-delete OR purge-protection. Without these
+    controls a deleted vault (or its secrets) is unrecoverable. Tier-0/1
+    vaults missing them is a P1 finding.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 18
+  - Length: 23
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.keyvault/vaults"
+    | where (HasNoSoftDelete == true) or (KvEnablePurgeProtection == false)
+    | project SecurityDomain="Azure", Category="Data protection", Subcategory="Key Vault without soft-delete / purge-protection",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat("KV softDelete=", KvEnableSoftDelete, " purgeProtection=", KvEnablePurgeProtection),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, KvEnableSoftDelete, KvEnablePurgeProtection, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_PublicIp_OnTier01Subscription_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Public IP addresses attached to resources in tier-0/1 subscriptions.
+    Direct internet attack surface on a privileged subscription = high
+    blast radius if the IP-attached service is compromised.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 10
+  - Length: 21
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.network/publicipaddresses"
+    | where isnotempty(PipAddress)
+    | project SecurityDomain="Azure", Category="Attack surface", Subcategory="Public IP on tier-0/1 subscription",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat("Public IP ", PipAddress, " attached on tier-", Tier, " sub"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, PipAddress, PipAttachedResourceId, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_AppService_UnencryptedTraffic_Detailed
+  ReportPurpose: |-
+    [Detailed companion] App Services / Functions / Web sites permitting HTTP (no HTTPS-only).
+    Unencrypted web traffic is a P1 on a sensitive workload.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 14
+  - Length: 13
+  - Length: 12
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where UnencryptedTraffic == true
+    | where ResourceType in~ ("microsoft.web/sites","microsoft.web/sites/slots")
+    | project SecurityDomain="Azure", Category="Encryption in transit", Subcategory="App Service permits HTTP",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=case(
+                cmdbDataSensitivity =~ 'Restricted' or cmdbDataSensitivity =~ 'Confidential', "Very High",
+                Tier <= 1, "High",
+                "Medium"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, AppHttpAllowed, FuncHttpsOnly, WebHttpsOnly, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_SQL_NoAadOnly_Detailed
+  ReportPurpose: |-
+    [Detailed companion] SQL Servers permitting password auth alongside AAD (AzureADOnlyAuth =
+    false). Password auth bypasses Conditional Access and central
+    identity controls.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 26
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.sql/servers"
+    | where SqlSrvAdminAzureADOnlyAuth == false
+    | project SecurityDomain="Azure", Category="Authentication", Subcategory="SQL Server allows password auth alongside AAD",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="SQL admin auth not AAD-only",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, SqlSrvAdminAzureADOnlyAuth, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_ACR_AnonymousPull_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Container registries with anonymous pull enabled. Public unauth pull
+    from a registry tagged Critical = supply-chain compromise risk.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 23
+  - Length: 15
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType =~ "microsoft.containerregistry/registries"
+    | where AcrAnonymousPullEnabled == true
+    | project SecurityDomain="Azure", Category="Supply chain", Subcategory="Container registry with anonymous pull",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="Anonymous pull enabled -- public can fetch images",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, AcrAnonymousPullEnabled, cmdbCriticality, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_AOAI_PublicWithKeyAuth_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Azure OpenAI / Cognitive Services with public network access enabled
+    AND local-auth (key auth) NOT disabled. Public LLM endpoint with key
+    auth = key in CI logs = tenant-wide model abuse / data exfil.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 23
+  - Length: 20
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType in~ ("microsoft.cognitiveservices/accounts","microsoft.cognitiveservices/accounts_openai")
+    | where AoaiPublicNetworkAccess =~ "Enabled" or CogPublicNetworkAccess =~ "Enabled"
+    | where AoaiDisableLocalAuth == false or CogDisableLocalAuth == false
+    | project SecurityDomain="Azure", Category="AI / LLM exposure", Subcategory="AOAI public + key-auth allowed",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="Public AOAI endpoint with shared-key auth -- key in CI = tenant-wide model abuse",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, AoaiPublicNetworkAccess, AoaiDisableLocalAuth, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_NSG_OpenAdminPort_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Network Security Groups with allow-Internet rules on management ports
+    (22, 3389, 5985). Uses HasOpenAdminPort flat column
+    (NSG securityRules[] walk lives in PowerShell, not in this query).
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where HasOpenAdminPort == true
+    | project SecurityDomain="Azure", Category="Network exposure", Subcategory="NSG allows Internet on admin port (22/3389/5985)",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="NSG security rule permits Internet -> SSH/RDP/WinRM",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_WebApp_AuthDisabled_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Web apps with authentication disabled OR client cert not required.
+    Anonymous access to a tier-0/1 web app = open the front door.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 17
+  - Length: 18
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    // fix: AppAuthDisabled / AppClientCertNotRequired are not flat
+    // columns in azure.schema.json (only nested usedBy refs). Use EG-curated
+    // EG_WebAuthEnabled / EG_FuncAuthEnabled (false = no auth) instead.
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where ResourceType in~ ("microsoft.web/sites","microsoft.web/sites/slots")
+    | where coalesce(EG_WebAuthEnabled, true) == false or coalesce(EG_FuncAuthEnabled, true) == false
+    | project SecurityDomain="Azure", Category="Authentication", Subcategory="Web app / Function with auth disabled",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="App-service authentication disabled (EG-observed)",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, EG_WebAuthEnabled, EG_FuncAuthEnabled, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_AdminUserEnabled_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Resources with built-in 'admin user' enabled (ACR / AKS bootstrap /
+    legacy resources). Shared admin credentials defeat per-user audit
+    and are a classic password-spray target.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 12
+  - Length: 16
+  - Length: 19
+  - Length: 14
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where AdminUserEnabled == true or AcrAdminUserEnabled == true
+    | project SecurityDomain="Azure", Category="Authentication", Subcategory="Built-in admin user enabled",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact="Shared admin credentials enabled",
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, ResourceType, AdminUserEnabled, AcrAdminUserEnabled, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_PubliclyExposed_Composite_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Catch-all for any azure resource flagged IsPubliclyExposed=true AND tier-0/1.
+    Backstop for resource types not covered by the dedicated reports.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 12
+  - Length: 17
+  - Length: 14
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IsPubliclyExposed == true
+    | project SecurityDomain="Azure", Category="Public exposure", Subcategory="Tier-0/1 resource publicly exposed (composite)",
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat(ResourceType, " has public access enabled"),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, ResourceType, IsPubliclyExposed, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_HighRiskFactor_Composite_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Azure resources with 2 or more risk factors flagged at profile time.
+    Catches anything that hits multiple individual rules even if no
+    single one is "Very High".
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 15
+  - Length: 5
+  - Length: 14
+  - Length: 12
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Azure_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where RiskFactorCount >= 2
+    | extend Flags = strcat(
+        iff(IsPubliclyExposed==true,"PublicAccess ", ""),
+        iff(HasNoSoftDelete==true,"NoSoftDelete ", ""),
+        iff(UnencryptedTraffic==true,"NoHttpsOnly ", ""),
+        iff(HasOpenAdminPort==true,"OpenAdminPort ", ""),
+        iff(IsCmdbOrphan==true,"CmdbOrphan ", ""))
+    | project SecurityDomain="Azure", Category="Composite risk", Subcategory=strcat(RiskFactorCount, " risk factors"),
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=Flags,
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactorCount, Flags, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+- ReportName: Azure_Recommendations_Summary_Detailed
+  ReportPurpose: |-
+    [Detailed companion] Azure resources with Defender CSPM / Exposure Graph findings
+    (non-CVE). Per-asset row enumerates each resource flagged by an
+    ExposureGraph affecting-edge. Severity ported from finding severity
+    (critical/high -> High, medium -> Medium, low -> Low). Engine
+    applies the canonical scoring.
+  SecurityDomain: Azure
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  CriticalityTierLevelScope:
+  - Critical - tier 0
+  - High - tier 1
+  - Medium - tier 2
+  - Low - tier 3
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium
+  - Low
+  OutputPropertyOrder:
+  - Length: 14
+  - Length: 8
+  - Length: 11
+  - Length: 17
+  - Length: 15
+  - Length: 6
+  - Length: 16
+  - Length: 15
+  - Length: 20
+  - Length: 12
+  - Length: 12
+  - Length: 15
+  - Length: 14
+  - Length: 8
+  - Length: 13
+  - Length: 19
+  - Length: 8
+  - Length: 15
+  - Length: 19
+  - Length: 10
+  - Length: 17
+  - Length: 16
+  - Length: 15
+  - Length: 18
+  - Length: 15
+  - Length: 11
+  - Length: 5
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    let _az = SI_Azure_Profile_CL
+        | where TimeGenerated > ago(8d)
+        | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+        | project AzureResourceId, Name, ResourceType, ExposureGraphNodeId, Tier, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskScoreTotal;
+    let _findings = ExposureGraphNodes
+        | mv-expand Category = Categories
+        | where tostring(Category) contains "finding"
+        | where NodeLabel !contains "cve"
+        | extend FindingSeverity = tostring(NodeProperties.rawData.severity)
+        | project FindingNodeId=NodeId, FindingName=NodeName, FindingLabel=NodeLabel, FindingSeverity;
+    let _edges = ExposureGraphEdges
+        | where tostring(EdgeLabel) contains "affecting"
+        | project SourceNodeId, TargetNodeId;
+    _edges
+    | join kind=inner _az on $left.SourceNodeId == $right.ExposureGraphNodeId
+    | join kind=inner _findings on $left.TargetNodeId == $right.FindingNodeId
+    | project SecurityDomain="Azure",
+              Category=tostring(FindingLabel),
+              Subcategory=tostring(FindingName),
+              ConfigurationName=Name, ConfigurationId=AzureResourceId,
+              Impact=strcat("Defender CSPM finding: ", FindingName, " on ", ResourceType),
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              ResourceType, FindingLabel, FindingSeverity, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+

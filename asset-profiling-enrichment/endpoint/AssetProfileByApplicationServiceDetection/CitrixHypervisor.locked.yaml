@@ -1,0 +1,21 @@
+id:        CitrixHypervisor
+appliesTo: endpoint
+mode:      locked
+purpose:   'Citrix Hypervisor'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'Citrix Hypervisor'
+  - 'XenServer'
+
+detections:
+  - id: CitrixHypervisor
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hypervisor*'
+    set:
+      Tier:     0
+      Purpose:  'Virtualization'
+      Category: 'Virtualization'

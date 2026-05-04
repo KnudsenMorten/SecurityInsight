@@ -1,0 +1,5724 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "engine": "azure",
+  "table": "Azure_Profile_CL",
+  "dcrName": "dcr-si-azure-profile",
+  "extends": "SCHEMA.json",
+  "sourcesConsumed": [
+    "azure",
+    "exposureGraph",
+    "derived"
+  ],
+  "entityIds": {
+    "primaryPriority": [
+      {
+        "resourceType": [
+          "*"
+        ],
+        "order": [
+          "AzureResourceId"
+        ]
+      }
+    ],
+    "expectedTypes": [
+      "AzureResourceId",
+      "ExposureGraphNodeId",
+      "AadObjectId"
+    ],
+    "hubJoin": "exposureGraph",
+    "subResourceRollupRule": "Sub-resources (extensions, subnets, databases, firewallrules, NICs, PIPs, AI deployments) are rolled up under their parent ARM resource by ARM ID prefix; they never emit their own row -- see SCHEMA-SPEC Â§ 5.2 / Â§ 11.1.",
+    "crossEngineVmRule": "When NodeLabel == microsoft.compute/virtualmachines AND Categories contains 'device', the same asset emits BOTH an Azure_Profile_CL row AND an Endpoint_Profile_CL row; rows are linked by shared EntityIds -- see SCHEMA-SPEC Â§ 5.3."
+  },
+  "egNodeLabelScope": [
+    "microsoft.storage/storageaccounts",
+    "microsoft.containerregistry/registries",
+    "microsoft.operationalinsights/workspaces",
+    "microsoft.cognitiveservices/accounts",
+    "microsoft.cognitiveservices/accounts_openai",
+    "microsoft.compute/virtualmachines",
+    "microsoft.network/virtualnetworks",
+    "microsoft.network/networksecuritygroups",
+    "microsoft.network/applicationgateways",
+    "microsoft.web/serverfarms",
+    "microsoft.web/sites_webapp",
+    "microsoft.web/sites_azurefunction",
+    "microsoft.logic/workflows",
+    "microsoft.sql/servers",
+    "microsoft.keyvault/vaults"
+  ],
+  "hashes": [
+    {
+      "name": "CollectHash",
+      "overPurposes": [
+        "identity",
+        "correlation",
+        "lifecycle",
+        "freshness",
+        "attribution",
+        "policy",
+        "posture"
+      ]
+    },
+    {
+      "name": "ProfileHash",
+      "overPhases": [
+        "profile"
+      ],
+      "excludesFields": [
+        "CollectHash",
+        "ProfileHash"
+      ],
+      "description": "Hash of every phase=profile field plus rule-set hash. collapses the legacy 4-hash model into 2 per ARCHITECTURE.md § 16."
+    }
+  ],
+  "rawPayload": {
+    "storageColumn": "Properties",
+    "sizeBudgetKb": 256,
+    "truncationStrategy": "drop_largest_field",
+    "sources": {
+      "azure": {
+        "_policy": "include-only (default-deny). Only paths listed here flow to Properties.collect.azure. New ARM/RP fields are NOT auto-included -- monthly schema-drift detection adds them after review.",
+        "includePaths": [
+          "id",
+          "name",
+          "type",
+          "location",
+          "subscriptionId",
+          "resourceGroup",
+          "managedBy",
+          "kind",
+          "sku.*",
+          "tags",
+          "identity.principalId",
+          "identity.tenantId",
+          "identity.type",
+          "identity.userAssignedIdentities",
+          "properties.publicNetworkAccess",
+          "properties.networkRuleSet.*",
+          "properties.networkAcls.*",
+          "properties.privateEndpointConnections[*]",
+          "properties.privateLinkServiceConnectionState",
+          "properties.minimumTlsVersion",
+          "properties.supportsHttpsTrafficOnly",
+          "properties.allowBlobPublicAccess",
+          "properties.allowSharedKeyAccess",
+          "properties.encryption.*",
+          "properties.enabledForDeployment",
+          "properties.enabledForTemplateDeployment",
+          "properties.enabledForDiskEncryption",
+          "properties.enableSoftDelete",
+          "properties.enablePurgeProtection",
+          "properties.enableRbacAuthorization",
+          "properties.accessPolicies[*]",
+          "properties.adminUserEnabled",
+          "properties.anonymousPullEnabled",
+          "properties.dataPlaneAudit",
+          "properties.disableLocalAuth",
+          "properties.publicNetworkAccessForIngestion",
+          "properties.publicNetworkAccessForQuery",
+          "properties.azureApiVersion",
+          "properties.provisioningState",
+          "createdTime",
+          "changedTime",
+          "rbacAssignments[*]"
+        ]
+      },
+      "exposureGraph": {
+        "_policy": "include-only (default-deny). Monthly schema-drift detection adds new MS fields after review.",
+        "includePaths": [
+          "NodeId",
+          "NodeLabel",
+          "NodeName",
+          "Categories[*]",
+          "EntityIds[*]",
+          "NodeProperties.rawData.environmentName",
+          "NodeProperties.rawData.hierarchyIdentifier",
+          "NodeProperties.rawData.hierarchyType",
+          "NodeProperties.rawData.nativeEnvironmentRegionName",
+          "NodeProperties.rawData.tags.tags.*",
+          "NodeProperties.rawData.identifiedResourceUsers[*].accountObjectId",
+          "NodeProperties.rawData.identifiedResourceUsers[*].lastSeen",
+          "NodeProperties.rawData.identifiedResourceUsers[*].score",
+          "NodeProperties.rawData.identifiedResourceUsers[*].operations[*]",
+          "NodeProperties.rawData.identifiedResourceUsers[*].confidence",
+          "NodeProperties.rawData.exposedToInternet",
+          "NodeProperties.rawData.exposedToInternet.effectiveRules[*]",
+          "NodeProperties.rawData.exposedToInternet.evidence.nodeIds[*]",
+          "NodeProperties.rawData.exposedToInternet.evidence.edgeIds[*]",
+          "NodeProperties.rawData.criticalityLevel.*",
+          "NodeProperties.rawData.isApplicableForMdeThroughDefenderForServers.*",
+          "NodeProperties.rawData.isUsiServer",
+          "NodeProperties.rawData.azureAiServicesResourceType.aiServiceType",
+          "NodeProperties.rawData.resourceTypeIsAzureOpenAI",
+          "NodeProperties.rawData.resourceTypeIsAzureAiServices",
+          "NodeProperties.rawData.allowsPublicAccess",
+          "NodeProperties.rawData.azureComputeServerlessMetadata.*"
+        ]
+      }
+    }
+  },
+  "schemaVersion": "2.3.6",
+  "lastModified": "2026-04-29",
+  "fields": [
+    {
+      "name": "PrimaryEntityId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "EntityIds[0].id (always AzureResourceId)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PrimaryEntityType",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "always 'AzureResourceId'",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EntityIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "derived",
+      "sourcePath": "merged from all sources (azure + exposureGraph + derived)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "RunId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "UUID per orchestrator run",
+      "stage": {
+        "writtenBy": "bootstrap",
+        "readBy": [
+          "all"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CollectionTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "derived",
+      "sourcePath": "now() at output",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "all"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzureResourceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "posture_analyze",
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AssetName",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of Name (the resource's short name from ARM) -- shared cross-engine asset-name field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "AssetId",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of AzureResourceId (= ARM resource id, full path) -- shared cross-engine asset-id field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "AssetType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "alias of Type (= ARM resource type, e.g. microsoft.compute/virtualmachines) -- shared cross-engine asset-type field for consistent reporting / dashboards"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "AzureResourceId_Guid",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "EG NodeId hex (preferred for cross-engine joins to ExposureGraph) -- short opaque GUID, distinct from AzureResourceId which is the full ARM path"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "AzSubscriptionId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.subscriptionId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "ManagementGroupId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "walked from parent path of subscription",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AzResourceGroup",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.resourceGroup",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "ParentMG_Structure",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "derived",
+      "sourcePath": "arg-walk: subscription -> management-group ancestors chain (root-first), '/' separated, leaf segment is subscription display name",
+      "derivation": {
+        "algorithm": "Walk ARG resourcecontainers (microsoft.management/managementgroups + microsoft.resources/subscriptions) once per run; emit slash-joined display-name path 'Tenant/.../<sub-name>'. Empty when principal can't read MG/sub scopes."
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "enrich",
+          "classify",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.2.0"
+    },
+    {
+      "name": "ManagedIdentityPrincipalId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.identity.principalId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExposureGraphNodeId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HierarchyIdentifier",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hierarchyIdentifier (subscription ID for Azure)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "dashboard"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "CollectHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over collect-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EnrichHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over enrich-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PostureHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over posture-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ClassifyHash",
+      "type": "string",
+      "purpose": "identity",
+      "source": "derived",
+      "sourcePath": "SHA256 over classify-stage fields",
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "MinimumTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.properties.minimumTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WeakTlsVersion"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SupportsHttpsTrafficOnly",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.supportsHttpsTrafficOnly",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageHttpAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AllowBlobPublicAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.allowBlobPublicAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageBlobPublicAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AllowSharedKeyAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.allowSharedKeyAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageSharedKeyAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EncryptionAtRestEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.properties.encryption.* (varies per RP)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "EncryptionAtRestDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EnablePurgeProtection",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.keyVaults.properties.enablePurgeProtection",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultNoPurgeProtection"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EnableSoftDelete",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.keyVaults.properties.enableSoftDelete",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultNoSoftDelete"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EnableRbacAuthorization",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.keyVaults.properties.enableRbacAuthorization",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultLegacyAccessPolicies"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AdminUserEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.containerRegistries.properties.adminUserEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrAdminUserEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AnonymousPullEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.containerRegistries.properties.anonymousPullEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrAnonymousPullAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "DisableLocalAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.disableLocalAuth",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "CognitiveLocalAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ChangedTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.changedTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExposedToInternet",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.exposedToInternet.type == 'InternetExposure'",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "internet_exposed_resource"
+        },
+        {
+          "kind": "posture_rule",
+          "name": "InternetExposedResource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExposureEvidenceNodeIds",
+      "type": "dynamic",
+      "purpose": "forensic",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.exposedToInternet.evidence.nodeIds[*] (graph-traversal proof for inherited exposure)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ExposureEvidenceEdgeIds",
+      "type": "dynamic",
+      "purpose": "forensic",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.exposedToInternet.evidence.edgeIds[*]",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IdentifiedResourceUsersHighPrivCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "cross_engine_join",
+        "join": "IdentifiedResourceUsers[*].accountObjectId -> Identity_Profile_CL.PrimaryEntityId where Tier <= 1"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify",
+          "dashboard"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "high_priv_resource_users"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HighestRiskRbacRole",
+      "type": "string",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "min_tier_over_catalog_match",
+        "catalog": "SecurityInsight_PrivilegeTierClassifier",
+        "sections": [
+          "Azure_BuiltInRoles_Tier0..3",
+          "Azure_CustomRoles_Tier0..3"
+        ],
+        "matchKey": "RoleDefinitionName",
+        "input": "arm.roleAssignments[*].roleDefinitionName"
+      },
+      "stage": {
+        "writtenBy": "enrich",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "highest_rbac_role_tier"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "NetworkAclMode",
+      "type": "string",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "arm.<resource>.properties.networkAcls.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "AllowsPublicAccess",
+      "type": "string",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.allowsPublicAccess (Enabled/Disabled)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "ServerlessPublicAccessNoAuth"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ServerlessAppServicePlan",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.azureComputeServerlessMetadata.appServicePlan (parent ASP ARM ID)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "ServerlessIdentityProvider",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.azureComputeServerlessMetadata.identityProvider (empty = anonymous = posture risk)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "ServerlessNoIdentityProvider"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "VmId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.vmId (used to join MDE)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "OsDiskEncryptionAtHost",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.securityProfile.encryptionAtHost",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmEncryptionAtHostDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "OsDiskEncryptionDiskSetId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.storageProfile.osDisk.managedDisk.diskEncryptionSet.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SecurityType",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.securityProfile.securityType (TrustedLaunch/ConfidentialVM)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmNotTrustedLaunch"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SecureBootEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.securityProfile.uefiSettings.secureBootEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmSecureBootDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "VTpmEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.securityProfile.uefiSettings.vTpmEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmVTpmDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AdminUsername",
+      "type": "string",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.osProfile.adminUsername (well-known names = brute-force surface)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmWellKnownAdminName"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AssignedHostId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.host.id (dedicated host)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "ProximityPlacementGroupId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.proximityPlacementGroup.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AvailabilitySetId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.availabilitySet.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "VirtualMachineScaleSetId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.virtualMachineScaleSet.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "HostGroupId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.hostGroup.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PatchModeWindows",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.osProfile.windowsConfiguration.patchSettings.patchMode",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmPatchModeManual"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PatchModeLinux",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.osProfile.linuxConfiguration.patchSettings.patchMode",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmPatchModeManual"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "DisablePasswordAuthentication",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines.properties.osProfile.linuxConfiguration.disablePasswordAuthentication",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmLinuxPasswordAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "Tier",
+      "type": "int",
+      "purpose": "kpi",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "weighted_tier_aggregator",
+        "see": "aggregator section in this file"
+      },
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "SIRules",
+      "type": "dynamic",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "rule_matches",
+        "see": "Profile stage: AssetProfileBy* YAML matches"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel",
+          "audit"
+        ]
+      },
+      "addedIn": "2.3.2"
+    },
+    {
+      "name": "IsEnabledActive",
+      "type": "bool",
+      "purpose": "freshness",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "enabled_and_recent",
+        "inputs": [
+          "Azure resource discovered via ARG or EG (presence implies active state); EG lastSeen within $global:SI_ActiveStaleDays when available"
+        ],
+        "default_stale_days": 30
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.3"
+    },
+    {
+      "name": "Verdict",
+      "type": "string",
+      "purpose": "kpi",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "verdict_from_tier_and_findings"
+      },
+      "stage": {
+        "writtenBy": "classify",
+        "readBy": [
+          "dashboard",
+          "sentinel"
+        ]
+      },
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Virtual Machine (microsoft.compute/virtualmachines)"
+    },
+    {
+      "name": "EG_VmJustInTimeAccessEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.justInTimeAccess.enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmJitAccessDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_VmJustInTimeAccessStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.justInTimeAccess.status",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmJitAccessDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_VmVulnerableSoftwareCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.vulnerableSoftwareCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "vm_vulnerable_software"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_VmHighSeverityVulnCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.highSeverityVulnerabilityCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "vm_vulnerable_software"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_VmCriticalSeverityVulnCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalSeverityVulnerabilityCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "vm_vulnerable_software"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_VmHandlesSensitiveData",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.handlesSensitiveData",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "sensitive_data_resource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Subnet (microsoft.network/virtualnetworks/subnets)"
+    },
+    {
+      "name": "EG_SubnetPrivateEndpointNetworkPolicies",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.privateEndpointNetworkPolicies",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SubnetPrivateEndpointPoliciesDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Log Analytics Workspace (microsoft.operationalinsights/workspaces)"
+    },
+    {
+      "name": "EG_LawPublicNetworkAccessForIngestion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccessForIngestion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_LawPublicNetworkAccessForQuery",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccessForQuery",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_LawDisableLocalAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.features.disableLocalAuth",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LocalAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Virtual Network (microsoft.network/virtualnetworks)"
+    },
+    {
+      "name": "EG_VnetEnableDdosProtection",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.enableDdosProtection",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VnetDdosProtectionDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: SQL Database (microsoft.sql/servers/databases)"
+    },
+    {
+      "name": "EG_SqlDbTransparentDataEncryption",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.transparentDataEncryption.state",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlDbTdeDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_SqlDbHandlesSensitiveData",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.handlesSensitiveData",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "sensitive_data_resource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_SqlDbDataClassificationLabels",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.dataSensitivity.classificationLabels",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "sensitive_data_resource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Key Vault (microsoft.keyvault/vaults)"
+    },
+    {
+      "name": "EG_KvPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_KvEnableRbacAuthorization",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.enableRbacAuthorization",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultLegacyAccessPolicies"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_KvEnableSoftDelete",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.enableSoftDelete",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultNoSoftDelete"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_KvEnablePurgeProtection",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.enablePurgeProtection",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultNoPurgeProtection"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_KvEnabledForDeployment",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.enabledForDeployment",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultLegacyEnabledForFlags"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_KvEnabledForTemplateDeployment",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.enabledForTemplateDeployment",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultLegacyEnabledForFlags"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_KvEnabledForDiskEncryption",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.enabledForDiskEncryption",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultLegacyEnabledForFlags"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_KvNetworkAclDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.networkAcls.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Logic App (microsoft.logic/workflows)"
+    },
+    {
+      "name": "EG_LogicAppHttpTriggerExposed",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasExposedHttpTrigger",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LogicAppHttpTriggerExposed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Network Security Group (microsoft.network/networksecuritygroups)"
+    },
+    {
+      "name": "EG_NsgInboundSshOpenToInternet",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasInboundSshOpenToInternet",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NsgInboundSshOpen"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_NsgInboundRdpOpenToInternet",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasInboundRdpOpenToInternet",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NsgInboundRdpOpen"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Cognitive Services Deployment (microsoft.cognitiveservices/accounts/deployments)"
+    },
+    {
+      "name": "EG_CogDepRaiPolicyName",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.raiPolicyName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "CognitiveDeploymentNoRaiPolicy"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Storage Account (microsoft.storage/storageaccounts)"
+    },
+    {
+      "name": "EG_StPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StAllowBlobPublicAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.allowBlobPublicAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageBlobPublicAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StAllowSharedKeyAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.allowSharedKeyAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageSharedKeyAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StSupportsHttpsTrafficOnly",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.supportsHttpsTrafficOnly",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageHttpAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StMinimumTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.minimumTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WeakTlsVersion"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StIsHnsEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isHnsEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageLegacyAccessProtocolEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StIsSftpEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isSftpEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageLegacyAccessProtocolEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StIsLocalUserEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isLocalUserEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageLegacyAccessProtocolEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StNetworkAclDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.networkAcls.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StBlobAnonymousContainerCount",
+      "type": "int",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.blobAnonymousContainerCount",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageAnonymousContainersExist"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StRequireInfrastructureEncryption",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.encryption.requireInfrastructureEncryption",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageInfraEncryptionDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StHandlesSensitiveData",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.handlesSensitiveData",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "sensitive_data_resource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_StDataClassificationLabels",
+      "type": "dynamic",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.dataSensitivity.classificationLabels",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "sensitive_data_resource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Azure OpenAI Account (microsoft.cognitiveservices/accounts)"
+    },
+    {
+      "name": "EG_AoaiPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AoaiDisableLocalAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.disableLocalAuth",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LocalAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AoaiNetworkAclDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.networkAcls.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AoaiHandlesSensitiveData",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.handlesSensitiveData",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "sensitive_data_resource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: SQL Firewall Rule (microsoft.sql/firewallrules)"
+    },
+    {
+      "name": "EG_SqlFwIsAllowAllAzureServices",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isAllowAllAzureServices",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlFirewallAllowAllAzure"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_SqlFwIsOpenToInternet",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isOpenToInternet",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlFirewallOpenToInternet"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Function App (microsoft.web/sites)"
+    },
+    {
+      "name": "EG_FuncIdentityProvider",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.azureComputeServerlessMetadata.identityProvider",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "ServerlessNoIdentityProvider"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_FuncHttpsOnly",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.httpsOnly",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppHttpAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_FuncMinTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.siteConfig.minTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WeakTlsVersion"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_FuncFtpsState",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.siteConfig.ftpsState",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FtpsNotEnforced"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_FuncPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_FuncAuthEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.authSettings.enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppAuthDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_FuncAllowsPublicAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.allowsPublicAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "ServerlessPublicAccessNoAuth"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: SQL Server (microsoft.sql/servers)"
+    },
+    {
+      "name": "EG_SqlSrvAzureADOnlyAuthentication",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.administrators.azureADOnlyAuthentication",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlServerLocalAuthAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_SqlSrvPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_SqlSrvMinimalTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.minimalTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WeakTlsVersion"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_SqlSrvRestrictOutboundNetworkAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.restrictOutboundNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlServerOutboundUnrestricted"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Web App (microsoft.web/sites)"
+    },
+    {
+      "name": "EG_WebIdentityProvider",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.azureComputeServerlessMetadata.identityProvider",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "ServerlessNoIdentityProvider"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebHttpsOnly",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.httpsOnly",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppHttpAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebMinTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.siteConfig.minTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WeakTlsVersion"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebFtpsState",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.siteConfig.ftpsState",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FtpsNotEnforced"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebClientCertEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.clientCertEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppClientCertNotRequired"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebClientCertMode",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.clientCertMode",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppClientCertNotRequired"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebAuthEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.authSettings.enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppAuthDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_WebAllowsPublicAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.allowsPublicAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "ServerlessPublicAccessNoAuth"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Cognitive Services Account (general) (microsoft.cognitiveservices/accounts)"
+    },
+    {
+      "name": "EG_CogPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_CogDisableLocalAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.disableLocalAuth",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LocalAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_CogNetworkAclDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.networkAcls.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_CogHandlesSensitiveData",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.handlesSensitiveData",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "tier_contributor",
+          "name": "sensitive_data_resource"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Container Registry (microsoft.containerregistry/registries)"
+    },
+    {
+      "name": "EG_AcrAdminUserEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.adminUserEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrAdminUserEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AcrAnonymousPullEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.anonymousPullEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrAnonymousPullAllowed"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AcrPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicNetworkAccessEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AcrNetworkRuleSetDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.networkRuleSet.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AcrPolicyExportPolicyStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.policies.exportPolicy.status",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrExportPolicyEnabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AcrPolicyTrustPolicyStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.policies.trustPolicy.status",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrContentTrustDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AcrEncryptionStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.encryption.status",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "EncryptionAtRestDisabled"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "_section": "EG: Application Gateway (microsoft.network/applicationgateways)"
+    },
+    {
+      "name": "EG_AgwWafEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.webApplicationFirewallConfiguration.enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayWafDisabledOrDetect"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AgwWafFirewallMode",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.webApplicationFirewallConfiguration.firewallMode",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayWafDisabledOrDetect"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AgwSslPolicyMinProtocolVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.sslPolicy.minProtocolVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WeakTlsVersion"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "EG_AgwHasPublicFrontendIp",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasPublicFrontendIp",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayPublicFrontend"
+        }
+      ],
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "PipAddress",
+      "type": "string",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "arm.publicIPAddresses.properties.ipAddress",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicIpAttached"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PipDdosProtectionMode",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.publicIPAddresses.properties.ddosSettings.protectionMode",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "PublicIpNoDdosProtection"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PipDdosPlanId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.publicIPAddresses.properties.ddosSettings.ddosProtectionPlan.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PipAttachedResourceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.publicIPAddresses.properties.ipConfiguration.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PipNatGatewayId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.publicIPAddresses.properties.natGateway.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PipPublicIPPrefixId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.publicIPAddresses.properties.publicIPPrefix.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "PipServicePublicIPAddress",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.publicIPAddresses.properties.servicePublicIPAddress.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicEnableIPForwarding",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.networkInterfaces.properties.enableIPForwarding",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NicIpForwardingEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicNsgId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkInterfaces.properties.networkSecurityGroup.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicVirtualMachineId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkInterfaces.properties.virtualMachine.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicMacAddress",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkInterfaces.properties.macAddress",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicHasPublicIp",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "isnotnull(arm.networkInterfaces.properties.ipConfigurations[0].properties.publicIPAddress.id)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NicHasPublicIp"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicPublicIpIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkInterfaces.properties.ipConfigurations[*].properties.publicIPAddress.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicSubnetIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkInterfaces.properties.ipConfigurations[*].properties.subnet.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NicPrivateIpAddresses",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkInterfaces.properties.ipConfigurations[*].properties.privateIPAddress",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "ExtType",
+      "type": "string",
+      "purpose": "pivot",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines/extensions.properties.type (e.g. MDE.Windows)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VmMissingMdeExtension"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "ExtSettingsJson",
+      "type": "string",
+      "purpose": "forensic",
+      "source": "azure",
+      "sourcePath": "arm.virtualMachines/extensions.properties.settings (non-secret config only)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "ExtParentVmId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "derived: ARM-id prefix of the extension",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SubnetNsgId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.subnets.properties.networkSecurityGroup.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SubnetNoNsg"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SubnetRouteTableId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.subnets.properties.routeTable.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SubnetNatGatewayId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.subnets.properties.natGateway.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SubnetDefaultOutboundAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.subnets.properties.defaultOutboundAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SubnetDefaultOutboundEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SubnetParentVnetId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "derived: ARM-id prefix of the subnet",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LawCustomerId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.workspaces.properties.customerId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LawRetentionInDays",
+      "type": "int",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.workspaces.properties.retentionInDays",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LawShortRetention"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LawPublicNetworkAccessForIngestion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.workspaces.properties.publicNetworkAccessForIngestion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LawPublicIngestionEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LawPublicNetworkAccessForQuery",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.workspaces.properties.publicNetworkAccessForQuery",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LawPublicQueryEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LawDisableLocalAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.workspaces.properties.features.disableLocalAuth",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LawLocalAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LawCmkKeyVaultUri",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.workspaces.properties.features.clusterResourceId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LawModifiedDate",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "azure",
+      "sourcePath": "arm.workspaces.properties.modifiedDate",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "VnetEnableDdosProtection",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualNetworks.properties.enableDdosProtection",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VnetNoDdosProtection"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "VnetDdosProtectionPlanId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualNetworks.properties.ddosProtectionPlan.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "VnetPeeringIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.virtualNetworks.properties.virtualNetworkPeerings[*].properties.remoteVirtualNetwork.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "VnetEncryptionEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.virtualNetworks.properties.encryption.enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "VnetEncryptionDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlDbDatabaseId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers/databases.properties.databaseId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlDbRequestedBackupStorageRedundancy",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.servers/databases.properties.requestedBackupStorageRedundancy",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlDbBackupRedundancyLocal"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlDbMaintenanceConfigurationId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers/databases.properties.maintenanceConfigurationId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlDbElasticPoolId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers/databases.properties.elasticPoolId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlDbSourceDatabaseId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers/databases.properties.sourceDatabaseId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlDbParentServerId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "derived: ARM-id prefix of the database",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultPublicNetworkAccess"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvNetworkAclsDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.networkAcls.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultNetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvEnableRbacAuthorization",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.enableRbacAuthorization",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultLegacyAccessPolicies"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvEnableSoftDelete",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.enableSoftDelete",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultNoSoftDelete"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvEnablePurgeProtection",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.enablePurgeProtection",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "KeyVaultNoPurgeProtection"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvTenantId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.tenantId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvVaultUri",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.vaultUri",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "KvHsmPoolResourceId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.vaults.properties.hsmPoolResourceId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LaIntegrationAccountId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.workflows.properties.integrationAccount.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LaIntegrationServiceEnvId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.workflows.properties.integrationServiceEnvironment.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LaAccessControlActionsAllowed",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.workflows.properties.accessControl.actions.allowedCallerIpAddresses",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LogicAppActionsCallerIpUnrestricted"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LaAccessControlTriggers",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.workflows.properties.accessControl.triggers.allowedCallerIpAddresses",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "LogicAppTriggersCallerIpUnrestricted"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LaEndpointsConnector",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.workflows.properties.endpointsConfiguration.connector.outgoingIpAddresses",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LaParameters",
+      "type": "string",
+      "purpose": "forensic",
+      "source": "azure",
+      "sourcePath": "arm.workflows.properties.parameters (parameter shape only; values may be redacted)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "LaChangedTime",
+      "type": "datetime",
+      "purpose": "freshness",
+      "source": "azure",
+      "sourcePath": "arm.workflows.properties.changedTime",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NsgInboundAllowAnyCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "derived: count(securityRules[direction=Inbound,access=Allow,source=Any])",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NsgInboundAllowAny"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NsgInboundAllowInternetCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "derived: count(securityRules[direction=Inbound,access=Allow,source=Internet])",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NsgInboundAllowInternet"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NsgInboundAllowRdpCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "derived: count(securityRules[direction=Inbound,access=Allow,destinationPortRange contains 3389])",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NsgInboundAllowRdp"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NsgInboundAllowSshCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "derived: count(securityRules[direction=Inbound,access=Allow,destinationPortRange contains 22])",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "NsgInboundAllowSsh"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NsgAttachedNicIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkSecurityGroups.properties.networkInterfaces[*].id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NsgAttachedSubnetIds",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.networkSecurityGroups.properties.subnets[*].id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "NsgSecurityRulesJson",
+      "type": "string",
+      "purpose": "forensic",
+      "source": "azure",
+      "sourcePath": "arm.networkSecurityGroups.properties.securityRules (full rule set as JSON)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "DeplRaiPolicyName",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.accounts/deployments.properties.raiPolicyName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AoaiDeploymentNoRaiPolicy"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "DeplParentAccountId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "derived: ARM-id prefix of the deployment",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageAccountPublicNetworkOpen"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StAllowBlobPublicAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.allowBlobPublicAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageBlobPublicAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StAllowSharedKeyAccess",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.allowSharedKeyAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageSharedKeyAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StAllowCrossTenantReplication",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.allowCrossTenantReplication",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageCrossTenantReplicationAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StMinimumTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.minimumTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageWeakTls"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StSupportsHttpsTrafficOnly",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.supportsHttpsTrafficOnly",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageHttpAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StNetworkAclsDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.networkAcls.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageNetworkAclDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StEncryptionKeySource",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.encryption.keySource (Microsoft.Storage/Microsoft.Keyvault)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageNoCmk"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StEncryptionKeyVaultUri",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.encryption.keyvaultproperties.keyvaulturi",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StEncryptionKeyName",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.encryption.keyvaultproperties.keyname",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StEncryptionKeyVersion",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.encryption.keyvaultproperties.keyversion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StIsNfsV3Enabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.isNfsV3Enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageNfsV3Enabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StIsSftpEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.isSftpEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageSftpEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "StKeyPolicyExpirationDays",
+      "type": "int",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.storageAccounts.properties.keyPolicy.keyExpirationPeriodInDays",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "StorageNoKeyRotationPolicy"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(OpenAI).properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AoaiPublicNetworkAccess"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiDisableLocalAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(OpenAI).properties.disableLocalAuth",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AoaiLocalAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiEncryptionKeySource",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.encryption.keySource",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AoaiNoCmk"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiEncryptionKeyVaultUri",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.encryption.keyVaultProperties.keyVaultUri",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiEncryptionKeyName",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.encryption.keyVaultProperties.keyName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiApiProperties",
+      "type": "string",
+      "purpose": "forensic",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.apiProperties (kind-specific configuration)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiEndpoint",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.endpoint",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AoaiEndpoints",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.endpoints (per-feature endpoint map)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlFwAllowsAllAzureIPs",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "derived: start=0.0.0.0 AND end=0.0.0.0",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlFwAllowAllAzureIps"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlFwAllowsAllIPv4",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "derived: start=0.0.0.0 AND end=255.255.255.255",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlFwAllowAllIpv4"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlFwParentServerId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "derived: ARM-id prefix of the firewall rule",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncHttpsOnly",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.httpsOnly",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FunctionAppHttpAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FunctionAppPublicNetworkOpen"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncMinTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.siteConfig.minTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FunctionAppWeakTls"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncFtpsState",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.siteConfig.ftpsState",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FunctionAppFtpAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncRemoteDebuggingEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.siteConfig.remoteDebuggingEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FunctionAppRemoteDebuggingEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncVnetSubnetId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.virtualNetworkSubnetId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncManagedEnvironmentId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.managedEnvironmentId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncKeyVaultReferenceIdentity",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.keyVaultReferenceIdentity",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncServerFarmId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.serverFarmId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncCorsAllowedOrigins",
+      "type": "dynamic",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.siteConfig.cors.allowedOrigins",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FunctionAppCorsWildcard"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "FuncAuthEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(functionapp).properties.siteAuthEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "FunctionAppNoAuth"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvMinimalTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.minimalTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlServerWeakTls"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlServerPublicNetworkOpen"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvAdminAzureADOnlyAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.administrators.azureADOnlyAuthentication",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "SqlServerSqlAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvAdminLogin",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.administrators.login",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvAdminSid",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.administrators.sid",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvAdminTenantId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.administrators.tenantId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvFederatedClientId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.federatedClientId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvPrimaryUserAssignedId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.primaryUserAssignedIdentityId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "SqlSrvFqdn",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.servers.properties.fullyQualifiedDomainName",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebHttpsOnly",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.httpsOnly",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WebAppHttpAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WebAppPublicNetworkOpen"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebMinTlsVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.siteConfig.minTlsVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WebAppWeakTls"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebFtpsState",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.siteConfig.ftpsState",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WebAppFtpAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebRemoteDebuggingEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.siteConfig.remoteDebuggingEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WebAppRemoteDebuggingEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebVnetSubnetId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.virtualNetworkSubnetId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich",
+          "classify"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebSiteAuthEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.siteAuthEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WebAppNoAuth"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebManagedEnvironmentId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.managedEnvironmentId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebKeyVaultReferenceIdentity",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.keyVaultReferenceIdentity",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebServerFarmId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.serverFarmId",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "WebCorsAllowedOrigins",
+      "type": "dynamic",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.sites(webapp).properties.siteConfig.cors.allowedOrigins",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "WebAppCorsWildcard"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "CogPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(non-OpenAI).properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "CognitivePublicNetworkAccess"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "CogDisableLocalAuth",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(non-OpenAI).properties.disableLocalAuth",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "CognitiveLocalAuthEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "CogEncryptionKeyVaultUri",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.encryption.keyVaultProperties.keyVaultUri",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "CogApiProperties",
+      "type": "string",
+      "purpose": "forensic",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.apiProperties",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "CogEndpoint",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices.properties.endpoint",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrAdminUserEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.adminUserEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrAdminUserEnabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrPublicNetworkAccess",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.publicNetworkAccess",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrPublicNetworkAccess"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrAnonymousPullEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.anonymousPullEnabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrAnonymousPullAllowed"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrNetworkRuleSetDefaultAction",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.networkRuleSet.defaultAction",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrNetworkRuleDefaultAllow"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrTrustPolicyStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.policies.trustPolicy.status",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrTrustPolicyDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrSoftDeletePolicyStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.policies.softDeletePolicy.status",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrSoftDeleteDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrEncryptionStatus",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.encryption.status",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AcrEncryptionDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrEncryptionKeyVaultId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.encryption.keyVaultProperties.keyIdentifier",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrDedicatedDataEndpoints",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.dataEndpointHostNames",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AcrLoginServer",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.registries.properties.loginServer",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AiProjDefaultProject",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(Hub).properties.defaultProject",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AiProjAssociatedProjects",
+      "type": "dynamic",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(Hub).properties.associatedProjects",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AiProjEncryptionKeyVaultUri",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(AIServices/Hub/Project).properties.encryption.keyVaultProperties.keyVaultUri",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AiProjEndpoint",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(AIServices/Hub/Project).properties.endpoint",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AiProjEndpoints",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.cognitiveServices(AIServices/Hub/Project).properties.endpoints",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AgwSkuTier",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.applicationGateways.properties.sku.tier (Standard_v2 = no WAF)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayNoWafTier"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AgwWafEnabled",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.applicationGateways.properties.webApplicationFirewallConfiguration.enabled",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayWafDisabled"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AgwWafFirewallMode",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.applicationGateways.properties.webApplicationFirewallConfiguration.firewallMode (Detection vs Prevention)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayWafDetectionOnly"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AgwFirewallPolicyId",
+      "type": "string",
+      "purpose": "correlation",
+      "source": "azure",
+      "sourcePath": "arm.applicationGateways.properties.firewallPolicy.id",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "enrich"
+        ]
+      },
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AgwSslMinProtocolVersion",
+      "type": "string",
+      "purpose": "posture",
+      "source": "azure",
+      "sourcePath": "arm.applicationGateways.properties.sslPolicy.minProtocolVersion",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayWeakTls"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "AgwFrontendPublicIpCount",
+      "type": "int",
+      "purpose": "risk",
+      "source": "azure",
+      "sourcePath": "derived: count(frontendIPConfigurations where publicIPAddress != null)",
+      "stage": {
+        "writtenBy": "collect",
+        "readBy": [
+          "classify"
+        ]
+      },
+      "usedBy": [
+        {
+          "kind": "posture_rule",
+          "name": "AppGatewayPublicFrontend"
+        }
+      ],
+      "addedIn": "2.3.1"
+    },
+    {
+      "name": "IsPubliclyExposed",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIAzurePubliclyExposed -- walks 14 public-access flags (AllowBlobPublicAccess, *PublicNetworkAccess, EG_*AllowsPublicAccess, PipAddress)"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "HasNoSoftDelete",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIAzureNoSoftDelete -- KvEnableSoftDelete == false (Key Vault only)"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "UnencryptedTraffic",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIAzureUnencryptedTraffic -- AppHttpAllowed=true OR SupportsHttpsTrafficOnly=false"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "HasOpenAdminPort",
+      "type": "bool",
+      "purpose": "risk",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Test-SIAzureOpenAdminPort -- NSG with allow-Internet rule on 22/3389/5985"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "name": "IsCmdbOrphan",
+      "type": "bool",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "CmdbMatchPhase == 'orphan' AND Tier <= 1"
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.4"
+    },
+    {
+      "purpose": "correlation",
+      "addedIn": "2.3.6",
+      "name": "cmdbId",
+      "source": "cmdb",
+      "sourcePath": "cmdb.id (CMDB row primary key when matched at Reconcile)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "correlation",
+      "addedIn": "2.3.6",
+      "name": "cmdbName",
+      "source": "cmdb",
+      "sourcePath": "cmdb.name (display name from CMDB)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "cmdbCriticality",
+      "source": "cmdb",
+      "sourcePath": "cmdb.criticality (Critical / High / Medium / Low)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "cmdbDataSensitivity",
+      "source": "cmdb",
+      "sourcePath": "cmdb.dataSensitivity (Restricted / Confidential / Internal / Public)",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string"
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchPhase",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "Reconcile-stage classification of how the asset was matched to CMDB: rule / identity / orphan / stale-cache / gap-cis"
+      }
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchState",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "Reconcile-stage match outcome: matched / unmatched / ambiguous"
+      }
+    },
+    {
+      "name": "MsCriticalityLevel",
+      "type": "string",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.criticalityLevel (Microsoft Exposure Mgmt asset criticality verdict). Comparison column only -- Tier sources from CL only.",
+      "stage": {"writtenBy": "collect", "readBy": ["enrich","classify","risk_analysis"]},
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsCompromisedRecently",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isCompromisedRecently. Feeds RiskFactor_Probability_Detailed.IsCompromisedRecently token.",
+      "stage": {"writtenBy": "collect", "readBy": ["enrich","classify","risk_analysis"]},
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "IsProductionEnvironment",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.isProductionEnvironment. Feeds RiskFactor_Consequence_Detailed.IsProductionEnvironment token.",
+      "stage": {"writtenBy": "collect", "readBy": ["enrich","classify","risk_analysis"]},
+      "addedIn": "2.3.0"
+    },
+    {
+      "name": "HasInternetExposureSignal",
+      "type": "bool",
+      "purpose": "posture",
+      "source": "exposureGraph",
+      "sourcePath": "eg.node.NodeProperties.rawData.hasInternetExposureSignal -- continuous signal alongside boolean IsPubliclyExposed.",
+      "stage": {"writtenBy": "collect", "readBy": ["enrich","classify","risk_analysis"]},
+      "addedIn": "2.3.0"
+    }
+  ]
+}

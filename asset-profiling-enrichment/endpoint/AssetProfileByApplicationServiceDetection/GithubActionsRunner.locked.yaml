@@ -1,0 +1,21 @@
+id:        GithubActionsRunner
+appliesTo: endpoint
+mode:      locked
+purpose:   'GitHub Actions Runner'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'GitHub Actions Runner'
+  - 'GitHub Self-Hosted Runner'
+
+detections:
+  - id: GithubActionsRunner
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'actions_runner*'
+    set:
+      Tier:     2
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

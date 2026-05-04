@@ -1,0 +1,21 @@
+id:        MicrosoftMimPam
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Privileged Access Management for Active Directory'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'Microsoft Privileged Access Management for Active Directory'
+  - 'MIM PAM'
+
+detections:
+  - id: MicrosoftMimPam
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mim_pam*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

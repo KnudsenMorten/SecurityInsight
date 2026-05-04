@@ -1,0 +1,37 @@
+id:        ExchangeServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Exchange Server'
+category:  'Server Roles'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |M|a|i|l|\|\| |f|l|o|w|\|\| |\|\|+|\|\| |e|x|t|e|n|s|i|v|e|\|\| |A|D|\|\| |p|r|i|v|i|l|e|g|e|s|\|\| |h|i|s|t|o|r|i|c|a|l|l|y|;|\|\| |w|e|l|l|-|k|n|o|w|n|\|\| |e|s|c|a|l|a|t|i|o|n|\|\| |p|a|t|h|s|\|\| |t|o|\|\| |D|A|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|e|x|c|h|a|n|g|e|_|s|e|r|v|e|r|
+
+detections:
+  - id: ExchangeServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft_exchange_server*'
+            - 'exchange_server*'
+            - 'exchange_server*'
+        - kind: egDetectedRoles
+          egSignals:
+            - 'isExchangeServerDnsName'
+            - 'isTaggedAsExchangeServer'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^exch\d'
+            - '(?i)^mbx\d'
+            - '(?i)^cas\d'
+            - '(?i)exchange'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)exchange'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Exchange Server'
+      Category: 'Server Roles'

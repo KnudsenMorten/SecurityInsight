@@ -1,0 +1,20 @@
+id:        AppdynamicsController
+appliesTo: endpoint
+mode:      locked
+purpose:   'AppDynamics Controller'
+category:  'Monitoring'
+description: ''
+displayNames:
+  - 'AppDynamics Controller'
+
+detections:
+  - id: AppdynamicsController
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'controller*'
+    set:
+      Tier:     2
+      Purpose:  'Monitoring'
+      Category: 'Monitoring'

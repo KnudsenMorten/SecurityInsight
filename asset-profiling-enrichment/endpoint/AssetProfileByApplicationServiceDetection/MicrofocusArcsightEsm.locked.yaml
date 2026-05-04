@@ -1,0 +1,20 @@
+id:        MicrofocusArcsightEsm
+appliesTo: endpoint
+mode:      locked
+purpose:   'ArcSight ESM'
+category:  'SIEM'
+description: ''
+displayNames:
+  - 'ArcSight ESM'
+
+detections:
+  - id: MicrofocusArcsightEsm
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'arcsight_esm*'
+    set:
+      Tier:     1
+      Purpose:  'SIEM'
+      Category: 'SIEM'

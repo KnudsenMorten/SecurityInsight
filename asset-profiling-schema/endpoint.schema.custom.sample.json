@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+
+  "_purpose": "REFERENCE FILE -- not loaded by the engine. Copy parts you need into: asset-profiling-schema/endpoint.schema.custom.json. Loaded automatically by Get-SISchemaWithCustomMerge.ps1 and merged on top of asset-profiling-schema/endpoint.schema.locked.json.",
+
+  "_loadingNotes": [
+    "Locked schema:   asset-profiling-schema/endpoint.schema.locked.json   (shipped, do NOT edit)",
+    "Custom overlay:  asset-profiling-schema/endpoint.schema.custom.json   (you create -- this file is a sample of that)",
+    "Merge semantics (per Get-SISchemaWithCustomMerge.ps1):",
+    "  fields[*]                          -- same name => REPLACES locked field, new name => APPENDS",
+    "  aggregator.contributors[*]         -- same id   => REPLACES locked, new id => APPENDS",
+    "  rawPayload.sources.<src>.includePaths[*]   -- UNION (locked first, then your additions)",
+    "  rawPayload.sources.<new-src>       -- entirely new source bucket => ADDS",
+    "  hashes / entityIds / aiEligibility -- engine invariants, CANNOT be overridden"
+  ],
+
+  "_examplesIncluded": [
+    "1. Add a brand-new bool field with purpose=risk -- auto-included in RA queries",
+    "2. Override an existing field's tier mapping",
+    "3. Add a new aggregator contributor (your custom CMDB column)",
+    "4. Add includePaths to surface extra fields from raw payload"
+  ],
+
+
+  "fields": [
+    {
+      "_comment": "EXAMPLE 1: brand-new bool field. purpose=risk auto-includes it in every RA report's RiskFactor_Probability + RiskFactor_Probability_Detailed (no Build-RiskAnalysis.ps1 edit needed). Set fillFrom to the column in your raw payload that drives this bool.",
+      "name": "HasUnpatchedExploitedCVE",
+      "type": "bool",
+      "purpose": "risk",
+      "stage": { "writtenBy": "profile" },
+      "default": false,
+      "description": "True when the asset has at least one CVE flagged in CISA KEV catalog and patch is missing > 7 days."
+    },
+
+    {
+      "_comment": "EXAMPLE 2: brand-new int field surfaced from your CMDB join.",
+      "name": "cmdbServiceTierNumeric",
+      "type": "int",
+      "purpose": "context",
+      "stage": { "writtenBy": "enrich" },
+      "default": 99,
+      "description": "Numeric copy of cmdbServiceTier (1..5). Lets KQL filter without string parsing."
+    },
+
+    {
+      "_comment": "EXAMPLE 3: REPLACE an existing field's tier mapping. Same `name` as a locked field -> replaces in full. Use this carefully; you're taking ownership of every aspect of this field. Here we change a string default.",
+      "name": "OsPlatform",
+      "type": "string",
+      "purpose": "metadata",
+      "stage": { "writtenBy": "collect" },
+      "default": "UnknownOS",
+      "description": "Customer override of OsPlatform default (was empty string)."
+    }
+  ],
+
+  "aggregator": {
+    "_comment": "EXAMPLE 4: extend the aggregator to surface a custom CMDB column into a profile field. The contributor's id matches the field name above (cmdbServiceTierNumeric).",
+    "contributors": [
+      {
+        "id": "cmdbServiceTierNumeric",
+        "source": "cmdb",
+        "fromColumn": "ServiceTierNumeric",
+        "transform": "toInt"
+      }
+    ]
+  },
+
+  "rawPayload": {
+    "_comment": "EXAMPLE 5: surface extra fields from MDE's DeviceInfo into Properties.collect.mde -- they become available in KQL via column_ifexists on the Profile_CL table.",
+    "sources": {
+      "mde": {
+        "includePaths": [
+          "DeviceInfo.MachineGroup",
+          "DeviceInfo.RegistryDeviceTag"
+        ]
+      },
+
+      "_comment_newSource": "EXAMPLE 6: entirely new source bucket. Useful when you've added a custom enricher (e.g. ManageEngine, Tanium) -- the bucket appears under Properties.collect.<sourceName> in the Profile_CL table.",
+      "tanium": {
+        "includePaths": [
+          "ComputerName",
+          "LastLoggedInUser",
+          "TaniumComplianceScore"
+        ]
+      }
+    }
+  }
+}

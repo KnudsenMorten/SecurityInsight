@@ -1,0 +1,21 @@
+id:        HpeSmartUpdateManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'HPE iLO Service Pack'
+category:  'Hardware Mgmt'
+description: ''
+displayNames:
+  - 'HPE iLO Service Pack'
+  - 'HPE Smart Update Manager'
+
+detections:
+  - id: HpeSmartUpdateManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'smart_update_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Hardware Mgmt'
+      Category: 'Hardware Mgmt'

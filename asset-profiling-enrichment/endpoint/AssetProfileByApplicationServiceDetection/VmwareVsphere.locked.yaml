@@ -1,0 +1,21 @@
+id:        VmwareVsphere
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware vSphere Client'
+category:  'Virtualization'
+description: ''
+displayNames:
+  - 'VMware vSphere Client'
+  - 'VMware vSphere Hypervisor'
+
+detections:
+  - id: VmwareVsphere
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vsphere*'
+    set:
+      Tier:     0
+      Purpose:  'Virtualization'
+      Category: 'Virtualization'

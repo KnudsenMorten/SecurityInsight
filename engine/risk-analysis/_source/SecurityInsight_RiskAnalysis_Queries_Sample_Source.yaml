@@ -1,0 +1,277 @@
+# SecurityInsight v2.2 -- Risk Analysis Locked Query Set
+#
+# Wave 0: folder skeleton + 3 sample queries demonstrating the
+# v2.2 typed-column query style. Wave 1+ adds the full ~50-report catalog
+# (see ../README.md). The legacy v2.1 set is frozen under ../_legacy/.
+#
+# Query conventions (v2.2):
+#   - Latest snapshot:  let _t = toscalar(<table> | summarize max(CollectionTime));
+#                       <table> | where CollectionTime == _t
+#   - No tag-string parsing on the hot path -- use typed columns
+#   - Cross-engine joins on AadDeviceId / AzureResourceId / AppId / Upn
+#   - ExposureGraphNodes for EG-curated posture (criticality, exposureScore,
+#     role detection) when the SI snapshot lacks the signal
+#
+Reports:
+    - ReportName: Identity_PrivilegedSPN_NoLogin180Days_Summary
+      ReportPurpose: |-
+        Service principals with at least one assigned application permission
+        (Entra app permission OR Entra role) that haven't signed in for 180+
+        days. Stale privileged SPNs are a high-impact compromise target --
+        unrotated secrets / certs sit on disk in CI runners, abandoned
+        automation, or decommissioned scripts. Removing them shrinks the
+        attack surface without touching live workloads.
+      SecurityDomain: Identity
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - DaysInactive
+      - PermissionCount
+      - HighRiskPermissions
+      - LastSignInDateTime
+      - RiskScoreTotal
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |-
+        // Identity_PrivilegedSPN_NoLogin180Days_Summary
+        let _t = toscalar(SI_Identity_Profile_CL | summarize max(CollectionTime));
+        let _highRiskPerms = dynamic([
+            "Directory.ReadWrite.All","RoleManagement.ReadWrite.Directory",
+            "Application.ReadWrite.All","AppRoleAssignment.ReadWrite.All",
+            "Mail.ReadWrite","Mail.Send","Files.ReadWrite.All",
+            "User.ReadWrite.All","Group.ReadWrite.All",
+            "PrivilegedAccess.ReadWrite.AzureAD","Sites.FullControl.All"
+        ]);
+        SI_Identity_Profile_CL
+        | where CollectionTime == _t
+        | where IdentityType == "ServicePrincipal"
+        | where AccountEnabled == true
+        | where isnotempty(AppId)
+        // Stale: never signed in OR last sign-in > 180d ago
+        | extend _lastSignIn = todatetime(LastSignInDateTime)
+        | extend DaysInactive = iff(isnull(_lastSignIn), 9999, datetime_diff('day', now(), _lastSignIn))
+        | where DaysInactive >= 180
+        // Has at least one privileged permission
+        | extend _appPerms = todynamic(EntraAppPermissions_Application)
+        | extend _entraRoles = todynamic(EntraRoles_Permanent)
+        | extend PermissionCount = array_length(_appPerms) + array_length(_entraRoles)
+        | where PermissionCount > 0
+        // Highlight high-risk permission overlap
+        | extend HighRiskPermissions = set_intersect(set_union(_appPerms, _entraRoles), _highRiskPerms)
+        | extend _hasHighRisk = array_length(HighRiskPermissions) > 0
+        | extend SecuritySeverity = case(
+            _hasHighRisk and DaysInactive >= 365, "Very High",
+            _hasHighRisk,                          "High",
+            DaysInactive >= 365,                   "High",
+            "Medium")
+        | extend CriticalityTierLevel = case(Tier == 0, "Critical - tier 0", Tier == 1, "High - tier 1", Tier == 2, "Medium - tier 2", "Low - tier 3")
+        | extend CriticalityTier      = Tier
+        | extend RiskFactor_Consequence = case(Tier == 0, 5, Tier == 1, 4, Tier == 2, 2, 1)
+        | extend RiskFactor_Probability = case(_hasHighRisk, 5, PermissionCount >= 3, 4, 2)
+        | extend RiskConsequenceScore = RiskFactor_Consequence * 10
+        | extend RiskProbabilityScore = RiskFactor_Probability * 10
+        | extend RiskScoreTotal       = RiskConsequenceScore + RiskProbabilityScore + min_of(DaysInactive / 30, 20)
+        | project
+            SecurityDomain     = "Identity",
+            Category           = "Service Principal hygiene",
+            Subcategory        = "Stale privileged SPN",
+            ConfigurationName  = DisplayName,
+            ConfigurationId    = AppId,
+            Impact             = strcat("SPN with ", PermissionCount, " perms inactive ", DaysInactive, "d"),
+            SecuritySeverity,
+            CriticalityTier,
+            CriticalityTierLevel,
+            DaysInactive,
+            PermissionCount,
+            HighRiskPermissions,
+            LastSignInDateTime = _lastSignIn,
+            RiskScoreTotal
+        | sort by RiskScoreTotal desc
+
+    - ReportName: Endpoint_InternetFacing_Tier0_With_CVE_Summary
+      ReportPurpose: |-
+        Tier-0 / Tier-1 endpoints that are reachable from the internet AND
+        carry at least one critical CVE older than 30 days. Combines the v2.2
+        endpoint typed columns (IsInternetFacing, CriticalCveCount30d, Tier)
+        with ExposureGraphNodes for the EG-curated severity that MDE alone
+        doesn't always surface.
+      SecurityDomain: Endpoint
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope: ['Critical - tier 0','High - tier 1']
+      SecuritySeverityScope: ['Very High','High']
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - CriticalCveCount30d
+      - ExposureLevel
+      - EgExposureScore
+      - SIRules
+      - RiskScoreTotal
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |-
+        // Endpoint_InternetFacing_Tier0_With_CVE_Summary
+        let _t = toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime));
+        let _egPosture =
+            ExposureGraphNodes
+            | where NodeLabel in~ ('device','microsoft.compute/virtualmachines','microsoft.hybridcompute/machines')
+            | extend rawData = todynamic(NodeProperties).rawData
+            | project
+                AadDeviceId = tostring(rawData.aadDeviceId),
+                EgExposureScore = tostring(rawData.exposureScore),
+                EgCriticality = tostring(rawData.criticality);
+        SI_Endpoint_Profile_CL
+        | where CollectionTime == _t
+        | where Tier in (0, 1)
+        | where IsInternetFacing == true
+        | where CriticalCveCount30d > 0
+        | join kind=leftouter _egPosture on AadDeviceId
+        | extend SecuritySeverity = case(
+            Tier == 0 and CriticalCveCount30d >= 5, "Very High",
+            Tier == 0,                              "High",
+            CriticalCveCount30d >= 5,               "High",
+            "Medium")
+        | extend CriticalityTierLevel = iff(Tier == 0, "Critical - tier 0", "High - tier 1")
+        | extend CriticalityTier      = Tier
+        | extend RiskFactor_Consequence = iff(Tier == 0, 5, 4)
+        | extend RiskFactor_Probability = case(EgCriticality =~ "Critical", 5, EgCriticality =~ "High", 4, 3)
+        | extend RiskConsequenceScore = RiskFactor_Consequence * 10
+        | extend RiskProbabilityScore = RiskFactor_Probability * 10
+        | extend RiskScoreTotal       = RiskConsequenceScore + RiskProbabilityScore + (CriticalCveCount30d * 2)
+        | project
+            SecurityDomain     = "Endpoint",
+            Category           = "Vulnerability + exposure",
+            Subcategory        = "Internet-facing tier-0/1 with critical CVE",
+            ConfigurationName  = DisplayName,
+            ConfigurationId    = AzureResourceId,
+            Impact             = strcat(CriticalCveCount30d, " critical CVEs >30d on internet-facing host"),
+            SecuritySeverity,
+            CriticalityTier,
+            CriticalityTierLevel,
+            CriticalCveCount30d,
+            ExposureLevel,
+            EgExposureScore,
+            SIRules,
+            RiskScoreTotal
+        | sort by RiskScoreTotal desc
+
+    - ReportName: Azure_PublicStorage_HoldsSensitiveData_Summary
+      ReportPurpose: |-
+        Storage accounts with public-blob access enabled (or shared-key auth
+        allowed) AND a CMDB criticality / data sensitivity tag of Confidential
+        or Restricted. Public storage by itself is a finding; combined with a
+        sensitive data classification it's a P1. Uses hasTag
+        cmdbDataSensitivity which Reconcile folds onto the row when a CMDB
+        rule matches the resource's subscription / RG.
+      SecurityDomain: Azure
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope: ['Critical - tier 0','High - tier 1','Medium - tier 2']
+      SecuritySeverityScope: ['Very High','High','Medium']
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - cmdbName
+      - cmdbDataSensitivity
+      - AllowBlobPublicAccess
+      - AllowSharedKeyAccess
+      - StPublicNetworkAccess
+      - RiskScoreTotal
+      SortBy:
+      - RiskScoreTotal
+      ReportQuery:
+      - |-
+        // Azure_PublicStorage_HoldsSensitiveData_Summary
+        SI_Azure_Profile_CL
+        | where TimeGenerated > ago(8d)
+        | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+        | where ResourceType =~ "microsoft.storage/storageaccounts"
+        | where (AllowBlobPublicAccess == true) or (AllowSharedKeyAccess == true) or (StPublicNetworkAccess !~ "Disabled")
+        // Sensitive-data tagging from CMDB Reconcile fold OR explicit cmdb rule match
+        | extend _sensitivity = tolower(coalesce(cmdbDataSensitivity, ''))
+        | where _sensitivity in ('confidential','restricted')
+            or Tier in (0, 1)
+        | extend SecuritySeverity = case(
+            _sensitivity == 'restricted'   and AllowBlobPublicAccess == true, "Very High",
+            _sensitivity == 'confidential' and AllowBlobPublicAccess == true, "High",
+            AllowBlobPublicAccess == true,                                     "High",
+            "Medium")
+        | extend CriticalityTierLevel = case(Tier == 0, "Critical - tier 0", Tier == 1, "High - tier 1", Tier == 2, "Medium - tier 2", "Low - tier 3")
+        | extend CriticalityTier      = Tier
+        | extend RiskFactor_Consequence = case(_sensitivity == 'restricted', 5, _sensitivity == 'confidential', 4, Tier <= 1, 4, 2)
+        | extend RiskFactor_Probability = case(AllowBlobPublicAccess == true, 5, StPublicNetworkAccess !~ 'Disabled', 4, AllowSharedKeyAccess == true, 3, 2)
+        | extend RiskConsequenceScore = RiskFactor_Consequence * 10
+        | extend RiskProbabilityScore = RiskFactor_Probability * 10
+        | extend RiskScoreTotal       = RiskConsequenceScore + RiskProbabilityScore
+        | project
+            SecurityDomain     = "Azure",
+            Category           = "Public exposure + data sensitivity",
+            Subcategory        = "Public-blob storage holding sensitive data",
+            ConfigurationName  = Name,
+            ConfigurationId    = AzureResourceId,
+            Impact             = strcat("Storage public=", iff(AllowBlobPublicAccess==true,'YES','no'),
+                                          " sharedKey=", iff(AllowSharedKeyAccess==true,'YES','no'),
+                                          " sensitivity=", coalesce(_sensitivity,'untagged')),
+            SecuritySeverity,
+            CriticalityTier,
+            CriticalityTierLevel,
+            cmdbName,
+            cmdbDataSensitivity,
+            AllowBlobPublicAccess,
+            AllowSharedKeyAccess,
+            StPublicNetworkAccess,
+            RiskScoreTotal
+        | sort by RiskScoreTotal desc

@@ -1,0 +1,31 @@
+id:        MedicalDeviceManagementServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Medical Device Management Server'
+category:  'IoT / OT'
+description: 'Manages patient-affecting medical devices; safety-critical systems with regulatory exposure.'
+
+detections:
+  - id: MedicalDeviceManagementServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'philips_intellispace*'
+            - 'ge_centricity*'
+            - 'siemens_syngo*'
+            - 'medtronic_*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^med\d'
+            - '(?i)^pacs\d'
+            - '(?i)medical.device'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)medical.device'
+            - '(?i)pacs'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Medical Device Management Server'
+      Category: 'IoT / OT'

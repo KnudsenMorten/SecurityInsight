@@ -1,0 +1,28 @@
+id:        PowerUserWorkstationFinanceLegalHR
+appliesTo: endpoint
+mode:      locked
+purpose:   'Power User Workstation (Finance, Legal, HR)'
+category:  'Client Devices'
+description: 'User has access to sensitive business data; spear-phishing target.'
+
+detections:
+  - id: PowerUserWorkstationFinanceLegalHR
+    detect:
+      any:
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^fin-wks'
+            - '(?i)^legal-wks'
+            - '(?i)^hr-wks'
+            - '(?i)^poweruser'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)power.user'
+            - '(?i)finance.user'
+            - '(?i)legal.user'
+            - '(?i)hr.user'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Power User Workstation (Finance, Legal, HR)'
+      Category: 'Client Devices'

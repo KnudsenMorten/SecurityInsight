@@ -1,0 +1,20 @@
+id:        JenkinsJenkins
+appliesTo: endpoint
+mode:      locked
+purpose:   'Jenkins'
+category:  'Build/CI'
+description: ''
+displayNames:
+  - 'Jenkins'
+
+detections:
+  - id: JenkinsJenkins
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'jenkins*'
+    set:
+      Tier:     1
+      Purpose:  'Build/CI'
+      Category: 'Build/CI'

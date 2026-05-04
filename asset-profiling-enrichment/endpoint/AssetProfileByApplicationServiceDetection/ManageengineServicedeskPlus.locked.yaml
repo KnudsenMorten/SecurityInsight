@@ -1,0 +1,20 @@
+id:        ManageengineServicedeskPlus
+appliesTo: endpoint
+mode:      locked
+purpose:   'ManageEngine ServiceDesk Plus'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'ManageEngine ServiceDesk Plus'
+
+detections:
+  - id: ManageengineServicedeskPlus
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'servicedesk_plus*'
+    set:
+      Tier:     2
+      Purpose:  'ITSM'
+      Category: 'ITSM'

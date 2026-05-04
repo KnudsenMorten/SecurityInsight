@@ -1,0 +1,20 @@
+id:        SonatypeNexusRepositoryManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Sonatype Nexus Repository Manager'
+category:  'Artifact Repo'
+description: ''
+displayNames:
+  - 'Sonatype Nexus Repository Manager'
+
+detections:
+  - id: SonatypeNexusRepositoryManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'nexus_repository_manager*'
+    set:
+      Tier:     1
+      Purpose:  'Artifact Repo'
+      Category: 'Artifact Repo'

@@ -1,0 +1,32 @@
+id:        SANStorageControllerBackingTier0VMs
+appliesTo: endpoint
+mode:      locked
+purpose:   'SAN / Storage Controller Backing Tier 0 VMs'
+category:  'Infrastructure'
+description: 'Storage admin can clone or detach tier 0 VM disks granting full data access offline.'
+
+detections:
+  - id: SANStorageControllerBackingTier0VMs
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'netapp_ontap*'
+            - 'dell_emc_unity*'
+            - 'hpe_3par*'
+            - 'pure_storage*'
+            - 'ibm_storwize*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^san\d'
+            - '(?i)^storagectl'
+            - '(?i)storage.controller'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)san.controller'
+            - '(?i)storage.tier.?0'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'SAN / Storage Controller Backing Tier 0 VMs'
+      Category: 'Infrastructure'

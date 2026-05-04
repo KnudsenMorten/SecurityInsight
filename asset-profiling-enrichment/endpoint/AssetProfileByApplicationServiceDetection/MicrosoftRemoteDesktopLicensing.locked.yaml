@@ -1,0 +1,21 @@
+id:        MicrosoftRemoteDesktopLicensing
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Remote Desktop Licensing'
+category:  'Remote Access'
+description: ''
+displayNames:
+  - 'Microsoft Remote Desktop Licensing'
+  - 'RD Licensing'
+
+detections:
+  - id: MicrosoftRemoteDesktopLicensing
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_desktop_licensing*'
+    set:
+      Tier:     2
+      Purpose:  'Remote Access'
+      Category: 'Remote Access'

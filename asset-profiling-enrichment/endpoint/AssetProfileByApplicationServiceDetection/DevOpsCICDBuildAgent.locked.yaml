@@ -1,0 +1,38 @@
+id:        DevOpsCICDBuildAgent
+appliesTo: endpoint
+mode:      locked
+purpose:   'DevOps / CI-CD Build Agent'
+category:  'Management'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |B|u|i|l|d|s|\|\| |a|n|d|\|\| |d|e|p|l|o|y|s|\|\| |c|o|d|e|;|\|\| |s|u|p|p|l|y|-|c|h|a|i|n|\|\| |r|i|s|k|\|\| |w|i|t|h|\|\| |s|c|o|p|e|d|\|\| |c|r|e|d|e|n|t|i|a|l|s|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |j|e|t|b|r|a|i|n|s|/|t|e|a|m|c|i|t|y|,|\|\| |j|e|t|b|r|a|i|n|s|/|t|e|a|m|c|i|t|y|_|a|g|e|n|t|
+
+detections:
+  - id: DevOpsCICDBuildAgent
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'jenkins*'
+            - 'gitlab_runner*'
+            - 'azure_devops_agent*'
+            - 'github_actions_runner*'
+            - 'teamcity*'
+            - 'teamcity_agent*'
+            - 'teamcity*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^build\d'
+            - '(?i)^agent\d'
+            - '(?i)^jenkins-agent'
+            - '(?i)^gh-runner'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)build.agent'
+            - '(?i)ci.cd'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'DevOps / CI-CD Build Agent'
+      Category: 'Management'

@@ -1,0 +1,20 @@
+id:        GlobalscapeEft
+appliesTo: endpoint
+mode:      locked
+purpose:   'Globalscape EFT Server'
+category:  'FTP'
+description: ''
+displayNames:
+  - 'Globalscape EFT Server'
+
+detections:
+  - id: GlobalscapeEft
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'eft*'
+    set:
+      Tier:     2
+      Purpose:  'FTP'
+      Category: 'FTP'

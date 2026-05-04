@@ -1,0 +1,20 @@
+id:        FreshworksDiscoveryProbe
+appliesTo: endpoint
+mode:      locked
+purpose:   'Freshservice Discovery Probe'
+category:  'ITSM'
+description: ''
+displayNames:
+  - 'Freshservice Discovery Probe'
+
+detections:
+  - id: FreshworksDiscoveryProbe
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'discovery_probe*'
+    set:
+      Tier:     2
+      Purpose:  'ITSM'
+      Category: 'ITSM'

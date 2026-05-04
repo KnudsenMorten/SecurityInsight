@@ -1,0 +1,20 @@
+id:        ForcepointDlp
+appliesTo: endpoint
+mode:      locked
+purpose:   'Forcepoint DLP'
+category:  'DLP'
+description: ''
+displayNames:
+  - 'Forcepoint DLP'
+
+detections:
+  - id: ForcepointDlp
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dlp*'
+    set:
+      Tier:     1
+      Purpose:  'DLP'
+      Category: 'DLP'

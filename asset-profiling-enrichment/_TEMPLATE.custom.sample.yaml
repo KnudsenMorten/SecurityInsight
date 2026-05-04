@@ -1,0 +1,477 @@
+# ============================================================================
+# SecurityInsight asset-profiling rule -- CANONICAL ANNOTATED TEMPLATE
+# ============================================================================
+#
+# This file is the single annotated example of the *.locked.yaml /
+# *.custom.yaml rule grammar. Copy it, rename it, edit it.
+#
+# Every detect kind known to the engine is demonstrated below WITH ITS REAL
+# PARAMETER NAMES (sourced from engine/asset-profiling/shared/RuleEval.ps1).
+#
+# Field reference and detect-kind catalogue:  RULE-REFERENCE.md
+# Loader source-of-truth:                     ../engine/asset-profiling/shared/Get-SIRuleSet.ps1
+# Per-detection evaluator:                    ../engine/asset-profiling/shared/RuleEval.ps1
+#
+# This file is NEVER loaded by the engine -- it ends in `.sample.yaml`, which
+# the loader explicitly skips. It exists only as documentation.
+# ============================================================================
+#
+# ----------------------------------------------------------------------------
+# QUICK SYNTAX REFERENCE -- every detect kind, with required + optional params
+# ----------------------------------------------------------------------------
+#
+#   nameMatches                     (all engines)
+#     namePatterns: [regex,...]     # required (alias: patterns)
+#
+#   osPlatform                      (endpoint)
+#     osPatterns:   [regex,...]     # required (alias: patterns)
+#
+#   hasMdeMachineGroupTag           (endpoint)
+#     machineTagPatterns: [regex,...]  # required (alias: patterns)
+#
+#   egDetectedRoles                 (endpoint, identity)
+#     egSignals:   [string,...]     # required (alias: roles)
+#
+#   hasEntraExtensionAttributeTag   (identity)
+#     attribute:   string           # required, e.g. extensionAttribute6
+#     value:       string           # required
+#     match:       exact | <other>  # optional, default exact (other = -like)
+#
+#   hasSoftwareInstalled            (endpoint)
+#     tvmSoftwareNames: [glob,...]  # required ('vendor/name' or '*/name')
+#
+#   groupMembership                 (identity)
+#     group:       string           # required (single name; CI exact)
+#
+#   hasAzureTagDirectOrParent       (azure; also endpoint when correlated)
+#     tag:         string           # required (key, CI exact)
+#     value:       string|list      # optional (presence-only if absent)
+#     match:       <operator>       # optional, default equal
+#
+#   egKustoQuery                    (escape hatch -- endpoint, identity, azure)
+#     kql:         string           # required, returns asset IDs
+#
+#   mostFrequentUserTier            (endpoint)
+#     tierValues:  [int,...]        # required, e.g. [0] or [0,1]
+#
+#   ipInRange                       (endpoint, azure)
+#     cidrs:       [CIDR,...]       # required (alias: cidr)
+#     fields:      [string,...]     # optional, restricts which fields to scan
+#
+#   hasTag                          (endpoint, identity, azure)
+#     tag:         string           # optional*  (key, CI exact)
+#     value:       string|list      # optional*  (depends on match)
+#     match:       <operator>       # optional, default equal
+#     sources:     [string,...]     # optional: mde,eg,entra,arm,cmdb,ad
+#     # *at least one of tag / value required; value-only equal is REFUSED
+#
+# Operators usable as `match:` (for hasTag, hasAzureTagDirectOrParent):
+#   equal (default) | like | has | regex | matches | in | startswith | endswith
+#
+# `set:` block:
+#   Tier:        int 0..3 (0=Critical, 1=High, 2=Medium, 3=Low)
+#   Purpose:     string (human-readable role label)
+#   Category:    string (grouping bucket)
+#   Tags:        [string,...] (free-form, aggregated across rule matches)
+#   cmdbId:      string (foreign key into CMDB.csv -- auto-stamps cmdbName +
+#                       cmdbCriticality + cmdbDataSensitivity from the row)
+#
+# DO NOT set inline (sourced from CMDB CSV via cmdbId):
+#   cmdbName  ·  cmdbCriticality  ·  cmdbDataSensitivity
+#
+# ============================================================================
+
+
+# ----------------------------------------------------------------------------
+# FILE-LEVEL FIELDS
+# ----------------------------------------------------------------------------
+
+# id: rule identity. PascalCase, no spaces. MUST equal the file basename
+# (without `.locked` / `.custom`). The engine deduplicates rules by `id` --
+# a `*.custom.yaml` with the same `id` as a sibling `*.locked.yaml` overrides
+# it. So a customer override file MUST keep the same `id` as the file it's
+# overriding.
+id: ExampleRuleName
+
+# appliesTo: which engine(s) evaluate this rule.
+#   endpoint   -- physical / virtual machine assets (MDE inventory)
+#   identity   -- user / service-principal / managed-identity assets (Entra)
+#   azure      -- Azure resources (ARM)
+#   publicip   -- internet-exposed IPs (Shodan-driven scanner)
+#
+# Single value, or a list for cross-engine rules:
+#   appliesTo: endpoint
+#   appliesTo: [endpoint, identity, azure]
+#
+# Cross-engine rules conventionally live under `shared/`.
+appliesTo: endpoint
+
+# mode:
+#   locked   (default) -- rule loads normally
+#   disable             -- engine skips this rule entirely (Invoke-SIRuleEval
+#                          returns null immediately; useful to silence a
+#                          shipped baseline without deleting the file).
+# Only `locked` and `disable` are wired today; any other value is treated as
+# `locked`. The custom-wins-by-id dedup happens regardless of mode.
+mode: locked
+
+# purpose: free-text description. Surfaces in run logs.
+purpose: 'Tag domain controllers as Tier 0 critical infrastructure'
+
+# category: grouping label. Surfaces in `SIRules[]` on each profile row.
+category: 'Server Roles'
+
+# description: multi-line operator notes -- the long-form `purpose`.
+description: |
+  Identifies Active Directory Domain Controllers via several independent
+  fingerprints. Any one match is sufficient. Tier 0 because compromise of
+  a DC is total-domain compromise.
+
+
+# ----------------------------------------------------------------------------
+# DETECTIONS
+# ----------------------------------------------------------------------------
+#
+# `detections:` is a LIST of detection blocks. The engine walks them in array
+# order; the FIRST detection whose `detect` block matches wins for that rule.
+# Every matched rule contributes one entry to the asset's `SIRules[]` array.
+# Tier reduces to `min(Tier)` across all matched rules.
+#
+# Each block has three required keys: `id`, `detect`, `set`.
+# ----------------------------------------------------------------------------
+
+detections:
+
+  # ==========================================================================
+  # USE CASE 1: ANY-of (OR semantics) with multiple regex / signal kinds
+  #
+  # "A box is a Domain Controller if its name LOOKS like a DC, OR its OS has
+  # the AD DS role bits, OR ExposureGraph already detected the DC role."
+  #
+  # Every kind here matches independently; the FIRST kind to fire wins the
+  # block (any: short-circuits).
+  # ==========================================================================
+  - id: DC-AnyFingerprint
+
+    detect:
+      any:
+
+        # ----- nameMatches (all engines) ----------------------------------
+        # Regex against asset Name / Hostname / DisplayName / Fqdn /
+        # MDE_DeviceName / ENTRA_DisplayName / AZ_Name. Any field that
+        # matches any pattern fires the kind.
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^dc\d'                     # 'DC1', 'dc-prod-04'
+            - '(?i)domain.controller'         # 'My Domain Controller'
+
+        # ----- osPlatform (endpoint) --------------------------------------
+        # Regex against MDE_OSPlatform / ENTRA_OS / EG_OS.
+        - kind: osPlatform
+          osPatterns:
+            - '(?i)^WindowsServer202[02]$'    # Windows Server 2020 / 2022
+
+        # ----- egDetectedRoles (endpoint, identity) -----------------------
+        # Two match modes:
+        #   (a) substring against EG_DetectedRoles (semicolon-joined string
+        #       sourced from EG confidenceHigh/confidenceLow arrays)
+        #   (b) boolean property on EG_RawData, e.g. isDomainController=true
+        - kind: egDetectedRoles
+          egSignals: ['isDomainController','DomainController']
+
+        # ----- hasMdeMachineGroupTag (endpoint) ---------------------------
+        # Regex against the MDE Machine-Group string (single field; comma- or
+        # semicolon-separated when device is in multiple groups).
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)domain.controller'
+            - '(?i)tier.?0'
+
+    set:
+      Tier: 0                                  # 0=Critical, 1=High, 2=Medium, 3=Low
+      Purpose: 'Domain Controller'
+      Category: 'Server Roles'
+      Tags: ['DomainController', 'Tier0Infra']
+
+
+  # ==========================================================================
+  # USE CASE 2: ALL-of (AND semantics) + cmdbId pattern
+  #
+  # "Stamp Tier 0 + the CMDB service id ONLY if the box is Windows AND its IP
+  # is in the prod DC subnet AND its MDE machine group says it's a DC."
+  #
+  # Every child kind must match. Use `all:` when you need conjunction.
+  # ==========================================================================
+  - id: DC-OnPrem-CmdbBacked
+
+    detect:
+      all:
+
+        - kind: osPlatform
+          osPatterns: ['(?i)^Windows']
+
+        # ----- ipInRange (endpoint, azure) --------------------------------
+        # CIDR test against ALL known IP carriers (MDE/EG/Entra/ARM/AD/CMDB).
+        # Single hit fires the kind. Optional `fields:` restricts the scan.
+        - kind: ipInRange
+          cidrs: ['10.100.1.0/24', '10.100.2.0/24']
+
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns: ['(?i)domain.controller']
+
+    set:
+      Tier: 0
+      Purpose: 'Domain Controller (production)'
+      Category: 'Server Roles'
+
+      # cmdbId: foreign key into asset-profiling-providers/servicenow-cmdb/CMDB.csv
+      # When set, the engine looks up this id at Reconcile and AUTO-STAMPS:
+      #   cmdbName · cmdbCriticality · cmdbDataSensitivity
+      # onto the profile row, sourced from the CSV row.
+      #
+      # *** DO NOT set cmdbName / cmdbCriticality / cmdbDataSensitivity here. ***
+      # *** They come from the CMDB CSV via the cmdbId lookup -- single       ***
+      # *** source of truth. Setting them inline causes drift between rule    ***
+      # *** and CSV.                                                          ***
+      cmdbId: '1'
+
+
+  # ==========================================================================
+  # USE CASE 3: identity engine -- group membership + extension attribute
+  #
+  # `groupMembership` takes a SINGLE group name (no list parameter). Use
+  # multiple `groupMembership` entries under `any:` for OR-of-groups.
+  # ==========================================================================
+  - id: PrivilegedIdentity
+
+    detect:
+      any:
+
+        - kind: groupMembership
+          group: 'Domain Admins'
+
+        - kind: groupMembership
+          group: 'Tier0-Admins'
+
+        - kind: groupMembership
+          group: 'Enterprise Admins'
+
+        # ----- hasEntraExtensionAttributeTag (identity) --------------------
+        # `match: exact` is case-SENSITIVE full-string (-ceq). Anything else
+        # falls back to case-insensitive substring (-like '*value*').
+        - kind: hasEntraExtensionAttributeTag
+          attribute: extensionAttribute6
+          value:     'Break_Glass_Account'
+          match:     exact
+
+    set:
+      Tier: 0
+      Purpose: 'Privileged Identity'
+      Category: 'Identity Privilege'
+      Tags: ['Tier0Identity']
+
+
+  # ==========================================================================
+  # USE CASE 4: azure engine -- tag walking, all 8 operators demonstrated
+  #
+  # `hasAzureTagDirectOrParent` walks resource -> RG -> sub -> management
+  # group. Matches if ANY level carries the tag. The `match:` operator is
+  # case-insensitive on both name AND value.
+  # ==========================================================================
+  - id: AzureTag-OperatorShowcase
+
+    detect:
+      any:
+
+        # equal (default) -- exact, case-insensitive
+        - kind: hasAzureTagDirectOrParent
+          tag:   'environment'
+          value: 'production'
+          # match: equal              # default; can be omitted
+
+        # like -- PowerShell wildcards
+        - kind: hasAzureTagDirectOrParent
+          tag:   'app'
+          value: '*-prod-*'
+          match: like
+
+        # has -- substring presence
+        - kind: hasAzureTagDirectOrParent
+          tag:   'owner'
+          value: 'finance'
+          match: has
+
+        # regex -- .NET regex
+        - kind: hasAzureTagDirectOrParent
+          tag:   'app'
+          value: '(?i)^prod[-_]'
+          match: regex
+
+        # in -- value appears in a list
+        - kind: hasAzureTagDirectOrParent
+          tag:   'environment'
+          value: ['prod', 'production', 'PRD']
+          match: in
+
+        # startswith / endswith -- prefix / suffix
+        - kind: hasAzureTagDirectOrParent
+          tag:   'app'
+          value: 'prod-'
+          match: startswith
+
+        - kind: hasAzureTagDirectOrParent
+          tag:   'app'
+          value: '-prod'
+          match: endswith
+
+        # presence-only (no value:) -- ANY non-empty value matches
+        - kind: hasAzureTagDirectOrParent
+          tag: 'businessOwner'
+
+    set:
+      Tier: 1
+      Purpose: 'Production Azure resource'
+      Category: 'Workload Tier'
+
+
+  # ==========================================================================
+  # USE CASE 5: hasTag -- the cross-source convenience matcher
+  #
+  # `hasTag` walks every tag carrier (MDE / EG / Entra / ARM / CMDB / AD) in
+  # ONE shot. Three modes:
+  #   (1) tag only          -- key presence
+  #   (2) value only        -- value presence (REQUIRES match: in/regex/like/has)
+  #   (3) tag + value       -- exact pair
+  # ==========================================================================
+  - id: TagShowcase
+
+    detect:
+      any:
+
+        # Mode 1: any source has key 'critical' with a non-empty value
+        - kind: hasTag
+          tag: 'critical'
+
+        # Mode 2: any value (anywhere) matches the regex.
+        # NOTE: value-only with `match: equal` is REFUSED (too broad). You
+        # MUST use match: in / regex / like / has when you omit `tag:`.
+        - kind: hasTag
+          value: '(?i)tier0|t0'
+          match: regex
+
+        # Mode 2: value in a list
+        - kind: hasTag
+          value: ['production','prd','prod']
+          match: in
+
+        # Mode 3: exact key:value pair
+        - kind: hasTag
+          tag:   'environment'
+          value: 'production'
+
+        # Mode 3 with operator
+        - kind: hasTag
+          tag:   'environment'
+          value: ['prod','production','PRD']
+          match: in
+
+        # Restrict carrier sources -- only ARM and Entra
+        - kind: hasTag
+          tag:   'criticality'
+          value: 'high'
+          sources: ['arm','entra']
+
+    set:
+      Tier: 1
+      Purpose: 'Tag-based business-critical asset'
+      Category: 'Tag'
+
+
+  # ==========================================================================
+  # USE CASE 6: hasSoftwareInstalled -- match by installed software
+  #
+  # Uses the TVM software inventory bulk index (Build-SIRuleIndexes). Patterns
+  # are PowerShell -like globs matched against 'vendor/name' pairs. Either
+  # the full 'vendor/name' OR just '*/name' works.
+  # ==========================================================================
+  - id: SqlServer
+
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft/sql server*'    # vendor/name with wildcard
+            - '*/microsoft sql server*'  # just match the name part
+            - '*sql server*'             # very loose
+
+    set:
+      Tier: 1
+      Purpose: 'SQL Server'
+      Category: 'Database Server'
+
+
+  # ==========================================================================
+  # USE CASE 7: mostFrequentUserTier -- inherit tier from logon graph
+  #
+  # An endpoint's tier is pulled UP to match the most-frequent interactive
+  # user's tier (logon-graph inheritance). `tierValues:` is the list of user
+  # tiers that should fire this rule.
+  # ==========================================================================
+  - id: WorkstationOfTier0User
+
+    detect:
+      all:
+        - kind: osPlatform
+          osPatterns: ['(?i)^Windows1[01]$']    # Win10 / Win11 client
+
+        - kind: mostFrequentUserTier
+          tierValues: [0]                       # most-frequent user is T0
+
+    set:
+      Tier: 1
+      Purpose: 'Workstation of Tier-0 user'
+      Category: 'Logon Activity'
+      Tags: ['AdminWorkstation']
+
+
+  # ==========================================================================
+  # USE CASE 8: egKustoQuery -- ESCAPE HATCH (raw KQL against ExposureGraph)
+  #
+  # Use ONLY when no built-in kind expresses what you need. The engine submits
+  # this KQL ONCE per run at startup, caches the returned IDs in a hashtable,
+  # then per-asset evaluation is just a set lookup -- no per-asset query.
+  #
+  # The returned column must contain asset IDs (NodeId / DeviceId /
+  # AccountObjectId).
+  # ==========================================================================
+  - id: CustomEgFingerprint
+
+    detect:
+      any:
+        - kind: egKustoQuery
+          kql: |
+            ExposureGraphNodes
+            | where NodeProperties has 'someCustomProperty'
+            | project NodeId
+
+    set:
+      Tier: 1
+      Purpose: 'Custom-detected sensitive asset'
+      Category: 'Custom'
+
+
+# ============================================================================
+# QUICK-REFERENCE: every supported `set:` field
+#
+#   Tier         int 0..3   -- 0=Critical, 1=High, 2=Medium, 3=Low
+#   Purpose      string     -- human-readable role label
+#   Category     string     -- grouping bucket
+#   Tags         [string]   -- free-form, aggregated across rule matches
+#   cmdbId       string     -- foreign key into CMDB.csv (auto-stamps name +
+#                              criticality + dataSensitivity from the CSV)
+#
+# DO NOT set inline (they come from the CMDB CSV via cmdbId):
+#   cmdbName · cmdbCriticality · cmdbDataSensitivity
+#
+# Full grammar reference:  RULE-REFERENCE.md
+# ============================================================================

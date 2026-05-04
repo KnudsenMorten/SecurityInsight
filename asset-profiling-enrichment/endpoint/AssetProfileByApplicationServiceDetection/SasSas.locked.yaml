@@ -1,0 +1,20 @@
+id:        SasSas
+appliesTo: endpoint
+mode:      locked
+purpose:   'SAS'
+category:  'Analytics'
+description: ''
+displayNames:
+  - 'SAS'
+
+detections:
+  - id: SasSas
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'sas*'
+    set:
+      Tier:     2
+      Purpose:  'Analytics'
+      Category: 'Analytics'

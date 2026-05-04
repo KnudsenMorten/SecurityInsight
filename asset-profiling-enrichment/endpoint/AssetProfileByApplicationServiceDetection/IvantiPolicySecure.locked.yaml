@@ -1,0 +1,20 @@
+id:        IvantiPolicySecure
+appliesTo: endpoint
+mode:      locked
+purpose:   'Ivanti Policy Secure'
+category:  'NAC'
+description: ''
+displayNames:
+  - 'Ivanti Policy Secure'
+
+detections:
+  - id: IvantiPolicySecure
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'policy_secure*'
+    set:
+      Tier:     1
+      Purpose:  'NAC'
+      Category: 'NAC'

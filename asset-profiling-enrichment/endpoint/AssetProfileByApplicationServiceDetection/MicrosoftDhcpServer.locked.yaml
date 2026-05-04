@@ -1,0 +1,20 @@
+id:        MicrosoftDhcpServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft DHCP Server'
+category:  'Network'
+description: 'T0 if domain-integrated and on DC; otherwise T1'
+displayNames:
+  - 'Microsoft DHCP Server'
+
+detections:
+  - id: MicrosoftDhcpServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dhcp_server*'
+    set:
+      Tier:     1
+      Purpose:  'Network'
+      Category: 'Network'

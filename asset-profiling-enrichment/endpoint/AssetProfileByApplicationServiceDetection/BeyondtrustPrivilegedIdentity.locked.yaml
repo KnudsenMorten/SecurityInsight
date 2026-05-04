@@ -1,0 +1,20 @@
+id:        BeyondtrustPrivilegedIdentity
+appliesTo: endpoint
+mode:      locked
+purpose:   'BeyondTrust Privileged Identity'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'BeyondTrust Privileged Identity'
+
+detections:
+  - id: BeyondtrustPrivilegedIdentity
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'privileged_identity*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

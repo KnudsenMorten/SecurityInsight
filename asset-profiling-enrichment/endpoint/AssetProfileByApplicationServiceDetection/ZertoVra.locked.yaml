@@ -1,0 +1,21 @@
+id:        ZertoVra
+appliesTo: endpoint
+mode:      locked
+purpose:   'Zerto Virtual Replication Appliance'
+category:  'DR/Replication'
+description: ''
+displayNames:
+  - 'Zerto Virtual Replication Appliance'
+  - 'Zerto VRA'
+
+detections:
+  - id: ZertoVra
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'vra*'
+    set:
+      Tier:     0
+      Purpose:  'DR/Replication'
+      Category: 'DR/Replication'

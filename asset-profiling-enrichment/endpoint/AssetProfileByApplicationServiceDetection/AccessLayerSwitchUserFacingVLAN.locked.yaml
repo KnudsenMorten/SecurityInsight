@@ -1,0 +1,31 @@
+id:        AccessLayerSwitchUserFacingVLAN
+appliesTo: endpoint
+mode:      locked
+purpose:   'Access Layer Switch (User-Facing VLAN)'
+category:  'Network Equipment'
+description: 'Edge switch on user VLAN; L2 attacks limited to its broadcast domain.'
+
+detections:
+  - id: AccessLayerSwitchUserFacingVLAN
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cisco_ios*'
+            - 'cisco_catalyst*'
+            - 'hp_procurve*'
+            - 'aruba_cx*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^acc-sw'
+            - '(?i)^accsw\d'
+            - '(?i)access.switch'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)access.switch'
+            - '(?i)user.vlan'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'Access Layer Switch (User-Facing VLAN)'
+      Category: 'Network Equipment'

@@ -1,0 +1,21 @@
+id:        SapAdaptiveServerEnterprise
+appliesTo: endpoint
+mode:      locked
+purpose:   'SAP Adaptive Server Enterprise'
+category:  'Database'
+description: ''
+displayNames:
+  - 'SAP Adaptive Server Enterprise'
+  - 'Sybase ASE'
+
+detections:
+  - id: SapAdaptiveServerEnterprise
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'adaptive_server_enterprise*'
+    set:
+      Tier:     2
+      Purpose:  'Database'
+      Category: 'Database'

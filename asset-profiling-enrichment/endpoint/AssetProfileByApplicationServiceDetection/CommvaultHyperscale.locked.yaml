@@ -1,0 +1,20 @@
+id:        CommvaultHyperscale
+appliesTo: endpoint
+mode:      locked
+purpose:   'Commvault HyperScale'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Commvault HyperScale'
+
+detections:
+  - id: CommvaultHyperscale
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hyperscale*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

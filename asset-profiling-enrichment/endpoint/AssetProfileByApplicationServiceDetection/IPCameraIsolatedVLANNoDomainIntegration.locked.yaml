@@ -1,0 +1,31 @@
+id:        IPCameraIsolatedVLANNoDomainIntegration
+appliesTo: endpoint
+mode:      locked
+purpose:   'IP Camera (Isolated VLAN, No Domain Integration)'
+category:  'IoT / OT'
+description: 'Isolated camera; espionage potential but limited pivot.'
+
+detections:
+  - id: IPCameraIsolatedVLANNoDomainIntegration
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'axis_camera*'
+            - 'hikvision*'
+            - 'dahua*'
+            - 'bosch_ip_camera*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^cam\d'
+            - '(?i)^ipcam\d'
+            - '(?i)ip.camera'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)ip.camera'
+            - '(?i)cctv.isolated'
+            - '(?i)tier.?2'
+    set:
+      Tier:     2
+      Purpose:  'IP Camera (Isolated VLAN, No Domain Integration)'
+      Category: 'IoT / OT'

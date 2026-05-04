@@ -1,0 +1,21 @@
+id:        MicrosoftWindowsServerUpdateServices
+appliesTo: endpoint
+mode:      locked
+purpose:   'Windows Server Update Services'
+category:  'Patch Mgmt'
+description: ''
+displayNames:
+  - 'Windows Server Update Services'
+  - 'WSUS'
+
+detections:
+  - id: MicrosoftWindowsServerUpdateServices
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'windows_server_update_services*'
+    set:
+      Tier:     1
+      Purpose:  'Patch Mgmt'
+      Category: 'Patch Mgmt'

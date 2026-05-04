@@ -1,0 +1,20 @@
+id:        BeyondtrustRemoteSupport
+appliesTo: endpoint
+mode:      locked
+purpose:   'BeyondTrust Remote Support'
+category:  'PAM'
+description: ''
+displayNames:
+  - 'BeyondTrust Remote Support'
+
+detections:
+  - id: BeyondtrustRemoteSupport
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'remote_support*'
+    set:
+      Tier:     0
+      Purpose:  'PAM'
+      Category: 'PAM'

@@ -1,0 +1,21 @@
+id:        VenafiTrustProtectionPlatform
+appliesTo: endpoint
+mode:      locked
+purpose:   'Venafi Trust Protection Platform'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'Venafi Trust Protection Platform'
+  - 'Venafi TPP'
+
+detections:
+  - id: VenafiTrustProtectionPlatform
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'trust_protection_platform*'
+    set:
+      Tier:     0
+      Purpose:  'PKI'
+      Category: 'PKI'

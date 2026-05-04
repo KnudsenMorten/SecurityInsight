@@ -1,0 +1,30 @@
+id:        BuildingManagementSystemBMSControllerWithDomainIntegration
+appliesTo: endpoint
+mode:      locked
+purpose:   'Building Management System (BMS) Controller with Domain Integration'
+category:  'IoT / OT'
+description: 'Domain-joined OT controller bridges IT/OT trust enabling lateral movement from the OT side.'
+
+detections:
+  - id: BuildingManagementSystemBMSControllerWithDomainIntegration
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'siemens_desigo*'
+            - 'honeywell_ebi*'
+            - 'schneider_ecostruxure*'
+            - 'johnson_controls_metasys*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^bms\d'
+            - '(?i)building.management'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)bms'
+            - '(?i)building.management'
+            - '(?i)tier.?0'
+    set:
+      Tier:     0
+      Purpose:  'Building Management System (BMS) Controller with Domain Integration'
+      Category: 'IoT / OT'

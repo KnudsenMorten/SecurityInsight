@@ -1,0 +1,20 @@
+id:        IbmCognosAnalytics
+appliesTo: endpoint
+mode:      locked
+purpose:   'IBM Cognos Analytics'
+category:  'BI'
+description: ''
+displayNames:
+  - 'IBM Cognos Analytics'
+
+detections:
+  - id: IbmCognosAnalytics
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'cognos_analytics*'
+    set:
+      Tier:     2
+      Purpose:  'BI'
+      Category: 'BI'

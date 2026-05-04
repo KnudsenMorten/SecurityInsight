@@ -1,0 +1,39 @@
+id:        SIEMServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'SIEM Server'
+category:  'Management'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |H|o|l|d|s|\|\| |c|o|l|l|e|c|t|i|o|n|\|\| |c|r|e|d|e|n|t|i|a|l|s|\|\| |a|n|d|\|\| |f|o|r|w|a|r|d|e|r|\|\| |s|e|c|r|e|t|s|\|\| |a|c|r|o|s|s|\|\| |t|h|e|\|\| |e|s|t|a|t|e|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|f|o|c|u|s|/|a|r|c|s|i|g|h|t|_|e|s|m|,|\|\| |s|p|l|u|n|k|/|s|p|l|u|n|k|
+
+detections:
+  - id: SIEMServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'splunk_enterprise*'
+            - 'ibm_qradar*'
+            - 'logrhythm*'
+            - 'arcsight*'
+            - 'elastic_security*'
+            - 'microsoft_sentinel*'
+            - 'arcsight_esm*'
+            - 'splunk*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^siem\d'
+            - '(?i)^splunk\d'
+            - '(?i)^qradar\d'
+            - '(?i)^sentinel\d'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)siem'
+            - '(?i)splunk'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'SIEM Server'
+      Category: 'Management'

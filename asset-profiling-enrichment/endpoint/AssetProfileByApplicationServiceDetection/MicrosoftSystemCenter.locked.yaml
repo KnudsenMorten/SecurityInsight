@@ -1,0 +1,22 @@
+id:        MicrosoftSystemCenter
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft System Center 2022'
+category:  'Mgmt Suite'
+description: ''
+displayNames:
+  - 'Microsoft System Center 2022'
+  - 'Microsoft System Center 2019'
+  - 'Microsoft System Center'
+
+detections:
+  - id: MicrosoftSystemCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center*'
+    set:
+      Tier:     0
+      Purpose:  'Mgmt suite (T0 if managing T0 hosts)'
+      Category: 'Mgmt Suite'

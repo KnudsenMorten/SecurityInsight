@@ -1,0 +1,9 @@
+{
+  "$schema": "../_manifest.schema.json",
+  "id":          "servicenow-cmdb",
+  "kind":        "both",
+  "engines":     ["identity", "endpoint", "azure"],
+  "auth":        { "type": "api-key" },
+  "bulk":        true,
+  "description": "ServiceNow CMDB -- read CIs / business services / relationships, optionally write-back discovered metadata. Sample-CSV mode for testing without a live ServiceNow instance."
+}

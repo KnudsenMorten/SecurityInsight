@@ -1,0 +1,36 @@
+id:        SCCMMECMPrimarySiteServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'SCCM / MECM Primary Site Server'
+category:  'Management'
+description: |
+  \|\| |\|\|||
+  |\|\| |\|\| |C|o|n|f|i|g|u|r|a|t|i|o|n|\|\| |m|a|n|a|g|e|r|\|\| |p|u|s|h|\|\| |i|n|s|t|a|l|l|s|\|\| |a|s|\|\| |S|Y|S|T|E|M|\|\| |o|n|\|\| |e|v|e|r|y|\|\| |m|a|n|a|g|e|d|\|\| |d|e|v|i|c|e|\|\|.|
+  |\|\| |\|\| |M|e|r|g|e|d|\|\| |s|o|f|t|w|a|r|e|\|\| |s|i|g|n|a|l|s|:|\|\| |m|i|c|r|o|s|o|f|t|/|s|y|s|t|e|m|_|c|e|n|t|e|r|_|c|o|n|f|i|g|u|r|a|t|i|o|n|_|m|a|n|a|g|e|r|
+
+detections:
+  - id: SCCMMECMPrimarySiteServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'system_center_configuration_manager*'
+            - 'microsoft_endpoint_configuration_manager*'
+            - 'sccm_*'
+            - 'mecm*'
+            - 'system_center_configuration_manager*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^sccm\d'
+            - '(?i)^mecm\d'
+            - '(?i)^cmsite'
+            - '(?i)config.manager'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)sccm'
+            - '(?i)mecm'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'SCCM / MECM Primary Site Server'
+      Category: 'Management'

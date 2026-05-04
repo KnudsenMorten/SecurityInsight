@@ -1,0 +1,20 @@
+id:        WorkdayStudio
+appliesTo: endpoint
+mode:      locked
+purpose:   'Workday Studio'
+category:  'HCM'
+description: ''
+displayNames:
+  - 'Workday Studio'
+
+detections:
+  - id: WorkdayStudio
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'studio*'
+    set:
+      Tier:     2
+      Purpose:  'HCM'
+      Category: 'HCM'

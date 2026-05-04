@@ -1,0 +1,20 @@
+id:        MicrosoftFimCertificateManagement
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft FIM Certificate Management'
+category:  'PKI'
+description: ''
+displayNames:
+  - 'Microsoft FIM Certificate Management'
+
+detections:
+  - id: MicrosoftFimCertificateManagement
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'fim_certificate_management*'
+    set:
+      Tier:     0
+      Purpose:  'PKI'
+      Category: 'PKI'

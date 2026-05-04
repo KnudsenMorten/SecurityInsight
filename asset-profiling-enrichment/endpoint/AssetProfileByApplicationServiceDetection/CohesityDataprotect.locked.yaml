@@ -1,0 +1,20 @@
+id:        CohesityDataprotect
+appliesTo: endpoint
+mode:      locked
+purpose:   'Cohesity DataProtect'
+category:  'Backup'
+description: ''
+displayNames:
+  - 'Cohesity DataProtect'
+
+detections:
+  - id: CohesityDataprotect
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'dataprotect*'
+    set:
+      Tier:     0
+      Purpose:  'Backup'
+      Category: 'Backup'

@@ -1,0 +1,290 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Pre-publish gate test suite for SecurityInsight v2.2 (Pester v5).
+.DESCRIPTION
+    9 Describe blocks. Uses Pester v5 -ForEach so dynamic test cases work.
+#>
+
+BeforeDiscovery {
+    # tests/pester/<file>.ps1 -> tests/pester -> tests -> v2.2 (3 ups from $PSCommandPath)
+    $_v22 = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+    # v2.2 -> SecurityInsight -> SOLUTIONS -> AutomateIT (repo root, 3 more ups)
+    $_repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $_v22))
+    $script:_V22Root  = $_v22
+    $script:_RepoRoot = $_repo
+
+    $script:_AllYaml = @(Get-ChildItem -Path $_v22 -Filter '*.locked.yaml' -Recurse -File -ErrorAction SilentlyContinue) +
+                      @(Get-ChildItem -Path $_v22 -Filter '*.custom.sample.yaml' -Recurse -File -ErrorAction SilentlyContinue) |
+        Where-Object { $_.FullName -notmatch '[\\/](OUTPUT|logs|staging)[\\/]' }
+    $script:_AllJson = Get-ChildItem -Path $_v22 -Filter '*.json' -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '[\\/](OUTPUT|logs|staging)[\\/]' -and $_.Name -notmatch '\.bak' }
+    # Skip stale one-shot tool scripts (used during major doc restructure work; not part of shipped product).
+    $script:_AllPs1 = Get-ChildItem -Path $_v22 -Filter '*.ps1' -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.FullName -notmatch '[\\/](OUTPUT|logs|staging)[\\/]' -and
+            $_.Name -notin @('Cleanup-SingleVersionVoice.ps1','Renumber-After-NewChapter3.ps1','Reverse-ReadmeRestructure.ps1','Strip-VersionFraming.ps1','Strip-VersionFraming-Pass2.ps1')
+        }
+    $script:_AllSamples = Get-ChildItem -Path $_v22 -Filter '*.custom.sample.json' -Recurse -File -ErrorAction SilentlyContinue
+    $script:_LockedSchemas = Get-ChildItem -Path (Join-Path $_v22 'asset-profiling-schema') -Filter '*.schema.locked.json' -File -ErrorAction SilentlyContinue
+}
+
+BeforeAll {
+    Import-Module powershell-yaml -Force
+    # Recompute (BeforeDiscovery script: vars don't always survive into BeforeAll)
+    # tests/pester/<file>.ps1 -> tests/pester -> tests -> v2.2 (3 ups from $PSCommandPath)
+    $_v22 = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+    # v2.2 -> SecurityInsight -> SOLUTIONS -> AutomateIT (repo root, 3 more ups)
+    $_repo = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $_v22))
+    $script:V22Root  = $_v22
+    $script:RepoRoot = $_repo
+    $script:RaYaml   = Join-Path $_v22 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml'
+    $script:Readme   = Join-Path $_v22 'README.md'
+    $script:RaCatalog   = ConvertFrom-Yaml (Get-Content -Raw -LiteralPath $script:RaYaml)
+    $script:RaReports   = @($script:RaCatalog.Reports)
+    $script:RaTemplates = @($script:RaCatalog.ReportTemplates)
+}
+
+# ============================================================================
+Describe 'RepoHygiene' {
+# ============================================================================
+
+    It 'No customer .custom.yaml files tracked' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/**/*.custom.yaml' 2>$null |
+                   Where-Object { $_ -notlike '*.custom.sample.yaml' }
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+
+    It 'No customer .custom.json files tracked' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/**/*.custom.json' 2>$null |
+                   Where-Object { $_ -notlike '*.custom.sample.json' -and $_ -notlike '*.exclude.json.sample' }
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+
+    It 'No LauncherConfig.custom.ps1 tracked' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/**/LauncherConfig.custom.ps1' 2>$null
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+
+    It 'No CMDB.csv outside /sample/ tracked' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/**/CMDB.csv' 2>$null |
+                   Where-Object { $_ -notlike '*/sample/CMDB.csv' }
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+
+    It 'No private-key files (.pfx/.cer/.key/.pem) tracked' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/' 2>$null |
+                   Where-Object { $_ -match '\.(pfx|cer|key|pem)$' }
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+
+    It 'No backup / editor temp files tracked (.bak, .swp, ~)' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/' 2>$null |
+                   Where-Object { $_ -match '\.bak\b|\.swp$|~$' }
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+
+    It 'No params.json (per-tenant config) tracked' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/' 2>$null |
+                   Where-Object { $_ -match '(^|/)params\.json$|\.params\.json$' }
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+
+    It 'No OUTPUT/logs/staging content tracked' {
+        $bad = git -C $script:RepoRoot ls-files 'SOLUTIONS/SecurityInsight/' 2>$null |
+                   Where-Object { $_ -match '/(OUTPUT|logs|staging)/' }
+            $bad | Should -BeNullOrEmpty -Because "leaks: $($bad -join ', ')"
+    }
+}
+
+# ============================================================================
+Describe 'YamlValidity' {
+# ============================================================================
+
+    It 'YAML found' {
+        # Direct probe (BeforeDiscovery script: vars don't always survive into It-scope).
+        $count = (Get-ChildItem -Path $script:V22Root -Filter '*.locked.yaml' -Recurse -File -ErrorAction SilentlyContinue).Count
+        $count | Should -BeGreaterThan 0
+    }
+
+    It 'parses: <_.Name>' -ForEach $script:_AllYaml {
+        $null = ConvertFrom-Yaml (Get-Content -Raw -LiteralPath $_.FullName)
+    }
+
+    It 'RA YAML has at least 100 reports' {
+        $script:RaReports.Count | Should -BeGreaterThan 99
+    }
+
+    It 'RA YAML has at least 2 ReportTemplates' {
+        $script:RaTemplates.Count | Should -BeGreaterOrEqual 2
+    }
+
+    It 'RA YAML has both Summary and Detailed templates' {
+        $names = $script:RaTemplates.ReportName
+        $names | Should -Contain 'RiskAnalysis_Summary'
+        $names | Should -Contain 'RiskAnalysis_Detailed'
+    }
+}
+
+# ============================================================================
+Describe 'JsonValidity' {
+# ============================================================================
+
+    It 'parses: <_.Name>' -ForEach $script:_AllJson {
+        $null = Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json
+    }
+
+    It 'risk-analysis.schema.locked.json has $schema + domains' {
+        $j = Get-Content -Raw -LiteralPath (Join-Path $script:V22Root 'risk-analysis-detection\risk-analysis.schema.locked.json') | ConvertFrom-Json
+        $j.'$schema'  | Should -Not -BeNullOrEmpty
+        $j.domains    | Should -Not -BeNullOrEmpty
+    }
+
+    It 'asset-profiling-schema/SCHEMA.locked.json present + parses' {
+        $p = Join-Path $script:V22Root 'asset-profiling-schema\SCHEMA.locked.json'
+        Test-Path $p | Should -BeTrue
+        { Get-Content -Raw -LiteralPath $p | ConvertFrom-Json } | Should -Not -Throw
+    }
+}
+
+# ============================================================================
+Describe 'PowerShellSyntax' {
+# ============================================================================
+
+    It 'tokenizes: <_.Name>' -ForEach $script:_AllPs1 {
+        $err = $null
+        [void][System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw -LiteralPath $_.FullName), [ref]$err)
+        if ($err -and $err.Count) { throw ("Parse error: " + $err[0].Message) }
+    }
+}
+
+# ============================================================================
+Describe 'RAReportStructure' {
+# ============================================================================
+
+    It 'every Report has all required fields' {
+        # Single-test summary form (avoids Pester v5 -ForEach hashtable scope-leak).
+        $required = 'ReportName','ReportPurpose','SecurityDomain','OutputPropertyOrder','ReportQuery'
+        $missing = @()
+        foreach ($r in $script:RaReports) {
+            foreach ($f in $required) {
+                if ($null -eq $r.$f -or ($r.$f -is [string] -and [string]::IsNullOrWhiteSpace($r.$f))) {
+                    $missing += "$($r.ReportName) missing '$f'"
+                }
+            }
+        }
+        $missing | Should -BeNullOrEmpty -Because "$($missing.Count) required-field gaps: $($missing -join '; ')"
+    }
+
+    It 'no duplicate ReportName values' {
+        $names = $script:RaReports.ReportName
+        $dupes = $names | Group-Object | Where-Object Count -gt 1 | ForEach-Object Name
+        $dupes | Should -BeNullOrEmpty -Because "duplicates: $($dupes -join ', ')"
+    }
+
+    It 'every Report SecurityDomain in allowed set' {
+        $allowed = 'Endpoint','Identity','Azure','PublicIP','PublicIp','Hygiene','RiskAnalysis'
+        $bad = @()
+        foreach ($r in $script:RaReports) {
+            if ($r.SecurityDomain -notin $allowed) {
+                $bad += "$($r.ReportName) -> '$($r.SecurityDomain)'"
+            }
+        }
+        $bad | Should -BeNullOrEmpty -Because "$($bad.Count) reports use unknown SecurityDomain: $($bad -join '; ')"
+    }
+
+    It 'every Report ReportPurpose >= 80 chars' {
+        $weak = @()
+        foreach ($r in $script:RaReports) {
+            $len = ($r.ReportPurpose -as [string]).Trim().Length
+            if ($len -lt 80) { $weak += "$($r.ReportName) ($len chars)" }
+        }
+        $weak | Should -BeNullOrEmpty -Because "$($weak.Count) ReportPurpose entries < 80 chars: $($weak -join '; ')"
+    }
+}
+
+# ============================================================================
+Describe 'TemplateCoverage' {
+# ============================================================================
+
+    It 'every Report appears in at least one template (no orphans)' {
+        $allReports  = @($script:RaReports.ReportName)
+        $allIncluded = @($script:RaTemplates | ForEach-Object { $_.ReportsIncluded.Name }) | Sort-Object -Unique
+        $orphans = $allReports | Where-Object { $_ -notin $allIncluded }
+        $orphans | Should -BeNullOrEmpty -Because "orphans: $($orphans -join ', ')"
+    }
+
+    It 'no ghost references in templates' {
+        $allReports  = @($script:RaReports.ReportName)
+        $allIncluded = @($script:RaTemplates | ForEach-Object { $_.ReportsIncluded.Name }) | Sort-Object -Unique
+        $ghosts = $allIncluded | Where-Object { $_ -notin $allReports }
+        $ghosts | Should -BeNullOrEmpty -Because "ghosts: $($ghosts -join ', ')"
+    }
+}
+
+# ============================================================================
+Describe 'DocConsistency' {
+# ============================================================================
+
+    It 'README claims same total report count as YAML' {
+        $readmeText = Get-Content -Raw -LiteralPath $script:Readme
+        $claimed = ([regex]::Matches($readmeText, '(\b\d{2,4}\b)\s+(?:Risk Analysis reports|attacker-centric KQL reports)') |
+                    ForEach-Object { [int]$_.Groups[1].Value })
+        $claimed | Should -Not -BeNullOrEmpty
+        $claimed | ForEach-Object { $_ | Should -Be $script:RaReports.Count -Because "drift" }
+    }
+
+    It 'linked doc exists: <_>' -ForEach @(
+        $readmeText = Get-Content -Raw -LiteralPath (Join-Path $script:_V22Root 'README.md')
+        [regex]::Matches($readmeText, '\]\(\./([^)]+\.md)\)') |
+            ForEach-Object { $_.Groups[1].Value } |
+            Sort-Object -Unique
+    ) {
+        Test-Path (Join-Path $script:V22Root $_) | Should -BeTrue
+    }
+
+    It 'docs/risk-analysis-detection.md exists' {
+        Test-Path (Join-Path $script:V22Root 'docs\risk-analysis-detection.md') | Should -BeTrue
+    }
+
+    It 'docs catalog count matches YAML' {
+        $cat = Get-Content -Raw -LiteralPath (Join-Path $script:V22Root 'docs\risk-analysis-detection.md')
+        if ($cat -match '\*\*(\d+)\s+reports\*\*') {
+            [int]$Matches[1] | Should -Be $script:RaReports.Count
+        }
+    }
+}
+
+# ============================================================================
+Describe 'SampleQuality' {
+# ============================================================================
+
+    It 'sample non-empty: <_.Name>' -ForEach $script:_AllSamples {
+        $obj = Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json
+        $keys = $obj.PSObject.Properties.Name
+        $keys.Count | Should -BeGreaterThan 0
+    }
+
+    It '<_.Name> has .custom.sample.json sibling' -ForEach $script:_LockedSchemas {
+        $sampleName = $_.Name -replace '\.locked\.json$','.custom.sample.json'
+        $samplePath = Join-Path $_.Directory.FullName $sampleName
+        Test-Path $samplePath | Should -BeTrue
+    }
+}
+
+# ============================================================================
+Describe 'WorkflowSyntax' {
+# ============================================================================
+
+    It '.github/workflows/publish.yml exists + parses' {
+        $p = Join-Path $script:RepoRoot '.github\workflows\publish.yml'
+        Test-Path $p | Should -BeTrue
+        { ConvertFrom-Yaml (Get-Content -Raw -LiteralPath $p) } | Should -Not -Throw
+    }
+
+    It '.github/workflows/si-preview-prepublish.yml exists + parses' {
+        $p = Join-Path $script:RepoRoot '.github\workflows\si-preview-prepublish.yml'
+        Test-Path $p | Should -BeTrue
+        { ConvertFrom-Yaml (Get-Content -Raw -LiteralPath $p) } | Should -Not -Throw
+    }
+}

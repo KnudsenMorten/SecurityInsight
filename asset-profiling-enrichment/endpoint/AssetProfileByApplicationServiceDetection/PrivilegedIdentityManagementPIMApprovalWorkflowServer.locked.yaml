@@ -1,0 +1,30 @@
+id:        PrivilegedIdentityManagementPIMApprovalWorkflowServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Privileged Identity Management (PIM) Approval Workflow Server'
+category:  'Management'
+description: 'Mediates JIT activation of privileged roles; compromise enables stealth role assignments.'
+
+detections:
+  - id: PrivilegedIdentityManagementPIMApprovalWorkflowServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft_identity_manager*'
+            - 'saviynt*'
+            - 'sailpoint_identityiq*'
+            - 'oracle_identity_manager*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^pim\d'
+            - '(?i)^mim\d'
+            - '(?i)pim.approval'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)pim'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Privileged Identity Management (PIM) Approval Workflow Server'
+      Category: 'Management'

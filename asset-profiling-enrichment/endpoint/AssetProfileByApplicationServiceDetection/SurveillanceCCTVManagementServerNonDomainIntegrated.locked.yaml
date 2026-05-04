@@ -1,0 +1,31 @@
+id:        SurveillanceCCTVManagementServerNonDomainIntegrated
+appliesTo: endpoint
+mode:      locked
+purpose:   'Surveillance / CCTV Management Server (Non-Domain Integrated)'
+category:  'IoT / OT'
+description: 'Camera management with footage and physical security visibility; useful for recon/attack staging.'
+
+detections:
+  - id: SurveillanceCCTVManagementServerNonDomainIntegrated
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'milestone_xprotect*'
+            - 'genetec_security_center*'
+            - 'axis_camera_station*'
+            - 'avigilon*'
+        - kind: nameMatches
+          namePatterns:
+            - '(?i)^cctv-mgmt'
+            - '(?i)^vms\d'
+            - '(?i)video.management'
+        - kind: hasMdeMachineGroupTag
+          machineTagPatterns:
+            - '(?i)cctv.management'
+            - '(?i)video.management'
+            - '(?i)tier.?1'
+    set:
+      Tier:     1
+      Purpose:  'Surveillance / CCTV Management Server (Non-Domain Integrated)'
+      Category: 'IoT / OT'

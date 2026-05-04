@@ -1,0 +1,23 @@
+id:        MicrosoftExchangeServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Exchange Server 2019'
+category:  'Mail'
+description: ''
+displayNames:
+  - 'Microsoft Exchange Server 2019'
+  - 'Microsoft Exchange Server 2016'
+  - 'Microsoft Exchange Server 2013'
+  - 'Microsoft Exchange Server'
+
+detections:
+  - id: MicrosoftExchangeServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'exchange_server*'
+    set:
+      Tier:     1
+      Purpose:  'Exchange (mailbox/CAS/edge)'
+      Category: 'Mail'

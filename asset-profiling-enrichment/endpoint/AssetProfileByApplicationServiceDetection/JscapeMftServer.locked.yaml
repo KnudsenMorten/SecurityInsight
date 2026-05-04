@@ -1,0 +1,20 @@
+id:        JscapeMftServer
+appliesTo: endpoint
+mode:      locked
+purpose:   'JSCAPE MFT Server'
+category:  'MFT'
+description: ''
+displayNames:
+  - 'JSCAPE MFT Server'
+
+detections:
+  - id: JscapeMftServer
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'mft_server*'
+    set:
+      Tier:     2
+      Purpose:  'MFT'
+      Category: 'MFT'

@@ -1,0 +1,20 @@
+id:        MicrosoftServiceFabric
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Service Fabric'
+category:  'Containers/Orchestration'
+description: ''
+displayNames:
+  - 'Microsoft Service Fabric'
+
+detections:
+  - id: MicrosoftServiceFabric
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'service_fabric*'
+    set:
+      Tier:     2
+      Purpose:  'Containers/Orchestration'
+      Category: 'Containers/Orchestration'

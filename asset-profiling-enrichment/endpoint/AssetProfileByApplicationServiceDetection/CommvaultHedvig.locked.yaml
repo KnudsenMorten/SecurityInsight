@@ -1,0 +1,20 @@
+id:        CommvaultHedvig
+appliesTo: endpoint
+mode:      locked
+purpose:   'Commvault Hedvig'
+category:  'Storage'
+description: ''
+displayNames:
+  - 'Commvault Hedvig'
+
+detections:
+  - id: CommvaultHedvig
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'hedvig*'
+    set:
+      Tier:     0
+      Purpose:  'Storage'
+      Category: 'Storage'

@@ -1,0 +1,20 @@
+id:        MicrosoftWorkflowManager
+appliesTo: endpoint
+mode:      locked
+purpose:   'Microsoft Workflow Manager'
+category:  'Workflow'
+description: ''
+displayNames:
+  - 'Microsoft Workflow Manager'
+
+detections:
+  - id: MicrosoftWorkflowManager
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'workflow_manager*'
+    set:
+      Tier:     2
+      Purpose:  'Workflow'
+      Category: 'Workflow'

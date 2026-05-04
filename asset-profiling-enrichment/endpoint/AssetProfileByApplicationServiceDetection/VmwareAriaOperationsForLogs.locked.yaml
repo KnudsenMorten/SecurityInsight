@@ -1,0 +1,21 @@
+id:        VmwareAriaOperationsForLogs
+appliesTo: endpoint
+mode:      locked
+purpose:   'VMware vRealize Log Insight'
+category:  'Logs'
+description: ''
+displayNames:
+  - 'VMware vRealize Log Insight'
+  - 'VMware Aria Operations for Logs'
+
+detections:
+  - id: VmwareAriaOperationsForLogs
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'aria_operations_for_logs*'
+    set:
+      Tier:     1
+      Purpose:  'Logs'
+      Category: 'Logs'

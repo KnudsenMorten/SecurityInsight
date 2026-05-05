@@ -730,14 +730,29 @@ union isfuzzy=true
         @{ Label = 'AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA)'; Engine = 'LogAnalytics'; Query = $laQuery }
     )
 
+    # For LA route, target the Defender workspace (where AAD*SignInLogs live)
+    # if customer has set SI_DefenderWorkspaceResourceId; else fall back to
+    # SI_WorkspaceResourceId. Defender XDR routes (DefenderGraph) ignore this --
+    # they use the SPN's Graph token directly.
+    $laTargetWs = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_DefenderWorkspaceResourceId)) {
+        [string]$global:SI_DefenderWorkspaceResourceId
+    } else {
+        [string]$global:SI_WorkspaceResourceId
+    }
+
     $rows   = $null
     $errors = New-Object System.Collections.Generic.List[string]
     foreach ($a in $attempts) {
-        Write-SIInfo ("[perms] SP sign-in source: trying {0}..." -f $a.Label)
+        $where = if ($a.Engine -eq 'LogAnalytics') { " (workspace=$laTargetWs)" } else { '' }
+        Write-SIInfo ("[perms] SP sign-in source: trying {0}{1}..." -f $a.Label, $where)
         $w = $null
         $r = $null
         try {
-            $r = @(Invoke-SIHuntingQuery -Query $a.Query -QueryEngine $a.Engine -WarningVariable w -WarningAction SilentlyContinue)
+            if ($a.Engine -eq 'LogAnalytics') {
+                $r = @(Invoke-SIHuntingQuery -Query $a.Query -QueryEngine $a.Engine -WorkspaceResourceId $laTargetWs -WarningVariable w -WarningAction SilentlyContinue)
+            } else {
+                $r = @(Invoke-SIHuntingQuery -Query $a.Query -QueryEngine $a.Engine -WarningVariable w -WarningAction SilentlyContinue)
+            }
         } catch {
             $errors.Add(("{0}: {1}" -f $a.Label, $_.Exception.Message))
             continue

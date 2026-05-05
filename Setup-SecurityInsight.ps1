@@ -1048,6 +1048,27 @@ function Invoke-Phase-LA {
                 -AzLogDcrTableCreateFromReferenceMachine    @() `
                 -Verbose:$false | Out-Null
             Write-Ok "Table + DCR provisioned: ${TableNameLA}_CL (rg=$DcrRgLA)"
+
+            # Resource-scope MMP grant on the just-created DCR. The RG-scope
+            # grant a few lines below covers future DCRs via inheritance, but
+            # propagation to this specific DCR can lag 5-30 min and stalls the
+            # very first ingest. Granting on the resource scope is fast (<60s)
+            # and idempotent.
+            try {
+                $_dcr = Get-AzDataCollectionRule -ResourceGroupName $DcrRgLA -Name $DcrNameLA -ErrorAction SilentlyContinue
+                if ($_dcr) {
+                    $existing = Get-AzRoleAssignment -ObjectId $spnObjectId -Scope $_dcr.Id -ErrorAction SilentlyContinue |
+                                  Where-Object { $_.RoleDefinitionName -eq 'Monitoring Metrics Publisher' }
+                    if (-not $existing) {
+                        New-AzRoleAssignment -ObjectId $spnObjectId -RoleDefinitionName 'Monitoring Metrics Publisher' -Scope $_dcr.Id -ErrorAction Stop | Out-Null
+                        Write-Ok "Granted 'Monitoring Metrics Publisher' on DCR ${DcrNameLA} (resource scope)"
+                    } else {
+                        Write-Info "MMP already assigned at DCR resource scope"
+                    }
+                }
+            } catch {
+                Write-Warning "Resource-scope MMP grant failed (RG-scope grant below should still cover via inheritance): $($_.Exception.Message)"
+            }
         } catch {
             Write-Err2 "Table/DCR provisioning failed: $($_.Exception.Message)"
             throw

@@ -415,3 +415,180 @@ and diff against the (locked + custom) catalog of known types.
 The schema-discovery engine already
 handles this drift loop for endpoint hunting tables; the same pattern extends to
 Azure resource types when the locked Azure catalog reaches stable coverage.
+
+---
+
+## 12. Troubleshooting — DCE / DCR provisioning failures
+
+LA ingest goes through three Azure resources: the **Log Analytics workspace**,
+a **Data Collection Endpoint (DCE)**, and one **Data Collection Rule (DCR)** per
+profile table. The DCR is auto-created/auto-updated on the first ingest of every
+table by `AzLogDcrIngestPS\CheckCreateUpdate-TableDcr-Structure`. Three failure
+modes recur in real tenants — symptoms, root cause, and fix below.
+
+> **Key invariant** — `AzLogDcrIngestPS.psm1` line 1725 sets the new DCR's
+> `location` field from `$DceInfo.location` (the DCE's location), **not** from
+> `$global:SI_Location`. The engine's `SI_Location` global is engine-intent
+> only; once the DCE exists, that DCE's location wins for every DCR pinned to
+> it. Recreating the DCR in a different location is impossible — DCR `location`
+> is immutable post-create.
+
+### 12.1  `RequestDisallowedByPolicy` — DCE in wrong region
+
+**Symptom**: `[ERR] Body : RequestDisallowedByPolicy ... target dcr-si-<engine>-profile ... policyDefinition Allowed locations ... targetValue ["global","westeurope"], operator NotIn`.
+HTTP 403 on the DCR PUT, ingest aborts.
+
+**Root cause**: An Azure Policy assigned at the management-group / subscription
+scope denies any resource location not in its allowlist. The DCE the engine
+resolved isn't in that allowlist — so the DCR PUT body that inherits its location
+is denied.
+
+**Diagnose** — v2.2.42+ logs the picked DCE's location explicitly:
+```
+DCR pre-create  : SI_Location        = westeurope  (engine intent; NOT used by module for new DCR)
+DCR pre-create  : DceLocation        = northeurope  (THIS becomes new DCR location)
+DCR pre-create  : LOCATION MISMATCH -- SI_Location='westeurope' but DCE is in 'northeurope'.
+```
+
+**Fix**: Delete the DCE and any DCRs pinned to it (their location is immutable),
+then recreate the DCE in an allowed region:
+
+```powershell
+# 1. Confirm the wrong-location DCE
+Get-AzDataCollectionEndpoint -ResourceGroupName $global:SI_DceResourceGroup `
+                              -Name              $global:SI_DceName |
+  Format-List Name, Location, Id
+
+# 2. Drop dependent DCRs (any auto-created dcr-si-*-profile pinned to it)
+Get-AzDataCollectionRule -ResourceGroupName $global:SI_DcrResourceGroup |
+  Where-Object { $_.Name -like 'dcr-si-*-profile' } |
+  Remove-AzDataCollectionRule -Confirm:$false
+
+# 3. Drop and recreate the DCE in the allowed location
+Remove-AzDataCollectionEndpoint -ResourceGroupName $global:SI_DceResourceGroup `
+                                 -Name              $global:SI_DceName -Confirm:$false
+New-AzDataCollectionEndpoint    -ResourceGroupName $global:SI_DceResourceGroup `
+                                 -Name              $global:SI_DceName `
+                                 -Location          $global:SI_Location `
+                                 -NetworkAclsPublicNetworkAccess Enabled
+
+# 4. Re-run any one engine; CheckCreateUpdate will recreate every DCR auto-pinned
+#    to the new DCE.
+```
+
+### 12.2  `LinkedAuthorizationFailed: invalid types 'Array'` — DCE name collision
+
+**Symptom**: `LinkedAuthorizationFailed ... properties.dataCollectionEndpointId
+has values which are of invalid types 'Array'`. HTTP 4xx on DCR PUT.
+
+**Root cause**: Two DCEs share `$global:SI_DceName` across subs/RGs (legacy
+install + new install on the same long-lived tenant). AzLogDcrIngestPS line 1575
+does a name-only lookup — `$global:AzDceDetails | Where { $_.name -eq $DceName }`
+— which returns BOTH records when names collide. `$DceInfo.id` becomes
+`string[]`, gets serialized as a JSON array, ARM rejects.
+
+**Fix (engine-side, v2.2.41+)**: Engine pre-filters `$global:AzDceDetails` to a
+single entry by name + RG before the module's name-only lookup runs. Set
+`$global:SI_DceResourceGroup` in `SecurityInsight.custom.ps1` to disambiguate
+when the DCE lives in a different RG than the DCRs.
+
+When the guard fires, the engine logs:
+```
+DCE collision guard: 2 DCEs named 'dce-si-securityinsight' visible -- pinned to RG 'rg-securityinsight' (/subscriptions/.../dce-si-securityinsight)
+```
+
+If the wrong DCE is being picked, either:
+1. Set `$global:SI_DceResourceGroup` explicitly to the desired RG, or
+2. Delete the unwanted duplicate DCE.
+
+### 12.3  Wrong `SI_DceName` — silent lookup miss
+
+**Symptom**: `RequestDisallowedByPolicy` (most likely) or generic ARM 400. Often
+mistaken for case 12.1 because the policy denial fires on the empty/null
+location field too.
+
+**Root cause**: `$global:SI_DceName` doesn't match any DCE the SPN can see in
+ARG. Module's name lookup returns `$null`; `$DceLocation = $null`; DCR PUT body
+has `location = null`; ARM either rejects or the policy treats null as a
+disallowed location.
+
+**Diagnose** — v2.2.42+ logs the empty-cache case:
+```
+DCR pre-create  : DceLocation        = <no DCE in cache>
+```
+Or: the `DCE collision guard` line is **absent** from the log entirely (no DCEs
+matched the name, so the guard had nothing to filter).
+
+**Fix**: Verify the actual DCE name in Azure and update `SecurityInsight.custom.ps1`:
+
+```powershell
+# List every DCE the SPN can read across the tenant
+Get-AzDataCollectionEndpoint | Format-Table Name, ResourceGroupName, Location, Id
+
+# Or scoped to the security-insight RG
+Get-AzDataCollectionEndpoint -ResourceGroupName 'rg-securityinsight' |
+  Format-Table Name, Location
+```
+
+Then in `SecurityInsight.custom.ps1`:
+```powershell
+$global:SI_DceName          = 'dce-securityinsight'   # match what Azure actually has
+$global:SI_DceResourceGroup = 'rg-securityinsight'    # belt-and-suspenders disambiguation
+$global:SI_Location         = 'westeurope'            # documents intent; only used when bootstrap creates a NEW DCE
+```
+
+### 12.4  `403 OperationFailed -- does not have access to ingest` — RBAC gap on DCR
+
+**Symptom**: DCR was created successfully (`CheckCreateUpdate-TableDcr-Structure` returned clean), then on the first `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` call:
+```
+HTTP 403 OperationFailed: The authentication token provided does not have access
+to ingest data for the data collection rule with immutable Id 'dcr-<32hex>'.
+```
+Engine retries 3 times with 30s/60s sleeps + cache refresh; all three fail identically. Sink reports `LA=FAIL JSON=OK Excel=OK`.
+
+**Root cause**: SPN is missing the **`Monitoring Metrics Publisher`** role on the DCR (or on a parent scope with propagation still in flight). Two sub-cases:
+1. **Bootstrap never granted it** — Setup-SecurityInsight.ps1 was skipped or this DCR was created post-bootstrap by a different engine. Pre-flight (12.4-engine-side) catches this.
+2. **RG-scope grant exists but hasn't propagated to a freshly-created DCR** — Azure RBAC inheritance can take 5-30 min for newly-created DCRs to become visible to the data plane even though the grant lives at the parent RG. v2.2.42's resource-scope grant in Setup avoids this by granting directly on the DCR (sub-60s propagation).
+
+**Diagnose** — v2.2.42+ engine pre-flight emits one of these lines per run, per DCR:
+```
+RBAC pre-flight  : SPN has 'Monitoring Metrics Publisher' at DCR RG (/subscriptions/.../resourceGroups/rg-securityinsight)
+```
+Or:
+```
+RBAC pre-flight  : SPN <objectId> has NO 'Monitoring Metrics Publisher' at /subscriptions/.../resourceGroups/rg-securityinsight
+RBAC pre-flight  : ingest may 403 if no inherited grant exists. Fix:
+RBAC pre-flight  :   New-AzRoleAssignment -ObjectId <objectId> -RoleDefinitionName 'Monitoring Metrics Publisher' -Scope '/subscriptions/.../resourceGroups/rg-securityinsight'
+```
+
+**Auto-fix (engine self-heal, v2.2.42+)**: The 3-attempt retry now detects the 403 RBAC pattern and attempts `New-AzRoleAssignment` on the DCR resource scope between attempts. **Requires the engine SPN to have `User Access Administrator` or `Owner` somewhere in the scope hierarchy** (it usually doesn't — runtime SPNs are typically read+ingest-only). If the grant call itself fails, the engine logs a `[WARN]` and falls through. The 403 surfaces unchanged on the final attempt.
+
+**Manual fix** (when self-heal can't grant):
+```powershell
+$spnObjectId = $global:SI_SPN_ObjectId
+$dcrId       = (Get-AzDataCollectionRule -ResourceGroupName $global:SI_DcrResourceGroup `
+                                          -Name              'dcr-si-identity-profile').Id
+
+# Resource-scope grant -- propagates in <60s vs 5-30 min for RG-scope
+New-AzRoleAssignment -ObjectId $spnObjectId `
+                     -RoleDefinitionName 'Monitoring Metrics Publisher' `
+                     -Scope              $dcrId
+
+# Belt-and-suspenders: also grant at RG (covers future auto-created DCRs)
+New-AzRoleAssignment -ObjectId $spnObjectId `
+                     -RoleDefinitionName 'Monitoring Metrics Publisher' `
+                     -Scope "/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DcrResourceGroup)"
+
+Start-Sleep -Seconds 60   # propagation
+```
+
+**Why two roles, not one**: `Monitoring Contributor` lets you read+write monitoring resources (DCEs, DCRs themselves); `Monitoring Metrics Publisher` lets you ingest data INTO a DCR. They're orthogonal — bootstrap needs Contributor (to create the DCR), runtime needs MMP (to send rows to it). Setup grants both at RG scope; v2.2.42 also grants MMP at the DCR resource scope per-DCR.
+
+### 12.5  Quick-reference — DCE/DCR location decision table
+
+| Scenario | What governs DCR location |
+|---|---|
+| First-ever DCE create (via `Setup-SecurityInsight.ps1`) | `$global:SI_Location` (bootstrap honours it) |
+| First-ever DCR create (via engine ingest) | `$DceInfo.location` (whatever location the DCE was created in) |
+| Subsequent DCR updates (schema drift) | DCR location is immutable — module sends `location = $DceLocation` again, ARM no-ops the field |
+| Recreating DCR in a new location | Impossible without delete + recreate. DCE delete + recreate first if you also want to move the DCE. |

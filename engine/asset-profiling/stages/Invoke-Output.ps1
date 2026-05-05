@@ -287,6 +287,53 @@ function Write-SIClassificationToLogAnalytics {
             }
         } catch { Write-Warning ('DCE collision guard failed -- {0} (continuing)' -f $_.Exception.Message) }
 
+        # DCR pre-create diagnostic.
+        # AzLogDcrIngestPS (line ~1725) sets the new DCR's location = DCE.location
+        # ($DceInfo.location). $global:SI_Location is NOT consulted by the module
+        # for new-DCR creation. If the operator's tenant has an Allowed-locations
+        # policy denying anything other than (e.g.) westeurope, the DCR PUT will
+        # 403 with RequestDisallowedByPolicy even though SI_Location says westeurope.
+        # Emit the DCE / DCR / location triple so the operator can see WHY the PUT
+        # picked the location it did.
+        try {
+            $_dceForDcr = if ($global:AzDceDetails) { @($global:AzDceDetails)[0] } else { $null }
+            $_dceLoc    = if ($_dceForDcr) { [string]$_dceForDcr.location } else { '<no DCE in cache>' }
+            $_dceId     = if ($_dceForDcr) { [string]$_dceForDcr.id }       else { '<no DCE in cache>' }
+            $_dcrRg     = $global:SI_DcrResourceGroup
+            $_intended  = if ($global:SI_Location) { [string]$global:SI_Location } else { '<unset>' }
+            Write-SIInfo ('DCR pre-create  : DcrName            = {0}' -f $dcrName)
+            Write-SIInfo ('DCR pre-create  : DcrResourceGroup   = {0}' -f $_dcrRg)
+            Write-SIInfo ('DCR pre-create  : SI_Location        = {0}  (engine intent; NOT used by module for new DCR)' -f $_intended)
+            Write-SIInfo ('DCR pre-create  : DceName            = {0}' -f $global:SI_DceName)
+            Write-SIInfo ('DCR pre-create  : DceLocation        = {0}  (THIS becomes new DCR location -- AzLogDcrIngestPS.psm1 line ~1725)' -f $_dceLoc)
+            Write-SIInfo ('DCR pre-create  : DceResourceId      = {0}' -f $_dceId)
+            if ($_intended -and $_dceLoc -and $_dceLoc -ne '<no DCE in cache>' -and $_intended -ne $_dceLoc) {
+                Write-Warning ('DCR pre-create  : LOCATION MISMATCH -- SI_Location=''{0}'' but DCE is in ''{1}''.' -f $_intended, $_dceLoc)
+                Write-Warning ('DCR pre-create  : new DCR will be created in ''{0}'' (DCE location). If a tenant policy denies that location, the PUT will 403 with RequestDisallowedByPolicy.' -f $_dceLoc)
+                Write-Warning ('DCR pre-create  : fix = recreate the DCE in ''{0}'' (or whatever location the policy allows).' -f $_intended)
+            }
+        } catch { Write-Warning ('DCR pre-create diagnostic failed -- {0} (continuing)' -f $_.Exception.Message) }
+
+        # Pre-flight RBAC check: Monitoring Metrics Publisher at DCR RG scope.
+        # Catches the silent-RBAC-gap case where bootstrap forgot to grant or
+        # the grant lives at a higher scope and hasn't propagated. Loud warning
+        # with the exact New-AzRoleAssignment to copy/paste -- no auto-grant
+        # here (that's (A)'s job at ingest time when the actual 403 fires).
+        try {
+            if ($spnObjectId -and $global:SI_DcrResourceGroup -and $global:SI_AzSubscriptionId) {
+                $_rgScope = "/subscriptions/{0}/resourceGroups/{1}" -f $global:SI_AzSubscriptionId, $global:SI_DcrResourceGroup
+                $_mmp = Get-AzRoleAssignment -ObjectId $spnObjectId -Scope $_rgScope -ErrorAction SilentlyContinue |
+                          Where-Object { $_.RoleDefinitionName -eq 'Monitoring Metrics Publisher' }
+                if (-not $_mmp) {
+                    Write-SIWarn ('RBAC pre-flight  : SPN {0} has NO ''Monitoring Metrics Publisher'' at {1}' -f $spnObjectId, $_rgScope)
+                    Write-SIWarn ('RBAC pre-flight  : ingest may 403 if no inherited grant exists. Fix:')
+                    Write-SIWarn ('RBAC pre-flight  :   New-AzRoleAssignment -ObjectId {0} -RoleDefinitionName ''Monitoring Metrics Publisher'' -Scope ''{1}''' -f $spnObjectId, $_rgScope)
+                } else {
+                    Write-SIInfo ('RBAC pre-flight  : SPN has ''Monitoring Metrics Publisher'' at DCR RG ({0})' -f $_rgScope)
+                }
+            }
+        } catch { Write-Warning ('RBAC pre-flight check failed -- {0} (continuing; ingest will reveal real state)' -f $_.Exception.Message) }
+
         Write-Host ''
         Write-SIStep 'CheckCreateUpdate-TableDcr-Structure (schema check + auto-provision)'
         # Verbose dropped on every AzLogDcrIngestPS call below.
@@ -403,12 +450,49 @@ function Write-SIClassificationToLogAnalytics {
                 $msg  = $_.Exception.Message
                 $body = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { '' }
                 $combined = ($msg + ' ' + $body)
-                $isTransient = $combined -match '404|NotFound|immutable Id|data collection rule'
-                if (-not $isTransient -or $attempt -ge $maxAttempts) {
+                $isCacheTransient = $combined -match '404|NotFound|immutable Id|data collection rule'
+                # 403 with 'does not have access to ingest' = SPN missing Monitoring
+                # Metrics Publisher on the DCR. Two causes: (1) RG-scoped grant
+                # hasn't propagated to the just-created DCR yet (5-30 min lag),
+                # (2) grant was never made. Self-heal: grant MMP on the DCR
+                # resource scope (faster propagation than RG) + 60s sleep + retry.
+                # Requires the engine SPN to have User Access Administrator or
+                # Owner SOMEWHERE in the scope hierarchy. If the grant fails,
+                # surface the original 403 unchanged.
+                $isRbacIngest = $combined -match '403' -and $combined -match 'does not have access to ingest'
+                if (-not ($isCacheTransient -or $isRbacIngest) -or $attempt -ge $maxAttempts) {
                     throw  # let outer catch surface the full error
                 }
                 $sleepSec = 30 * $attempt  # 30, 60s
-                Write-SIWarn ('LA ingest attempt {0}/{1} failed (transient DCR-cache issue): {2}. Refreshing DCE/DCR cache and retrying in {3}s ...' -f $attempt, $maxAttempts, $msg, $sleepSec)
+                if ($isRbacIngest) {
+                    Write-SIWarn ('LA ingest attempt {0}/{1} failed (403 -- SPN missing Monitoring Metrics Publisher on DCR): {2}' -f $attempt, $maxAttempts, $msg)
+                    try {
+                        $_dcr = $global:AzDcrDetails | Where-Object { $_.name -eq $dcrName } | Select-Object -First 1
+                        if (-not $_dcr) {
+                            $_dcr = Get-AzDataCollectionRule -ResourceGroupName $global:SI_DcrResourceGroup -Name $dcrName -ErrorAction SilentlyContinue
+                        }
+                        $_dcrId = if ($_dcr) { $_dcr.id } else { $null }
+                        if ($_dcrId -and $spnObjectId) {
+                            Write-SIInfo ('  self-heal: granting Monitoring Metrics Publisher to SPN {0} on DCR {1}' -f $spnObjectId, $_dcrId)
+                            $existing = Get-AzRoleAssignment -ObjectId $spnObjectId -Scope $_dcrId -ErrorAction SilentlyContinue |
+                                          Where-Object { $_.RoleDefinitionName -eq 'Monitoring Metrics Publisher' }
+                            if (-not $existing) {
+                                New-AzRoleAssignment -ObjectId $spnObjectId -RoleDefinitionName 'Monitoring Metrics Publisher' -Scope $_dcrId -ErrorAction Stop | Out-Null
+                                Write-SIInfo ('  self-heal: grant succeeded; sleeping 60s for propagation')
+                                $sleepSec = 60
+                            } else {
+                                Write-SIInfo ('  self-heal: MMP already assigned at DCR scope -- waiting for propagation')
+                                $sleepSec = 60
+                            }
+                        } else {
+                            Write-SIWarn ('  self-heal skipped: could not resolve DCR id (dcrId={0}, spnObjectId={1})' -f $_dcrId, $spnObjectId)
+                        }
+                    } catch {
+                        Write-SIWarn ('  self-heal grant failed: {0} -- continuing to next retry (engine SPN may lack User Access Administrator)' -f $_.Exception.Message)
+                    }
+                } else {
+                    Write-SIWarn ('LA ingest attempt {0}/{1} failed (transient DCR-cache issue): {2}. Refreshing DCE/DCR cache and retrying in {3}s ...' -f $attempt, $maxAttempts, $msg, $sleepSec)
+                }
                 Start-Sleep -Seconds $sleepSec
                 if (-not $useMi) {
                     try {

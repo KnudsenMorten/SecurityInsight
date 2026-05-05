@@ -33,14 +33,29 @@ function Get-PublishedVersion {
     )
     if (-not $RepoRoot) { return '(dev)' }
 
-    # Layer 1: VERSION.txt -- preferred, written by the publish workflow.
+    # Layer 1: per-solution VERSION file -- canonical for monorepo + internal
+    # AutomateIT_InstallUpdate installs (where root VERSION.txt holds the
+    # AutomateIT install marker, NOT the SI release). Banner shows e.g.
+    # "SecurityInsight-v2.2.17" which is what operators care about.
+    $solVerFile = Join-Path $RepoRoot ("SOLUTIONS\{0}\VERSION" -f $Solution)
+    if (Test-Path -LiteralPath $solVerFile) {
+        $raw = Get-Content -Raw -LiteralPath $solVerFile -ErrorAction SilentlyContinue
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            return ('{0}-v{1}' -f $Solution, $raw.Trim())
+        }
+    }
+
+    # Layer 2: VERSION.txt at repo root -- written by the publish workflow
+    # when shipping to a public/community repo (e.g.
+    # "AutomateIT-internal-main-<sha> ..." or just "v2.2.17").
     $verFile = Join-Path $RepoRoot 'VERSION.txt'
     if (Test-Path -LiteralPath $verFile) {
         $raw = Get-Content -Raw -LiteralPath $verFile -ErrorAction SilentlyContinue
         if (-not [string]::IsNullOrWhiteSpace($raw)) { return $raw.Trim() }
     }
 
-    # Layer 2: git describe -- works in the monorepo/dev clone.
+    # Layer 3: git describe -- last-resort for plain dev clones with no
+    # VERSION files at all.
     if (Test-Path (Join-Path $RepoRoot '.git')) {
         try {
             $tag = & git -C $RepoRoot describe --tags --match "$Solution-v*" --abbrev=0 2>$null

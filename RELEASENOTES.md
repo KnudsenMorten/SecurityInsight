@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.17
+## v2.2.18
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
+- add: SOLUTIONS/SecurityInsight/auth/Get-SIKvSecret.ps1 -- runtime KV secret fetch (830319dc)
 - release: SecurityInsight v2.2.17 - SI_RunHealth DCR overridable (18efa17b)
 - release: SecurityInsight v2.2.16 - make RA DCR names overridable (dd9da5af)
 - release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
@@ -32,14 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.191 — drop CrossEngine completely + fix Subcategory undefined (3fc1ade1)
 - feat(SI v2.2): preview.190 — restore Category/Subcategory from legacy v2.1 (106 reports), drop CrossEngine, simpler risk-analysis.schema.json with Impact-by-Category map (440ec891)
 - fix(SI v2.2): preview.189 — engine-level row dedup by (ConfigurationName, ConfigurationId) collapses 50x mv-expand+join inflation (d89afb9a)
-- fix(SI v2.2): preview.188 — Discover layout: drop NoNewline progress that glued helper output, normalize [perms] indent (93008ef5)
-- feat(SI v2.2): preview.187 — new canonical column Issues_Details (array of distinct ConfigurationName(s) per report; LA dynamic, Excel joined) (214ddeb2)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.18 — Banner shows SI version on internal monorepo installs
+
+`Get-PublishedVersion.ps1` was checking `<install>/VERSION.txt` first, which on internal monorepo / `AutomateIT_InstallUpdate` installs holds the AutomateIT install marker (`AutomateIT-internal-main-<sha> ...`) rather than the SI release tag. Operators saw the install SHA but couldn't tell which SI version a customer was running.
+
+New resolution order:
+1. `<install>/SOLUTIONS/<Solution>/VERSION` — per-solution version file (e.g. `SecurityInsight-v2.2.18`). Canonical for monorepo + internal installs.
+2. `<install>/VERSION.txt` — community installs (publish workflow stamps the SI tag here).
+3. `git describe --tags --match <Solution>-v*` — dev clones with no VERSION files.
+4. `(dev)`.
+
+Banner now reads `SecurityInsight-v2.2.18` on every internal customer VM, regardless of how they pulled the code.
 
 ---
 

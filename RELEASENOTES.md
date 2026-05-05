@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.47
+## v2.2.48
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
 - release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
 - release: SecurityInsight v2.2.46 - fix v2.2.42 DCR diagnostic showing wrong DCE + new SI_SkipDcrAutoCreate opt-out (30bd8d85)
 - release: SecurityInsight v2.2.45 - skip kustoSets KQL for rules whose osPlatformScope can't match any loaded asset (134ce3ce)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
 - release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
 - release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
-- add: SOLUTIONS/SecurityInsight/auth/Get-SIKvSecret.ps1 -- runtime KV secret fetch (830319dc)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.48 — Output: rebuild `$global:AzDceDetails` + `$global:AzDcrDetails` fresh on every ingest (canonical AzLogDcrIngestPS pattern)
+
+Engine was using `if (-not $global:AzDceDetails) { Get-AzDceListAll }` — a "fetch only when empty" guard added to avoid extra ARG calls. Two problems with that approach:
+
+1. **Stale state across ingests in one run.** v2.2.41's collision guard prunes `$global:AzDceDetails` to a single entry. The next ingest in the same engine run still sees the pruned cache (only one DCE), so collision logic can't re-evaluate against the full tenant view. After a multi-ingest run (multiple Profile tables), only the FIRST one had accurate cache state.
+2. **Deviates from the canonical `AzLogDcrIngestPS` pattern.** The module's docs and example scripts always call `Get-AzDceListAll` + `Get-AzDcrListAll` fresh before each ingest. The "fetch only when empty" gate skipped that refresh, missing newly-bootstrapped DCEs/DCRs created by other engine runs that happened between this engine's iterations.
+
+Fix: at the top of `Write-SIClassificationToLogAnalytics`, the engine now ALWAYS calls `Get-AzDceListAll` + `Get-AzDcrListAll` fresh (SPN auth path). The collision guard then runs against fresh full-tenant data, prunes if needed, and the NEXT ingest starts the cycle over with another fresh fetch — undoing any prior prune. MI-auth path keeps the "fetch when empty" gate (the helper signature for MI is different and the canonical IMDS scope handles refresh elsewhere).
+
+Cost: 1-3 extra seconds per ingest call (two ARG queries). Acceptable given the correctness gain. Also matches the canonical pattern, so future operators reading the engine code see the same flow they see in `AzLogDcrIngestPS` examples.
+
+Existing post-`CheckCreateUpdate-TableDcr-Structure` refresh of `$global:AzDcrDetails` (around line 410) is preserved — it's still needed to discover the just-created DCR's `immutableId` for the immediate `Post-*` call.
 
 ---
 

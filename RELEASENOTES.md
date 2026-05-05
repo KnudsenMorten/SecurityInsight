@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.36
+## v2.2.37
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.37 - Run-AllEngines: 3 subset switches (7dc62844)
 - release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
 - release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
 - release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.10 - PublicIP Set-AzContext + Use-SIAzContext helper (1dc6fac4)
 - release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
 - release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
-- release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.37 — Run-AllEngines: 3 subset switches for partial reruns
+
+`Run-AllEngines.ps1` now has 3 new mutually-exclusive switches alongside the existing `-PrivilegeTierClassifier`. Picks a subset of the 6-launcher fanout instead of always firing all six:
+
+| Switch | Fires | Use case |
+|---|---|---|
+| `-InitialProfilersOnly` | Endpoint + Identity + Azure | First-run on a fresh customer. Get the three core Profile_CL tables populated BEFORE PublicIP (which needs tier signals from the others) or RA (which queries all four). |
+| `-ProfilersOnly` | Endpoint + Identity + Azure + PublicIP | Refresh all 4 Profile tables when RA output is still current. |
+| `-RiskAnalysisOnly` | RA Detailed + RA Summary | Rerun just RA when Profile tables are fresh (~5 min vs the full ~hour fanout). |
+
+All 4 subset switches (`-PrivilegeTierClassifier`, `-InitialProfilersOnly`, `-ProfilersOnly`, `-RiskAnalysisOnly`) are mutually exclusive — passing more than one fails fast with an error before anything launches.
+
+Default (no subset switch): all 6 launchers fire as before.
 
 ---
 

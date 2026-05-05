@@ -112,6 +112,22 @@ param(
     [switch]$Sequential,
     [switch]$NoForceFullRun,
     [switch]$PrivilegeTierClassifier,
+    # Subset switches (mutually exclusive with each other and -PrivilegeTierClassifier).
+    # Useful when you only need to refresh one slice of the pipeline:
+    #   -InitialProfilersOnly  -- Endpoint + Identity + Azure (skip PublicIP + RA)
+    #                             First-run pattern: get the three core profile tables
+    #                             populated before firing PublicIP (which depends on
+    #                             tier signals from the others) or RA (which queries
+    #                             all four Profile_CL tables).
+    #   -ProfilersOnly         -- Endpoint + Identity + Azure + PublicIP (skip RA)
+    #                             Use when Profile tables need a refresh but RA
+    #                             output is still current.
+    #   -RiskAnalysisOnly      -- RA Detailed + RA Summary only
+    #                             Use after Profile tables are already fresh; cheaper
+    #                             rerun for RA-only (~5 min vs the full ~hour fanout).
+    [switch]$InitialProfilersOnly,
+    [switch]$ProfilersOnly,
+    [switch]$RiskAnalysisOnly,
     # Launcher flavour. 'community' = launcher.community-vm.ps1 (auth from
     # custom.ps1's $Spn* block; demo VMs / community customers). 'internal' =
     # launcher.internal-vm.ps1 (auth via upstream Initialize-PlatformAutomationFramework
@@ -122,6 +138,14 @@ param(
     [ValidateSet('community','internal')]
     [string]$Flavour
 )
+
+# Mutually-exclusive subset switches. Catch the obvious user error early
+# rather than firing a confusing fan-out.
+$__subsetSwitches = @($PrivilegeTierClassifier, $InitialProfilersOnly, $ProfilersOnly, $RiskAnalysisOnly) | Where-Object { $_ }
+if ($__subsetSwitches.Count -gt 1) {
+    Write-Host 'ERROR: pick at most ONE of -PrivilegeTierClassifier, -InitialProfilersOnly, -ProfilersOnly, -RiskAnalysisOnly.' -ForegroundColor Red
+    exit 1
+}
 $ErrorActionPreference = 'Continue'
 
 # Auto-redirect: if -Root points at an AutomateIT install root (no engine/ here
@@ -286,19 +310,32 @@ $ff = if ($NoForceFullRun) { '' } else { '-ForceFullRun' }
 # WaitForFile = a path the orchestrator polls (up to WaitTimeoutSec) before
 # launching the next plan item. Reserved for future use; current plans
 # don't set it (PTC always runs solo when -PrivilegeTierClassifier is on).
+# Reusable plan-item definitions. Build the actual $plan from these based on
+# which subset switch was passed. Order in the per-subset arrays = launch order.
+$endpointItem  = @{ Title = 'SI - Endpoint';    Path = "$Root\launcher\endpoint\launcher.$Flavour-vm.ps1";    Args = $ff }
+$azureItem     = @{ Title = 'SI - Azure';       Path = "$Root\launcher\azure\launcher.$Flavour-vm.ps1";       Args = $ff }
+$identityItem  = @{ Title = 'SI - Identity';    Path = "$Root\launcher\identity\launcher.$Flavour-vm.ps1";    Args = $ff }
+$publicIpItem  = @{ Title = 'SI - PublicIP';    Path = "$Root\launcher\publicip\launcher.$Flavour-vm.ps1";    Args = $ff }
+$raDetailedItem= @{ Title = 'SI - RA Detailed'; Path = "$Root\launcher\risk-analysis\launcher.$Flavour-vm.ps1"; Args = '-ReportTemplate "RiskAnalysis_Detailed"' }
+$raSummaryItem = @{ Title = 'SI - RA Summary';  Path = "$Root\launcher\risk-analysis\launcher.$Flavour-vm.ps1"; Args = '-ReportTemplate "RiskAnalysis_Summary"' }
+$ptcItem       = @{ Title = 'SI - PrivilegeTierClassifier'; Path = "$Root\launcher\privilege-tier-classifier\launcher.$Flavour-vm.ps1"; Args = '' }
+
 if ($PrivilegeTierClassifier) {
-    $plan = @(
-        @{ Title = 'SI - PrivilegeTierClassifier'; Path = "$Root\launcher\privilege-tier-classifier\launcher.$Flavour-vm.ps1"; Args = '' }
-    )
+    $plan = @($ptcItem)
+} elseif ($InitialProfilersOnly) {
+    # First-run pattern: get core Profile_CL tables populated before downstream
+    # engines (PublicIP needs tier signals; RA queries all four tables).
+    $plan = @($endpointItem, $azureItem, $identityItem)
+} elseif ($ProfilersOnly) {
+    # All four collectors, no RA. Use to refresh Profile tables when RA output
+    # is still current.
+    $plan = @($endpointItem, $azureItem, $identityItem, $publicIpItem)
+} elseif ($RiskAnalysisOnly) {
+    # RA-only rerun. Cheaper than the full fanout when Profile tables already fresh.
+    $plan = @($raDetailedItem, $raSummaryItem)
 } else {
-    $plan = @(
-        @{ Title = 'SI - Endpoint';                Path = "$Root\launcher\endpoint\launcher.$Flavour-vm.ps1";                  Args = $ff }
-        @{ Title = 'SI - Azure';                   Path = "$Root\launcher\azure\launcher.$Flavour-vm.ps1";                     Args = $ff }
-        @{ Title = 'SI - Identity';                Path = "$Root\launcher\identity\launcher.$Flavour-vm.ps1";                  Args = $ff }
-        @{ Title = 'SI - PublicIP';                Path = "$Root\launcher\publicip\launcher.$Flavour-vm.ps1";                  Args = $ff }
-        @{ Title = 'SI - RA Detailed';             Path = "$Root\launcher\risk-analysis\launcher.$Flavour-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Detailed"' }
-        @{ Title = 'SI - RA Summary';              Path = "$Root\launcher\risk-analysis\launcher.$Flavour-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Summary"' }
-    )
+    # Default: 4 collectors + 2 RA passes (full fanout).
+    $plan = @($endpointItem, $azureItem, $identityItem, $publicIpItem, $raDetailedItem, $raSummaryItem)
 }
 
 # ---------------------------------------------------------------------------

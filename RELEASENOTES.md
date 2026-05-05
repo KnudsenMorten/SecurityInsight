@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.31
+## v2.2.32
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
 - release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
 - release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
 - release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
 - release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
 - release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
-- release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.32 — Endpoint + Identity: flip "active assets only" to DEFAULT ON
+
+v2.2.31 made the active-only filter opt-in. Customer feedback was immediate: they want clean active-fleet view by default; let them opt OUT if they specifically need stale-asset cleanup. Now applies to BOTH endpoint and identity engines.
+
+### Endpoint
+
+| Setting | Behavior |
+|---|---|
+| (no globals set -- DEFAULT) | Mixed-source filter: keep if NOT MDE-offboarded AND any of MDE Active / MDE_LastSeen / EG.lastSeen / ENTRA_ApproximateLastSignInDateTime within `SI_ActiveStaleDays` (default 30). |
+| `$global:SI_IncludeInactive_Endpoint = $true` | Disable filter. Emit every asset including stale registrations + offboarded devices. Use when stale-asset cleanup IS the use-case. |
+| `$global:SI_RequireMdeActive_Endpoint = $true` | Strict MDE-only. Drops EG-only and Entra-only devices. Matches the MDE portal "Sensor health state: Active" filter exactly. |
+
+### Identity (NEW in v2.2.32)
+
+| Setting | Behavior |
+|---|---|
+| (no globals set -- DEFAULT) | Filter: keep if `ENTRA_Enabled=$true` AND `0 <= ENTRA_LastSignInDays <= SI_ActiveStaleDays`. Same logic as `Build-IdentityProfileRow.ps1`'s `IsEnabledActive`. |
+| `$global:SI_IncludeInactive_Identity = $true` | Disable filter. Emit every identity including disabled accounts and ghost SPs that never signed in. |
+
+`SI_ExcludeInactive_Endpoint` from v2.2.31 is now redundant -- ignored if set, no-op.
+
+Engine prints one INFO line per run so operators can see what happened:
+```
+asset filter [ExcludeInactive (MDE+EG+Entra), 30d]: 4452 -> 487 (dropped 3965 inactive). Set $global:SI_IncludeInactive_Endpoint=$true to disable.
+asset filter [ExcludeInactive (Identity), 30d]: 4057 -> 1284 (dropped 2773 disabled/stale). Set $global:SI_IncludeInactive_Identity=$true to disable.
+```
+
+### Performance note
+
+Filter runs at Stage Output (post-Classify), so it shrinks LA ingest + JSON/Excel output + downstream RA query cost. **Stage Collect / Enrich / Classify still process all rows** -- the per-asset Graph/MDE/EG fetches and 5851-row Profile rule evaluation aren't shortcut by this filter. A Stage-Discover-time filter that cuts the upstream work too is a separate future change (bigger surface; this filter ships first because it's safe + immediately useful for LA ingest cost + report cleanliness).
 
 ---
 

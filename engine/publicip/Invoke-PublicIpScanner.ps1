@@ -505,8 +505,10 @@ function Invoke-ShodanScans {
             CollectionTime    = $script:_CollectionTime
             ScanTime          = ([datetime]::UtcNow).ToString('yyyy-MM-ddTHH:mm:ssZ')
             IpAddress         = $t.IpAddress
+            AssetId           = $t.IpAddress
             AssetName         = $t.AssetName
             AssetEngine       = $t.AssetEngine
+            AssetType         = 'PublicIP'
             AssetTier         = $t.AssetTier
             cmdbId              = $t.cmdbId
             cmdbName            = $t.cmdbName

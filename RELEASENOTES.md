@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.41
+## v2.2.42
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
 - release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
 - release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
 - release: SecurityInsight v2.2.39 - flip endpoint filter default back to MIXED (87316f19)
@@ -33,13 +34,52 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
 - release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
 - release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
-- release: SecurityInsight v2.2.12 - PublicIP tolerate missing Profile tables (acfc2a9e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.42 — Output: DCR pre-create diagnostic + RBAC self-heal + PublicIP AssetId/AssetType + Setup hardening
+
+Five fixes bundled, all targeting the bootstrap-and-first-ingest path.
+
+**1. DCR pre-create diagnostic (`engine/asset-profiling/stages/Invoke-Output.ps1`).**
+After the v2.2.41 collision guard, customers still hit `RequestDisallowedByPolicy` when an Allowed-locations Azure Policy denies DCR creation. Symptom is opaque because AzLogDcrIngestPS sets the new DCR's `location` field from `$DceInfo.location` (module line 1725), not from `$global:SI_Location` — so a misnamed/misplaced DCE silently mints DCRs in the wrong region and the policy denies the PUT.
+
+New diagnostic block runs once per DCR, immediately before `CheckCreateUpdate-TableDcr-Structure`. Logs six lines:
+
+```
+DCR pre-create  : DcrName            = dcr-si-identity-profile
+DCR pre-create  : DcrResourceGroup   = rg-securityinsight
+DCR pre-create  : SI_Location        = westeurope  (engine intent; NOT used by module for new DCR)
+DCR pre-create  : DceName            = dce-si-securityinsight
+DCR pre-create  : DceLocation        = northeurope  (THIS becomes new DCR location -- AzLogDcrIngestPS.psm1 line ~1725)
+DCR pre-create  : DceResourceId      = /subscriptions/.../dce-si-securityinsight
+```
+
+Emits a 3-line `[WARN]` block when `SI_Location ≠ DceLocation` calling out the mismatch, what the new DCR location will be, and the fix (recreate the DCE in the allowed location). Also handles the wrong-name case — when the lookup misses, logs `<no DCE in cache>` so the operator immediately sees the name mismatch instead of chasing a phantom policy denial.
+
+Always-on; no flag. One-time per DCR per run, low noise.
+
+**2. RBAC pre-flight check (`engine/asset-profiling/stages/Invoke-Output.ps1`).**
+Before the first ingest of every DCR, the engine queries `Get-AzRoleAssignment` for `Monitoring Metrics Publisher` at the DCR RG scope. If missing, logs a loud `[WARN]` block with the exact `New-AzRoleAssignment` to copy/paste. Cheap (one ARM call), one-time per run, catches the silent-RBAC-gap case where the bootstrap forgot to grant or the grant lives at a higher scope and hasn't propagated.
+
+**3. RBAC self-heal on 403 ingest (`engine/asset-profiling/stages/Invoke-Output.ps1`).**
+Existing 3-attempt retry loop only matched `404|NotFound|immutable Id` (DCR-cache transient). Now also matches `403 + 'does not have access to ingest'` (RBAC). On RBAC match, the engine attempts `New-AzRoleAssignment -RoleDefinitionName 'Monitoring Metrics Publisher' -Scope <DCR resource id>` (resource scope = sub-60s propagation vs 5-30 min for RG-scope), sleeps 60s, retries. Idempotent — checks for existing assignment first. Requires the engine SPN to have User Access Administrator or Owner somewhere in scope hierarchy; if the grant call itself fails, surfaces a clear `[WARN]` and falls through to the next retry.
+
+**4. Setup hardening: resource-scope MMP grant per DCR (`Setup-SecurityInsight.ps1`).**
+After `CheckCreateUpdate-TableDcr-Structure` succeeds, Setup now grants `Monitoring Metrics Publisher` directly on the just-created DCR's resource id (in addition to the existing RG-scope grant a few lines later). The RG grant covers future auto-created DCRs via inheritance, but propagation to a specific DCR can lag and stalls the very first ingest. Resource-scope grant is fast (<60s) and idempotent — checks `Get-AzRoleAssignment` first.
+
+**5. PublicIP engine emits `AssetId` + `AssetType` (`engine/publicip/Invoke-PublicIpScanner.ps1`).**
+Shodan/PublicIP rows in `SI_VulnerabilityPIP_CL` were missing two columns the locked RA queries project:
+- `AssetId` — schema declared it (`alias of PrimaryEntityId = the public IP itself`) but the row builder never emitted it
+- `AssetType` — cross-engine identity field (`'PublicIP'` for this engine), missing entirely
+
+Result: 4 RA report queries (`PublicIP_OpenPorts_Summary/Detailed`, `PublicIP_Vulnerabilities_Summary/Detailed`) failed with KQL `SEM0100 -- Failed to resolve scalar expression named 'AssetId'`, even though the engine ran clean and ingested rows. Engine now emits both fields on every row; queries resolve and return the expected per-IP findings. No schema/DCR change required (existing DCR auto-merges the new columns on next run).
 
 ---
 

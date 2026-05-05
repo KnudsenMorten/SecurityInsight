@@ -213,17 +213,32 @@ function Get-SIRuleSet {
                 }
             }
 
+            # osPlatformScope: optional per-rule list of OS classes the rule applies to.
+            # When non-empty, Invoke-Profile.ps1 Pass 2.5 buckets the rule into ONLY
+            # those OS-class buckets. When empty/missing, rule lands in EVERY bucket
+            # (unscoped) and runs against every asset. Without this field on the
+            # rule object, the bucketing optimization is silently disabled.
+            $osScope = @()
+            if ($obj.osPlatformScope) {
+                if ($obj.osPlatformScope -is [System.Collections.IEnumerable] -and -not ($obj.osPlatformScope -is [string])) {
+                    $osScope = @($obj.osPlatformScope | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                } else {
+                    $osScope = @(([string]$obj.osPlatformScope) -split '[,;]\s*' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                }
+            }
+
             [void]$results.Add([pscustomobject]@{
-                Id          = $id
-                AppliesTo   = $appliesTo
-                Mode        = $mode
-                Purpose     = if ($obj.purpose)     { [string]$obj.purpose }     else { $null }
-                Category    = if ($obj.category)    { [string]$obj.category }    else { $null }
-                Description = if ($obj.description) { [string]$obj.description } else { $null }
-                Detections  = $detections.ToArray()
-                File        = $f.FullName.Substring($siRoot.Length).TrimStart('\','/')
-                Folder      = $folder
-                SchemaShape = 'AssetProfileBy'
+                Id              = $id
+                AppliesTo       = $appliesTo
+                Mode            = $mode
+                osPlatformScope = $osScope
+                Purpose         = if ($obj.purpose)     { [string]$obj.purpose }     else { $null }
+                Category        = if ($obj.category)    { [string]$obj.category }    else { $null }
+                Description     = if ($obj.description) { [string]$obj.description } else { $null }
+                Detections      = $detections.ToArray()
+                File            = $f.FullName.Substring($siRoot.Length).TrimStart('\','/')
+                Folder          = $folder
+                SchemaShape     = 'AssetProfileBy'
             })
             $loaded++
         }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.20
+## v2.2.21
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
 - release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
 - release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
 - release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.194 — routing: skip reports needing ExposureGraph + SI_*_Profile_CL when EG isn't reachable from LA (5d77492e)
 - fix(SI v2.2): preview.193 — wrap 75 more bare tostring(<col>) refs in column_ifexists (9b7cd01c)
 - fix(SI v2.2): preview.192 — wrap value-side tostring(<col>) in column_ifexists so case() Category/Subcategory parses when source column is missing (133fd01c)
-- fix(SI v2.2): preview.191 — drop CrossEngine completely + fix Subcategory undefined (3fc1ade1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.21 — Quiet down Graph 429-retry warnings
+
+PIM scans across 80+ role-bearing groups can fire 50+ HTTP 429 throttle responses, each currently emitting a `WARNING: Graph transient error (HTTP 429) on https://graph.microsoft.com/...` line. All auto-recovered by the existing 3-attempt exponential backoff -- pure noise that drowned the launcher trace.
+
+`engine/asset-profiling/shared/IdentityRoleFetcher.ps1` now demotes the per-retry message to `Write-Verbose` and bumps a counter (`$script:_SIGraphRetryCount`) for an end-of-phase summary. Pass `-Verbose` to the launcher when you actually need per-call detail (e.g. diagnosing a stuck request).
+
+Engine behavior unchanged -- only the log surface is quieter.
 
 ---
 

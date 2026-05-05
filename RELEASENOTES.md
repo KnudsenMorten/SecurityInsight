@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.22
+## v2.2.23
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
 - release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
 - release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
 - release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI README): add 'New release v2.2 coming very soon !' teaser callout (9b283fcf)
 - feat+fix(SI v2.2): preview.196 — anne-tier fix, native logon rule, cross-merge guard, Match→CmdbMatch, Summary↔Detailed parity, YAML cleanup (b50f9220)
 - fix(SI v2.2): preview.194 — routing: skip reports needing ExposureGraph + SI_*_Profile_CL when EG isn't reachable from LA (5d77492e)
-- fix(SI v2.2): preview.193 — wrap 75 more bare tostring(<col>) refs in column_ifexists (9b7cd01c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.23 — PublicIP: drop redundant DCE URI lookup (was failing on split DCE/DCR RGs)
+
+`Invoke-PublicIpScanner.ps1` had a manual `Get-AzDataCollectionEndpoint -ResourceGroupName $SI_DcrResourceGroup -Name $SI_DceName` block that computed `$dceUri` and threw when the DCE wasn't in the same RG as DCRs. But `$dceUri` was **never actually used** -- the downstream `CheckCreateUpdate-TableDcr-Structure` and `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` calls (both from AzLogDcrIngestPS) resolve DCE/DCR by name themselves via `Get-AzDcrListAll`, which scans the SPN's visible scope across all subs/RGs.
+
+Removed the dead lookup. Engine now succeeds whether DCE lives in the same RG as DCRs or a different one (e.g. `rg-dce-securityinsight-community` next to `rg-securityinsight-community`).
+
+Mirrors how the asset-profiling Output stage handles this -- consistent ingest behavior across all 4 collection engines.
 
 ---
 

@@ -29,21 +29,30 @@ function Invoke-SIHuntingQuery {
         [Parameter(Mandatory)][string]$Query,
         [Parameter()]
         [ValidateSet('DefenderGraph','LogAnalytics','MultiWorkspace')]
-        [string]$QueryEngine = 'DefenderGraph'
+        [string]$QueryEngine = 'DefenderGraph',
+        # Optional workspace override. When set, the LA route queries this
+        # workspace instead of the default $global:SI_WorkspaceResourceId.
+        # Lets identity-related queries target the Defender workspace where
+        # AADServicePrincipalSignInLogs / AADManagedIdentitySignInLogs /
+        # IdentityInfo live, while SI_*_Profile_CL queries continue to use
+        # the SI home workspace.
+        [string]$WorkspaceResourceId
     )
 
     if ($QueryEngine -in 'LogAnalytics','MultiWorkspace') {
-        if ([string]::IsNullOrWhiteSpace($global:SI_WorkspaceResourceId)) {
-            Write-Warning 'Invoke-SIHuntingQuery: LogAnalytics route needs $global:SI_WorkspaceResourceId.'
+        $targetWs = if (-not [string]::IsNullOrWhiteSpace($WorkspaceResourceId)) { $WorkspaceResourceId } else { $global:SI_WorkspaceResourceId }
+        if ([string]::IsNullOrWhiteSpace($targetWs)) {
+            Write-Warning 'Invoke-SIHuntingQuery: LogAnalytics route needs $global:SI_WorkspaceResourceId or -WorkspaceResourceId.'
             return @()
         }
         try {
             # Get-AzOperationalInsightsWorkspace -ResourceId is NOT
             # a valid parameter on PS 5.1. Parse the ARM ID + use -ResourceGroupName -Name.
-            if ($global:SI_WorkspaceResourceId -notmatch '^/subscriptions/(?<sub>[^/]+)/resourceGroups/(?<rg>[^/]+)/providers/Microsoft\.OperationalInsights/workspaces/(?<name>[^/]+)$') {
-                throw "SI_WorkspaceResourceId malformed: $($global:SI_WorkspaceResourceId)"
+            if ($targetWs -notmatch '^/subscriptions/(?<sub>[^/]+)/resourceGroups/(?<rg>[^/]+)/providers/Microsoft\.OperationalInsights/workspaces/(?<name>[^/]+)$') {
+                throw "Workspace ResourceId malformed: $targetWs"
             }
             $sub = $matches.sub; $rg = $matches.rg; $name = $matches.name
+            Write-Verbose ("Invoke-SIHuntingQuery (LA): targeting {0}" -f $targetWs)
             # restore the caller's Az context after the query so a
             # cross-sub workspace lookup doesn't silently rebind the rest of the
             # engine run to the workspace's subscription.

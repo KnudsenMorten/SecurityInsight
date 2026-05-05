@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.21
+## v2.2.22
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
 - release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
 - release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
 - release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
@@ -33,13 +34,36 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat+fix(SI v2.2): preview.196 — anne-tier fix, native logon rule, cross-merge guard, Match→CmdbMatch, Summary↔Detailed parity, YAML cleanup (b50f9220)
 - fix(SI v2.2): preview.194 — routing: skip reports needing ExposureGraph + SI_*_Profile_CL when EG isn't reachable from LA (5d77492e)
 - fix(SI v2.2): preview.193 — wrap 75 more bare tostring(<col>) refs in column_ifexists (9b7cd01c)
-- fix(SI v2.2): preview.192 — wrap value-side tostring(<col>) in column_ifexists so case() Category/Subcategory parses when source column is missing (133fd01c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.22 — SP sign-in: actually query the Defender workspace + visible target log
+
+`Invoke-SIHuntingQuery` always queried `$global:SI_WorkspaceResourceId` on the LA route -- ignored `$global:SI_DefenderWorkspaceResourceId` even when callers had set it. The SP sign-in fetcher (`IdentityRoleFetcher.ps1` `Get-SISpnSignInActivity`) announced "fetching from Log Analytics (separate Defender workspace)" but the implementation actually targeted the SI workspace, where `AADServicePrincipalSignInLogs` / `AADManagedIdentitySignInLogs` don't live. Result: 0 rows on every run for tenants with hundreds of active SPs.
+
+Two fixes:
+
+1. **`Invoke-SIHuntingQuery` adds `-WorkspaceResourceId` parameter**. When set, the LA route queries that workspace instead of the global default. Verbose log line surfaces the chosen target on every call.
+
+2. **`Get-SISpnSignInActivity` passes `-WorkspaceResourceId $global:SI_DefenderWorkspaceResourceId`** for the LA-route attempt (with fallback to `SI_WorkspaceResourceId` when the Defender variable isn't set). Also surfaces the chosen workspace in the trace's "trying ..." line so operators can see exactly where the query went without `-Verbose`.
+
+Trace before:
+```
+[INFO] [perms] SP sign-in source: trying AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA)...
+[INFO] [perms] SP sign-in source: OK -- 0 rows from AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA)
+```
+
+Trace after:
+```
+[INFO] [perms] SP sign-in source: trying AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA) (workspace=/subscriptions/.../log-platform-management-srvnetworkcloud-p)...
+[INFO] [perms] SP sign-in source: OK -- 1247 rows from AADServicePrincipalSignInLogs + AADManagedIdentitySignInLogs (LA)
+```
 
 ---
 

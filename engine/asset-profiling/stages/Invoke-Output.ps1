@@ -431,36 +431,38 @@ function Invoke-SIOutput {
                                      -Stage 'Classify' `
                                      -ReplicaIndex ([int]$RunContext.ShardIndex))
 
-    # ---- ENDPOINT engine: "active devices only" filter (DEFAULT ON) ----
+    # ---- ENDPOINT engine: "active devices only" filter ----
     # Stale Entra device registrations, offboarded MDE boxes, decommissioned
-    # servers still on the EG node list -- all real findings (T3 candidates),
-    # but they're noise for most customers tracking the live fleet. v2.2.32
-    # FLIPPED the default to ON so Profile tables + RA reports start clean.
+    # servers still on the EG node list -- all noise for most customers
+    # tracking the live managed fleet.
     #
-    # DEFAULT (no globals set): mixed-source active-only filter -- keep a
-    # device if NOT MDE-offboarded AND any of:
-    #   * MDE sensor Active / ImpairedCommunication, OR
-    #   * MDE_LastSeen within $global:SI_ActiveStaleDays (default 30), OR
-    #   * EG.lastSeen within staleDays, OR
-    #   * ENTRA_ApproximateLastSignInDateTime within staleDays
-    # = "device is alive in at least one Microsoft surface."
+    # v2.2.38 flipped the default to STRICT MDE-only -- matches the MDE portal
+    # "Sensor health state: Active" filter exactly. The mixed-source default
+    # (v2.2.32-v2.2.37) was too permissive: BYOD phones sign in to Entra
+    # daily, so the "alive in any Microsoft surface" filter still kept them.
     #
-    # OPT-OUT: $global:SI_IncludeInactive_Endpoint = $true
-    #   Disables the filter. Engine surfaces every asset including stale
-    #   registrations + offboarded devices. Use when stale-asset cleanup
-    #   IS the use-case (helps SOC find ghosts to delete).
+    # PRECEDENCE (top wins):
+    #   1. $global:SI_IncludeInactive_Endpoint = $true
+    #      Disable filter entirely. Emit every asset including stale
+    #      registrations + offboarded devices. Use when stale-asset cleanup
+    #      IS the use-case (SOC needs to find ghosts to delete).
+    #   2. $global:SI_AllowNonMdeDevices_Endpoint = $true
+    #      Mixed-source mode (v2.2.32 behaviour). Keep if NOT MDE-offboarded
+    #      AND any of: MDE Active, MDE_LastSeen<staleDays, EG.lastSeen<staleDays,
+    #      ENTRA_ApproximateLastSignInDateTime<staleDays. Use when the customer
+    #      also wants visibility into BYOD / IoT / non-MDE-onboarded devices.
+    #   3. DEFAULT (no globals set)
+    #      Strict MDE-only. Keep if NOT MDE-offboarded AND (MDE Active OR
+    #      MDE_LastSeen<staleDays). Drops EG-only and Entra-only devices.
+    #      Matches MDE portal "Sensor health state: Active" filter exactly.
     #
-    # OPT-IN STRICT: $global:SI_RequireMdeActive_Endpoint = $true
-    #   Keep ONLY MDE sensor Active OR MDE_LastSeen<staleDays. Drops EG-only
-    #   and Entra-only devices. Matches the MDE portal "Sensor health state:
-    #   Active" filter exactly.
-    #
-    # Precedence: SI_IncludeInactive wins (no filter), else
-    # SI_RequireMdeActive wins (strict), else default (mixed).
     # Filter runs BEFORE all sinks (LA + JSON + Excel see same set).
     if ($RunContext.Engine -ieq 'endpoint') {
-        $includeInactive  = [bool](Get-Variable -Name 'SI_IncludeInactive_Endpoint'  -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
-        $requireMdeActive = [bool](Get-Variable -Name 'SI_RequireMdeActive_Endpoint' -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        $includeInactive    = [bool](Get-Variable -Name 'SI_IncludeInactive_Endpoint'    -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        $allowNonMde        = [bool](Get-Variable -Name 'SI_AllowNonMdeDevices_Endpoint' -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        # Backwards-compat: v2.2.32-v2.2.37 used SI_RequireMdeActive_Endpoint as
+        # opt-in to strict mode. Strict is now the default; the old global is
+        # ignored (still strict either way) but we don't error on it.
         $staleDays   = if ($global:SI_ActiveStaleDays) { [int]$global:SI_ActiveStaleDays } else { 30 }
         $staleCutoff = (Get-Date).ToUniversalTime().AddDays(-$staleDays)
 
@@ -472,10 +474,11 @@ function Invoke-SIOutput {
                 if ([string]$m.MDE_OnboardingStatus -eq 'Offboarded') { return $false }
                 $sensorActive = ([string]$m.MDE_SensorHealthState -in @('Active','ImpairedCommunication'))
                 if ($sensorActive) { return $true }
-                # Build the freshness candidate list. Strict MDE mode skips
-                # EG / Entra fallbacks intentionally.
+                # Build the freshness candidate list. Default (strict) only
+                # accepts MDE_LastSeen. SI_AllowNonMdeDevices_Endpoint loosens
+                # to also accept EG / Entra freshness signals.
                 $candidates = @('MDE_LastSeen')
-                if (-not $requireMdeActive) { $candidates += @('EG_LastSeen','ENTRA_ApproximateLastSignInDateTime') }
+                if ($allowNonMde) { $candidates += @('EG_LastSeen','ENTRA_ApproximateLastSignInDateTime') }
                 foreach ($prop in $candidates) {
                     $p = $m.PSObject.Properties[$prop]
                     if ($p -and $p.Value) {
@@ -491,8 +494,8 @@ function Invoke-SIOutput {
                 return $false
             })
             $dropped = $beforeCount - $records.Count
-            $modeLabel = if ($requireMdeActive) { 'RequireMdeActive (MDE-only)' } else { 'ExcludeInactive (MDE+EG+Entra)' }
-            Write-SIInfo ('asset filter [{0}, {1}d]: {2} -> {3} (dropped {4} inactive). Set $global:SI_IncludeInactive_Endpoint=$true to disable.' -f $modeLabel, $staleDays, $beforeCount, $records.Count, $dropped)
+            $modeLabel = if ($allowNonMde) { 'Mixed (MDE+EG+Entra)' } else { 'Strict (MDE-only, DEFAULT)' }
+            Write-SIInfo ('asset filter [{0}, {1}d]: {2} -> {3} (dropped {4} inactive). Loosen with $global:SI_AllowNonMdeDevices_Endpoint=$true; disable with $global:SI_IncludeInactive_Endpoint=$true.' -f $modeLabel, $staleDays, $beforeCount, $records.Count, $dropped)
         } else {
             Write-SIInfo 'asset filter: DISABLED ($global:SI_IncludeInactive_Endpoint = $true) -- emitting all assets including stale registrations'
         }

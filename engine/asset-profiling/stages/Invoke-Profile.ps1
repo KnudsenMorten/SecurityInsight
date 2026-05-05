@@ -72,11 +72,39 @@ function Invoke-SIProfile {
         else          { Write-SIInfo ("index '{0}' NOT built ({1})" -f $k, $s.Error) }
     }
 
+    # ---- Pass 2.5: BUCKET RULES BY OS CLASS ----
+    # Pre-bucket rules by OS class so the per-asset loop iterates only the rules
+    # relevant to that asset's OS instead of scanning all $rules and skipping
+    # via inline `osPlatformScope` check (was 543/559 server-only rules being
+    # skipped per workstation × 5K assets = ~2.7M wasted iterations).
+    # Each bucket = (rules with NO scope, run on every asset) +
+    # (rules whose scope contains that class). Unscoped rules are pointer-shared
+    # across all buckets, not duplicated.
+    $_osClasses = @('WindowsServer','WindowsClient','Linux','macOS','iOS','Android','IoT','Other')
+    $rulesByOsClass = @{}
+    foreach ($_c in $_osClasses) { $rulesByOsClass[$_c] = New-Object System.Collections.ArrayList }
+    $_unscopedCount = 0
+    foreach ($rule in $rules) {
+        $scope = @($rule.osPlatformScope)
+        if ($scope.Count -eq 0 -or ($scope.Count -eq 1 -and [string]::IsNullOrWhiteSpace([string]$scope[0]))) {
+            $_unscopedCount++
+            foreach ($_c in $_osClasses) { [void]$rulesByOsClass[$_c].Add($rule) }
+        } else {
+            foreach ($_c in $scope) {
+                $_ck = [string]$_c
+                if ($rulesByOsClass.ContainsKey($_ck)) { [void]$rulesByOsClass[$_ck].Add($rule) }
+            }
+        }
+    }
+    $_bucketSummary = ($_osClasses | ForEach-Object { '{0}={1}' -f $_, $rulesByOsClass[$_].Count }) -join ' '
+    Write-SIInfo ("rule buckets: unscoped={0} | {1}" -f $_unscopedCount, $_bucketSummary)
+
     # ---- Pass 3: PER-ASSET (collect ALL matches, not first-wins) ----
     $matchedAssets = 0; $noMatchAssets = 0; $totalMatches = 0
     $perRuleHits   = @{}   # per-rule-name fire counter for visibility
     $perRuleMs     = @{}   # cumulative time per rule -- spotting slow rules
     $skipScope     = 0     # rules skipped because osPlatformScope didn't match the asset
+    $_totalRules   = $rules.Count
     $_total = $records.Count; $_i = 0
     Reset-SIProgress -Label "ProfileRuleEval-$engine" -ErrorAction SilentlyContinue
     $_ruleSw = [System.Diagnostics.Stopwatch]::new()
@@ -86,23 +114,17 @@ function Invoke-SIProfile {
         $matches = New-Object System.Collections.ArrayList
 
         # Coarse OS class for fast per-rule scope filtering. Computed ONCE per
-        # asset (not per-rule) so the lookup cost is amortized across ~559 rules.
-        # Reads MDE_OSPlatform / ENTRA_OS / EG_OS via Get-SIAssetField -- same
-        # source as the existing osPlatform rule kind. Possible values:
+        # asset to pick the pre-built bucket. Reads MDE_OSPlatform / ENTRA_OS /
+        # EG_OS via Get-SIAssetField -- same source as the existing osPlatform
+        # rule kind. Possible values:
         # WindowsServer / WindowsClient / Linux / macOS / iOS / Android / IoT / Other.
         $assetOsClass = Get-SIAssetOsClass -Asset $r
+        # Pull the pre-bucketed rule list for this asset's OS class. Unknown
+        # classes fall back to 'Other' bucket (only unscoped rules).
+        $_assetRules = if ($rulesByOsClass.ContainsKey($assetOsClass)) { $rulesByOsClass[$assetOsClass] } else { $rulesByOsClass['Other'] }
+        $skipScope += ($_totalRules - $_assetRules.Count)
 
-        foreach ($rule in $rules) {
-            # Optional rule-level pre-filter. Rules that declare
-            # `osPlatformScope: [WindowsServer, Linux]` only run against assets
-            # whose OS class is in the list. Rules without the field run on every
-            # asset (backwards compatible). Skip is O(1), cheaper than entering
-            # Invoke-SIRuleEval which dispatches per-kind handlers.
-            $scope = $rule.osPlatformScope
-            if ($scope -and @($scope).Count -gt 0 -and ($assetOsClass -notin @($scope))) {
-                $skipScope++
-                continue
-            }
+        foreach ($rule in $_assetRules) {
             $_ruleSw.Restart()
             $hit = Invoke-SIRuleEval -Asset $r -Rule $rule
             $_ruleSw.Stop()

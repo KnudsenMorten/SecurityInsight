@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.38
+## v2.2.40
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
+- release: SecurityInsight v2.2.39 - flip endpoint filter default back to MIXED (87316f19)
 - release: SecurityInsight v2.2.38 - Endpoint filter strict MDE-only by default (c0bc8e7f)
 - release: SecurityInsight v2.2.37 - Run-AllEngines: 3 subset switches (7dc62844)
 - release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
@@ -32,14 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
 - release: SecurityInsight v2.2.12 - PublicIP tolerate missing Profile tables (acfc2a9e)
 - release: SecurityInsight v2.2.11 - PublicIP surface KQL error body (73b03856)
-- release: SecurityInsight v2.2.10 - PublicIP Set-AzContext + Use-SIAzContext helper (1dc6fac4)
-- release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.40 — Profile: pre-bucket rules by OS class (skip 543/559 inner-loop iterations per workstation)
+
+Phase 6 Profile inner loop iterated all 559 rules per asset and `continue`d when the rule's `osPlatformScope` didn't match the asset's OS class. On 5275 assets × 543 server-scoped rules that's ~2.86M wasted iterations + per-iteration `@($scope) -notin` allocs.
+
+New: **Pass 2.5 BUCKET RULES BY OS CLASS** runs once between BULK FETCH and PER-ASSET. Builds `$rulesByOsClass = @{ WindowsServer=...; WindowsClient=...; Linux=...; ... }` where each bucket = (rules with no `osPlatformScope`, run on every asset) + (rules whose scope contains that class). Unscoped rules are pointer-shared across buckets (no data duplication).
+
+Per-asset loop now iterates `$rulesByOsClass[$assetOsClass]` directly — drops the inline scope check from the hot path. `$skipScope` stat preserved for visibility (computed as `$_totalRules - $bucketSize` per asset).
+
+Logged at startup: `rule buckets: unscoped=N | WindowsServer=X WindowsClient=Y Linux=Z ...` — operator can immediately see how big each bucket is.
+
+Behaviour unchanged: same matches, same tier results, same `ScopeSkipped` count in the return object.
+
+---
+
+## v2.2.39 — Endpoint filter: flip default back to MIXED (MDE + EG + Entra)
+
+v2.2.38's strict MDE-only default dropped real Azure VMs visible only in ARG/EG and stripped cross-source enrichment for non-MDE devices. Mixed mode is the right default for the broad asset view; strict is now opt-in.
+
+New default: **mixed-source freshness** (the v2.2.32-v2.2.37 behaviour, restored). Keep if NOT MDE-offboarded AND any of:
+- MDE sensor Active/Impaired,
+- `MDE_LastSeen` < `SI_ActiveStaleDays`,
+- `EG_LastSeen` < `SI_ActiveStaleDays`,
+- `ENTRA_ApproximateLastSignInDateTime` < `SI_ActiveStaleDays`.
+
+| Setting | Mode |
+|---|---|
+| (no globals set -- DEFAULT) | Mixed (MDE + EG + Entra). Preserves Azure-VM / BYOD / IoT visibility and cross-source correlation. |
+| `$global:SI_RequireMdeActive_Endpoint = $true` | Strict MDE-only. Matches MDE portal `Sensor health state: Active` filter. Drops EG-only and Entra-only devices. |
+| `$global:SI_IncludeInactive_Endpoint = $true` | Disable filter entirely. Emit everything. |
+
+Backwards compat: the v2.2.38 `SI_AllowNonMdeDevices_Endpoint` global is now ignored (mixed either way) -- no error, just no-op. Customers who previously set it to `$true` get the same behaviour they wanted (now as default). Customers who relied on v2.2.38's strict default need to add `SI_RequireMdeActive_Endpoint = $true` to keep the narrower view.
 
 ---
 
@@ -58,6 +92,8 @@ New default: **strict MDE-only**. Matches the MDE portal `Sensor health state: A
 | `$global:SI_IncludeInactive_Endpoint = $true` | Disable filter entirely. Emit everything. |
 
 Backwards compat: the old `SI_RequireMdeActive_Endpoint` global is now ignored (strict either way) -- no error, just no-op. Customers who previously set it to `$true` get the same behaviour they wanted (now as default). Customers who relied on the implicit mixed default need to add `SI_AllowNonMdeDevices_Endpoint = $true` to keep the broader view.
+
+> Superseded by v2.2.39 — strict was too narrow; mixed is the default again.
 
 ---
 

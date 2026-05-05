@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.46
+## v2.2.47
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
 - release: SecurityInsight v2.2.46 - fix v2.2.42 DCR diagnostic showing wrong DCE + new SI_SkipDcrAutoCreate opt-out (30bd8d85)
 - release: SecurityInsight v2.2.45 - skip kustoSets KQL for rules whose osPlatformScope can't match any loaded asset (134ce3ce)
 - release: SecurityInsight v2.2.44 - revive v2.2.40 OS-class bucketing (rule loader was dropping osPlatformScope) (d884f5ec)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
 - release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
 - add: SOLUTIONS/SecurityInsight/auth/Get-SIKvSecret.ps1 -- runtime KV secret fetch (830319dc)
-- release: SecurityInsight v2.2.17 - SI_RunHealth DCR overridable (18efa17b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.47 — Output: DCE picker now correlates by sub + RG + name (not just name)
+
+Both the v2.2.41 collision guard AND the v2.2.46 diagnostic only correlated DCEs by **name + RG**. Generic RG names (`rg-securityinsight`) often exist in multiple subs the SPN can read across the tenant, so a DCE named `dce-si-securityinsight` in the wrong sub's `rg-securityinsight` could still be picked.
+
+Fix: both code paths now use the **most-specific match first** strategy:
+1. `name + sub + RG` (full match — `$global:SI_AzSubscriptionId` + `$global:SI_DceResourceGroup` + `$global:SI_DceName`)
+2. fall back to `name + RG` (sub mismatch)
+3. fall back to `name` only (RG mismatch — last resort, almost certainly wrong)
+
+When the picker falls back to a less-specific match (i.e., the most-specific lookup found nothing), the diagnostic now logs:
+```
+DCR pre-create  : SCOPE MISMATCH -- expected sub='<sub-id>' RG='rg-securityinsight' but picked DCE is in sub='<other-sub>' RG='rg-other'.
+DCR pre-create  : Likely cause: the DCE name is reused across multiple subs/RGs in this tenant and the engine picked a same-named DCE the SPN can read. Set $global:SI_DceResourceGroup + $global:SI_AzSubscriptionId to disambiguate.
+```
+
+Diagnostic also now logs `DceSubscription` line so operator sees all three coordinates (sub / RG / name) without parsing the resource id by hand.
+
+Companion to v2.2.46 — both rely on `$global:SI_AzSubscriptionId` being set in `SecurityInsight.custom.ps1` (it usually is, sourced from `$global:MainLogAnalyticsWorkspaceSubId` in the canonical sample).
 
 ---
 

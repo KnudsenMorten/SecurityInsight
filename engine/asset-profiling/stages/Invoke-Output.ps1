@@ -270,18 +270,21 @@ function Write-SIClassificationToLogAnalytics {
         # Pre-filter the cache to one entry by name + RG so the module's
         # name-only lookup returns exactly one record.
         try {
-            $_dceRg = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { $global:SI_DcrResourceGroup }
+            $_dceRg  = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { $global:SI_DcrResourceGroup }
+            $_dceSub = $global:SI_AzSubscriptionId   # correlate by sub too -- 'rg-securityinsight' is a generic name that may exist in multiple subs the SPN can read
             if (-not $global:AzDceDetails) {
                 try { $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false } catch { Write-Warning ('DCE list query failed -- {0}' -f $_.Exception.Message) }
             }
             if ($global:AzDceDetails) {
-                $_byNameAndRg = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName -and ($_.id -like "*/resourceGroups/$_dceRg/*") })
-                $_byName      = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
-                $_picked = if ($_byNameAndRg.Count -ge 1) { $_byNameAndRg | Select-Object -First 1 }
-                           elseif ($_byName.Count -ge 1)  { $_byName | Select-Object -First 1 }
+                $_byName        = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
+                $_bySubAndRg    = @($_byName | Where-Object { $_dceSub -and $_dceRg -and ($_.id -like "*/subscriptions/$_dceSub/resourceGroups/$_dceRg/*") })
+                $_byNameAndRg   = @($_byName | Where-Object { $_.id -like "*/resourceGroups/$_dceRg/*" })
+                $_picked = if ($_bySubAndRg.Count -ge 1)   { $_bySubAndRg | Select-Object -First 1 }
+                           elseif ($_byNameAndRg.Count -ge 1) { $_byNameAndRg | Select-Object -First 1 }
+                           elseif ($_byName.Count -ge 1)      { $_byName | Select-Object -First 1 }
                            else { $null }
                 if ($_picked -and $_byName.Count -gt 1) {
-                    Write-SIInfo ("DCE collision guard: {0} DCEs named '{1}' visible -- pinned to RG '{2}' ({3})" -f $_byName.Count, $global:SI_DceName, $_dceRg, $_picked.id)
+                    Write-SIInfo ("DCE collision guard: {0} DCEs named '{1}' visible -- pinned to sub '{2}' / RG '{3}' ({4})" -f $_byName.Count, $global:SI_DceName, $_dceSub, $_dceRg, $_picked.id)
                     $global:AzDceDetails = @($_picked)
                 }
             }
@@ -296,21 +299,35 @@ function Write-SIClassificationToLogAnalytics {
         # Emit the DCE / DCR / location triple so the operator can see WHY the PUT
         # picked the location it did.
         try {
-            # Look up the DCE the MODULE will actually pick (by name, matching
-            # AzLogDcrIngestPS.psm1 line 1575). Previous version took
-            # @($global:AzDceDetails)[0] which produced misleading output when
-            # the cache contained unrelated DCEs from other tools (e.g. an
-            # Azure Monitor starter pack DCE in a different RG would be
-            # logged as 'the' DCE even though the module's name lookup would
-            # never pick it).
-            $_dceForDcr = $null
+            # Look up the DCE the MODULE will actually pick. Correlate by
+            # name + sub + RG (same logic as the v2.2.41 collision guard) so
+            # the diagnostic accurately reflects which DCE the engine will
+            # use. Falls back through {name+sub+RG} -> {name+RG} -> {name}
+            # with a RG/sub-mismatch warning when the most-specific match
+            # doesn't exist -- this catches the case where 'rg-securityinsight'
+            # exists in multiple subs the SPN can read.
+            $_dceForDcr     = $null
+            $_dceWrongScope = $false
+            $_dceExpectRg   = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { $global:SI_DcrResourceGroup }
+            $_dceExpectSub  = $global:SI_AzSubscriptionId
             if ($global:AzDceDetails -and $global:SI_DceName) {
-                $_dceForDcr = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName } | Select-Object -First 1)
-                if ($_dceForDcr -is [System.Collections.IEnumerable] -and -not ($_dceForDcr -is [string])) { $_dceForDcr = @($_dceForDcr)[0] }
+                $_dceMatches = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
+                $_dceInSubAndRg = @($_dceMatches | Where-Object { $_dceExpectSub -and $_dceExpectRg -and ($_.id -like "*/subscriptions/$_dceExpectSub/resourceGroups/$_dceExpectRg/*") })
+                $_dceInRg       = @($_dceMatches | Where-Object { $_dceExpectRg -and ($_.id -like "*/resourceGroups/$_dceExpectRg/*") })
+                if ($_dceInSubAndRg.Count -ge 1) {
+                    $_dceForDcr = $_dceInSubAndRg | Select-Object -First 1
+                } elseif ($_dceInRg.Count -ge 1) {
+                    $_dceForDcr     = $_dceInRg | Select-Object -First 1
+                    $_dceWrongScope = $true   # right RG name, wrong sub
+                } elseif ($_dceMatches.Count -ge 1) {
+                    $_dceForDcr     = $_dceMatches | Select-Object -First 1
+                    $_dceWrongScope = $true   # name match but wrong RG (and probably wrong sub)
+                }
             }
             $_dceLoc    = if ($_dceForDcr) { [string]$_dceForDcr.location } else { '<NOT FOUND in cache -- name does not match any DCE the SPN can read>' }
             $_dceId     = if ($_dceForDcr) { [string]$_dceForDcr.id }       else { '<NOT FOUND in cache>' }
             $_dceRgSeen = if ($_dceForDcr -and $_dceForDcr.id -match '/resourceGroups/([^/]+)/') { $Matches[1] } else { '<unknown>' }
+            $_dceSubSeen = if ($_dceForDcr -and $_dceForDcr.id -match '/subscriptions/([^/]+)/') { $Matches[1] } else { '<unknown>' }
             $_dcrRg     = $global:SI_DcrResourceGroup
             $_intended  = if ($global:SI_Location) { [string]$global:SI_Location } else { '<unset>' }
             Write-SIInfo ('DCR pre-create  : DcrName            = {0}' -f $dcrName)
@@ -318,12 +335,16 @@ function Write-SIClassificationToLogAnalytics {
             Write-SIInfo ('DCR pre-create  : SI_Location        = {0}  (engine intent; NOT used by module for new DCR)' -f $_intended)
             Write-SIInfo ('DCR pre-create  : DceName (configured) = {0}' -f $global:SI_DceName)
             Write-SIInfo ('DCR pre-create  : DceLocation        = {0}' -f $_dceLoc)
+            Write-SIInfo ('DCR pre-create  : DceSubscription    = {0}' -f $_dceSubSeen)
             Write-SIInfo ('DCR pre-create  : DceResourceGroup   = {0}' -f $_dceRgSeen)
             Write-SIInfo ('DCR pre-create  : DceResourceId      = {0}' -f $_dceId)
             if (-not $_dceForDcr) {
                 Write-Warning ('DCR pre-create  : DCE ''{0}'' NOT visible to SPN. Module will fail with null location/id.' -f $global:SI_DceName)
                 Write-Warning ('DCR pre-create  : Fix: verify the DCE name in Azure (Get-AzDataCollectionEndpoint), or check SPN has Reader on the DCE RG.')
                 Write-Warning ('DCR pre-create  : Cache size: {0} DCEs visible. None named ''{1}''.' -f (@($global:AzDceDetails).Count), $global:SI_DceName)
+            } elseif ($_dceWrongScope) {
+                Write-Warning ('DCR pre-create  : SCOPE MISMATCH -- expected sub=''{0}'' RG=''{1}'' but picked DCE is in sub=''{2}'' RG=''{3}''.' -f $_dceExpectSub, $_dceExpectRg, $_dceSubSeen, $_dceRgSeen)
+                Write-Warning ('DCR pre-create  : Likely cause: the DCE name is reused across multiple subs/RGs in this tenant and the engine picked a same-named DCE the SPN can read. Set $global:SI_DceResourceGroup + $global:SI_AzSubscriptionId to disambiguate.')
             } elseif ($_intended -and $_dceLoc -and $_intended -ne $_dceLoc) {
                 Write-Warning ('DCR pre-create  : LOCATION MISMATCH -- SI_Location=''{0}'' but DCE is in ''{1}''.' -f $_intended, $_dceLoc)
                 Write-Warning ('DCR pre-create  : new DCR will be created in ''{0}'' (DCE location). If a tenant policy denies that location, the PUT will 403 with RequestDisallowedByPolicy.' -f $_dceLoc)

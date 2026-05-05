@@ -112,12 +112,15 @@ param(
     [switch]$Sequential,
     [switch]$NoForceFullRun,
     [switch]$PrivilegeTierClassifier,
-    # Launcher flavour. 'community' = launcher.$Flavour-vm.ps1 (auth from
+    # Launcher flavour. 'community' = launcher.community-vm.ps1 (auth from
     # custom.ps1's $Spn* block; demo VMs / community customers). 'internal' =
     # launcher.internal-vm.ps1 (auth via upstream Initialize-PlatformAutomationFramework
-    # cert+KV). Default 'community' so existing demo callers don't break.
+    # cert+KV). Mandatory -- forcing an explicit choice prevents internal
+    # customers from accidentally firing the community-flavour launchers
+    # (which would skip Initialize-PlatformAutomationFramework + KV secret fetch).
+    [Parameter(Mandatory)]
     [ValidateSet('community','internal')]
-    [string]$Flavour                 = 'community'
+    [string]$Flavour
 )
 $ErrorActionPreference = 'Continue'
 

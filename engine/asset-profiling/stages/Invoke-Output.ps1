@@ -431,35 +431,40 @@ function Invoke-SIOutput {
                                      -Stage 'Classify' `
                                      -ReplicaIndex ([int]$RunContext.ShardIndex))
 
-    # ---- ENDPOINT engine: optional "active devices only" filter ----
+    # ---- ENDPOINT engine: "active devices only" filter (DEFAULT ON) ----
     # Stale Entra device registrations, offboarded MDE boxes, decommissioned
     # servers still on the EG node list -- all real findings (T3 candidates),
-    # but customers tracking only the live fleet want them out of Profile +
-    # RA reports. Two opt-in modes (endpoint engine only; identity / azure /
-    # publicip are not in scope for this filter):
+    # but they're noise for most customers tracking the live fleet. v2.2.32
+    # FLIPPED the default to ON so Profile tables + RA reports start clean.
     #
-    #   $global:SI_ExcludeInactive_Endpoint = $true       (mixed-source view)
-    #     Keep a device if NOT MDE-offboarded AND any of:
-    #       * MDE sensor Active / ImpairedCommunication, OR
-    #       * MDE_LastSeen within $global:SI_ActiveStaleDays (default 30), OR
-    #       * EG.lastSeen within staleDays, OR
-    #       * ENTRA_ApproximateLastSignInDateTime within staleDays
-    #     Result = "device is alive in at least one Microsoft surface."
+    # DEFAULT (no globals set): mixed-source active-only filter -- keep a
+    # device if NOT MDE-offboarded AND any of:
+    #   * MDE sensor Active / ImpairedCommunication, OR
+    #   * MDE_LastSeen within $global:SI_ActiveStaleDays (default 30), OR
+    #   * EG.lastSeen within staleDays, OR
+    #   * ENTRA_ApproximateLastSignInDateTime within staleDays
+    # = "device is alive in at least one Microsoft surface."
     #
-    #   $global:SI_RequireMdeActive_Endpoint = $true      (strict MDE-only)
-    #     Keep ONLY: MDE sensor Active OR MDE_LastSeen<staleDays.
-    #     Drops EG-only and Entra-only devices. Matches the MDE portal's
-    #     "Sensor health state: Active" filter exactly.
+    # OPT-OUT: $global:SI_IncludeInactive_Endpoint = $true
+    #   Disables the filter. Engine surfaces every asset including stale
+    #   registrations + offboarded devices. Use when stale-asset cleanup
+    #   IS the use-case (helps SOC find ghosts to delete).
     #
-    # Defaults OFF -- engine continues to surface stale assets unless customer
-    # opts in. Filter runs BEFORE all sinks (LA + JSON + Excel see same set).
+    # OPT-IN STRICT: $global:SI_RequireMdeActive_Endpoint = $true
+    #   Keep ONLY MDE sensor Active OR MDE_LastSeen<staleDays. Drops EG-only
+    #   and Entra-only devices. Matches the MDE portal "Sensor health state:
+    #   Active" filter exactly.
+    #
+    # Precedence: SI_IncludeInactive wins (no filter), else
+    # SI_RequireMdeActive wins (strict), else default (mixed).
+    # Filter runs BEFORE all sinks (LA + JSON + Excel see same set).
     if ($RunContext.Engine -ieq 'endpoint') {
-        $excludeInactive  = [bool](Get-Variable -Name 'SI_ExcludeInactive_Endpoint'  -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        $includeInactive  = [bool](Get-Variable -Name 'SI_IncludeInactive_Endpoint'  -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
         $requireMdeActive = [bool](Get-Variable -Name 'SI_RequireMdeActive_Endpoint' -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
         $staleDays   = if ($global:SI_ActiveStaleDays) { [int]$global:SI_ActiveStaleDays } else { 30 }
         $staleCutoff = (Get-Date).ToUniversalTime().AddDays(-$staleDays)
 
-        if ($excludeInactive -or $requireMdeActive) {
+        if (-not $includeInactive) {
             $beforeCount = $records.Count
             $records = @($records | Where-Object {
                 $m = $_.Metadata
@@ -481,10 +486,38 @@ function Invoke-SIOutput {
                 return $false
             })
             $dropped = $beforeCount - $records.Count
-            if ($dropped -gt 0) {
-                $modeLabel = if ($requireMdeActive) { 'RequireMdeActive' } else { 'ExcludeInactive (MDE+EG+Entra)' }
-                Write-SIInfo ('asset filter [{0}, {1}d]: {2} -> {3} (dropped {4} inactive)' -f $modeLabel, $staleDays, $beforeCount, $records.Count, $dropped)
-            }
+            $modeLabel = if ($requireMdeActive) { 'RequireMdeActive (MDE-only)' } else { 'ExcludeInactive (MDE+EG+Entra)' }
+            Write-SIInfo ('asset filter [{0}, {1}d]: {2} -> {3} (dropped {4} inactive). Set $global:SI_IncludeInactive_Endpoint=$true to disable.' -f $modeLabel, $staleDays, $beforeCount, $records.Count, $dropped)
+        } else {
+            Write-SIInfo 'asset filter: DISABLED ($global:SI_IncludeInactive_Endpoint = $true) -- emitting all assets including stale registrations'
+        }
+    }
+
+    # ---- IDENTITY engine: "active identities only" filter (DEFAULT ON) ----
+    # Mirrors the endpoint flip in v2.2.32: filter out disabled accounts and
+    # ghost accounts (never signed in OR signed in > $global:SI_ActiveStaleDays
+    # ago). Same logic as Build-IdentityProfileRow.ps1's IsEnabledActive.
+    #   DEFAULT: ENTRA_Enabled=$true AND 0 <= ENTRA_LastSignInDays <= staleDays
+    #   OPT-OUT: $global:SI_IncludeInactive_Identity = $true
+    if ($RunContext.Engine -ieq 'identity') {
+        $includeInactiveId = [bool](Get-Variable -Name 'SI_IncludeInactive_Identity' -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        $staleDaysId       = if ($global:SI_ActiveStaleDays) { [int]$global:SI_ActiveStaleDays } else { 30 }
+        if (-not $includeInactiveId) {
+            $beforeCountId = $records.Count
+            $records = @($records | Where-Object {
+                $m = $_.Metadata
+                if (-not $m) { return $true }
+                if ($m.PSObject.Properties['ENTRA_Enabled'] -and $m.ENTRA_Enabled -ne $true) { return $false }
+                if ($null -eq $m.ENTRA_LastSignInDays) { return $false }
+                $days = $null
+                try { $days = [int]$m.ENTRA_LastSignInDays } catch { return $false }
+                if ($days -lt 0) { return $false }
+                return ($days -le $staleDaysId)
+            })
+            $droppedId = $beforeCountId - $records.Count
+            Write-SIInfo ('asset filter [ExcludeInactive (Identity), {0}d]: {1} -> {2} (dropped {3} disabled/stale). Set $global:SI_IncludeInactive_Identity=$true to disable.' -f $staleDaysId, $beforeCountId, $records.Count, $droppedId)
+        } else {
+            Write-SIInfo 'asset filter: DISABLED ($global:SI_IncludeInactive_Identity = $true) -- emitting all identities including disabled/ghost accounts'
         }
     }
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.48
+## v2.2.49
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
 - release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
 - release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
 - release: SecurityInsight v2.2.46 - fix v2.2.42 DCR diagnostic showing wrong DCE + new SI_SkipDcrAutoCreate opt-out (30bd8d85)
@@ -33,13 +34,52 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
 - release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
 - release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
-- release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.49 — Catalog: delete 13 unscoped workstation/IoT rules + scope `TestSandboxServer` to `[WindowsServer, Linux]`
+
+Endpoint catalog had 16 unscoped rules (no `osPlatformScope` → ran against every asset class). v2.2.44 + v2.2.45 made the bucketing optimization actually work but only for properly-scoped rules — the 16 unscoped ones still bloated every per-asset bucket. Pruning them down:
+
+**Deleted (13 rules + 13 .custom.sample.yaml companions = 26 files)** — all from `asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/`:
+
+*Workstation/PAW classification (8)* — better handled by the asset-tagging engine's `PAWDevices--tier0--SI` / `BYODPersonalDevice--tier3--SI` tag rules (which classify device cohorts upstream of profiling):
+- `PrivilegedAccessWorkstationPAWForTier0Admins`
+- `PrivilegedAccessWorkstationPAWForTier1Admins`
+- `AdminWorkstationUsedByTier1StaffWithoutPAWControls`
+- `PowerUserWorkstationFinanceLegalHR`
+- `ProductionWorkstation`
+- `PersonallyOwnedBYODDevice`
+- `SharedDevice`
+- `SharedClassroomLibraryComputer`
+
+*IoT / non-traditional endpoints (5)* — too narrow / too brittle for app-detection patterns; better handled via MDE machine groups + tag-engine rules:
+- `ConsumerIoTDeviceIsolatedGuestVLAN`
+- `NonNetworkedOrAirGappedSensor`
+- `USBOnlyPeripheralWithFirmwareUpdateCapability`
+- `VendingMachineCoffeeMachineWithNetworkConnectivity`
+- `WearableSmartBadgeNoDomainIntegration`
+
+**Scope-tagged (1)** — `TestSandboxServer.locked.yaml` + companion sample now declare `osPlatformScope: [WindowsServer, Linux]`. Was unscoped (running against every asset class) but conceptually server-only — workstations don't get a "Test/Sandbox Server" tier.
+
+**Net effect on rule counts:**
+| Bucket | Before | After |
+|---|---|---|
+| Total rules | 559 | 546 |
+| Unscoped | 16 | **2** (just the two top-level catalogs `AssetProfileByDeviceType` + `AssetProfileByLogonUser`) |
+| WindowsClient bucket | 16 | **2** (8x fewer rules per workstation) |
+| WindowsServer bucket | 559 | 546 |
+| Linux bucket | 559 | 546 |
+
+Per-asset eval cost on workstation-heavy fleets drops further — workstations now scan only 2 rules instead of 16, on top of v2.2.44's 35x reduction.
+
+The two top-level catalogs (`AssetProfileByDeviceType` + `AssetProfileByLogonUser`) remain unscoped by design — they classify by cross-OS device-type signals and logon-user patterns that genuinely apply to every endpoint class.
 
 ---
 

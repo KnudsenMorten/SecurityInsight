@@ -86,6 +86,7 @@
 # ============================================================================
 id:        TestSandboxServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Test / Sandbox Server'
 category:  'Server Roles'

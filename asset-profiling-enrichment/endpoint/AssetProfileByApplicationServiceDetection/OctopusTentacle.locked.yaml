@@ -1,5 +1,6 @@
 id:        OctopusTentacle
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Octopus Tentacle'
 category:  'Deployment'

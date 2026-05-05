@@ -1,5 +1,6 @@
 id:        MicrosoftAzureAdConnectSync
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Azure AD Connect synchronization services'
 category:  'Identity Sync'

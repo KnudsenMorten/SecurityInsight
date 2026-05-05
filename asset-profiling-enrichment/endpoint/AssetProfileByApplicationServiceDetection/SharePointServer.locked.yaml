@@ -1,5 +1,6 @@
 id:        SharePointServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SharePoint Server'
 category:  'Server Roles'

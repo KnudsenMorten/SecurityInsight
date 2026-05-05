@@ -1,5 +1,6 @@
 id:        BroadcomEndpointProtectionManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Symantec Endpoint Protection Manager'
 category:  'EDR/AV'

@@ -1,5 +1,6 @@
 id:        BeyondtrustPrivilegedIdentity
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BeyondTrust Privileged Identity'
 category:  'PAM'

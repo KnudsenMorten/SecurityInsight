@@ -1,5 +1,6 @@
 id:        EpicorErp
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Epicor ERP'
 category:  'ERP'

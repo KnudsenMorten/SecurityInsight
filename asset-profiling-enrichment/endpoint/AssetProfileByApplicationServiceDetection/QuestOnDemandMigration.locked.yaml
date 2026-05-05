@@ -1,5 +1,6 @@
 id:        QuestOnDemandMigration
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Quest On Demand Migration'
 category:  'Identity Migration'

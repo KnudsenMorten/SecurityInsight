@@ -1,5 +1,6 @@
 id:        CitrixStorefront
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix StoreFront'
 category:  'VDI'

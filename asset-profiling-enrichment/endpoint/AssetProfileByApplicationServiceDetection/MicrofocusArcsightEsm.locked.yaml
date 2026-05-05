@@ -1,5 +1,6 @@
 id:        MicrofocusArcsightEsm
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ArcSight ESM'
 category:  'SIEM'

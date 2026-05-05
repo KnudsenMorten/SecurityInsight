@@ -1,5 +1,6 @@
 id:        VoIPSIPGateway
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VoIP / SIP Gateway'
 category:  'Network Equipment'

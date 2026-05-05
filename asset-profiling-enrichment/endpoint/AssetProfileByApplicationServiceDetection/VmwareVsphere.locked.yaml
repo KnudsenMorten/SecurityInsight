@@ -1,5 +1,6 @@
 id:        VmwareVsphere
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware vSphere Client'
 category:  'Virtualization'

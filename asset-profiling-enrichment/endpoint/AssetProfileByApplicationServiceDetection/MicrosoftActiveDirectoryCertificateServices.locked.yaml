@@ -1,5 +1,6 @@
 id:        MicrosoftActiveDirectoryCertificateServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Active Directory Certificate Services'
 category:  'PKI'

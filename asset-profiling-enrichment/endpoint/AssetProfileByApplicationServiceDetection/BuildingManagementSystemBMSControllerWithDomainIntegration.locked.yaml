@@ -1,5 +1,6 @@
 id:        BuildingManagementSystemBMSControllerWithDomainIntegration
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Building Management System (BMS) Controller with Domain Integration'
 category:  'IoT / OT'

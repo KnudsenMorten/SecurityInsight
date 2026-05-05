@@ -1,5 +1,6 @@
 id:        MicrosoftAzureRecoveryServicesAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Azure Recovery Services Agent'
 category:  'Backup'

@@ -1,5 +1,6 @@
 id:        3CxPhoneSystem
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   '3CX Phone System Server'
 category:  'VoIP'

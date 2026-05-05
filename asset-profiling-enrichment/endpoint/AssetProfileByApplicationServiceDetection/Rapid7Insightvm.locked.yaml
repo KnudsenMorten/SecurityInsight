@@ -1,5 +1,6 @@
 id:        Rapid7Insightvm
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Rapid7 InsightVM'
 category:  'Vulnerability Mgmt'

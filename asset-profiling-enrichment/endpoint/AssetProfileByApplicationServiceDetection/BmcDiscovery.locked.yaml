@@ -1,5 +1,6 @@
 id:        BmcDiscovery
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BMC Discovery'
 category:  'ITSM/CMDB'

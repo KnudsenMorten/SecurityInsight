@@ -1,5 +1,6 @@
 id:        MicrosoftBiztalkServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft BizTalk Server'
 category:  'Integration'

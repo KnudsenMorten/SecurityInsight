@@ -1,5 +1,6 @@
 id:        PrivilegedAccessWorkstationPAWForTier1Admins
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Privileged Access Workstation (PAW) for Tier 1 Admins'
 category:  'Management'

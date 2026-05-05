@@ -153,6 +153,53 @@ function Test-SIKind_osPlatform {
     return $false
 }
 
+function Get-SIAssetOsClass {
+    <#
+    .SYNOPSIS
+        Coarse OS classification for fast per-rule scope filtering in Stage Profile.
+
+    .DESCRIPTION
+        Returns one of: WindowsServer, WindowsClient, Linux, macOS, iOS, Android,
+        IoT, Other. Reads the same MDE_OSPlatform / ENTRA_OS / EG_OS fields the
+        existing osPlatform rule kind uses. First non-empty wins.
+
+        Used by Invoke-Profile.ps1 to short-circuit rule evaluation when a rule
+        declares `osPlatformScope: [WindowsServer,...]` and the asset's class
+        isn't in the list. Avoids running ~589 server-app rules against
+        workstations / IoT / mobile and similar wasted permutations.
+
+        Match table (case-insensitive prefix on the raw OS string):
+          WindowsServer  : Windows Server, WindowsServer
+          WindowsClient  : Windows10, Windows11, Windows7, Windows8
+          Linux          : Linux, Ubuntu, Debian, RHEL, CentOS, Fedora, SUSE,
+                           Oracle, AmazonLinux, AlmaLinux, Rocky
+          macOS          : macOS, Mac OS, OSX
+          iOS            : iOS, iPadOS
+          Android        : Android
+          IoT            : TvOS, WatchOS, IoT, Embedded, ChromeOS
+          Other          : nothing matched (empty / unknown OS)
+    #>
+    param([Parameter(Mandatory)]$Asset)
+    $os = $null
+    foreach ($field in @('MDE_OSPlatform','ENTRA_OS','EG_OS')) {
+        $v = [string](Get-SIAssetField -Asset $Asset -Name $field)
+        if (-not [string]::IsNullOrWhiteSpace($v)) { $os = $v; break }
+    }
+    if ([string]::IsNullOrWhiteSpace($os)) { return 'Other' }
+    switch -Regex ($os) {
+        '(?i)windows[\s_-]*server'                                                 { return 'WindowsServer' }
+        '(?i)^windowsserver'                                                       { return 'WindowsServer' }
+        '(?i)^windows(7|8|8\.1|10|11)$'                                            { return 'WindowsClient' }
+        '(?i)^windows[\s_-]?(10|11)'                                               { return 'WindowsClient' }
+        '(?i)^(linux|ubuntu|debian|rhel|redhat|centos|fedora|suse|oracle|amazonlinux|almalinux|rocky)' { return 'Linux' }
+        '(?i)^(macos|mac os|osx)'                                                  { return 'macOS' }
+        '(?i)^(ios|ipados)'                                                        { return 'iOS' }
+        '(?i)^android'                                                             { return 'Android' }
+        '(?i)^(tvos|watchos|iot|embedded|chromeos)'                                { return 'IoT' }
+        default                                                                    { return 'Other' }
+    }
+}
+
 function Test-SIKind_nameMatches {
     <#
         kind: nameMatches

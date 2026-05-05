@@ -1,5 +1,6 @@
 id:        PhysicalSecurityControllerBadgeAccessCCTVManagementWithDomainIntegratio
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Physical Security Controller (Badge Access, CCTV Management) with Domain Integration'
 category:  'IoT / OT'

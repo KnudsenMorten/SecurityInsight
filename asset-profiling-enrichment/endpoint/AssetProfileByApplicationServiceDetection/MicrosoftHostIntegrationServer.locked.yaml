@@ -1,5 +1,6 @@
 id:        MicrosoftHostIntegrationServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Host Integration Server'
 category:  'Integration'

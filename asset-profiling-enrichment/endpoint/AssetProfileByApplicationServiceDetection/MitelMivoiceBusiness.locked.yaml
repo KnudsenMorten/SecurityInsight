@@ -1,5 +1,6 @@
 id:        MitelMivoiceBusiness
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Mitel MiVoice Business'
 category:  'VoIP'

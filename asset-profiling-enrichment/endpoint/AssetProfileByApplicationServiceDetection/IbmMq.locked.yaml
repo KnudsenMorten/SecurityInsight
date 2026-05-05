@@ -1,5 +1,6 @@
 id:        IbmMq
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM WebSphere MQ'
 category:  'Messaging'

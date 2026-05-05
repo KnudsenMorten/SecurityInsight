@@ -1,5 +1,6 @@
 id:        SmartMeetingRoomDeviceDisplayConferencingSystem
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Smart Meeting Room Device (Display, Conferencing System)'
 category:  'IoT / OT'

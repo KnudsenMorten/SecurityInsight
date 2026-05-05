@@ -1,5 +1,6 @@
 id:        HpeInsightManagement
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HP Insight Management Agents'
 category:  'Hardware Mgmt'

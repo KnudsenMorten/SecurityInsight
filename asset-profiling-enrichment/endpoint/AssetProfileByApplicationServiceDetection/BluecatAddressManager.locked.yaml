@@ -1,5 +1,6 @@
 id:        BluecatAddressManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BlueCat Address Manager'
 category:  'Network'

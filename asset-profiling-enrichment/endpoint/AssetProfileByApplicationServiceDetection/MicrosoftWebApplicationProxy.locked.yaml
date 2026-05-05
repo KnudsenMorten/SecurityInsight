@@ -1,5 +1,6 @@
 id:        MicrosoftWebApplicationProxy
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Web Application Proxy'
 category:  'Identity'

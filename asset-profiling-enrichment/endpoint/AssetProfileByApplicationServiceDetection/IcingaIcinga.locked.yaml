@@ -1,5 +1,6 @@
 id:        IcingaIcinga
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Icinga'
 category:  'Monitoring'

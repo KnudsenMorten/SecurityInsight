@@ -1,5 +1,6 @@
 id:        CitrixDirector
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix Director'
 category:  'VDI'

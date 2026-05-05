@@ -1,5 +1,6 @@
 id:        CerberusFtpServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cerberus FTP Server'
 category:  'FTP'

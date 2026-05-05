@@ -1,5 +1,6 @@
 id:        BadgeReaderNonDomainIntegratedIsolated
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Badge Reader (Non-Domain Integrated, Isolated)'
 category:  'IoT / OT'

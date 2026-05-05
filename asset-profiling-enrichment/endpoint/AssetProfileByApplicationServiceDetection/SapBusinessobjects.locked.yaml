@@ -1,5 +1,6 @@
 id:        SapBusinessobjects
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SAP BusinessObjects'
 category:  'BI'

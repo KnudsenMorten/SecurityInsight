@@ -1,5 +1,6 @@
 id:        GoogleCloudOpsAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Google Cloud Ops Agent'
 category:  'Monitoring'

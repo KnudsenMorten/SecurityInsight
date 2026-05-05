@@ -1,5 +1,6 @@
 id:        VenafiTrustProtectionPlatform
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Venafi Trust Protection Platform'
 category:  'PKI'

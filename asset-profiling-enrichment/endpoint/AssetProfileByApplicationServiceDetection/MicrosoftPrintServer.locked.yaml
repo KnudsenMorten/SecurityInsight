@@ -1,5 +1,6 @@
 id:        MicrosoftPrintServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Print Server'
 category:  'Print'

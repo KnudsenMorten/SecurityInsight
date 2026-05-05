@@ -1,5 +1,6 @@
 id:        OutOfBandManagementNetworkDeviceIDRACILOIPMI
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Out-of-Band Management Network Device (iDRAC, iLO, IPMI)'
 category:  'Network Equipment'

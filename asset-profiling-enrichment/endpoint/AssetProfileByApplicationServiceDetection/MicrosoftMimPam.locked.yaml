@@ -1,5 +1,6 @@
 id:        MicrosoftMimPam
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Privileged Access Management for Active Directory'
 category:  'PAM'

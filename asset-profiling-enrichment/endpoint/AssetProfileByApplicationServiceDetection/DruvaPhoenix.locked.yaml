@@ -1,5 +1,6 @@
 id:        DruvaPhoenix
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Druva Phoenix'
 category:  'Backup'

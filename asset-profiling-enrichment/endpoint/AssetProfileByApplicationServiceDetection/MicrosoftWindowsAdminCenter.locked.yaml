@@ -1,5 +1,6 @@
 id:        MicrosoftWindowsAdminCenter
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Windows Admin Center'
 category:  'Server Mgmt'

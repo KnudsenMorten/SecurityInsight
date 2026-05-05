@@ -1,5 +1,6 @@
 id:        SapNetweaver
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SAP NetWeaver'
 category:  'ERP'

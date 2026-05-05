@@ -1,5 +1,6 @@
 id:        RubrikCdm
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Rubrik Cluster'
 category:  'Backup'

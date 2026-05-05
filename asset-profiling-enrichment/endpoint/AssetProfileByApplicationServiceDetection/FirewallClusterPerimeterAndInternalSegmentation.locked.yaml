@@ -1,5 +1,6 @@
 id:        FirewallClusterPerimeterAndInternalSegmentation
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Firewall Cluster (Perimeter and Internal Segmentation)'
 category:  'Network Equipment'

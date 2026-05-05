@@ -1,5 +1,6 @@
 id:        VmwareHorizonConnectionServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware Horizon Connection Server'
 category:  'VDI'

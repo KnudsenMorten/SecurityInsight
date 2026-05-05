@@ -1,5 +1,6 @@
 id:        Neo4jNeo4j
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Neo4j'
 category:  'Database'

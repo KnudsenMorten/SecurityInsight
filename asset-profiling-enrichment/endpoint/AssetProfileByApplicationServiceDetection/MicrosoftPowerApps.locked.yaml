@@ -1,5 +1,6 @@
 id:        MicrosoftPowerApps
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Power Apps'
 category:  'Low-code'

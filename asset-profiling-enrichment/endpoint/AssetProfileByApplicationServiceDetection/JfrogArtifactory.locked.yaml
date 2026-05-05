@@ -1,5 +1,6 @@
 id:        JfrogArtifactory
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'JFrog Artifactory'
 category:  'Artifact Repo'

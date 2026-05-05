@@ -1,5 +1,6 @@
 id:        IbmCognosAnalytics
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Cognos Analytics'
 category:  'BI'

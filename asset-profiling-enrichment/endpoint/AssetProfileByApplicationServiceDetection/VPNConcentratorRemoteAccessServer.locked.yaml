@@ -1,5 +1,6 @@
 id:        VPNConcentratorRemoteAccessServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VPN Concentrator / Remote Access Server'
 category:  'Infrastructure'

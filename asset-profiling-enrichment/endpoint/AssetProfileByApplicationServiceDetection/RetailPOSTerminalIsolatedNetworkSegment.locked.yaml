@@ -1,5 +1,6 @@
 id:        RetailPOSTerminalIsolatedNetworkSegment
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Retail / POS Terminal (Isolated Network Segment)'
 category:  'IoT / OT'

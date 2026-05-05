@@ -1,5 +1,6 @@
 id:        VmwareNsxEdge
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware NSX Edge'
 category:  'Network/SDN'

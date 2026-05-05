@@ -1,5 +1,6 @@
 id:        HRAndIdentityLifecycleManagementServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HR and Identity Lifecycle Management Server'
 category:  'Server Roles'

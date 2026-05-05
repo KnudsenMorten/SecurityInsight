@@ -1,5 +1,6 @@
 id:        YubicoAuthenticator
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Yubico Authenticator'
 category:  'Authentication'

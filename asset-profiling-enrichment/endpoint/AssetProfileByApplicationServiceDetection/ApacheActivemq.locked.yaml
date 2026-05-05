@@ -1,5 +1,6 @@
 id:        ApacheActivemq
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache ActiveMQ'
 category:  'Messaging'

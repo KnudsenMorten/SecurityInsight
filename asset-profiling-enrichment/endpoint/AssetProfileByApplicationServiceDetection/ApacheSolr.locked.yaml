@@ -1,5 +1,6 @@
 id:        ApacheSolr
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache Solr'
 category:  'Search'

@@ -1,5 +1,6 @@
 id:        Hpe3ParServiceProcessor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HPE 3PAR Service Processor'
 category:  'Storage'

@@ -1,5 +1,6 @@
 id:        Wso2ApiManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'WSO2 API Manager'
 category:  'API Gateway'

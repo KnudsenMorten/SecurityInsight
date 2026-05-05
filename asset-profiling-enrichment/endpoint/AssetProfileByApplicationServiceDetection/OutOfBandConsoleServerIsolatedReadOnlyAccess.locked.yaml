@@ -1,5 +1,6 @@
 id:        OutOfBandConsoleServerIsolatedReadOnlyAccess
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Out-of-Band Console Server (Isolated, Read-Only Access)'
 category:  'Network Equipment'

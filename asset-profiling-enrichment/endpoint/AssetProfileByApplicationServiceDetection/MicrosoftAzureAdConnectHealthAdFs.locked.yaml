@@ -1,5 +1,6 @@
 id:        MicrosoftAzureAdConnectHealthAdFs
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Entra Connect Health agent for AD FS'
 category:  'Identity Sync'

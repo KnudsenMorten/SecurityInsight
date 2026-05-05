@@ -76,6 +76,7 @@ function Invoke-SIProfile {
     $matchedAssets = 0; $noMatchAssets = 0; $totalMatches = 0
     $perRuleHits   = @{}   # per-rule-name fire counter for visibility
     $perRuleMs     = @{}   # cumulative time per rule -- spotting slow rules
+    $skipScope     = 0     # rules skipped because osPlatformScope didn't match the asset
     $_total = $records.Count; $_i = 0
     Reset-SIProgress -Label "ProfileRuleEval-$engine" -ErrorAction SilentlyContinue
     $_ruleSw = [System.Diagnostics.Stopwatch]::new()
@@ -83,7 +84,25 @@ function Invoke-SIProfile {
         $_i++
         try { Write-SIProgress -Label "ProfileRuleEval-$engine" -Index $_i -Total $_total } catch { }
         $matches = New-Object System.Collections.ArrayList
+
+        # Coarse OS class for fast per-rule scope filtering. Computed ONCE per
+        # asset (not per-rule) so the lookup cost is amortized across ~559 rules.
+        # Reads MDE_OSPlatform / ENTRA_OS / EG_OS via Get-SIAssetField -- same
+        # source as the existing osPlatform rule kind. Possible values:
+        # WindowsServer / WindowsClient / Linux / macOS / iOS / Android / IoT / Other.
+        $assetOsClass = Get-SIAssetOsClass -Asset $r
+
         foreach ($rule in $rules) {
+            # Optional rule-level pre-filter. Rules that declare
+            # `osPlatformScope: [WindowsServer, Linux]` only run against assets
+            # whose OS class is in the list. Rules without the field run on every
+            # asset (backwards compatible). Skip is O(1), cheaper than entering
+            # Invoke-SIRuleEval which dispatches per-kind handlers.
+            $scope = $rule.osPlatformScope
+            if ($scope -and @($scope).Count -gt 0 -and ($assetOsClass -notin @($scope))) {
+                $skipScope++
+                continue
+            }
             $_ruleSw.Restart()
             $hit = Invoke-SIRuleEval -Asset $r -Rule $rule
             $_ruleSw.Stop()
@@ -216,6 +235,7 @@ function Invoke-SIProfile {
         NoMatch       = $noMatchAssets
         TotalMatches  = $totalMatches
         IndexStats    = $indexStats
-        Summary       = ('{0} rules x {1} assets -> {2} assets matched ({3} total rule-matches)' -f $rules.Count, $records.Count, $matchedAssets, $totalMatches)
+        ScopeSkipped  = $skipScope
+        Summary       = ('{0} rules x {1} assets -> {2} assets matched ({3} total rule-matches, {4} rule-evals skipped via osPlatformScope)' -f $rules.Count, $records.Count, $matchedAssets, $totalMatches, $skipScope)
     }
 }

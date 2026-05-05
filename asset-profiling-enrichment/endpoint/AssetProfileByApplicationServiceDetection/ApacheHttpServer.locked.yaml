@@ -1,5 +1,6 @@
 id:        ApacheHttpServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache HTTP Server'
 category:  'Web Server'

@@ -1,5 +1,6 @@
 id:        SemperisPurpleKnight
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Purple Knight'
 category:  'Identity Security'

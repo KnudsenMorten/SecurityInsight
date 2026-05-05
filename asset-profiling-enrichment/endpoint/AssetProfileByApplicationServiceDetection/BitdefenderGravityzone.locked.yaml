@@ -1,5 +1,6 @@
 id:        BitdefenderGravityzone
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Bitdefender GravityZone'
 category:  'EDR/AV'

@@ -1,5 +1,6 @@
 id:        CitrixAdc
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix ADC'
 category:  'Load Balancer'

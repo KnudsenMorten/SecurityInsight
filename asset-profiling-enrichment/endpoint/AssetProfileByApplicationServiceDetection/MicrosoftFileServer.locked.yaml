@@ -1,5 +1,6 @@
 id:        MicrosoftFileServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft File Server'
 category:  'File Storage'

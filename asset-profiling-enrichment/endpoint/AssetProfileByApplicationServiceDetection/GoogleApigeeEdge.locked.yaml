@@ -1,5 +1,6 @@
 id:        GoogleApigeeEdge
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apigee Edge'
 category:  'API Gateway'

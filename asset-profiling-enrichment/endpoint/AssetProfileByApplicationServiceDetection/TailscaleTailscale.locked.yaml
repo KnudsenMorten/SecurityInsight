@@ -1,5 +1,6 @@
 id:        TailscaleTailscale
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Tailscale'
 category:  'VPN'

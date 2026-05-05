@@ -1,5 +1,6 @@
 id:        MicrosoftForefrontTmg
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Forefront Threat Management Gateway'
 category:  'Proxy'

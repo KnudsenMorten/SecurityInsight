@@ -1,5 +1,6 @@
 id:        QuestKaceSma
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'KACE Systems Management Appliance'
 category:  'Endpoint Mgmt'

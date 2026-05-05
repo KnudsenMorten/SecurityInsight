@@ -1,5 +1,6 @@
 id:        ProofpointSendmail
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Sendmail'
 category:  'Mail'

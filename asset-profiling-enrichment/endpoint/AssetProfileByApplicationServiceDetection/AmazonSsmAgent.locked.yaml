@@ -1,5 +1,6 @@
 id:        AmazonSsmAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'AWS Systems Manager Agent'
 category:  'Cloud Mgmt'

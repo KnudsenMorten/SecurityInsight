@@ -1,5 +1,6 @@
 id:        AcronisCyberProtect
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Acronis Cyber Backup'
 category:  'Backup'

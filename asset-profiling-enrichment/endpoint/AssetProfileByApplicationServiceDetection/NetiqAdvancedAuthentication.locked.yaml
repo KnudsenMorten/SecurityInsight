@@ -1,5 +1,6 @@
 id:        NetiqAdvancedAuthentication
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'NetIQ Advanced Authentication'
 category:  'Authentication'

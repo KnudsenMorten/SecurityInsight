@@ -1,5 +1,6 @@
 id:        MicrosoftSkypeForBusinessServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Skype for Business Server'
 category:  'Collaboration'

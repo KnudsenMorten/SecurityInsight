@@ -1,5 +1,6 @@
 id:        VaronisDatadvantage
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Varonis DatAdvantage'
 category:  'Data Security'

@@ -1,5 +1,6 @@
 id:        BroadcomDataLossPrevention
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Symantec DLP'
 category:  'DLP'

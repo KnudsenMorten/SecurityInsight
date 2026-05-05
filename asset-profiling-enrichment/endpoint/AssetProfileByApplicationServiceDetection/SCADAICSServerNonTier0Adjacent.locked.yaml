@@ -1,5 +1,6 @@
 id:        SCADAICSServerNonTier0Adjacent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SCADA / ICS Server (Non-Tier 0 Adjacent)'
 category:  'IoT / OT'

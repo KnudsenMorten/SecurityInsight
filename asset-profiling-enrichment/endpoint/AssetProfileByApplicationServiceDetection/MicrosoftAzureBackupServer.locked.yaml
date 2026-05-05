@@ -1,5 +1,6 @@
 id:        MicrosoftAzureBackupServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Azure Backup Server'
 category:  'Backup'

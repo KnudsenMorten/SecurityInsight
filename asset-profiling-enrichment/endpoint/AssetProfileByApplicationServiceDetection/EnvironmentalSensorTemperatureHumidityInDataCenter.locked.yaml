@@ -1,5 +1,6 @@
 id:        EnvironmentalSensorTemperatureHumidityInDataCenter
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Environmental Sensor (Temperature, Humidity in Data Center)'
 category:  'IoT / OT'

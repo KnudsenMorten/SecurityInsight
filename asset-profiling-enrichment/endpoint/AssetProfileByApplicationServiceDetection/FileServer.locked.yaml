@@ -1,5 +1,6 @@
 id:        FileServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'File Server'
 category:  'Server Roles'

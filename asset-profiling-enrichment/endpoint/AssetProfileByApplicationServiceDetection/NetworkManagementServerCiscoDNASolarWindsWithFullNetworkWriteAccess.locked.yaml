@@ -1,5 +1,6 @@
 id:        NetworkManagementServerCiscoDNASolarWindsWithFullNetworkWriteAccess
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Network Management Server (Cisco DNA, SolarWinds with Full Network Write Access)'
 category:  'Network Equipment'

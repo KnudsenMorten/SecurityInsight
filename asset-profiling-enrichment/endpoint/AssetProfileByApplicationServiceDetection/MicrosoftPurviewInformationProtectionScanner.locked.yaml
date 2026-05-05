@@ -1,5 +1,6 @@
 id:        MicrosoftPurviewInformationProtectionScanner
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Purview Information Protection Scanner'
 category:  'DLP'

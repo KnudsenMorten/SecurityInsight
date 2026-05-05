@@ -1,5 +1,6 @@
 id:        MicrosoftPowerBiGateway
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Power BI Gateway'
 category:  'BI'

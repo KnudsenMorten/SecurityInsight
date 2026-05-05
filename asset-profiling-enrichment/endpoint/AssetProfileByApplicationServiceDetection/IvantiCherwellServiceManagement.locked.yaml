@@ -1,5 +1,6 @@
 id:        IvantiCherwellServiceManagement
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cherwell Service Management'
 category:  'ITSM'

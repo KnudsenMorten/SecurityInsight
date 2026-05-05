@@ -1,5 +1,6 @@
 id:        MicrosoftActiveDirectory
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Active Directory Domain Services'
 category:  'Identity'

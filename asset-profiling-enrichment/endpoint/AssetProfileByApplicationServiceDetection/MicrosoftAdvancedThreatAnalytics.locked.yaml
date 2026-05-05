@@ -1,5 +1,6 @@
 id:        MicrosoftAdvancedThreatAnalytics
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Advanced Threat Analytics'
 category:  'Identity Security'

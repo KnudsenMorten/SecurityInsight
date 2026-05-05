@@ -1,5 +1,6 @@
 id:        SplunkDbConnect
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Splunk DB Connect'
 category:  'SIEM'

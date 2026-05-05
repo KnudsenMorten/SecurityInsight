@@ -1,5 +1,6 @@
 id:        MicrosoftExchangeManagementTools
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Exchange Management Tools'
 category:  'Mail'

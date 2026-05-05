@@ -1,5 +1,6 @@
 id:        SpecteropsBloodhoundEnterprise
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BloodHound Enterprise'
 category:  'Identity Security'

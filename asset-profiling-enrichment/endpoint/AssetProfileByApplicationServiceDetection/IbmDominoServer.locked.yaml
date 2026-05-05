@@ -1,5 +1,6 @@
 id:        IbmDominoServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Domino Server'
 category:  'Mail/Collaboration'

@@ -1,5 +1,6 @@
 id:        CitrixApplicationDeliveryManagement
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix ADM'
 category:  'Load Balancer Mgmt'

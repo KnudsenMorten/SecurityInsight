@@ -1,5 +1,6 @@
 id:        MicrosoftStorageReplica
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Storage Replica'
 category:  'Storage'

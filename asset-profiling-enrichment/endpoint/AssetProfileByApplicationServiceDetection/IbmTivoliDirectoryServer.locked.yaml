@@ -1,5 +1,6 @@
 id:        IbmTivoliDirectoryServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Tivoli Directory Server'
 category:  'Identity'

@@ -1,5 +1,6 @@
 id:        MicrosoftDynamicsAx
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Dynamics AX'
 category:  'ERP'

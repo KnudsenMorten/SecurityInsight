@@ -1,5 +1,6 @@
 id:        HashicorpNomad
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HashiCorp Nomad'
 category:  'Orchestration'

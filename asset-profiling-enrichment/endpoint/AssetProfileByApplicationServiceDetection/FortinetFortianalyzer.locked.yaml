@@ -1,5 +1,6 @@
 id:        FortinetFortianalyzer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Fortinet FortiAnalyzer'
 category:  'SIEM'

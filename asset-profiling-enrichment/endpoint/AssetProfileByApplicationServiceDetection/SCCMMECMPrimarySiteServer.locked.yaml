@@ -1,5 +1,6 @@
 id:        SCCMMECMPrimarySiteServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SCCM / MECM Primary Site Server'
 category:  'Management'

@@ -1,5 +1,6 @@
 id:        ZabbixServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Zabbix Server'
 category:  'Monitoring'

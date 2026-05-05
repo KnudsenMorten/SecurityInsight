@@ -1,5 +1,6 @@
 id:        MicrosoftDynamicsGp
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Dynamics GP'
 category:  'ERP'

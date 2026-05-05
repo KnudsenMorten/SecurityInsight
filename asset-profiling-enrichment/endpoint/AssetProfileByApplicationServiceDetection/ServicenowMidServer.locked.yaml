@@ -1,5 +1,6 @@
 id:        ServicenowMidServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ServiceNow MID Server'
 category:  'ITSM'

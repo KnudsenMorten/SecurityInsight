@@ -1,5 +1,6 @@
 id:        CircleciServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'CircleCI Server'
 category:  'Build/CI'

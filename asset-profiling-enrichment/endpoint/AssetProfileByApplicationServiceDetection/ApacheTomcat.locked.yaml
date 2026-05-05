@@ -1,5 +1,6 @@
 id:        ApacheTomcat
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache Tomcat'
 category:  'App Server'

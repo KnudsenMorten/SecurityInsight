@@ -1,5 +1,6 @@
 id:        MicrosoftRemoteDesktopWebAccess
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Remote Desktop Web Access'
 category:  'Remote Access'

@@ -1,5 +1,6 @@
 id:        MicrosoftRemoteDesktopVirtualizationHost
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Remote Desktop Virtualization Host'
 category:  'Remote Access'

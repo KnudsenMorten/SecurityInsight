@@ -1,5 +1,6 @@
 id:        CitrixProvisioningServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix Provisioning Services'
 category:  'VDI'

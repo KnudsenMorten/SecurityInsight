@@ -1,5 +1,6 @@
 id:        CohesityHelios
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cohesity Helios'
 category:  'Backup'

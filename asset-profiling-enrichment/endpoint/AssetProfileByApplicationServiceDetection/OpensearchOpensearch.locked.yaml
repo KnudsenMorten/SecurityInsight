@@ -1,5 +1,6 @@
 id:        OpensearchOpensearch
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'OpenSearch'
 category:  'Search/SIEM'

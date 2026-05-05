@@ -1,5 +1,6 @@
 id:        ManageengineAdauditPlus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ManageEngine ADAudit Plus'
 category:  'Identity Audit'

@@ -1,5 +1,6 @@
 id:        ForcepointDlp
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Forcepoint DLP'
 category:  'DLP'

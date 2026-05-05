@@ -1,5 +1,6 @@
 id:        DellSolutionsEnabler
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Dell EMC Solutions Enabler'
 category:  'Storage'

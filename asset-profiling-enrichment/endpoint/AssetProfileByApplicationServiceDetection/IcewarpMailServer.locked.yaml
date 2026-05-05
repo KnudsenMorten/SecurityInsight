@@ -1,5 +1,6 @@
 id:        IcewarpMailServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IceWarp Mail Server'
 category:  'Mail'

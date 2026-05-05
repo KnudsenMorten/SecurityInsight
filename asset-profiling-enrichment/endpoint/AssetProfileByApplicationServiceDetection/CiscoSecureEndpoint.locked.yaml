@@ -1,5 +1,6 @@
 id:        CiscoSecureEndpoint
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cisco Secure Endpoint'
 category:  'EDR'

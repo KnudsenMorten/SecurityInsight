@@ -1,5 +1,6 @@
 id:        IvantiConnectSecure
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Ivanti Connect Secure'
 category:  'VPN'

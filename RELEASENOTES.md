@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.33
+## v2.2.34
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
 - release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
 - release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
 - release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
@@ -33,13 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
 - release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
 - release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
-- release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.34 — Profile: per-rule `osPlatformScope` + tag 557 AppService rules WindowsServer/Linux
+
+### Engine support (Phase 1)
+
+`Invoke-Profile.ps1` rule-eval loop now honors an optional top-level `osPlatformScope` field on each rule:
+
+```yaml
+id:               ADDomainController
+appliesTo:        endpoint
+osPlatformScope:  [WindowsServer, Linux]   # NEW -- skip rule entirely when asset OS class not in list
+detections: ...
+```
+
+When set, the evaluator computes the asset's OS class once per asset (via new `Get-SIAssetOsClass` helper in `RuleEval.ps1`) and skips the rule for any asset whose class isn't listed. Rules without the field run on every asset (backwards compatible).
+
+OS class values: `WindowsServer`, `WindowsClient`, `Linux`, `macOS`, `iOS`, `Android`, `IoT`, `Other`. Reads same `MDE_OSPlatform` / `ENTRA_OS` / `EG_OS` fields the existing `osPlatform` rule kind uses.
+
+Profile stage `[DONE]` line now also reports `N rule-evals skipped via osPlatformScope` so operators can see the perf gain.
+
+### Rule content (Phase 2)
+
+All 557 `AssetProfileByApplicationServiceDetection/*.locked.yaml` rules tagged with `osPlatformScope: [WindowsServer, Linux]`. These cover server roles (3CX, AD, Exchange, IIS, SQL, Apache, MySQL, Nginx, etc.) which by definition only run on server OS. Workstations, IoT, mobile, macOS now skip these 557 rules entirely.
+
+### Effect
+
+Rough math on a 5260-device tenant where ~3000 are non-server (workstations + Entra-only + IoT + mobile):
+- Before: 5260 assets × 559 rules = ~2.94M rule evals
+- After:  3000 non-server assets × 557 = ~1.67M evals SKIPPED via scope; 5260 × 2 (DeviceType + LogonUser) = ~10K + 2260 server assets × 557 = ~1.26M still evaluated
+- ~57% fewer rule evals; Phase 6 should drop from ~1 hour to ~25-30 min on this tenant
+
+Customers with custom rules in `AssetProfileByApplicationServiceDetection/*.custom.yaml` should add `osPlatformScope` to their custom files manually if the rule targets a server-only stack. Custom files are not auto-tagged (we never touch customer files).
 
 ---
 

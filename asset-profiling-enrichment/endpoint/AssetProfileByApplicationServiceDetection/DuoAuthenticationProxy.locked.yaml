@@ -1,5 +1,6 @@
 id:        DuoAuthenticationProxy
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Duo Authentication Proxy'
 category:  'Authentication'

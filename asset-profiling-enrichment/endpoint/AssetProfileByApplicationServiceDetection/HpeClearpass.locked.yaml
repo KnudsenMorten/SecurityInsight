@@ -1,5 +1,6 @@
 id:        HpeClearpass
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Aruba ClearPass'
 category:  'NAC'

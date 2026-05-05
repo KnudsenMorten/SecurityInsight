@@ -1,5 +1,6 @@
 id:        MicrosoftAzureStackHci
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Azure Stack HCI'
 category:  'Virtualization'

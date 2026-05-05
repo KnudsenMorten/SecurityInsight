@@ -1,5 +1,6 @@
 id:        GlobalsignAtlas
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'GlobalSign Atlas'
 category:  'PKI'

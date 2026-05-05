@@ -1,5 +1,6 @@
 id:        MicrosoftSystemCenterOperationsManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft System Center Operations Manager'
 category:  'Monitoring'

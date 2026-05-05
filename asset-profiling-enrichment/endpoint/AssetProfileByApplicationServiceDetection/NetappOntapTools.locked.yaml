@@ -1,5 +1,6 @@
 id:        NetappOntapTools
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'NetApp ONTAP Tools'
 category:  'Storage'

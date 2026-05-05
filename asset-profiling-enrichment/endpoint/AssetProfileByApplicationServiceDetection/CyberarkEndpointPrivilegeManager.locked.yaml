@@ -1,5 +1,6 @@
 id:        CyberarkEndpointPrivilegeManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'CyberArk Endpoint Privilege Manager'
 category:  'PAM'

@@ -1,5 +1,6 @@
 id:        CiscoFirepowerManagementCenter
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cisco Firepower Management Center'
 category:  'Firewall Mgmt'

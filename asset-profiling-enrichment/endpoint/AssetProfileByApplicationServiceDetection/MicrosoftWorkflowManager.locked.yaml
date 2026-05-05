@@ -1,5 +1,6 @@
 id:        MicrosoftWorkflowManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Workflow Manager'
 category:  'Workflow'

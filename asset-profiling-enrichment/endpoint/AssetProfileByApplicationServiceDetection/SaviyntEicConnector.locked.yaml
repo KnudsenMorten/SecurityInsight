@@ -1,5 +1,6 @@
 id:        SaviyntEicConnector
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Saviynt Enterprise Identity Cloud Connector'
 category:  'Identity Governance'

@@ -1,5 +1,6 @@
 id:        WebApplicationServerWithEntraIntegratedAuth
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Web Application Server with Entra Integrated Auth'
 category:  'Server Roles'

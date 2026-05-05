@@ -1,5 +1,6 @@
 id:        SplunkHeavyForwarder
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Splunk Heavy Forwarder'
 category:  'SIEM'

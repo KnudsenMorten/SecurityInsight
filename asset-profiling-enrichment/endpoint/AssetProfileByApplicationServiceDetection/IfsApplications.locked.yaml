@@ -1,5 +1,6 @@
 id:        IfsApplications
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IFS Applications'
 category:  'ERP'

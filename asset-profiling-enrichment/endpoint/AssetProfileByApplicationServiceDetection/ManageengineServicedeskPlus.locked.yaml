@@ -1,5 +1,6 @@
 id:        ManageengineServicedeskPlus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ManageEngine ServiceDesk Plus'
 category:  'ITSM'

@@ -1,5 +1,6 @@
 id:        GithubActionsRunner
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'GitHub Actions Runner'
 category:  'Build/CI'

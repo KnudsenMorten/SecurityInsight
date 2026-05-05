@@ -1,5 +1,6 @@
 id:        MicrosoftPowerPivotForSharepoint
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Power Pivot for SharePoint'
 category:  'BI'

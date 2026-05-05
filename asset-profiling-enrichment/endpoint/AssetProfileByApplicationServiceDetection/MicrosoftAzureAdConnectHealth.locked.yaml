@@ -1,5 +1,6 @@
 id:        MicrosoftAzureAdConnectHealth
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Azure AD Connect Health agent for sync'
 category:  'Identity Sync'

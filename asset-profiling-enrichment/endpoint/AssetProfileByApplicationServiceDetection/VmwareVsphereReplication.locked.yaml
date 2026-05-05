@@ -1,5 +1,6 @@
 id:        VmwareVsphereReplication
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware vSphere Replication'
 category:  'DR/Replication'

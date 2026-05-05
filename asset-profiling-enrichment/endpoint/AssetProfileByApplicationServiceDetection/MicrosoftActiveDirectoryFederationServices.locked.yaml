@@ -1,5 +1,6 @@
 id:        MicrosoftActiveDirectoryFederationServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Active Directory Federation Services'
 category:  'Identity'

@@ -1,5 +1,6 @@
 id:        BuildingAutomationSystemBASServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Building Automation System (BAS) Server'
 category:  'IoT / OT'

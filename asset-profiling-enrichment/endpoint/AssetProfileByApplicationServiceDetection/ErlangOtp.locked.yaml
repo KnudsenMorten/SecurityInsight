@@ -1,5 +1,6 @@
 id:        ErlangOtp
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Erlang/OTP'
 category:  'Runtime/Server'

@@ -1,5 +1,6 @@
 id:        FortinetFortiauthenticator
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'FortiAuthenticator'
 category:  'Authentication'

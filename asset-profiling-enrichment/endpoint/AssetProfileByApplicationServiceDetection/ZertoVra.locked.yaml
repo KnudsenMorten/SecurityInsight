@@ -1,5 +1,6 @@
 id:        ZertoVra
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Zerto Virtual Replication Appliance'
 category:  'DR/Replication'

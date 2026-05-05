@@ -1,5 +1,6 @@
 id:        DellNetworker
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Dell EMC NetWorker'
 category:  'Backup'

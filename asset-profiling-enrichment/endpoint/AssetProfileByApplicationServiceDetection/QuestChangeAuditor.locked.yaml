@@ -1,5 +1,6 @@
 id:        QuestChangeAuditor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Quest Change Auditor'
 category:  'Identity Audit'

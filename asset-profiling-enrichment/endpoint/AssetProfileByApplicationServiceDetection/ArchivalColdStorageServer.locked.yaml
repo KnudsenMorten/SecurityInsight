@@ -1,5 +1,6 @@
 id:        ArchivalColdStorageServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Archival / Cold Storage Server'
 category:  'Server Roles'

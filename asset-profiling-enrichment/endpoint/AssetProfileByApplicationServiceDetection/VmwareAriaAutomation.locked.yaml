@@ -1,5 +1,6 @@
 id:        VmwareAriaAutomation
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware vRealize Automation'
 category:  'Virtualization Mgmt'

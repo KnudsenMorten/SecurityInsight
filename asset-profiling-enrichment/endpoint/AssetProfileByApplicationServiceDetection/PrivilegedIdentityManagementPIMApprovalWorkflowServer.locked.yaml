@@ -1,5 +1,6 @@
 id:        PrivilegedIdentityManagementPIMApprovalWorkflowServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Privileged Identity Management (PIM) Approval Workflow Server'
 category:  'Management'

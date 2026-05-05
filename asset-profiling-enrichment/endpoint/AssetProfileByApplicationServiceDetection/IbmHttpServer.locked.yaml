@@ -1,5 +1,6 @@
 id:        IbmHttpServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM HTTP Server'
 category:  'Web Server'

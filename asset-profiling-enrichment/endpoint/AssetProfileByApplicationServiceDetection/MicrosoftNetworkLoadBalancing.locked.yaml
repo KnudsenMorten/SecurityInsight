@@ -1,5 +1,6 @@
 id:        MicrosoftNetworkLoadBalancing
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Network Load Balancing'
 category:  'Load Balancer'

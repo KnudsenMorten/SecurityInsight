@@ -1,5 +1,6 @@
 id:        VCenterSCVMMManagementServerManagingTier1Hypervisors
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'vCenter / SCVMM Management Server (Managing Tier 1 Hypervisors)'
 category:  'Hypervisor'

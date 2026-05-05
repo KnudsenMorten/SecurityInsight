@@ -1,5 +1,6 @@
 id:        SasSas
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SAS'
 category:  'Analytics'

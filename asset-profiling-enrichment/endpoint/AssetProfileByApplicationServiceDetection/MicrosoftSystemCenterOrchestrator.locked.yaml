@@ -1,5 +1,6 @@
 id:        MicrosoftSystemCenterOrchestrator
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft System Center Orchestrator'
 category:  'Automation'

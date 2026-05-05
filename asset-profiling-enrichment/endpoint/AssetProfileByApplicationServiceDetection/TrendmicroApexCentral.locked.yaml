@@ -1,5 +1,6 @@
 id:        TrendmicroApexCentral
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Trend Micro Apex Central'
 category:  'EDR/AV'

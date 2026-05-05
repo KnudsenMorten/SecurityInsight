@@ -1,5 +1,6 @@
 id:        OmadaIdentity
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Omada Identity'
 category:  'Identity Governance'

@@ -1,5 +1,6 @@
 id:        BeyondtrustRemoteSupport
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BeyondTrust Remote Support'
 category:  'PAM'

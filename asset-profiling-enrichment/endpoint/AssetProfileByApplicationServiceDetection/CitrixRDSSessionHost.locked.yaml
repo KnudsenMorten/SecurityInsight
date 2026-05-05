@@ -1,5 +1,6 @@
 id:        CitrixRDSSessionHost
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix / RDS Session Host'
 category:  'Server Roles'

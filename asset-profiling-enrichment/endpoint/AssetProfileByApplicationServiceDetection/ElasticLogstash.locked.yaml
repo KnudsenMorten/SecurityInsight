@@ -1,5 +1,6 @@
 id:        ElasticLogstash
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Logstash'
 category:  'SIEM/Log'

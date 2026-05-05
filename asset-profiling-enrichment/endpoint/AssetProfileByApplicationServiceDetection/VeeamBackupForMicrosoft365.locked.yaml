@@ -1,5 +1,6 @@
 id:        VeeamBackupForMicrosoft365
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Veeam Backup for Microsoft 365'
 category:  'Backup'

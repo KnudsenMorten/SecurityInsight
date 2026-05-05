@@ -1,5 +1,6 @@
 id:        MicrosoftAzurePipelinesAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Azure Pipelines Agent'
 category:  'Build/CI'

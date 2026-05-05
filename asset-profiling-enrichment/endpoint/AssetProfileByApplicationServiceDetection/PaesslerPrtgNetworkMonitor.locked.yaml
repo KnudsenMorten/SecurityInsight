@@ -1,5 +1,6 @@
 id:        PaesslerPrtgNetworkMonitor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'PRTG Network Monitor'
 category:  'Monitoring'

@@ -1,5 +1,6 @@
 id:        GitlabGitlab
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'GitLab Self-Managed'
 category:  'SCM'

@@ -1,5 +1,6 @@
 id:        MicrosoftAzureAdConnectCloudProvisioningAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Entra Cloud Sync'
 category:  'Identity Sync'

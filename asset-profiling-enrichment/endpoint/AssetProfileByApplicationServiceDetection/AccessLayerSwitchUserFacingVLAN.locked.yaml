@@ -1,5 +1,6 @@
 id:        AccessLayerSwitchUserFacingVLAN
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Access Layer Switch (User-Facing VLAN)'
 category:  'Network Equipment'

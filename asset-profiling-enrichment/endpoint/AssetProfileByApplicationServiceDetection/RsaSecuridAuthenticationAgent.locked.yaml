@@ -1,5 +1,6 @@
 id:        RsaSecuridAuthenticationAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'RSA SecurID Authentication Agent'
 category:  'Authentication'

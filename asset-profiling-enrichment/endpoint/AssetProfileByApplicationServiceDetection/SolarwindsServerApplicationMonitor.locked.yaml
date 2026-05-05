@@ -1,5 +1,6 @@
 id:        SolarwindsServerApplicationMonitor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SolarWinds Server & Application Monitor'
 category:  'Monitoring'

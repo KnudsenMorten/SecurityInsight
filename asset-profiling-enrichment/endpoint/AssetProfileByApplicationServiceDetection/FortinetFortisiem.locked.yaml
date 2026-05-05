@@ -1,5 +1,6 @@
 id:        FortinetFortisiem
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'FortiSIEM'
 category:  'SIEM'

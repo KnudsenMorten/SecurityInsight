@@ -1,5 +1,6 @@
 id:        IvantiServiceManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Ivanti Service Manager'
 category:  'ITSM'

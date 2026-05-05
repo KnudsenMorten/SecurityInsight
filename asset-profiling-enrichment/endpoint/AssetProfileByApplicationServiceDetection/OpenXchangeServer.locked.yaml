@@ -1,5 +1,6 @@
 id:        OpenXchangeServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Open-Xchange Server'
 category:  'Mail/Collaboration'

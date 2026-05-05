@@ -1,5 +1,6 @@
 id:        TenableNessus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Tenable Nessus'
 category:  'Vulnerability Mgmt'

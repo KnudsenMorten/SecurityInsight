@@ -1,5 +1,6 @@
 id:        GithubEnterpriseServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'GitHub Enterprise Server'
 category:  'SCM'

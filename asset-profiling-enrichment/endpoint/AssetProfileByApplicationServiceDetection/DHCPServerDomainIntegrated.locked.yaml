@@ -1,5 +1,6 @@
 id:        DHCPServerDomainIntegrated
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'DHCP Server (Domain-Integrated)'
 category:  'Network Equipment'

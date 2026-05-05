@@ -1,5 +1,6 @@
 id:        SentineloneSingularity
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SentinelOne Singularity'
 category:  'EDR'

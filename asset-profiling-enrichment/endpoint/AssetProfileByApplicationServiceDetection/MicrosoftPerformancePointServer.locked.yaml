@@ -1,5 +1,6 @@
 id:        MicrosoftPerformancePointServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Performance Point Server'
 category:  'BI'

@@ -1,5 +1,6 @@
 id:        TenableLumin
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Tenable Lumin'
 category:  'Vulnerability Mgmt'

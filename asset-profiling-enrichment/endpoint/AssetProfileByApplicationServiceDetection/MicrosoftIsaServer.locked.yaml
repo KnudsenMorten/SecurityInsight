@@ -1,5 +1,6 @@
 id:        MicrosoftIsaServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Internet Security and Acceleration Server'
 category:  'Proxy'

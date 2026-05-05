@@ -1,5 +1,6 @@
 id:        MicrosoftAzureFileSync
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Azure File Sync'
 category:  'Storage'

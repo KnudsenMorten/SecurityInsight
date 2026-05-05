@@ -1,5 +1,6 @@
 id:        KasperskySecurityCenter
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Kaspersky Security Center'
 category:  'EDR/AV'

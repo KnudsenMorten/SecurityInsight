@@ -1,5 +1,6 @@
 id:        FederationServerADFSPrimary
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Federation Server (AD FS Primary)'
 category:  'Server Roles'

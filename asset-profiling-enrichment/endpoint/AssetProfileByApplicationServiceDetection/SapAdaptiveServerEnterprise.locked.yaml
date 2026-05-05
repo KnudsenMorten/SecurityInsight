@@ -1,5 +1,6 @@
 id:        SapAdaptiveServerEnterprise
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SAP Adaptive Server Enterprise'
 category:  'Database'

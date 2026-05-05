@@ -1,5 +1,6 @@
 id:        VeeamBackupForAws
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Veeam Backup for AWS'
 category:  'Backup'

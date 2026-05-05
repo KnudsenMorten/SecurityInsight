@@ -1,5 +1,6 @@
 id:        VmwareAriaOperationsForLogs
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware vRealize Log Insight'
 category:  'Logs'

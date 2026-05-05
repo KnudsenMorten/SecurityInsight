@@ -1,5 +1,6 @@
 id:        QuestRecoveryManagerForActiveDirectory
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Quest Recovery Manager for Active Directory'
 category:  'Identity Backup'

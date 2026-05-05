@@ -1,5 +1,6 @@
 id:        UPSManagementControllerPowerDisruptionPotential
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'UPS Management Controller (Power Disruption Potential)'
 category:  'IoT / OT'

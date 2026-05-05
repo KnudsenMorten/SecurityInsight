@@ -1,5 +1,6 @@
 id:        MicrosoftFslogix
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'FSLogix'
 category:  'Profile Mgmt'

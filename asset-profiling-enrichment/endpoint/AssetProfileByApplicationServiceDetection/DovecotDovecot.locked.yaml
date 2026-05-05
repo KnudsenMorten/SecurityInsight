@@ -1,5 +1,6 @@
 id:        DovecotDovecot
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Dovecot'
 category:  'Mail'

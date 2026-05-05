@@ -1,5 +1,6 @@
 id:        AppdynamicsController
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'AppDynamics Controller'
 category:  'Monitoring'

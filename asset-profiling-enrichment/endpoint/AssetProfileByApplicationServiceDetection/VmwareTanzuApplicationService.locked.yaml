@@ -1,5 +1,6 @@
 id:        VmwareTanzuApplicationService
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware Tanzu Application Service'
 category:  'Containers'

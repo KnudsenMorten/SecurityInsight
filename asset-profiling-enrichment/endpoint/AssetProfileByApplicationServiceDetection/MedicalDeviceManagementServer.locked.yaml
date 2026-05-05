@@ -1,5 +1,6 @@
 id:        MedicalDeviceManagementServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Medical Device Management Server'
 category:  'IoT / OT'

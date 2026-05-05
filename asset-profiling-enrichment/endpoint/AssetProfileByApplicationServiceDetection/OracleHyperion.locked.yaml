@@ -1,5 +1,6 @@
 id:        OracleHyperion
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Oracle Hyperion'
 category:  'BI'

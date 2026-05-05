@@ -1,5 +1,6 @@
 id:        RedhatWildfly
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'WildFly'
 category:  'App Server'

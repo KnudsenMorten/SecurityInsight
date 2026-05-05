@@ -1,5 +1,6 @@
 id:        NginxNginx
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'nginx'
 category:  'Web Server'

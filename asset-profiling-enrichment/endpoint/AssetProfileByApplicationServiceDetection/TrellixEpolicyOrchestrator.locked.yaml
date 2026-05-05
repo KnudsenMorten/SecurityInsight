@@ -1,5 +1,6 @@
 id:        TrellixEpolicyOrchestrator
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'McAfee ePolicy Orchestrator'
 category:  'EDR/AV'

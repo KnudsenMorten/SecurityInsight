@@ -1,5 +1,6 @@
 id:        TableauServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Tableau Server'
 category:  'BI'

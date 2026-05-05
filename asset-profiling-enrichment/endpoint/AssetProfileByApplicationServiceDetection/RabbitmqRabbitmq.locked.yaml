@@ -1,5 +1,6 @@
 id:        RabbitmqRabbitmq
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'RabbitMQ'
 category:  'Messaging'

@@ -1,5 +1,6 @@
 id:        MicrosoftAzureAdApplicationProxyConnector
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Entra Application Proxy Connector'
 category:  'Identity'

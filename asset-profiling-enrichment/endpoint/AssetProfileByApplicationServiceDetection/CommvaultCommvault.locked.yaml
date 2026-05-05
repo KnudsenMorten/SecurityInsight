@@ -1,5 +1,6 @@
 id:        CommvaultCommvault
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Commvault Server'
 category:  'Backup'

@@ -1,5 +1,6 @@
 id:        SitecoreExperiencePlatform
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Sitecore Experience Platform'
 category:  'CMS'

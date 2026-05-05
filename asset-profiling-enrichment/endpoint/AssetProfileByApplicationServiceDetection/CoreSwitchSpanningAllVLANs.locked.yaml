@@ -1,5 +1,6 @@
 id:        CoreSwitchSpanningAllVLANs
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Core Switch (Spanning All VLANs)'
 category:  'Network Equipment'

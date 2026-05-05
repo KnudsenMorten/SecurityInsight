@@ -1,5 +1,6 @@
 id:        SonatypeNexusRepositoryManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Sonatype Nexus Repository Manager'
 category:  'Artifact Repo'

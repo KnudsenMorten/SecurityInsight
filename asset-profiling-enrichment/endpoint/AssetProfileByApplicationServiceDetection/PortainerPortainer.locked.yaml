@@ -1,5 +1,6 @@
 id:        PortainerPortainer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Portainer'
 category:  'Containers'

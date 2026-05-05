@@ -1,5 +1,6 @@
 id:        CloudflareCloudflared
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cloudflared'
 category:  'ZTNA'

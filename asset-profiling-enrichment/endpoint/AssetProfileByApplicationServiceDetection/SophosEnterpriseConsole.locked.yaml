@@ -1,5 +1,6 @@
 id:        SophosEnterpriseConsole
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Sophos Enterprise Console'
 category:  'EDR/AV'

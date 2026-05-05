@@ -1,5 +1,6 @@
 id:        FreeradiusFreeradius
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'FreeRADIUS'
 category:  'Authentication'

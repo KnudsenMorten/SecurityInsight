@@ -1,5 +1,6 @@
 id:        OracleMysqlServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'MySQL Server'
 category:  'Database'

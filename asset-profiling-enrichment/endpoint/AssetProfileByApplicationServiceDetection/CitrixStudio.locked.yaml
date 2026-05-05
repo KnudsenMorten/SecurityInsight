@@ -1,5 +1,6 @@
 id:        CitrixStudio
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix Studio'
 category:  'VDI'

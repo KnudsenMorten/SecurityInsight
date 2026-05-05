@@ -1,5 +1,6 @@
 id:        MicrosoftServiceBusForWindowsServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Service Bus for Windows Server'
 category:  'Messaging'

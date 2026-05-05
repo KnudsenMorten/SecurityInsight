@@ -1,5 +1,6 @@
 id:        VmwareVcenterServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware vCenter Server'
 category:  'Virtualization'

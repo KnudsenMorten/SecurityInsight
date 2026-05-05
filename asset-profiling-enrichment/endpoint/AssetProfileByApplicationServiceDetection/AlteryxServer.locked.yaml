@@ -1,5 +1,6 @@
 id:        AlteryxServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Alteryx Server'
 category:  'Analytics'

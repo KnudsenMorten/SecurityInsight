@@ -1,5 +1,6 @@
 id:        IbmQradar
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM QRadar'
 category:  'SIEM'

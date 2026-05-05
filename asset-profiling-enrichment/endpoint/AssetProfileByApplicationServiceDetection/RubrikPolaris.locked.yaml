@@ -1,5 +1,6 @@
 id:        RubrikPolaris
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Rubrik Polaris'
 category:  'Backup'

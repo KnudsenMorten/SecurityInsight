@@ -1,5 +1,6 @@
 id:        DruvaInsync
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Druva inSync'
 category:  'Backup'

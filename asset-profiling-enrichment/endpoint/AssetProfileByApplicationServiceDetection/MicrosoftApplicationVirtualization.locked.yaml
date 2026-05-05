@@ -1,5 +1,6 @@
 id:        MicrosoftApplicationVirtualization
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Application Virtualization'
 category:  'App Delivery'

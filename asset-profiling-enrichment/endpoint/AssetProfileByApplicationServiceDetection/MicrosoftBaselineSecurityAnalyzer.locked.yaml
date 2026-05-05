@@ -1,5 +1,6 @@
 id:        MicrosoftBaselineSecurityAnalyzer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Baseline Security Analyzer'
 category:  'Compliance'

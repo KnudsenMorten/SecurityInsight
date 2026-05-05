@@ -1,5 +1,6 @@
 id:        BookstackBookstack
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BookStack'
 category:  'Wiki'

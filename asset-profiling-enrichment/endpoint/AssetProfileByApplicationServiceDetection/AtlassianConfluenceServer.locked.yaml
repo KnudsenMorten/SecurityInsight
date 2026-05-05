@@ -1,5 +1,6 @@
 id:        AtlassianConfluenceServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Confluence Server'
 category:  'Collaboration'

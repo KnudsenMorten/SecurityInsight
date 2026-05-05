@@ -1,5 +1,6 @@
 id:        ManageengineAdselfservicePlus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ManageEngine ADSelfService Plus'
 category:  'Identity'

@@ -1,5 +1,6 @@
 id:        IndustrialIoTGatewayWithNetworkBridging
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Industrial IoT Gateway with Network Bridging'
 category:  'IoT / OT'

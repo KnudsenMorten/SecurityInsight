@@ -1,5 +1,6 @@
 id:        IbmWebsphereApplicationServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM WebSphere Application Server'
 category:  'App Server'

@@ -1,5 +1,6 @@
 id:        MicrosoftIdentityManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Identity Manager 2016'
 category:  'Identity'

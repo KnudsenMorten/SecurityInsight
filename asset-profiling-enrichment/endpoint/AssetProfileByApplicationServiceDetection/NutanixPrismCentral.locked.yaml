@@ -1,5 +1,6 @@
 id:        NutanixPrismCentral
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Nutanix Prism Central'
 category:  'Virtualization'

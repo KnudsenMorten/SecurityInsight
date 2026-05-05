@@ -1,5 +1,6 @@
 id:        DellOpenmanageServerAdministrator
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Dell OpenManage Server Administrator'
 category:  'Hardware Mgmt'

@@ -1,5 +1,6 @@
 id:        VmwareCarbonBlackAppControl
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Carbon Black App Control'
 category:  'EDR'

@@ -1,5 +1,6 @@
 id:        HSMAttachedServerStoringRootCAPrivateKeys
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HSM-Attached Server (Storing Root CA Private Keys)'
 category:  'Infrastructure'

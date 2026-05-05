@@ -1,5 +1,6 @@
 id:        CaddyCaddy
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Caddy'
 category:  'Web Server'

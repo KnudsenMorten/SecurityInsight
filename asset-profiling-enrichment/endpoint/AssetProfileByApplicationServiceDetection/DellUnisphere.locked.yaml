@@ -1,5 +1,6 @@
 id:        DellUnisphere
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Dell EMC Unisphere'
 category:  'Storage'

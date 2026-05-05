@@ -1,5 +1,6 @@
 id:        MicrosoftHyperV
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Hyper-V'
 category:  'Virtualization'

@@ -1,5 +1,6 @@
 id:        WearableSmartBadgeNoDomainIntegration
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Wearable / Smart Badge (No Domain Integration)'
 category:  'IoT / OT'

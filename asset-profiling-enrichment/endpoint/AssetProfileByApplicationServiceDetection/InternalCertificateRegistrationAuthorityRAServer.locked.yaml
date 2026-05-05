@@ -1,5 +1,6 @@
 id:        InternalCertificateRegistrationAuthorityRAServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Internal Certificate Registration Authority (RA) Server'
 category:  'Server Roles'

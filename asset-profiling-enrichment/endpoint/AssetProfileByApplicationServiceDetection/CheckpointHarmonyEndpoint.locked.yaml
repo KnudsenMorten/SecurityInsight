@@ -1,5 +1,6 @@
 id:        CheckpointHarmonyEndpoint
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Check Point Endpoint Security E80'
 category:  'EDR'

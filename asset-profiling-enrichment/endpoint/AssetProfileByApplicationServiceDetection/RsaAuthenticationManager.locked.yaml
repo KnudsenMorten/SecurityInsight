@@ -1,5 +1,6 @@
 id:        RsaAuthenticationManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'RSA Authentication Manager'
 category:  'Authentication'

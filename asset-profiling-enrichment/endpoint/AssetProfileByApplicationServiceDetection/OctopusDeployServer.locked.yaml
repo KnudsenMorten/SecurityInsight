@@ -1,5 +1,6 @@
 id:        OctopusDeployServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Octopus Deploy Server'
 category:  'Deployment'

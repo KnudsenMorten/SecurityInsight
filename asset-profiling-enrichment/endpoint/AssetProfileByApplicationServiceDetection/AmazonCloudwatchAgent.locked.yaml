@@ -1,5 +1,6 @@
 id:        AmazonCloudwatchAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Amazon CloudWatch Agent'
 category:  'Monitoring'

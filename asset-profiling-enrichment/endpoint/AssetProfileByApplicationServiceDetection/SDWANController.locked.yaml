@@ -1,5 +1,6 @@
 id:        SDWANController
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SD-WAN Controller'
 category:  'Network Equipment'

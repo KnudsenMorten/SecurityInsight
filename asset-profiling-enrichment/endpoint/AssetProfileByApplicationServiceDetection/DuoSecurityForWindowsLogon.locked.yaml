@@ -1,5 +1,6 @@
 id:        DuoSecurityForWindowsLogon
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Duo Security for Windows Logon'
 category:  'Authentication'

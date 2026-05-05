@@ -1,5 +1,6 @@
 id:        VmwareAriaOperations
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware vRealize Operations'
 category:  'Virtualization Mgmt'

@@ -1,5 +1,6 @@
 id:        GlobalscapeEft
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Globalscape EFT Server'
 category:  'FTP'

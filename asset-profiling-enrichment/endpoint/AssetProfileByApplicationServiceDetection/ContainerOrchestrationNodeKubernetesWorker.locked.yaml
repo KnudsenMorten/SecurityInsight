@@ -1,5 +1,6 @@
 id:        ContainerOrchestrationNodeKubernetesWorker
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Container Orchestration Node (Kubernetes Worker)'
 category:  'Management'

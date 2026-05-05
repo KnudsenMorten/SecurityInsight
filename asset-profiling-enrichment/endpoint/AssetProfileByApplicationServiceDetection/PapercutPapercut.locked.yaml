@@ -1,5 +1,6 @@
 id:        PapercutPapercut
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'PaperCut MF'
 category:  'Print'

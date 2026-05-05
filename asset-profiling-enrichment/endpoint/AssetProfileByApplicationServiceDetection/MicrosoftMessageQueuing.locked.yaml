@@ -1,5 +1,6 @@
 id:        MicrosoftMessageQueuing
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Message Queuing'
 category:  'Messaging'

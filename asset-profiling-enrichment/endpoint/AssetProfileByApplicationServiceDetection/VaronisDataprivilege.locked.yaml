@@ -1,5 +1,6 @@
 id:        VaronisDataprivilege
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Varonis DataPrivilege'
 category:  'Data Security'

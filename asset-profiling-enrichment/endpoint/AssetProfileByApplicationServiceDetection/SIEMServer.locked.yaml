@@ -1,5 +1,6 @@
 id:        SIEMServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SIEM Server'
 category:  'Management'

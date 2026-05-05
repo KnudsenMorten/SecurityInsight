@@ -1,5 +1,6 @@
 id:        SupermicroIpmiview
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Supermicro IPMIView'
 category:  'Hardware Mgmt'

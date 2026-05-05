@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.43
+## v2.2.44
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.44 - revive v2.2.40 OS-class bucketing (rule loader was dropping osPlatformScope) (d884f5ec)
 - release: SecurityInsight v2.2.43 - gate EG identity sample-dump diagnostics behind SI_Verbose (14e25cbf)
 - release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
 - release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.17 - SI_RunHealth DCR overridable (18efa17b)
 - release: SecurityInsight v2.2.16 - make RA DCR names overridable (dd9da5af)
 - release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
-- release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.44 — Profile: revive v2.2.40 OS-class bucketing (rule loader was dropping `osPlatformScope`)
+
+The v2.2.40 optimization (pre-bucket rules by OS class so workstations skip 543/559 server-only rule iterations) was silently dead for ~4 releases. Symptom: log line `rule buckets: unscoped=559 | WindowsServer=559 WindowsClient=559 Linux=559 ...` — every OS class showed all 559 rules as if every rule were unscoped, so per-asset evaluation iterated all 559 rules regardless of OS. On 4523 endpoints that's ~2.5M rule evals per run vs the ~150K the bucketing was designed to deliver (~17x slowdown). Live tenant ran at ~0.9 assets/sec.
+
+Root cause: `Get-SIRuleSet.ps1` Pass-1 rule loader (line 216-227) built the compiled rule object with `Id, AppliesTo, Mode, Purpose, Category, Description, Detections, File, Folder, SchemaShape` — but **never copied `osPlatformScope`** from the source YAML. Invoke-Profile.ps1's bucketing pass at line 88 reads `$rule.osPlatformScope`, got `$null` for every rule, classified all 559 as unscoped.
+
+Fix: rule loader now reads `$obj.osPlatformScope` from the YAML (handles both array and CSV-string forms; case-insensitive class names), normalizes to a string array, and emits it as `osPlatformScope` on the rule object. Compatible with the existing `osPlatformScope: [WindowsServer, Linux]` shape used by the 557 AppService rules tagged in v2.2.34.
+
+Expected impact next run: `unscoped` count drops from 559 to ~2 (the small set of truly cross-OS rules); `WindowsClient` bucket drops from 559 to ~20-50 (unscoped + client-tagged); `WindowsServer` bucket stays near 559. Per-asset eval rate should jump 5-15x for non-server fleets.
+
+No behaviour change beyond performance — same matches, same tier results, same `ScopeSkipped` counter (which was always 0 because the inline-skip path never ran with bucketing on).
 
 ---
 

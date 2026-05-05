@@ -1,6 +1,5 @@
 id:        PersonallyOwnedBYODDevice
 appliesTo: endpoint
-osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Personally-Owned BYOD Device'
 category:  'Client Devices'

@@ -1,6 +1,5 @@
 id:        VendingMachineCoffeeMachineWithNetworkConnectivity
 appliesTo: endpoint
-osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Vending Machine / Coffee Machine with Network Connectivity'
 category:  'IoT / OT'

@@ -1,6 +1,5 @@
 id:        ProductionWorkstation
 appliesTo: endpoint
-osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Production Workstation'
 category:  'Client Devices'

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.34
+## v2.2.35
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
 - release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
 - release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
 - release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
 - release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
 - release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
-- release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.35 — Profile: narrow `osPlatformScope` tagging to TVM-driven rules only
+
+v2.2.34 tagged ALL 557 `AssetProfileByApplicationServiceDetection/*.locked.yaml` rules with `[WindowsServer, Linux]`. That was over-broad: ~14 rules in that folder are actually workstation / PAW / BYOD / IoT detectors that match by name pattern or MachineGroup tag, not by installed-software TVM signal. Tagging those server-only would silently miss them on the actual workstations they target.
+
+Re-tagging logic for v2.2.35:
+- Rule contains `kind: hasSoftwareInstalled` (TVM-driven) -> `osPlatformScope: [WindowsServer, Linux]`. Software-installed signals only make sense for the OS that hosts them, and AppService-folder TVM rules detect server stacks (3CX, AD, Exchange, IIS, SQL, Apache, MySQL, Nginx, etc.).
+- Otherwise -> NO scope. Name-pattern + MachineGroup detections are OS-agnostic; let them run on every asset.
+
+Result: 543 rules tagged, 14 left untagged (PAW, BYOD, ProductionWorkstation, ConsumerIoTDevice, USBOnlyPeripheral, VendingMachine, etc.).
+
+Caveat: client-installed software like Adobe Reader / Office / browsers, IF they end up in the AppService folder as TVM rules, will currently be tagged WindowsServer+Linux — wrong for those. Fix per-rule when a customer reports it. Better long-term: split AppService folder into `appservices/` (server stacks) vs `clientapps/` (workstation software).
 
 ---
 

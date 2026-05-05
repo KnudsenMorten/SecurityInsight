@@ -556,33 +556,11 @@ function Send-RowsToLogAnalytics {
     if (-not $global:LogIngestAppSecret) { $global:LogIngestAppSecret = $global:SpnClientSecret }
     if (-not $global:TenantId)           { $global:TenantId           = $global:SpnTenantId }
 
-    # Resolve DCE ingestion URI -- precedence:
-    #   1. $global:DceIngestionUri (canonical, set by Bootstrap-LA / launcher config)
-    #   2. $global:SI_DceIngestUri (legacy alias)
-    #   3. AUTO-RESOLVE from Azure ARM via Get-AzDataCollectionEndpoint using
-    #      $global:SI_DceName + $global:SI_DcrResourceGroup.
-    $dceUri = if ($global:DceIngestionUri)  { [string]$global:DceIngestionUri } `
-              elseif ($global:SI_DceIngestUri) { [string]$global:SI_DceIngestUri } `
-              else { $null }
-    if (-not $dceUri -and $global:SI_DceName -and $global:SI_DcrResourceGroup) {
-        Write-Log ("auto-resolving DCE ingestion URI via Get-AzDataCollectionEndpoint -ResourceGroupName {0} -Name {1} ..." -f $global:SI_DcrResourceGroup, $global:SI_DceName) "INFO"
-        try {
-            $dce = Get-AzDataCollectionEndpoint -ResourceGroupName $global:SI_DcrResourceGroup -Name $global:SI_DceName -ErrorAction Stop
-            if ($dce -and $dce.LogIngestionEndpoint) {
-                $dceUri = [string]$dce.LogIngestionEndpoint
-                $global:DceIngestionUri = $dceUri   # cache for any downstream consumer
-                Write-Log ("DCE ingestion URI resolved: {0}" -f $dceUri) "SUCCESS"
-            }
-        } catch {
-            Write-Log ("DCE auto-resolution failed: {0}" -f $_.Exception.Message) "WARN"
-        }
-    }
-    if (-not $dceUri) {
-        throw "Missing DCE ingestion URI. Set `$global:DceIngestionUri OR `$global:SI_DceName + `$global:SI_DcrResourceGroup in your launcher config, or run Bootstrap-LA."
-    }
-
-    # AzLogDcrIngestPS Post-... takes DceName + DcrName (resolves URI internally
-    # via $global:SI_DcrResourceGroup / azure ARM lookup) -- NOT a raw URI/ImmutableId.
+    # AzLogDcrIngestPS Post-* + CheckCreateUpdate-* resolve DCE/DCR by name on
+    # their own (Get-AzDcrListAll scans the SPN's visible scope), so we don't
+    # need $global:DceIngestionUri pre-populated AND we don't care which RG
+    # the DCE actually lives in -- mirrors how the asset-profiling Output
+    # stage behaves. Just validate the name is set.
     if (-not $global:SI_DceName) { throw "Missing `$global:SI_DceName -- set in launcher config." }
     $tableName = $global:SI_Shodan_TableName -replace '_CL$',''
 

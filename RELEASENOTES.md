@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.19
+## v2.2.20
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
 - release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
 - release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
 - add: SOLUTIONS/SecurityInsight/auth/Get-SIKvSecret.ps1 -- runtime KV secret fetch (830319dc)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.193 — wrap 75 more bare tostring(<col>) refs in column_ifexists (9b7cd01c)
 - fix(SI v2.2): preview.192 — wrap value-side tostring(<col>) in column_ifexists so case() Category/Subcategory parses when source column is missing (133fd01c)
 - fix(SI v2.2): preview.191 — drop CrossEngine completely + fix Subcategory undefined (3fc1ade1)
-- feat(SI v2.2): preview.190 — restore Category/Subcategory from legacy v2.1 (106 reports), drop CrossEngine, simpler risk-analysis.schema.json with Impact-by-Category map (440ec891)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.20 — Capture Context return value from auto-init
+
+v2.2.19's auto-init called `Initialize-PlatformAutomationFramework -ErrorAction Stop | Out-Null` -- which discarded the returned Context. The function RETURNS `$ctx` (line 389) and the caller is responsible for assigning it to `$global:Context`. So Layer 3 customer files still saw `$global:Context` as null and `Get-PlatformSecret` calls still failed.
+
+Fixed: `$global:Context = Initialize-PlatformAutomationFramework -ErrorAction Stop` (capture, not discard).
+
+The function ALSO sets `$global:HighPriv_*` and a handful of other v1-contract globals as side effects internally; those worked already in v2.2.19. Only the typed Context object was missing.
 
 ---
 

@@ -447,8 +447,11 @@ function Initialize-LauncherConfig {
         if (Test-Path -LiteralPath $aitpsPath) {
             try {
                 Import-Module $aitpsPath -Force -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
-                _CfgStep "Layer 1.5/5: Initialize-PlatformAutomationFramework (auto-init -- $global:Context was null)"
-                Initialize-PlatformAutomationFramework -ErrorAction Stop | Out-Null
+                _CfgStep "Layer 1.5/5: Initialize-PlatformAutomationFramework (auto-init -- `$global:Context was null)"
+                # Initialize-PlatformAutomationFramework RETURNS the Context object;
+                # caller must assign it to $global:Context. (It also sets $global:HighPriv_*
+                # internally as a side effect, but Context itself is returned, not globalised.)
+                $global:Context = Initialize-PlatformAutomationFramework -ErrorAction Stop
                 if ($global:Context) {
                     _CfgOk ("Context populated (CorrelationId={0})" -f $global:Context.CorrelationId)
                 } else {

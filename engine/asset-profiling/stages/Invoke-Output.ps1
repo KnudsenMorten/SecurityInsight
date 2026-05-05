@@ -296,18 +296,35 @@ function Write-SIClassificationToLogAnalytics {
         # Emit the DCE / DCR / location triple so the operator can see WHY the PUT
         # picked the location it did.
         try {
-            $_dceForDcr = if ($global:AzDceDetails) { @($global:AzDceDetails)[0] } else { $null }
-            $_dceLoc    = if ($_dceForDcr) { [string]$_dceForDcr.location } else { '<no DCE in cache>' }
-            $_dceId     = if ($_dceForDcr) { [string]$_dceForDcr.id }       else { '<no DCE in cache>' }
+            # Look up the DCE the MODULE will actually pick (by name, matching
+            # AzLogDcrIngestPS.psm1 line 1575). Previous version took
+            # @($global:AzDceDetails)[0] which produced misleading output when
+            # the cache contained unrelated DCEs from other tools (e.g. an
+            # Azure Monitor starter pack DCE in a different RG would be
+            # logged as 'the' DCE even though the module's name lookup would
+            # never pick it).
+            $_dceForDcr = $null
+            if ($global:AzDceDetails -and $global:SI_DceName) {
+                $_dceForDcr = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName } | Select-Object -First 1)
+                if ($_dceForDcr -is [System.Collections.IEnumerable] -and -not ($_dceForDcr -is [string])) { $_dceForDcr = @($_dceForDcr)[0] }
+            }
+            $_dceLoc    = if ($_dceForDcr) { [string]$_dceForDcr.location } else { '<NOT FOUND in cache -- name does not match any DCE the SPN can read>' }
+            $_dceId     = if ($_dceForDcr) { [string]$_dceForDcr.id }       else { '<NOT FOUND in cache>' }
+            $_dceRgSeen = if ($_dceForDcr -and $_dceForDcr.id -match '/resourceGroups/([^/]+)/') { $Matches[1] } else { '<unknown>' }
             $_dcrRg     = $global:SI_DcrResourceGroup
             $_intended  = if ($global:SI_Location) { [string]$global:SI_Location } else { '<unset>' }
             Write-SIInfo ('DCR pre-create  : DcrName            = {0}' -f $dcrName)
             Write-SIInfo ('DCR pre-create  : DcrResourceGroup   = {0}' -f $_dcrRg)
             Write-SIInfo ('DCR pre-create  : SI_Location        = {0}  (engine intent; NOT used by module for new DCR)' -f $_intended)
-            Write-SIInfo ('DCR pre-create  : DceName            = {0}' -f $global:SI_DceName)
-            Write-SIInfo ('DCR pre-create  : DceLocation        = {0}  (THIS becomes new DCR location -- AzLogDcrIngestPS.psm1 line ~1725)' -f $_dceLoc)
+            Write-SIInfo ('DCR pre-create  : DceName (configured) = {0}' -f $global:SI_DceName)
+            Write-SIInfo ('DCR pre-create  : DceLocation        = {0}' -f $_dceLoc)
+            Write-SIInfo ('DCR pre-create  : DceResourceGroup   = {0}' -f $_dceRgSeen)
             Write-SIInfo ('DCR pre-create  : DceResourceId      = {0}' -f $_dceId)
-            if ($_intended -and $_dceLoc -and $_dceLoc -ne '<no DCE in cache>' -and $_intended -ne $_dceLoc) {
+            if (-not $_dceForDcr) {
+                Write-Warning ('DCR pre-create  : DCE ''{0}'' NOT visible to SPN. Module will fail with null location/id.' -f $global:SI_DceName)
+                Write-Warning ('DCR pre-create  : Fix: verify the DCE name in Azure (Get-AzDataCollectionEndpoint), or check SPN has Reader on the DCE RG.')
+                Write-Warning ('DCR pre-create  : Cache size: {0} DCEs visible. None named ''{1}''.' -f (@($global:AzDceDetails).Count), $global:SI_DceName)
+            } elseif ($_intended -and $_dceLoc -and $_intended -ne $_dceLoc) {
                 Write-Warning ('DCR pre-create  : LOCATION MISMATCH -- SI_Location=''{0}'' but DCE is in ''{1}''.' -f $_intended, $_dceLoc)
                 Write-Warning ('DCR pre-create  : new DCR will be created in ''{0}'' (DCE location). If a tenant policy denies that location, the PUT will 403 with RequestDisallowedByPolicy.' -f $_dceLoc)
                 Write-Warning ('DCR pre-create  : fix = recreate the DCE in ''{0}'' (or whatever location the policy allows).' -f $_intended)
@@ -335,6 +352,23 @@ function Write-SIClassificationToLogAnalytics {
         } catch { Write-Warning ('RBAC pre-flight check failed -- {0} (continuing; ingest will reveal real state)' -f $_.Exception.Message) }
 
         Write-Host ''
+        # Skip-auto-create opt-out: when $global:SI_SkipDcrAutoCreate = $true,
+        # the engine assumes the DCE + DCR + table already exist with the right
+        # schema and skips the CheckCreateUpdate-TableDcr-Structure call
+        # entirely. Useful when:
+        #   - operator manages DCE/DCR via IaC (Bicep/Terraform) and doesn't
+        #     want the engine touching ARM resources
+        #   - the SPN has Reader-only on the DCR scope (can ingest but not
+        #     create/update DCR shape) -- e.g., a tenant where DCR provisioning
+        #     is handled by a separate identity
+        #   - schema is known-stable and operator wants to skip the
+        #     ARG/ARM PUT round-trip per ingest (saves 5-15s per run)
+        # Trade-off: schema drift in $DataVariable (new column from upstream
+        # source) won't auto-migrate the DCR -- operator must update DCR by
+        # hand or re-enable this for one run.
+        if ($global:SI_SkipDcrAutoCreate) {
+            Write-SIInfo 'CheckCreateUpdate-TableDcr-Structure : SKIPPED ($global:SI_SkipDcrAutoCreate = $true) -- assuming DCE/DCR/table pre-exist'
+        } else {
         Write-SIStep 'CheckCreateUpdate-TableDcr-Structure (schema check + auto-provision)'
         # Verbose dropped on every AzLogDcrIngestPS call below.
         # also wrap each call in Invoke-SIQuietBlock to silence the
@@ -358,6 +392,7 @@ function Write-SIClassificationToLogAnalytics {
             -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
             -AzLogDcrTableCreateFromAnyMachine          $true `
             -AzLogDcrTableCreateFromReferenceMachine    @() 4>$null
+        }
 
         # ---- 2. ARM consistency sleep removed.
         # The 15s sleep was a defence for newly-created DCRs (Post-* needs

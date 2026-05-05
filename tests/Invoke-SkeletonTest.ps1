@@ -14,8 +14,8 @@
 
 $ErrorActionPreference = 'Stop'
 
-$v22Root = Split-Path -Parent $PSScriptRoot
-$orchestrator = Join-Path $v22Root 'engine\asset-profiling\Invoke-SIEngineRun.ps1'
+$siRoot = Split-Path -Parent $PSScriptRoot
+$orchestrator = Join-Path $siRoot 'engine\asset-profiling\Invoke-SIEngineRun.ps1'
 
 Write-Host "============================================================"
 Write-Host "v2.2 skeleton test -- run #1 (cold cache, expect AI calls)"
@@ -39,10 +39,10 @@ Write-Host "============================================================"
 $run2Ctx = $run1.StorageContext
 $runId2 = '{0:yyyyMMddTHHmmssZ}-endpoint-{1}' -f ([datetime]::UtcNow), [guid]::NewGuid().ToString().Substring(0,8)
 
-. (Join-Path $v22Root 'Get-FingerprintEngine.ps1')
-. (Join-Path $v22Root 'engine\asset-profiling\storage\StorageContext.ps1')
-. (Join-Path $v22Root 'engine\asset-profiling\storage\FingerprintCache.ps1')
-. (Join-Path $v22Root 'engine\asset-profiling\storage\StagingBlob.ps1')
+. (Join-Path $siRoot 'Get-FingerprintEngine.ps1')
+. (Join-Path $siRoot 'engine\asset-profiling\storage\StorageContext.ps1')
+. (Join-Path $siRoot 'engine\asset-profiling\storage\FingerprintCache.ps1')
+. (Join-Path $siRoot 'engine\asset-profiling\storage\StagingBlob.ps1')
 
 $runContext2 = [pscustomobject]@{
     RunId            = $runId2
@@ -56,7 +56,7 @@ $runContext2 = [pscustomobject]@{
     StageResults     = @{}
 }
 
-$stagesRoot = Join-Path $v22Root 'engine\asset-profiling\stages'
+$stagesRoot = Join-Path $siRoot 'engine\asset-profiling\stages'
 foreach ($s in @('Schedule','Discover','Collect','Enrich','Classify','Output')) {
     . (Join-Path $stagesRoot ('Invoke-{0}.ps1' -f $s))
     $result = & ('Invoke-SI{0}' -f $s) -RunContext $runContext2

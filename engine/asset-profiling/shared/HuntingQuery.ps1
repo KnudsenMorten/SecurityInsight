@@ -82,8 +82,8 @@ function Invoke-SIHuntingQuery {
     # DefenderGraph (default)
     # Resolve auth helper relative to v2.2 root (../../../auth/) regardless of
     # which stage dot-sourced us.
-    $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    . (Join-Path $v22Root 'auth\Get-SIGraphToken.ps1')
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    . (Join-Path $siRoot 'auth\Get-SIGraphToken.ps1')
     try {
         $token = Get-SIGraphToken -Resource Graph
     } catch {

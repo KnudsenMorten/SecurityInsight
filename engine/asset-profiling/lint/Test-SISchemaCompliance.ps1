@@ -44,13 +44,13 @@ function Test-SISchemaCompliance {
 
     if (-not $RulesRoot) {
         # $PSScriptRoot = v2.2/engine/asset-profiling/lint -> three parents = v2.2 root
-        $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     } else {
-        $v22Root = Split-Path -Parent $RulesRoot
+        $siRoot = Split-Path -Parent $RulesRoot
     }
 
     # Load registry to validate detect.kind values
-    . (Join-Path $v22Root 'engine\asset-profiling\shared\RuleEval.ps1')
+    . (Join-Path $siRoot 'engine\asset-profiling\shared\RuleEval.ps1')
     $registry = Get-SIKindRegistry
 
     $violations = New-Object System.Collections.ArrayList
@@ -65,7 +65,7 @@ function Test-SISchemaCompliance {
     }
 
     foreach ($rulesDir in @('rules','rules-custom')) {
-        $root = Join-Path $v22Root $rulesDir
+        $root = Join-Path $siRoot $rulesDir
         if (-not (Test-Path $root)) { continue }
         $yamls = @(Get-ChildItem -Path $root -Filter '*.yaml' -Recurse -File -ErrorAction SilentlyContinue)
         foreach ($f in $yamls) {
@@ -127,7 +127,7 @@ function Test-SISchemaCompliance {
     }
 
     # Check 7: no v22 / v2.2 in file names anywhere under v22Root
-    $vsuffix = @(Get-ChildItem -Path $v22Root -Recurse -File -ErrorAction SilentlyContinue |
+    $vsuffix = @(Get-ChildItem -Path $siRoot -Recurse -File -ErrorAction SilentlyContinue |
                  Where-Object { $_.Name -match 'v22|v2\.2' -and $_.Name -notmatch 'v2\.2\.0-preview' })
     foreach ($f in $vsuffix) {
         Add-Violation 'version-in-name' $f.FullName 'file name contains version-shaped suffix (per ARCHITECTURE.md rule 6)'
@@ -135,7 +135,7 @@ function Test-SISchemaCompliance {
 
     # Check 8: no SI_ prefix on fields[].name in profile schemas
     foreach ($s in @('identity','endpoint','azure','public-ip')) {
-        $sf = Join-Path $v22Root ('asset-profiling-schema\{0}.schema.json' -f $s)
+        $sf = Join-Path $siRoot ('asset-profiling-schema\{0}.schema.json' -f $s)
         if (-not (Test-Path $sf)) { continue }
         try {
             $schema = Get-Content -Raw $sf | ConvertFrom-Json

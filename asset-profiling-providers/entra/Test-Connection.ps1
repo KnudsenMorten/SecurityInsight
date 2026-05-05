@@ -20,8 +20,8 @@ function Test-EntraProviderConnection {
     try {
         # Use existing Get-SIGraphToken helper.
         # $PSScriptRoot = providers/entra -> two parents = v2.2 root.
-        $v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-        . (Join-Path $v22Root 'auth\Get-SIGraphToken.ps1')
+        $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        . (Join-Path $siRoot 'auth\Get-SIGraphToken.ps1')
         $token = Get-SIGraphToken
         if ([string]::IsNullOrWhiteSpace($token)) {
             return @{ Ok = $false; Error = 'Get-SIGraphToken returned empty.'; Detail = 'Check $global:SI_SPN_AppId/Secret/TenantId in custom.ps1.' }

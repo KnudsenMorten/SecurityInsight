@@ -59,7 +59,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$v22Root  = Split-Path -Parent $PSScriptRoot
+$siRoot  = Split-Path -Parent $PSScriptRoot
 $failures = New-Object System.Collections.Generic.List[string]
 $warnings = New-Object System.Collections.Generic.List[string]
 function _PASS($name, $detail = '') { Write-Host (" [PASS] {0,-20} {1}" -f $name, $detail) -ForegroundColor Green }
@@ -81,11 +81,11 @@ function _Phase($name) {
 _Phase 'SYNTAX :: parse every .ps1 under v2.2/'
 if ('SYNTAX' -in $Skip) { _SKIP 'SYNTAX' } else {
     $bad = 0
-    foreach ($f in Get-ChildItem -LiteralPath $v22Root -Recurse -Filter *.ps1 -File -ErrorAction SilentlyContinue) {
+    foreach ($f in Get-ChildItem -LiteralPath $siRoot -Recurse -Filter *.ps1 -File -ErrorAction SilentlyContinue) {
         $err = $null
         $null = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$err)
         if ($err) {
-            _FAIL 'SYNTAX' ('{0} -- {1} error(s) (first: {2})' -f $f.FullName.Substring($v22Root.Length+1), $err.Count, $err[0].Message)
+            _FAIL 'SYNTAX' ('{0} -- {1} error(s) (first: {2})' -f $f.FullName.Substring($siRoot.Length+1), $err.Count, $err[0].Message)
             $bad++
         }
     }
@@ -97,7 +97,7 @@ if ('SYNTAX' -in $Skip) { _SKIP 'SYNTAX' } else {
 # ============================================================================
 _Phase 'ROW-BUILDER :: mock-build one row per profiler'
 if ('ROW-BUILDER' -in $Skip) { _SKIP 'ROW-BUILDER' } else {
-    $sharedDir = Join-Path $v22Root 'engine\asset-profiling\shared'
+    $sharedDir = Join-Path $siRoot 'engine\asset-profiling\shared'
     $sampleCases = @(
         @{ Engine = 'identity'; Builder = 'Build-IdentityProfileRow.ps1'; Function = 'Build-SIIdentityProfileRow';
            Record = @{ AssetId = 'entra-user:11111111-2222-3333-4444-555555555555';
@@ -135,7 +135,7 @@ if ('ROW-BUILDER' -in $Skip) { _SKIP 'ROW-BUILDER' } else {
 # ============================================================================
 _Phase 'SCHEMA-DRIFT :: AlwaysOn columns vs row-builder output'
 if ('SCHEMA-DRIFT' -in $Skip) { _SKIP 'SCHEMA-DRIFT' } else {
-    $outputPath = Join-Path $v22Root 'engine\asset-profiling\stages\Invoke-Output.ps1'
+    $outputPath = Join-Path $siRoot 'engine\asset-profiling\stages\Invoke-Output.ps1'
     if (-not (Test-Path -LiteralPath $outputPath)) {
         _FAIL 'SCHEMA-DRIFT' ('Invoke-Output.ps1 missing: ' + $outputPath)
     } else {
@@ -171,7 +171,7 @@ if ('DOTSOURCE-PATHS' -in $Skip) { _SKIP 'DOTSOURCE-PATHS' } else {
     # Catches the bug class introduced by Get-DiscoveryFromShodan / Invoke-Discover /
     # Invoke-Collect / Invoke-Enrich all hit this when the discovery folder moved.
     $bad = 0; $ok = 0
-    $apRoot = Join-Path $v22Root 'engine\asset-profiling'
+    $apRoot = Join-Path $siRoot 'engine\asset-profiling'
     foreach ($f in Get-ChildItem -LiteralPath $apRoot -Recurse -Filter *.ps1 -File) {
         $src  = Get-Content -LiteralPath $f.FullName -Raw
         # Match: . (Join-Path X 'rel/path.ps1')   AND   . 'abs/path.ps1'
@@ -216,7 +216,7 @@ if ('CACHE-KQL' -in $Skip) {
         $wsId  = (Invoke-RestMethod -Headers @{Authorization="Bearer $arm"} -Uri ('https://management.azure.com' + $global:SI_WorkspaceResourceId + '?api-version=2023-09-01')).properties.customerId
     } catch { _FAIL 'CACHE-KQL' ('LA token / workspace lookup failed: ' + $_.Exception.Message); $tok = $null }
     if ($tok) {
-        $sharedDir = Join-Path $v22Root 'engine\asset-profiling\shared'
+        $sharedDir = Join-Path $siRoot 'engine\asset-profiling\shared'
         $cacheKqlOk = 0; $cacheKqlFail = 0
         foreach ($f in Get-ChildItem -LiteralPath $sharedDir -Filter *Cache*.ps1 -File) {
             $src = Get-Content -LiteralPath $f.FullName -Raw
@@ -255,8 +255,8 @@ _Phase 'SCHEMA-VALIDITY :: every *.locked.json + *.locked.yaml parses'
 if ('SCHEMA-VALIDITY' -in $Skip) { _SKIP 'SCHEMA-VALIDITY' } else {
     $bad = 0; $ok = 0
     foreach ($f in @(
-        (Get-ChildItem -LiteralPath (Join-Path $v22Root 'asset-profiling-schema') -Filter '*.locked.json' -File -ErrorAction SilentlyContinue)
-        (Get-ChildItem -LiteralPath (Join-Path $v22Root 'asset-profiling-schema') -Filter '*.locked.yaml' -File -ErrorAction SilentlyContinue)
+        (Get-ChildItem -LiteralPath (Join-Path $siRoot 'asset-profiling-schema') -Filter '*.locked.json' -File -ErrorAction SilentlyContinue)
+        (Get-ChildItem -LiteralPath (Join-Path $siRoot 'asset-profiling-schema') -Filter '*.locked.yaml' -File -ErrorAction SilentlyContinue)
     )) {
         try {
             $raw = Get-Content -LiteralPath $f.FullName -Raw
@@ -285,7 +285,7 @@ if ('GLOBALS-CONTRACT' -in $Skip) { _SKIP 'GLOBALS-CONTRACT' } else {
     # naming. The previous Test-Smoke missed this because KQL-PARSE bypasses the
     # engine and goes straight to the LA REST API -- the routing/contract layer
     # never executes during the test.
-    $customDataPath = Join-Path (Split-Path -Parent (Split-Path -Parent $v22Root)) 'config\SecurityInsight.custom.ps1'
+    $customDataPath = Join-Path (Split-Path -Parent (Split-Path -Parent $siRoot)) 'config\SecurityInsight.custom.ps1'
     if (-not (Test-Path -LiteralPath $customDataPath)) {
         _WARN 'GLOBALS-CONTRACT' "config file not found: $customDataPath"
     } else {
@@ -339,7 +339,7 @@ if ('KQL-PARSE' -in $Skip) {
         try { Import-Module powershell-yaml -ErrorAction Stop } catch { _FAIL 'KQL-PARSE' 'powershell-yaml module missing'; $tok = $null }
     }
     if ($tok) {
-        $yamlPath = Join-Path $v22Root 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml'
+        $yamlPath = Join-Path $siRoot 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml'
         $yaml = ConvertFrom-Yaml (Get-Content -LiteralPath $yamlPath -Raw)
         $reports = @($yaml.Reports)
         # Mirror the engine's routing: only validate against LA queries that the engine

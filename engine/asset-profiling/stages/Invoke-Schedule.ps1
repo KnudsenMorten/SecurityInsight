@@ -126,8 +126,8 @@ function Invoke-SISchedule {
     if ($global:SI_EnableCmdbProvider) {
         $intervalH = if ($global:SI_CmdbRefreshIntervalHours) { [int]$global:SI_CmdbRefreshIntervalHours } else { 24 }
         try {
-            $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-            . (Join-Path $v22Root 'engine\asset-profiling\storage\CmdbCache.ps1')
+            $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+            . (Join-Path $siRoot 'engine\asset-profiling\storage\CmdbCache.ps1')
             $age = Get-SICmdbCacheAge -Context $RunContext.StorageContext
             # ForceFullRun also forces CMDB refresh. Mirrors the
             # ForceFullRun semantics for the fingerprint cache --
@@ -140,7 +140,7 @@ function Invoke-SISchedule {
                           elseif ($age.State -eq 'never') { 'never synced' }
                           else { ('{0}h old >= {1}h interval' -f $age.HoursOld, $intervalH) }
                 Write-SIInfo ("CMDB provider ENABLED -- refreshing cache ({0}) ..." -f $reason)
-                $refreshScript = Join-Path $v22Root 'asset-profiling-providers\servicenow-cmdb\Refresh-CmdbCache.ps1'
+                $refreshScript = Join-Path $siRoot 'asset-profiling-providers\servicenow-cmdb\Refresh-CmdbCache.ps1'
                 if (Test-Path $refreshScript) {
                     $cmdbRefresh = & $refreshScript -StorageAccountName ([string]$RunContext.StorageContext.AccountName) -StorageKey ([string]$RunContext.StorageContext.AccountKey)
                     Write-SIInfo ("CMDB cache refreshed: {0} services written" -f $cmdbRefresh.ServicesWritten)

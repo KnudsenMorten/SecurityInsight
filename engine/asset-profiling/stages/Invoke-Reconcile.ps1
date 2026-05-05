@@ -42,9 +42,9 @@ function Invoke-SIReconcile {
     # be empty (state='never'); the per-asset loop below handles that gracefully
     # by tagging every row 'orphan-discovered' without failing the stage.
     $engine = $RunContext.Engine
-    $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    . (Join-Path $v22Root 'engine\asset-profiling\storage\StagingBlob.ps1')
-    . (Join-Path $v22Root 'engine\asset-profiling\storage\CmdbCache.ps1')
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    . (Join-Path $siRoot 'engine\asset-profiling\storage\StagingBlob.ps1')
+    . (Join-Path $siRoot 'engine\asset-profiling\storage\CmdbCache.ps1')
 
     # ensure cache tables exist before any read. Without this, the
     # first engine run on a new tenant emits doubled "Can not find table

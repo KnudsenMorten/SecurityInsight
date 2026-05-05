@@ -244,14 +244,14 @@ $global:SuppressErrors      = [bool]$SuppressErrors
 $global:SuppressWarnings    = [bool]$SuppressWarnings
 
 $launcherDir       = $PSScriptRoot
-$v22Root           = Split-Path -Parent (Split-Path -Parent $launcherDir)
-$global:SettingsPath = Join-Path $v22Root 'privilege-tier-catalog'
+$siRoot           = Split-Path -Parent (Split-Path -Parent $launcherDir)
+$global:SettingsPath = Join-Path $siRoot 'privilege-tier-catalog'
 
 Write-Info ("[LAUNCHER] AutomationFramework={0} SettingsPath={1} Auth={2}" -f $global:AutomationFramework, $global:SettingsPath, $authMethodUsed)
 
 try {
     Write-Step "Invoking engine"
-    $engine = Join-Path $v22Root 'engine\privilege-tier-classifier\Invoke-PrivilegeTierClassifier.ps1'
+    $engine = Join-Path $siRoot 'engine\privilege-tier-classifier\Invoke-PrivilegeTierClassifier.ps1'
     if (-not (Test-Path -LiteralPath $engine)) {
         throw "Launcher: engine 'Invoke-PrivilegeTierClassifier.ps1' not found at $engine."
     }

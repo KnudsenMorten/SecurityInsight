@@ -117,12 +117,12 @@ if (Test-Path $customConfigPath) {
     . $customConfigPath
 }
 
-$v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-. (Join-Path $v22Root 'engine\asset-profiling\storage\StorageContext.ps1')
-. (Join-Path $v22Root 'engine\asset-profiling\storage\FingerprintCache.ps1')
-. (Join-Path $v22Root 'engine\asset-profiling\storage\StagingBlob.ps1')
-. (Join-Path $v22Root 'engine\asset-profiling\storage\WorkerQueue.ps1')
-. (Join-Path $v22Root 'Get-FingerprintEngine.ps1')
+$siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $siRoot 'engine\asset-profiling\storage\StorageContext.ps1')
+. (Join-Path $siRoot 'engine\asset-profiling\storage\FingerprintCache.ps1')
+. (Join-Path $siRoot 'engine\asset-profiling\storage\StagingBlob.ps1')
+. (Join-Path $siRoot 'engine\asset-profiling\storage\WorkerQueue.ps1')
+. (Join-Path $siRoot 'Get-FingerprintEngine.ps1')
 
 $runId = '{0:yyyyMMddTHHmmssZ}-{1}-{2}' -f ([datetime]::UtcNow), $Engine, [guid]::NewGuid().ToString().Substring(0,8)
 

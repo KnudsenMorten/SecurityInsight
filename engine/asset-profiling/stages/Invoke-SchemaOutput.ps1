@@ -24,7 +24,7 @@ function Invoke-SISchemaOutput {
         return [pscustomobject]@{ Stage='SchemaOutput'; Summary='no catalog -- skipped' }
     }
 
-    $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     $proposals = @($RunContext.SchemaProposals)
 
     # ---- Sink 1: write YAML drafts to posture-rules-pending/<engine>/ ----
@@ -32,7 +32,7 @@ function Invoke-SISchemaOutput {
     foreach ($p in $proposals) {
         if ([string]::IsNullOrWhiteSpace($p.PostureRuleYaml)) { continue }
         $engine = if ($p.Engine -in 'endpoint','identity','azure','crossengine') { $p.Engine } else { 'endpoint' }
-        $folder = Join-Path $v22Root (Join-Path 'posture-rules-pending' $engine)
+        $folder = Join-Path $siRoot (Join-Path 'posture-rules-pending' $engine)
         if (-not (Test-Path $folder)) { New-Item -Path $folder -ItemType Directory -Force | Out-Null }
 
         # Filename derived from finding -- deterministic so the same finding
@@ -54,7 +54,7 @@ function Invoke-SISchemaOutput {
 
         # Sink 2: companion .kql when AI provided one
         if (-not [string]::IsNullOrWhiteSpace($p.RiskQueryKql)) {
-            $kqlFolder = Join-Path $v22Root 'risk-queries-pending'
+            $kqlFolder = Join-Path $siRoot 'risk-queries-pending'
             if (-not (Test-Path $kqlFolder)) { New-Item -Path $kqlFolder -ItemType Directory -Force | Out-Null }
             $kqlPath = Join-Path $kqlFolder ($key + '.kql')
             try { Set-Content -Path $kqlPath -Value $p.RiskQueryKql -Encoding utf8 -Force } catch { }

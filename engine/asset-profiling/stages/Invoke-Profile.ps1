@@ -43,8 +43,8 @@ function Invoke-SIProfile {
 
     # ---- Read assets from Classify-stage staging (preserves the per-source
     # verdict block produced upstream so Profile only OVERLAYS rule matches).
-    $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    . (Join-Path $v22Root 'engine\asset-profiling\storage\StagingBlob.ps1')
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    . (Join-Path $siRoot 'engine\asset-profiling\storage\StagingBlob.ps1')
     $records = @(Read-SIStageShards -Context $RunContext.StorageContext `
                                     -ContainerName $RunContext.StagingContainer `
                                     -RunId $RunContext.RunId `

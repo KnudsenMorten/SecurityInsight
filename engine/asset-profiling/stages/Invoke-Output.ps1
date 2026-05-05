@@ -431,6 +431,63 @@ function Invoke-SIOutput {
                                      -Stage 'Classify' `
                                      -ReplicaIndex ([int]$RunContext.ShardIndex))
 
+    # ---- ENDPOINT engine: optional "active devices only" filter ----
+    # Stale Entra device registrations, offboarded MDE boxes, decommissioned
+    # servers still on the EG node list -- all real findings (T3 candidates),
+    # but customers tracking only the live fleet want them out of Profile +
+    # RA reports. Two opt-in modes (endpoint engine only; identity / azure /
+    # publicip are not in scope for this filter):
+    #
+    #   $global:SI_ExcludeInactive_Endpoint = $true       (mixed-source view)
+    #     Keep a device if NOT MDE-offboarded AND any of:
+    #       * MDE sensor Active / ImpairedCommunication, OR
+    #       * MDE_LastSeen within $global:SI_ActiveStaleDays (default 30), OR
+    #       * EG.lastSeen within staleDays, OR
+    #       * ENTRA_ApproximateLastSignInDateTime within staleDays
+    #     Result = "device is alive in at least one Microsoft surface."
+    #
+    #   $global:SI_RequireMdeActive_Endpoint = $true      (strict MDE-only)
+    #     Keep ONLY: MDE sensor Active OR MDE_LastSeen<staleDays.
+    #     Drops EG-only and Entra-only devices. Matches the MDE portal's
+    #     "Sensor health state: Active" filter exactly.
+    #
+    # Defaults OFF -- engine continues to surface stale assets unless customer
+    # opts in. Filter runs BEFORE all sinks (LA + JSON + Excel see same set).
+    if ($RunContext.Engine -ieq 'endpoint') {
+        $excludeInactive  = [bool](Get-Variable -Name 'SI_ExcludeInactive_Endpoint'  -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        $requireMdeActive = [bool](Get-Variable -Name 'SI_RequireMdeActive_Endpoint' -Scope Global -ValueOnly -ErrorAction SilentlyContinue)
+        $staleDays   = if ($global:SI_ActiveStaleDays) { [int]$global:SI_ActiveStaleDays } else { 30 }
+        $staleCutoff = (Get-Date).ToUniversalTime().AddDays(-$staleDays)
+
+        if ($excludeInactive -or $requireMdeActive) {
+            $beforeCount = $records.Count
+            $records = @($records | Where-Object {
+                $m = $_.Metadata
+                if (-not $m) { return $true }   # no metadata -> can't decide, keep it
+                if ([string]$m.MDE_OnboardingStatus -eq 'Offboarded') { return $false }
+                $sensorActive = ([string]$m.MDE_SensorHealthState -in @('Active','ImpairedCommunication'))
+                if ($sensorActive) { return $true }
+                # Build the freshness candidate list. Strict MDE mode skips
+                # EG / Entra fallbacks intentionally.
+                $candidates = @('MDE_LastSeen')
+                if (-not $requireMdeActive) { $candidates += @('EG_LastSeen','ENTRA_ApproximateLastSignInDateTime') }
+                foreach ($prop in $candidates) {
+                    $p = $m.PSObject.Properties[$prop]
+                    if ($p -and $p.Value) {
+                        $ts = $null
+                        if ([datetime]::TryParse([string]$p.Value, [ref]$ts) -and $ts.ToUniversalTime() -ge $staleCutoff) { return $true }
+                    }
+                }
+                return $false
+            })
+            $dropped = $beforeCount - $records.Count
+            if ($dropped -gt 0) {
+                $modeLabel = if ($requireMdeActive) { 'RequireMdeActive' } else { 'ExcludeInactive (MDE+EG+Entra)' }
+                Write-SIInfo ('asset filter [{0}, {1}d]: {2} -> {3} (dropped {4} inactive)' -f $modeLabel, $staleDays, $beforeCount, $records.Count, $dropped)
+            }
+        }
+    }
+
     $outDir = Join-Path ([System.IO.Path]::GetTempPath()) ('si-out-' + $RunContext.RunId)
     if (-not (Test-Path $outDir)) { New-Item -Path $outDir -ItemType Directory | Out-Null }
 
@@ -475,11 +532,19 @@ function Invoke-SIOutput {
     }
 
     # Build an honest summary that distinguishes OK from SKIPPED/FAILED per sink.
+    # Emit the actual SKIP/FAIL reason as a Write-Warning so the operator can see
+    # WHICH global / auth piece is missing without having to grep SinkResults.
     $sinkLabels = foreach ($k in $sinkResults.Keys) {
         $v = [string]$sinkResults[$k]
-        if ($v -like 'SKIPPED*')      { '{0}=SKIP' -f $k }
-        elseif ($v -like 'FAILED:*')  { '{0}=FAIL' -f $k }
-        else                          { '{0}=OK'   -f $k }
+        if ($v -like 'SKIPPED*') {
+            Write-Warning ('Sink {0}: {1}' -f $k, $v)
+            '{0}=SKIP' -f $k
+        }
+        elseif ($v -like 'FAILED:*') {
+            Write-Warning ('Sink {0}: {1}' -f $k, $v)
+            '{0}=FAIL' -f $k
+        }
+        else { '{0}=OK' -f $k }
     }
     $okCount = @($sinkLabels | Where-Object { $_ -like '*=OK' }).Count
 

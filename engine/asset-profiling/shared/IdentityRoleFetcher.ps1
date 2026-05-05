@@ -87,7 +87,16 @@ function Invoke-SIGraphPaged {
                 $isTransient = ($status -in 429,502,503,504) -or ($status -eq 0)
                 if (-not $isTransient -or $attempt -ge $maxAttempts) { throw }
                 $delay = [Math]::Pow(2, $attempt - 1)   # 1s, 2s, 4s
-                Write-Warning ('Graph transient error (HTTP {0}) on {1} -- retry {2}/{3} in {4}s' -f $status, $url, $attempt, $maxAttempts, $delay)
+                # Per-retry warnings on busy tenants (PIM scans across 80+
+                # role-bearing groups can fire 50+ retries that all auto-
+                # recover) drown the launcher trace. Bump a counter for an
+                # end-of-phase summary line; keep the per-call detail
+                # available via -Verbose for debugging.
+                if (-not $script:_SIGraphRetryCount) { $script:_SIGraphRetryCount = @{} }
+                $key = "HTTP$status"
+                if (-not $script:_SIGraphRetryCount.ContainsKey($key)) { $script:_SIGraphRetryCount[$key] = 0 }
+                $script:_SIGraphRetryCount[$key]++
+                Write-Verbose ('Graph transient error (HTTP {0}) on {1} -- retry {2}/{3} in {4}s' -f $status, $url, $attempt, $maxAttempts, $delay)
                 Start-Sleep -Seconds $delay
             }
         }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.42
+## v2.2.43
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.43 - gate EG identity sample-dump diagnostics behind SI_Verbose (14e25cbf)
 - release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
 - release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
 - release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.16 - make RA DCR names overridable (dd9da5af)
 - release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
 - release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
-- release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.43 — Identity: gate EG sample-dump diagnostics behind `$global:SI_Verbose`
+
+`IdentityRoleFetcher.ps1` `Resolve-IdentityRoleAssignments` was unconditionally
+emitting two `[INFO]` lines per EG node label (group / user / serviceprincipal /
+managedidentity) on every run — sample EntityIds + sample rawData keys.
+Useful for first-time schema diagnosis but pure noise on stable tenants.
+
+Now gated behind `$global:SI_Verbose` (the same flag used by other
+diagnostic-only blocks across the engine). Always-on counters
+(`[perms] EG identity nodes ... rows=N skip-no-aadOid=M` + per-type
+`total/kept/skip-no-aadOid` table) are unchanged — those are needed to spot
+coverage drift run-over-run.
+
+To re-enable for one run: `$global:SI_Verbose = $true` in
+`SecurityInsight.custom.ps1` or per-launcher `LauncherConfig.custom.ps1`.
 
 ---
 

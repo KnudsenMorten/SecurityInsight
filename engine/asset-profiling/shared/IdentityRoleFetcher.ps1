@@ -1064,9 +1064,11 @@ function Get-SIExposureGraphIdentities {
     foreach ($k in ($perLabelTotal.Keys | Sort-Object)) {
         Write-SIInfo ('     [{0,-18}] total={1,5}  kept={2,5}  skip-no-aadOid={3}' -f $k, $perLabelTotal[$k], $perLabelKept[$k], $perLabelSkipNoOid[$k])
     }
-    foreach ($k in ($diagSamplesPerLabel.Keys | Sort-Object)) {
-        Write-SIInfo ('     [{0,-18}] sample EntityIds: {1}' -f $k, $diagSamplesPerLabel[$k].EntitySample)
-        Write-SIInfo ('     [{0,-18}] sample rawData keys: {1}' -f $k, $diagSamplesPerLabel[$k].RawKeys)
+    if ($global:SI_Verbose) {
+        foreach ($k in ($diagSamplesPerLabel.Keys | Sort-Object)) {
+            Write-SIInfo ('     [{0,-18}] sample EntityIds: {1}' -f $k, $diagSamplesPerLabel[$k].EntitySample)
+            Write-SIInfo ('     [{0,-18}] sample rawData keys: {1}' -f $k, $diagSamplesPerLabel[$k].RawKeys)
+        }
     }
     if ($egMap.Count -eq 0 -and ($skipNoProps + $skipNoOid) -gt 0) {
         Write-Warning ('  EG: parsed 0 of {0} nodes. Sample row keys: {1}' -f `

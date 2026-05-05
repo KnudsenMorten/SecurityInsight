@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.37
+## v2.2.38
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.38 - Endpoint filter strict MDE-only by default (c0bc8e7f)
 - release: SecurityInsight v2.2.37 - Run-AllEngines: 3 subset switches (7dc62844)
 - release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
 - release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.11 - PublicIP surface KQL error body (73b03856)
 - release: SecurityInsight v2.2.10 - PublicIP Set-AzContext + Use-SIAzContext helper (1dc6fac4)
 - release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
-- release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.38 — Endpoint filter: flip default to STRICT MDE-only
+
+v2.2.32-v2.2.37 default was the mixed-source filter ("alive in any Microsoft surface" — MDE + EG + Entra). Customer feedback: too permissive in real tenants. BYOD phones sign in to Entra daily, so the mixed filter still kept them. Customers expected the count to match MDE portal "Active" view (their ground-truth fleet number) but saw multiples.
+
+New default: **strict MDE-only**. Matches the MDE portal `Sensor health state: Active` filter exactly:
+- Keep if NOT MDE-offboarded AND (MDE sensor Active/Impaired OR `MDE_LastSeen` < `SI_ActiveStaleDays`).
+- Drops EG-only and Entra-only devices.
+
+| Setting | Mode |
+|---|---|
+| (no globals set -- DEFAULT) | Strict MDE-only |
+| `$global:SI_AllowNonMdeDevices_Endpoint = $true` | Mixed mode (MDE + EG + Entra). Use when you want BYOD/IoT/non-MDE-onboarded device visibility. |
+| `$global:SI_IncludeInactive_Endpoint = $true` | Disable filter entirely. Emit everything. |
+
+Backwards compat: the old `SI_RequireMdeActive_Endpoint` global is now ignored (strict either way) -- no error, just no-op. Customers who previously set it to `$true` get the same behaviour they wanted (now as default). Customers who relied on the implicit mixed default need to add `SI_AllowNonMdeDevices_Endpoint = $true` to keep the broader view.
 
 ---
 

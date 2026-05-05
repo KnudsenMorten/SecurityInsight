@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.25
+## v2.2.27
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
 - release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
 - release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
 - release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
 - SI v2.2.0 stable: flatten v2.2/ to root, drop v2.1 layout, audit-pass RA fixes (536e1405)
 - ci(publish): per-channel sourceRef + README regression guard (43b6e88c)
-- docs(SI README): add 'New release v2.2 coming very soon !' teaser callout (9b283fcf)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.27 — RA SettingsPath overshoot + Run-AllEngines polish
+
+### RA launcher: `RiskAnalysis_Queries_Locked.yaml not found`
+
+`launcher.community-vm.ps1` and `launcher.internal-vm.ps1` for risk-analysis had a stray second `Split-Path -Parent $siRoot` line — a leftover from the v2.2.25 `$v22Root` -> `$siRoot` rename where two distinct variables collapsed onto the same name. Result: `$siRoot` overshot by one folder (`C:\Demo` instead of `C:\Demo\SecurityInsight`), the `risk-analysis-detection/` candidate path missed, `$global:SettingsPath` fell back to `$PSScriptRoot`, and the engine threw `Locked YAML not found`. Removed the extra walk.
+
+### Run-AllEngines.ps1
+
+- **Auto-redirect when `-Root` points at AutomateIT install root**: if `<Root>/engine` doesn't exist but `<Root>/SOLUTIONS/SecurityInsight/engine` does, silently rewrite `$Root` to the SI dir. Internal callers can now run `.\Run-AllEngines.ps1 -Root D:\AutomateIT -Flavour internal` without remembering the `SOLUTIONS\SecurityInsight` suffix.
+- **Default for `-Root`**: derives from `$PSScriptRoot` instead of the hardcoded `C:\Demo\SecurityInsight` demo path. Running `.\Run-AllEngines.ps1` from inside any install's `tools/` folder works without `-Root`. Explicit `-Root` still wins.
+- **Banner**: dropped `(demo helper)` — the script ships and runs in production internal installs too, the label was misleading.
 
 ---
 

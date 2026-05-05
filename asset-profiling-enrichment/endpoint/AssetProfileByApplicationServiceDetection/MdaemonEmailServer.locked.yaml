@@ -1,5 +1,6 @@
 id:        MdaemonEmailServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'MDaemon Email Server'
 category:  'Mail'

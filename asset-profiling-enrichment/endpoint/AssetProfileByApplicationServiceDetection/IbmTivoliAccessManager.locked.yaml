@@ -1,5 +1,6 @@
 id:        IbmTivoliAccessManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Tivoli Access Manager'
 category:  'Identity'

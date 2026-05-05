@@ -1,5 +1,6 @@
 id:        EsetProtect
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ESET Security Management Center'
 category:  'EDR/AV'

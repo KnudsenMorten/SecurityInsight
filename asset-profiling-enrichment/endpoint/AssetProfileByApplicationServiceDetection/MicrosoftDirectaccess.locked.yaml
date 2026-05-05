@@ -1,5 +1,6 @@
 id:        MicrosoftDirectaccess
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft DirectAccess Connectivity Assistant'
 category:  'VPN'

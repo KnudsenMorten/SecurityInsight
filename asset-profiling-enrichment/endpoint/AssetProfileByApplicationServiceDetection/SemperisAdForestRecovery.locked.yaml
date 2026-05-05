@@ -1,5 +1,6 @@
 id:        SemperisAdForestRecovery
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Semperis Active Directory Forest Recovery'
 category:  'Identity Backup'

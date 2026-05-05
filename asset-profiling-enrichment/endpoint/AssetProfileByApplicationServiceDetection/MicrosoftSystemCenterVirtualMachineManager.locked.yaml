@@ -1,5 +1,6 @@
 id:        MicrosoftSystemCenterVirtualMachineManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft System Center Virtual Machine Manager'
 category:  'Virtualization'

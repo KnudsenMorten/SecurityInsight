@@ -1,5 +1,6 @@
 id:        MicrosoftTeamsRooms
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Teams Rooms'
 category:  'Collaboration'

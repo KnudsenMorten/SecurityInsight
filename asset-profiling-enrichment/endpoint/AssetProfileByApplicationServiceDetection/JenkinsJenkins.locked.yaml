@@ -1,5 +1,6 @@
 id:        JenkinsJenkins
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Jenkins'
 category:  'Build/CI'

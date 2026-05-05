@@ -1,5 +1,6 @@
 id:        MicrosoftKeyManagementServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Key Management Service Host'
 category:  'Licensing/Crypto'

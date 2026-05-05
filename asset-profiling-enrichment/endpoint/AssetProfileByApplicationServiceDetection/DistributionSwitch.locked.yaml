@@ -1,5 +1,6 @@
 id:        DistributionSwitch
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Distribution Switch'
 category:  'Network Equipment'

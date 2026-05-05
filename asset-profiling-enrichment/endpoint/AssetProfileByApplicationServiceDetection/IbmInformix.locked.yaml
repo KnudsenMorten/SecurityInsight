@@ -1,5 +1,6 @@
 id:        IbmInformix
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Informix'
 category:  'Database'

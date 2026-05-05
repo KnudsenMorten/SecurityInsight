@@ -1,5 +1,6 @@
 id:        MicrosoftEndpointConfigurationManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Endpoint Configuration Manager Console'
 category:  'Endpoint Mgmt'

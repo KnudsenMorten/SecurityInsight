@@ -1,5 +1,6 @@
 id:        IvantiEndpointManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Ivanti Endpoint Manager'
 category:  'Endpoint Mgmt'

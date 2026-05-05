@@ -1,5 +1,6 @@
 id:        MicrosoftSecurityComplianceToolkit
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Security Compliance Toolkit'
 category:  'Compliance'

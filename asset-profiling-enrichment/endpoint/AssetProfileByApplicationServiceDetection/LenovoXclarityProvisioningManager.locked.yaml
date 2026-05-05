@@ -1,5 +1,6 @@
 id:        LenovoXclarityProvisioningManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Lenovo XClarity Provisioning Manager'
 category:  'Hardware Mgmt'

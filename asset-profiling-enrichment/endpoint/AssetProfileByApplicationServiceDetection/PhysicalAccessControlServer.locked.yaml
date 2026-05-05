@@ -1,5 +1,6 @@
 id:        PhysicalAccessControlServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Physical Access Control Server'
 category:  'Server Roles'

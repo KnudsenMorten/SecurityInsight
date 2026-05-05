@@ -1,5 +1,6 @@
 id:        IPCameraIsolatedVLANNoDomainIntegration
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IP Camera (Isolated VLAN, No Domain Integration)'
 category:  'IoT / OT'

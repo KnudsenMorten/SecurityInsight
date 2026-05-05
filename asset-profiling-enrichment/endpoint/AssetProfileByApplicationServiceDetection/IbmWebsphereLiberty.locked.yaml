@@ -1,5 +1,6 @@
 id:        IbmWebsphereLiberty
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM WebSphere Liberty'
 category:  'App Server'

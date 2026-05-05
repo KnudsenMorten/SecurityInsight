@@ -1,5 +1,6 @@
 id:        QualysScannerAppliance
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Qualys Scanner Appliance'
 category:  'Vulnerability Mgmt'

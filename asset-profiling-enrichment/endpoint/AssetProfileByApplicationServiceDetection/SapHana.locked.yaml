@@ -1,5 +1,6 @@
 id:        SapHana
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SAP HANA Server'
 category:  'Database'

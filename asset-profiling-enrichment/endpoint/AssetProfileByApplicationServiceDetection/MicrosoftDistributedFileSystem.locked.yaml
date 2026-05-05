@@ -1,5 +1,6 @@
 id:        MicrosoftDistributedFileSystem
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Distributed File System'
 category:  'File Storage'

@@ -1,5 +1,6 @@
 id:        MicrosoftExchangeMailbox
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Exchange Mailbox Role'
 category:  'Mail'

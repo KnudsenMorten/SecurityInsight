@@ -1,5 +1,6 @@
 id:        LoadBalancerHandlingAuthTraffic
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Load Balancer (Handling Auth Traffic)'
 category:  'Network Equipment'

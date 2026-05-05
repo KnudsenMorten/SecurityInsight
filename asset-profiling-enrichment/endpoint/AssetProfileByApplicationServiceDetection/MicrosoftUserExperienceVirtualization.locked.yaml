@@ -1,5 +1,6 @@
 id:        MicrosoftUserExperienceVirtualization
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft User Experience Virtualization'
 category:  'Profile Mgmt'

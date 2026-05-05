@@ -1,5 +1,6 @@
 id:        IbmSametimeServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Sametime Server'
 category:  'Collaboration'

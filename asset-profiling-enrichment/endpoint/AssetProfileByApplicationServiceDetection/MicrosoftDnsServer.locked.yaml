@@ -1,5 +1,6 @@
 id:        MicrosoftDnsServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft DNS Server'
 category:  'Network'

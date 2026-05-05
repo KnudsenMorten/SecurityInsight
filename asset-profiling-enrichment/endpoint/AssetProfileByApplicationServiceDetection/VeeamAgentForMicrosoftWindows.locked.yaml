@@ -1,5 +1,6 @@
 id:        VeeamAgentForMicrosoftWindows
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Veeam Agent for Microsoft Windows'
 category:  'Backup'

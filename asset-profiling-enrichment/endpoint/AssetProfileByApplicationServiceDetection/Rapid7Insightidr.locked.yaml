@@ -1,5 +1,6 @@
 id:        Rapid7Insightidr
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Rapid7 InsightIDR'
 category:  'SIEM'

@@ -1,5 +1,6 @@
 id:        MicrosoftSqlServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft SQL Server 2022'
 category:  'Database'

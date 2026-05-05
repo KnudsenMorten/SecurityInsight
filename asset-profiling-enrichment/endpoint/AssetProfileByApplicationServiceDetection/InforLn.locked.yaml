@@ -1,5 +1,6 @@
 id:        InforLn
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Infor LN'
 category:  'ERP'

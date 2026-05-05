@@ -1,5 +1,6 @@
 id:        MicrosoftSystemCenter
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft System Center 2022'
 category:  'Mgmt Suite'

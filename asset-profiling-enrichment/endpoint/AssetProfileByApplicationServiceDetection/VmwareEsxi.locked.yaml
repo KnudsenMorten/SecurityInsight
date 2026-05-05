@@ -1,5 +1,6 @@
 id:        VmwareEsxi
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware ESXi'
 category:  'Virtualization'

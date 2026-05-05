@@ -1,5 +1,6 @@
 id:        FortinetFortimanager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Fortinet FortiManager'
 category:  'Firewall Mgmt'

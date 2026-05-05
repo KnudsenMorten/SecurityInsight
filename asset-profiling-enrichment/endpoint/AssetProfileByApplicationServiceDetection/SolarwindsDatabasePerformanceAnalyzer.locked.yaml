@@ -1,5 +1,6 @@
 id:        SolarwindsDatabasePerformanceAnalyzer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SolarWinds Database Performance Analyzer'
 category:  'Monitoring'

@@ -1,5 +1,6 @@
 id:        QlikSense
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Qlik Sense Enterprise'
 category:  'BI'

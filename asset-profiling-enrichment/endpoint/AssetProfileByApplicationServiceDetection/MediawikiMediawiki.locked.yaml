@@ -1,5 +1,6 @@
 id:        MediawikiMediawiki
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'MediaWiki'
 category:  'Wiki'

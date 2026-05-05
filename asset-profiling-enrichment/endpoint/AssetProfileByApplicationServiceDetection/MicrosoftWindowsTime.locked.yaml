@@ -1,5 +1,6 @@
 id:        MicrosoftWindowsTime
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Windows Time Service'
 category:  'Time Sync'

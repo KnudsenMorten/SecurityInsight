@@ -1,5 +1,6 @@
 id:        DigicertPkiPlatform
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'DigiCert PKI Platform'
 category:  'PKI'

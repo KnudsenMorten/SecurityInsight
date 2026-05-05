@@ -1,5 +1,6 @@
 id:        IndustrialSensorReadOnlyNoControlPlaneAccess
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Industrial Sensor (Read-Only, No Control Plane Access)'
 category:  'IoT / OT'

@@ -1,5 +1,6 @@
 id:        CohesityDataprotect
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cohesity DataProtect'
 category:  'Backup'

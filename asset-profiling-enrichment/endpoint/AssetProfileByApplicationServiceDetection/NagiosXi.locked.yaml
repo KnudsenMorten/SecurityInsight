@@ -1,5 +1,6 @@
 id:        NagiosXi
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Nagios Core'
 category:  'Monitoring'

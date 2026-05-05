@@ -1,5 +1,6 @@
 id:        DHCPServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'DHCP Server'
 category:  'Server Roles'

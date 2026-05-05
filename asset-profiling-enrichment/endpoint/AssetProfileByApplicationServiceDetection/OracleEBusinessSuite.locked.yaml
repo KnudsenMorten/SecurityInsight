@@ -1,5 +1,6 @@
 id:        OracleEBusinessSuite
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Oracle E-Business Suite'
 category:  'ERP'

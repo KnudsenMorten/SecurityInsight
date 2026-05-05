@@ -1,5 +1,6 @@
 id:        JenkinsAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Jenkins Agent'
 category:  'Build/CI'

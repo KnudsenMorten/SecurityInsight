@@ -1,5 +1,6 @@
 id:        FreshworksDiscoveryProbe
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Freshservice Discovery Probe'
 category:  'ITSM'

@@ -1,5 +1,6 @@
 id:        SolarwindsNetworkPerformanceMonitor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SolarWinds Network Performance Monitor'
 category:  'Monitoring'

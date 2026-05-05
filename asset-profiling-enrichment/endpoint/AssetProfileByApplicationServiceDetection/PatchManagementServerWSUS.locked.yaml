@@ -1,5 +1,6 @@
 id:        PatchManagementServerWSUS
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Patch Management Server (WSUS)'
 category:  'Management'

@@ -1,5 +1,6 @@
 id:        MicrosoftSqlServerReportingServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft SQL Server Reporting Services'
 category:  'Database'

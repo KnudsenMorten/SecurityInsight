@@ -1,5 +1,6 @@
 id:        JoomlaJoomla
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Joomla'
 category:  'CMS'

@@ -1,5 +1,6 @@
 id:        NginxNginxPlus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'NGINX Plus'
 category:  'Web Server'

@@ -1,5 +1,6 @@
 id:        MicrosoftSqlServerAnalysisServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft SQL Server Analysis Services'
 category:  'Database'

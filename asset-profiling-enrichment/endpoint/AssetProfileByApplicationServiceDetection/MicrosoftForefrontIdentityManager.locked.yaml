@@ -1,5 +1,6 @@
 id:        MicrosoftForefrontIdentityManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Forefront Identity Manager 2010'
 category:  'Identity'

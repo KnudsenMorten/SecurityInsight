@@ -1,5 +1,6 @@
 id:        DevOpsCICDBuildAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'DevOps / CI-CD Build Agent'
 category:  'Management'

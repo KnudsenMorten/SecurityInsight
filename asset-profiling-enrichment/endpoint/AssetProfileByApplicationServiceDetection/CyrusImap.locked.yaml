@@ -1,5 +1,6 @@
 id:        CyrusImap
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cyrus IMAP'
 category:  'Mail'

@@ -1,5 +1,6 @@
 id:        CheckpointSmartconsole
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Check Point SmartConsole'
 category:  'Firewall Mgmt'

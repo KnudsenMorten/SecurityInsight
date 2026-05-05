@@ -1,5 +1,6 @@
 id:        QuestActiveRoles
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Quest Active Roles'
 category:  'Identity'

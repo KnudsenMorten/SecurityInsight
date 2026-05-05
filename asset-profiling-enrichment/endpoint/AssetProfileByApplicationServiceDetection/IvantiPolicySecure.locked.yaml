@@ -1,5 +1,6 @@
 id:        IvantiPolicySecure
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Ivanti Policy Secure'
 category:  'NAC'

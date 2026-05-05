@@ -1,5 +1,6 @@
 id:        IbmSpectrumProtect
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Spectrum Protect'
 category:  'Backup'

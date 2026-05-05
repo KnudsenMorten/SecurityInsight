@@ -1,5 +1,6 @@
 id:        SemperisDirectoryServicesProtector
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Semperis Directory Services Protector'
 category:  'Identity Backup'

@@ -1,5 +1,6 @@
 id:        LenovoXclarityAdministrator
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Lenovo XClarity Administrator'
 category:  'Hardware Mgmt'

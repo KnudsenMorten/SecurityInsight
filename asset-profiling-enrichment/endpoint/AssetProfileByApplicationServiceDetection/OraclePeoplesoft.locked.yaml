@@ -1,5 +1,6 @@
 id:        OraclePeoplesoft
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Oracle PeopleSoft'
 category:  'ERP'

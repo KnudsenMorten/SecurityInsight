@@ -1,5 +1,6 @@
 id:        ApacheZookeeper
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache ZooKeeper'
 category:  'Coordination'

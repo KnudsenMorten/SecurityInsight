@@ -1,5 +1,6 @@
 id:        MicrosoftLaps
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft LAPS'
 category:  'Identity'

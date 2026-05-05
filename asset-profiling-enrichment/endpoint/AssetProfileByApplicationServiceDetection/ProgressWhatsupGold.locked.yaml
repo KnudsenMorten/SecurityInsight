@@ -1,5 +1,6 @@
 id:        ProgressWhatsupGold
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'WhatsUp Gold'
 category:  'Monitoring'

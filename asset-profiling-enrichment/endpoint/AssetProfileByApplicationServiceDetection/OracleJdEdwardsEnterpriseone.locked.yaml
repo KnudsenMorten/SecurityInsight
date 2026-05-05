@@ -1,5 +1,6 @@
 id:        OracleJdEdwardsEnterpriseone
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Oracle JD Edwards EnterpriseOne'
 category:  'ERP'

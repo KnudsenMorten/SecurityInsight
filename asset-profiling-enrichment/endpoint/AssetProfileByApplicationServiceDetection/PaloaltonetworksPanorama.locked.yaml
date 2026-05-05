@@ -1,5 +1,6 @@
 id:        PaloaltonetworksPanorama
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Palo Alto Networks Panorama'
 category:  'Firewall Mgmt'

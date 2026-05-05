@@ -1,5 +1,6 @@
 id:        EntraConnectADConnectServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Entra Connect / AD Connect Server'
 category:  'Server Roles'

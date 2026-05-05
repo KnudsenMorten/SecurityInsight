@@ -1,5 +1,6 @@
 id:        PingcastlePingcastle
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'PingCastle'
 category:  'Identity Security'

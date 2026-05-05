@@ -1,5 +1,6 @@
 id:        JetbrainsTeamcityAgent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'TeamCity Build Agent'
 category:  'Build/CI'

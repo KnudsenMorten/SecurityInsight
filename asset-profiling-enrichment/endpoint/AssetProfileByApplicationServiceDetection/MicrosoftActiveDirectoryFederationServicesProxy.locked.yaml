@@ -1,5 +1,6 @@
 id:        MicrosoftActiveDirectoryFederationServicesProxy
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Active Directory Federation Services Proxy'
 category:  'Identity'

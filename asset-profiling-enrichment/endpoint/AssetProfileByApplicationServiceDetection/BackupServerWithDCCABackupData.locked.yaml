@@ -1,5 +1,6 @@
 id:        BackupServerWithDCCABackupData
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Backup Server with DC/CA Backup Data'
 category:  'Management'

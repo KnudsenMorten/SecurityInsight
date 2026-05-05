@@ -1,5 +1,6 @@
 id:        JetbrainsTeamcity
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'TeamCity Server'
 category:  'Build/CI'

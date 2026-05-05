@@ -1,5 +1,6 @@
 id:        ApacheSpark
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache Spark'
 category:  'Analytics'

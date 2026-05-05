@@ -1,5 +1,6 @@
 id:        IvantiPatchForWindows
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Ivanti Patch for Windows'
 category:  'Patch Mgmt'

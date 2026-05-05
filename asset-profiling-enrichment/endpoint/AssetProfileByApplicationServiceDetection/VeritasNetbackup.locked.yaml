@@ -1,5 +1,6 @@
 id:        VeritasNetbackup
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Veritas NetBackup Server'
 category:  'Backup'

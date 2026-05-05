@@ -1,5 +1,6 @@
 id:        CoreRouterBGPMPLSBackbone
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Core Router (BGP, MPLS Backbone)'
 category:  'Network Equipment'

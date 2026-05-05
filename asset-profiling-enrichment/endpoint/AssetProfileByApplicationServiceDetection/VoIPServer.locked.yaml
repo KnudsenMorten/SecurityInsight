@@ -1,5 +1,6 @@
 id:        VoIPServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VoIP Server'
 category:  'Server Roles'

@@ -1,5 +1,6 @@
 id:        GitlabRunner
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'GitLab Runner'
 category:  'Build/CI'

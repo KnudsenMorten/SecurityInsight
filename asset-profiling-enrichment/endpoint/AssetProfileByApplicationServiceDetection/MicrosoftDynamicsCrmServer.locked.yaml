@@ -1,5 +1,6 @@
 id:        MicrosoftDynamicsCrmServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Dynamics CRM Server'
 category:  'CRM'

@@ -1,5 +1,6 @@
 id:        WirelessAccessPointManaged
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Wireless Access Point (Managed)'
 category:  'Network Equipment'

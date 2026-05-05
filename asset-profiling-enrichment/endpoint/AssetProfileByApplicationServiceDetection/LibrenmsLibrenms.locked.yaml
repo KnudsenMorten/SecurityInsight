@@ -1,5 +1,6 @@
 id:        LibrenmsLibrenms
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'LibreNMS'
 category:  'Monitoring'

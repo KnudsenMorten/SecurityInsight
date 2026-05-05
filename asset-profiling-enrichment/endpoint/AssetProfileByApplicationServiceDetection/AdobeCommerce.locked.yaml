@@ -1,5 +1,6 @@
 id:        AdobeCommerce
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Magento Commerce'
 category:  'E-commerce'

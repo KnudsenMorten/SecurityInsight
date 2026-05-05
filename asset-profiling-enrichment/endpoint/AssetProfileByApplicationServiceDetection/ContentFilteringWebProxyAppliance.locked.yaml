@@ -1,5 +1,6 @@
 id:        ContentFilteringWebProxyAppliance
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Content Filtering / Web Proxy Appliance'
 category:  'Network Equipment'

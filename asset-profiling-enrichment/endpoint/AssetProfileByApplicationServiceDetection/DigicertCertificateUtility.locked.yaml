@@ -1,5 +1,6 @@
 id:        DigicertCertificateUtility
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'DigiCert CertCentral'
 category:  'PKI'

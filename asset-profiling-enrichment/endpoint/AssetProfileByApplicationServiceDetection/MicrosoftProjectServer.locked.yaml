@@ -1,5 +1,6 @@
 id:        MicrosoftProjectServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Project Server'
 category:  'Project Mgmt'

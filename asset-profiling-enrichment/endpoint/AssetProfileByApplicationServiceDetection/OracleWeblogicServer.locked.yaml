@@ -1,5 +1,6 @@
 id:        OracleWeblogicServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Oracle WebLogic Server'
 category:  'App Server'

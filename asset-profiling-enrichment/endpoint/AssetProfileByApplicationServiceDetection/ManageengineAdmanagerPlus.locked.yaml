@@ -1,5 +1,6 @@
 id:        ManageengineAdmanagerPlus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ManageEngine ADManager Plus'
 category:  'Identity Mgmt'

@@ -1,5 +1,6 @@
 id:        JscapeMftServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'JSCAPE MFT Server'
 category:  'MFT'

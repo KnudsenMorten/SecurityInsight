@@ -1,5 +1,6 @@
 id:        MicrosoftRemoteDesktopSessionHost
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Remote Desktop Session Host'
 category:  'Remote Access'

@@ -1,5 +1,6 @@
 id:        MicrosoftFimCertificateManagement
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft FIM Certificate Management'
 category:  'PKI'

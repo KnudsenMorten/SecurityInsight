@@ -1,5 +1,6 @@
 id:        SolarwindsOrionPlatform
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SolarWinds Orion Platform'
 category:  'Monitoring'

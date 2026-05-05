@@ -1,5 +1,6 @@
 id:        ADCertificateServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'AD CS Server (Certificate Authority)'
 category:  'Server Roles'

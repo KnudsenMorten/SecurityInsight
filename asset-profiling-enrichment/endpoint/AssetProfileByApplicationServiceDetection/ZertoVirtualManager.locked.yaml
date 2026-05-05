@@ -1,5 +1,6 @@
 id:        ZertoVirtualManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Zerto Virtual Manager'
 category:  'DR/Replication'

@@ -1,5 +1,6 @@
 id:        HpeNimbleConnectionManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Nimble Storage Connection Manager'
 category:  'Storage'

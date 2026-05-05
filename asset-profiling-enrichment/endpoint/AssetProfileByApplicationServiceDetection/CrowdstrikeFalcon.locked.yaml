@@ -1,5 +1,6 @@
 id:        CrowdstrikeFalcon
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'CrowdStrike Falcon'
 category:  'EDR'

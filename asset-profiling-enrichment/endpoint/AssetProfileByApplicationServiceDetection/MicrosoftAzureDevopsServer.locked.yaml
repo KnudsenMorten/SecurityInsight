@@ -1,5 +1,6 @@
 id:        MicrosoftAzureDevopsServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Azure DevOps Server'
 category:  'Build/CI'

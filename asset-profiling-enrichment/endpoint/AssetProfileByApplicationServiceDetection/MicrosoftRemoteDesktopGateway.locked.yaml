@@ -1,5 +1,6 @@
 id:        MicrosoftRemoteDesktopGateway
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Remote Desktop Gateway'
 category:  'Remote Access'

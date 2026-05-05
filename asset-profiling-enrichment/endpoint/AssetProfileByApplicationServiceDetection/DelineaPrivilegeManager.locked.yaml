@@ -1,5 +1,6 @@
 id:        DelineaPrivilegeManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Delinea Privilege Manager'
 category:  'PAM'

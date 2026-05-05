@@ -1,5 +1,6 @@
 id:        MongodbMongodb
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'MongoDB Server'
 category:  'Database'

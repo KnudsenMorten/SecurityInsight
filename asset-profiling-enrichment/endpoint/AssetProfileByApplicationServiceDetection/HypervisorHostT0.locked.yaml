@@ -1,5 +1,6 @@
 id:        HypervisorHostT0
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Hypervisor Host (Tier 0 guest VMs)'
 category:  'Server Roles'

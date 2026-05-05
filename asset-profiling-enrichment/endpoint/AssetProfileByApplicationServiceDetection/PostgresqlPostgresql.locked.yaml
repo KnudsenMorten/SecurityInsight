@@ -1,5 +1,6 @@
 id:        PostgresqlPostgresql
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'PostgreSQL'
 category:  'Database'

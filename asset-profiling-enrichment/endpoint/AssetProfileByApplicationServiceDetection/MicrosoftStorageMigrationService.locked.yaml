@@ -1,5 +1,6 @@
 id:        MicrosoftStorageMigrationService
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Storage Migration Service'
 category:  'Storage'

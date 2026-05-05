@@ -1,5 +1,6 @@
 id:        MicrosoftWindowsServerUpdateServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Windows Server Update Services'
 category:  'Patch Mgmt'

@@ -1,5 +1,6 @@
 id:        SplunkSoar
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Splunk SOAR'
 category:  'SOAR'

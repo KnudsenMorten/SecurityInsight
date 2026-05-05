@@ -1,5 +1,6 @@
 id:        FortraGoanywhereMft
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'GoAnywhere MFT'
 category:  'MFT'

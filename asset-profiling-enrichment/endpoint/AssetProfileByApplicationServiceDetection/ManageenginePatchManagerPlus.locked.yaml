@@ -1,5 +1,6 @@
 id:        ManageenginePatchManagerPlus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ManageEngine Patch Manager Plus'
 category:  'Patch Mgmt'

@@ -1,5 +1,6 @@
 id:        GreenboneSecurityManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Greenbone Security Manager'
 category:  'Vulnerability Mgmt'

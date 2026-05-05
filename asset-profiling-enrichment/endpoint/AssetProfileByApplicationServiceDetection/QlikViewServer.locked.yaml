@@ -1,5 +1,6 @@
 id:        QlikViewServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'QlikView Server'
 category:  'BI'

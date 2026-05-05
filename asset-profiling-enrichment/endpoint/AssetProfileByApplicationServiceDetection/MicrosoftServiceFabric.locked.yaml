@@ -1,5 +1,6 @@
 id:        MicrosoftServiceFabric
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Service Fabric'
 category:  'Containers/Orchestration'

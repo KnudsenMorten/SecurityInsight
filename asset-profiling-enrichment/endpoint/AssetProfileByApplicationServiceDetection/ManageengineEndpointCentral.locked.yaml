@@ -1,5 +1,6 @@
 id:        ManageengineEndpointCentral
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ManageEngine Endpoint Central'
 category:  'Endpoint Mgmt'

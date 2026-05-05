@@ -1,5 +1,6 @@
 id:        ApacheHadoop
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache Hadoop'
 category:  'Analytics'

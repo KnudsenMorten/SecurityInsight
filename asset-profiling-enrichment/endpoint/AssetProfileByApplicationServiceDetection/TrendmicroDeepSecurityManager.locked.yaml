@@ -1,5 +1,6 @@
 id:        TrendmicroDeepSecurityManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Trend Micro Deep Security Manager'
 category:  'EDR/AV'

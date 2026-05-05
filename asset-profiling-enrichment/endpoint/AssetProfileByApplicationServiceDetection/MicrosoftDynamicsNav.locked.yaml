@@ -1,5 +1,6 @@
 id:        MicrosoftDynamicsNav
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Dynamics NAV'
 category:  'ERP'

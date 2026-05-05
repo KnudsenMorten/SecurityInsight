@@ -1,5 +1,6 @@
 id:        DellIdracServiceModule
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Dell iDRAC Service Module'
 category:  'Hardware Mgmt'

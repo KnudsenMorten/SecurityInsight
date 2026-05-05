@@ -1,5 +1,6 @@
 id:        HpeSmartUpdateManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HPE iLO Service Pack'
 category:  'Hardware Mgmt'

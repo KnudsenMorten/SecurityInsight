@@ -1,5 +1,6 @@
 id:        VmwareViewComposer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware View Composer'
 category:  'VDI'

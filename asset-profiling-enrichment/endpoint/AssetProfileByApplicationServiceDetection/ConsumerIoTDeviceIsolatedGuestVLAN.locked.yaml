@@ -1,5 +1,6 @@
 id:        ConsumerIoTDeviceIsolatedGuestVLAN
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Consumer IoT Device (Isolated Guest VLAN)'
 category:  'IoT / OT'

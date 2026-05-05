@@ -1,5 +1,6 @@
 id:        VmwareSiteRecoveryManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware Site Recovery Manager'
 category:  'DR/Replication'

@@ -1,5 +1,6 @@
 id:        CiscoSecureAccessByDuo
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cisco Secure Access by Duo'
 category:  'Authentication'

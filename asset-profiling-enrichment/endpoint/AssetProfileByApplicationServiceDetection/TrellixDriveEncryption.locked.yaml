@@ -1,5 +1,6 @@
 id:        TrellixDriveEncryption
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'McAfee Drive Encryption'
 category:  'Encryption'

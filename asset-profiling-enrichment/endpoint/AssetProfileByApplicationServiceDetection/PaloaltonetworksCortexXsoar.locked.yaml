@@ -1,5 +1,6 @@
 id:        PaloaltonetworksCortexXsoar
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Palo Alto Networks Cortex XSOAR'
 category:  'SOAR'

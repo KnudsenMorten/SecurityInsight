@@ -1,5 +1,6 @@
 id:        AtlassianBitbucketServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Atlassian Bitbucket Server'
 category:  'SCM'

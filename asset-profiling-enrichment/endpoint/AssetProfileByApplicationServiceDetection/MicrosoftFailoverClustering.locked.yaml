@@ -1,5 +1,6 @@
 id:        MicrosoftFailoverClustering
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Failover Clustering'
 category:  'HA/Cluster'

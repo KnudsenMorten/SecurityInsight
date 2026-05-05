@@ -1,5 +1,6 @@
 id:        BmcRemedy
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BMC Remedy'
 category:  'ITSM'

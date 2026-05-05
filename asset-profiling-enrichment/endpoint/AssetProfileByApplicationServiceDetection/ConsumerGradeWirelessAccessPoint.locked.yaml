@@ -1,5 +1,6 @@
 id:        ConsumerGradeWirelessAccessPoint
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Consumer-Grade Wireless Access Point'
 category:  'Network Equipment'

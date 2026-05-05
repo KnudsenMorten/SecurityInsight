@@ -1,5 +1,6 @@
 id:        ElasticMarvel
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Elasticsearch Marvel'
 category:  'SIEM/Log'

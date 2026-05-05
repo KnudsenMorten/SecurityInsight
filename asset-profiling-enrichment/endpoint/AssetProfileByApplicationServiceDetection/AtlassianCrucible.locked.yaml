@@ -1,5 +1,6 @@
 id:        AtlassianCrucible
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Atlassian Crucible'
 category:  'SCM'

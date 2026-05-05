@@ -1,5 +1,6 @@
 id:        ZendeskConnect
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Zendesk Connect'
 category:  'ITSM'

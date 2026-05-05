@@ -1,5 +1,6 @@
 id:        MicrosoftAzureMigrateAppliance
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Azure Migrate Appliance'
 category:  'Cloud Migration'

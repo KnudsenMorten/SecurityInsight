@@ -1,5 +1,6 @@
 id:        CheckpointR80SecurityManagement
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Check Point R80 Security Management'
 category:  'Firewall Mgmt'

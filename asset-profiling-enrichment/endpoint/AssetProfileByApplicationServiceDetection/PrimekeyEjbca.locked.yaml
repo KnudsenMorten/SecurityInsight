@@ -1,5 +1,6 @@
 id:        PrimekeyEjbca
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'EJBCA Enterprise'
 category:  'PKI'

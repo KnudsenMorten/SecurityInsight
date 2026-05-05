@@ -1,5 +1,6 @@
 id:        EclipseJetty
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Eclipse Jetty'
 category:  'App Server'

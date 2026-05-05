@@ -1,5 +1,6 @@
 id:        ManageenginePam360
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'ManageEngine PAM360'
 category:  'PAM'

@@ -1,5 +1,6 @@
 id:        SplunkStream
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Splunk Stream'
 category:  'SIEM'

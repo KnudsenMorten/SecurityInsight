@@ -1,5 +1,6 @@
 id:        PKISubordinateCAServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'PKI Subordinate CA Server'
 category:  'Server Roles'

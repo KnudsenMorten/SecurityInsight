@@ -1,5 +1,6 @@
 id:        MicrosoftRemoteDesktopConnectionBroker
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Remote Desktop Connection Broker'
 category:  'Remote Access'

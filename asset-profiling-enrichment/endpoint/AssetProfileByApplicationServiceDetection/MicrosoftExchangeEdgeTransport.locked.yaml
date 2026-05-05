@@ -1,5 +1,6 @@
 id:        MicrosoftExchangeEdgeTransport
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Exchange Edge Transport'
 category:  'Mail'

@@ -1,5 +1,6 @@
 id:        TeradataDatabase
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Teradata Database'
 category:  'Database'

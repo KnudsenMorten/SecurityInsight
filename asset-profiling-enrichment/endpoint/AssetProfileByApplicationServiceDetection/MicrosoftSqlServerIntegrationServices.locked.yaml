@@ -1,5 +1,6 @@
 id:        MicrosoftSqlServerIntegrationServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft SQL Server Integration Services'
 category:  'Database'

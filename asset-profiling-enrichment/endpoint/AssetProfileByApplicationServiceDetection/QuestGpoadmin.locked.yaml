@@ -1,5 +1,6 @@
 id:        QuestGpoadmin
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Quest GPOADmin'
 category:  'Identity'

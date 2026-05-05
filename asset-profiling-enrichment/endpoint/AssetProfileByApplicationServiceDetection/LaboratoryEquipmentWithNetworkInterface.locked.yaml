@@ -1,5 +1,6 @@
 id:        LaboratoryEquipmentWithNetworkInterface
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Laboratory Equipment with Network Interface'
 category:  'IoT / OT'

@@ -1,5 +1,6 @@
 id:        MicrosoftInternetInformationServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Internet Information Services'
 category:  'Web Server'

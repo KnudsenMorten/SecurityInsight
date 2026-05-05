@@ -1,5 +1,6 @@
 id:        NetwrixAccountLockoutExaminer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Netwrix Account Lockout Examiner'
 category:  'Identity'

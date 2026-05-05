@@ -1,5 +1,6 @@
 id:        AtlassianCrowd
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Atlassian Crowd'
 category:  'Identity'

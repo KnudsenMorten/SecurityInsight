@@ -1,5 +1,6 @@
 id:        TaniumServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Tanium Server'
 category:  'Endpoint Mgmt'

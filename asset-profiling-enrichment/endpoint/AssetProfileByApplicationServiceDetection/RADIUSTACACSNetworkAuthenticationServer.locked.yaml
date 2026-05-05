@@ -1,5 +1,6 @@
 id:        RADIUSTACACSNetworkAuthenticationServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'RADIUS / TACACS+ Network Authentication Server'
 category:  'Network Equipment'

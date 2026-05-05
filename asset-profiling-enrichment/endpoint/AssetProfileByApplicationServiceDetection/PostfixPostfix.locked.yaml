@@ -1,5 +1,6 @@
 id:        PostfixPostfix
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Postfix'
 category:  'Mail'

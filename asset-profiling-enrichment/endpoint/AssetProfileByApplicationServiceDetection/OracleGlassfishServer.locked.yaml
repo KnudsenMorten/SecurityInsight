@@ -1,5 +1,6 @@
 id:        OracleGlassfishServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'GlassFish Server'
 category:  'App Server'

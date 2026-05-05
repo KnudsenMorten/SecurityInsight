@@ -1,5 +1,6 @@
 id:        InfobloxNios
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Infoblox NIOS'
 category:  'Network'

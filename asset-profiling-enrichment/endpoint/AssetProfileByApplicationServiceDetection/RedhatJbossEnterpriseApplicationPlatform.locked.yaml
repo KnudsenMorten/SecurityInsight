@@ -1,5 +1,6 @@
 id:        RedhatJbossEnterpriseApplicationPlatform
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'JBoss Enterprise Application Platform'
 category:  'App Server'

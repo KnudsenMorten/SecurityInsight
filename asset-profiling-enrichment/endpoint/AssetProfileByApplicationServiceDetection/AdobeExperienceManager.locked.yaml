@@ -1,5 +1,6 @@
 id:        AdobeExperienceManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Adobe Experience Manager'
 category:  'CMS'

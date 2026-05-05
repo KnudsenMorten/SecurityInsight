@@ -1,5 +1,6 @@
 id:        HmailserverHmailserver
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'hMailServer'
 category:  'Mail'

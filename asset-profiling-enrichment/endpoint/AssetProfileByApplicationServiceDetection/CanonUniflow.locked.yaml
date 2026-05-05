@@ -1,5 +1,6 @@
 id:        CanonUniflow
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'uniFLOW'
 category:  'Print'

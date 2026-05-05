@@ -1,5 +1,6 @@
 id:        OTICSControllerWithDirectNetworkAdjacencyToTier0Systems
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'OT / ICS Controller with Direct Network Adjacency to Tier 0 Systems'
 category:  'IoT / OT'

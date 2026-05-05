@@ -1,5 +1,6 @@
 id:        IbmDb2
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'IBM Db2'
 category:  'Database'

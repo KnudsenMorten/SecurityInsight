@@ -1,5 +1,6 @@
 id:        MicrosoftSharepointFoundation
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft SharePoint Foundation'
 category:  'Collaboration'

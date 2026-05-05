@@ -1,5 +1,6 @@
 id:        APIGatewayServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'API Gateway Server'
 category:  'Server Roles'

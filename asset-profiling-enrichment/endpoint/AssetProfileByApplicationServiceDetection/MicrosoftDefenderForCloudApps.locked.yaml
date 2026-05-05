@@ -1,5 +1,6 @@
 id:        MicrosoftDefenderForCloudApps
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Defender for Cloud Apps'
 category:  'CASB'

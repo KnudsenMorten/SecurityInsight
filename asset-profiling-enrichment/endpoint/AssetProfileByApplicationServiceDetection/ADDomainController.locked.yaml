@@ -1,5 +1,6 @@
 id:        ADDomainController
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Domain Controller'
 category:  'Server Roles'

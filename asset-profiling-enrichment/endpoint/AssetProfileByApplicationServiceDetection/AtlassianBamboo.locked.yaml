@@ -1,5 +1,6 @@
 id:        AtlassianBamboo
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Atlassian Bamboo'
 category:  'Build/CI'

@@ -1,5 +1,6 @@
 id:        BroadcomCriticalSystemProtection
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Symantec Critical System Protection'
 category:  'EDR/AV'

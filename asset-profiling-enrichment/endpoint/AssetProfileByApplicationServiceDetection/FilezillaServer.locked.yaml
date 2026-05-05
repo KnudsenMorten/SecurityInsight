@@ -1,5 +1,6 @@
 id:        FilezillaServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'FileZilla Server'
 category:  'FTP'

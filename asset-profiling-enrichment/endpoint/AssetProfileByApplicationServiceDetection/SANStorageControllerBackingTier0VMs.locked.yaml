@@ -1,5 +1,6 @@
 id:        SANStorageControllerBackingTier0VMs
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SAN / Storage Controller Backing Tier 0 VMs'
 category:  'Infrastructure'

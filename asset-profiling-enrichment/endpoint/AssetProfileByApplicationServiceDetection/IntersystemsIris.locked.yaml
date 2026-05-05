@@ -1,5 +1,6 @@
 id:        IntersystemsIris
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'InterSystems Cache'
 category:  'Database'

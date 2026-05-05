@@ -1,5 +1,6 @@
 id:        NetworkMonitoringApplianceReadOnly
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Network Monitoring Appliance (Read-Only)'
 category:  'Network Equipment'

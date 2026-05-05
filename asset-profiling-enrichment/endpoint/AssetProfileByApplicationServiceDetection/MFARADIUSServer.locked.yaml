@@ -1,5 +1,6 @@
 id:        MFARADIUSServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'MFA / RADIUS Server'
 category:  'Server Roles'

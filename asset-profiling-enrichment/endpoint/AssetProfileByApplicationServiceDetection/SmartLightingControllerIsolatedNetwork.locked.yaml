@@ -1,5 +1,6 @@
 id:        SmartLightingControllerIsolatedNetwork
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Smart Lighting Controller (Isolated Network)'
 category:  'IoT / OT'

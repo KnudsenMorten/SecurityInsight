@@ -1,5 +1,6 @@
 id:        NonNetworkedOrAirGappedSensor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Non-Networked or Air-Gapped Sensor'
 category:  'IoT / OT'

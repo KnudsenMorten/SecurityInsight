@@ -1,5 +1,6 @@
 id:        InternalWikiIntranetServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Internal Wiki / Intranet Server'
 category:  'Server Roles'

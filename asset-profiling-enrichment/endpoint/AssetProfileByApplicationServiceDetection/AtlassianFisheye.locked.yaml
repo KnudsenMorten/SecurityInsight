@@ -1,5 +1,6 @@
 id:        AtlassianFisheye
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Atlassian Fisheye'
 category:  'SCM'

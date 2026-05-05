@@ -1,5 +1,6 @@
 id:        CommvaultHyperscale
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Commvault HyperScale'
 category:  'Backup'

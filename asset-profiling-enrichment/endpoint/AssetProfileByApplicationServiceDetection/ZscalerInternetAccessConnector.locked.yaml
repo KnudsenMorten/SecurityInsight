@@ -1,5 +1,6 @@
 id:        ZscalerInternetAccessConnector
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Zscaler Internet Access Connector'
 category:  'ZTNA/Proxy'

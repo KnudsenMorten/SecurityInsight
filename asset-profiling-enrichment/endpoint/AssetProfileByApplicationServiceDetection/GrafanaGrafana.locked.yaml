@@ -1,5 +1,6 @@
 id:        GrafanaGrafana
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Grafana'
 category:  'Monitoring'

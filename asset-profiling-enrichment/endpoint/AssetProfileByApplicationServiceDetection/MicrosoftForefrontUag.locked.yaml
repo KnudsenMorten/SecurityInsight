@@ -1,5 +1,6 @@
 id:        MicrosoftForefrontUag
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Forefront Unified Access Gateway'
 category:  'Remote Access'

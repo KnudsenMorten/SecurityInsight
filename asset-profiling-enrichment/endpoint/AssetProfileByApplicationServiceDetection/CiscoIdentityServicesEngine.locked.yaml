@@ -1,5 +1,6 @@
 id:        CiscoIdentityServicesEngine
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cisco Identity Services Engine'
 category:  'NAC'

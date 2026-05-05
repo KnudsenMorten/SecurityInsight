@@ -1,5 +1,6 @@
 id:        MicrosoftSentinel
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Sentinel'
 category:  'SIEM'

@@ -1,5 +1,6 @@
 id:        DigitalSignagePlayerIsolatedReadOnlyContent
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Digital Signage Player (Isolated, Read-Only Content)'
 category:  'IoT / OT'

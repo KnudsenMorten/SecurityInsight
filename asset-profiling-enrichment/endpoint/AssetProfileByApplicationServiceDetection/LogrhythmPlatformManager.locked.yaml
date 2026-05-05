@@ -1,5 +1,6 @@
 id:        LogrhythmPlatformManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'LogRhythm Platform Manager'
 category:  'SIEM'

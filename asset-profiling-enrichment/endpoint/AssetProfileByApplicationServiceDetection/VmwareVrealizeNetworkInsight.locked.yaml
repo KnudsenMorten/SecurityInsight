@@ -1,5 +1,6 @@
 id:        VmwareVrealizeNetworkInsight
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware vRealize Network Insight'
 category:  'Network/SDN'

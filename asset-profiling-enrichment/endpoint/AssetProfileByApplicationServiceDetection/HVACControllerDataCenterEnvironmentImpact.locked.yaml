@@ -1,5 +1,6 @@
 id:        HVACControllerDataCenterEnvironmentImpact
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HVAC Controller (Data Center Environment Impact)'
 category:  'IoT / OT'

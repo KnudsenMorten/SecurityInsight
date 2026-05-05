@@ -1,5 +1,6 @@
 id:        MicrosoftNetworkPolicyServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Network Policy Server'
 category:  'Authentication'

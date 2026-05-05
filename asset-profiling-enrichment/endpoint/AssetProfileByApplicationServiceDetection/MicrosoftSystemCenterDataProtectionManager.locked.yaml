@@ -1,5 +1,6 @@
 id:        MicrosoftSystemCenterDataProtectionManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft System Center Data Protection Manager'
 category:  'Backup'

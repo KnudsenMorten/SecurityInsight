@@ -1,5 +1,6 @@
 id:        MicrosoftPowerBiReportServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Power BI Report Server'
 category:  'BI'

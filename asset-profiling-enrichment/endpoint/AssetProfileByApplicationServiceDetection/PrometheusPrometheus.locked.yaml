@@ -1,5 +1,6 @@
 id:        PrometheusPrometheus
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Prometheus'
 category:  'Monitoring'

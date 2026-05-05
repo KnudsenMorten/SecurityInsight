@@ -1,5 +1,6 @@
 id:        CyberarkVault
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'CyberArk Vault'
 category:  'PAM'

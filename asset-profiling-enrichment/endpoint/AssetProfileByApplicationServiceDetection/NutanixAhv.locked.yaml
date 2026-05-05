@@ -1,5 +1,6 @@
 id:        NutanixAhv
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Nutanix AHV'
 category:  'Virtualization'

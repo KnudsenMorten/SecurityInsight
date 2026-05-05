@@ -1,5 +1,6 @@
 id:        IvantiPulseConnectSecure
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Pulse Connect Secure Collaboration Suite'
 category:  'VPN'

@@ -1,5 +1,6 @@
 id:        ArcserveUdp
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Arcserve Backup'
 category:  'Backup'

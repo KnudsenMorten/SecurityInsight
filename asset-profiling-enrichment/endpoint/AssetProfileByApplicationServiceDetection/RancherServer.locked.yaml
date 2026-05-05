@@ -1,5 +1,6 @@
 id:        RancherServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Rancher Server'
 category:  'Containers'

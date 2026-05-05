@@ -1,5 +1,6 @@
 id:        MicrosoftActiveDirectoryLightweightDirectoryServices
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Active Directory Lightweight Directory Services'
 category:  'Identity'

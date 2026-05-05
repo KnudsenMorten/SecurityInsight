@@ -1,5 +1,6 @@
 id:        MirantisContainerRuntime
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Mirantis Container Runtime'
 category:  'Containers'

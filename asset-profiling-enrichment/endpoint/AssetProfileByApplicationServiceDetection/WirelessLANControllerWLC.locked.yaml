@@ -1,5 +1,6 @@
 id:        WirelessLANControllerWLC
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Wireless LAN Controller (WLC)'
 category:  'Network Equipment'

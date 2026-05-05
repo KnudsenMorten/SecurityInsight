@@ -1,5 +1,6 @@
 id:        CitrixLicenseServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix License Server'
 category:  'VDI'

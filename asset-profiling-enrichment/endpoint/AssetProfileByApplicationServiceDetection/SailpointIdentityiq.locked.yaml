@@ -1,5 +1,6 @@
 id:        SailpointIdentityiq
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SailPoint IdentityIQ'
 category:  'Identity Governance'

@@ -1,5 +1,6 @@
 id:        MicrosoftExchangeServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Exchange Server 2019'
 category:  'Mail'

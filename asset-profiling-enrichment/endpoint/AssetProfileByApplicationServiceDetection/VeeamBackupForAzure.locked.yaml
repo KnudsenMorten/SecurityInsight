@@ -1,5 +1,6 @@
 id:        VeeamBackupForAzure
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Veeam Backup for Azure'
 category:  'Backup'

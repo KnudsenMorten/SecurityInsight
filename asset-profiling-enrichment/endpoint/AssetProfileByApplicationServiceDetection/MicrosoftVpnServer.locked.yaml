@@ -1,5 +1,6 @@
 id:        MicrosoftVpnServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Routing and Remote Access Server'
 category:  'VPN'

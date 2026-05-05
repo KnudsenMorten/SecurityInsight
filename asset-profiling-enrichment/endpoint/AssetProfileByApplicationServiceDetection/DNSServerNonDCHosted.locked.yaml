@@ -1,5 +1,6 @@
 id:        DNSServerNonDCHosted
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'DNS Server (Non-DC Hosted)'
 category:  'Server Roles'

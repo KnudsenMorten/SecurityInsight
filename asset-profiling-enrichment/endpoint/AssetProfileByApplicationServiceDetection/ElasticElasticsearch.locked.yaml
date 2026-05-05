@@ -1,5 +1,6 @@
 id:        ElasticElasticsearch
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Elastic Stack'
 category:  'SIEM/Log'

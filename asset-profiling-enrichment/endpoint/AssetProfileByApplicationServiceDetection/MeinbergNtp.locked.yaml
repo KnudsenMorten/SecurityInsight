@@ -1,5 +1,6 @@
 id:        MeinbergNtp
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Meinberg NTP'
 category:  'Time Sync'

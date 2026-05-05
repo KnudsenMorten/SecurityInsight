@@ -1,5 +1,6 @@
 id:        KongGateway
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Kong Gateway'
 category:  'API Gateway'

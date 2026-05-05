@@ -1,5 +1,6 @@
 id:        NetwrixAuditor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Netwrix Auditor'
 category:  'Identity Audit'

@@ -1,5 +1,6 @@
 id:        NetworkMonitoringProbe
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Network Monitoring Probe'
 category:  'Management'

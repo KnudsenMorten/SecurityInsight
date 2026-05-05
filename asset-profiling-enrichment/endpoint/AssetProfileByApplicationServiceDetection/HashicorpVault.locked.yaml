@@ -1,5 +1,6 @@
 id:        HashicorpVault
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'HashiCorp Vault Enterprise'
 category:  'Secrets'

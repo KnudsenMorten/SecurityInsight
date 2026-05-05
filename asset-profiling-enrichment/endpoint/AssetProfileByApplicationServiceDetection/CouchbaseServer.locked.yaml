@@ -1,5 +1,6 @@
 id:        CouchbaseServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Couchbase Server'
 category:  'Database'

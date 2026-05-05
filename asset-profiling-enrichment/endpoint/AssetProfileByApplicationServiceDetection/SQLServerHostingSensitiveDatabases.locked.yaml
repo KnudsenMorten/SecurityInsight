@@ -1,5 +1,6 @@
 id:        SQLServerHostingSensitiveDatabases
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'SQL Server Hosting Sensitive Databases'
 category:  'Server Roles'

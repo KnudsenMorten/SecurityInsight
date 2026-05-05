@@ -1,5 +1,6 @@
 id:        SolarwindsServU
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Solarwinds Serv-U FTP Server'
 category:  'FTP'

@@ -1,5 +1,6 @@
 id:        VmwareNsxManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'VMware NSX Manager'
 category:  'Network/SDN'

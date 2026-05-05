@@ -1,5 +1,6 @@
 id:        EntrustNshield
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Entrust nShield Software'
 category:  'PKI/HSM'

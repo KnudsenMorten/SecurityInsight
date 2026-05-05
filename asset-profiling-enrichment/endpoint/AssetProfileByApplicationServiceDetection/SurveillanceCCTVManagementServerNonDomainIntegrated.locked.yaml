@@ -1,5 +1,6 @@
 id:        SurveillanceCCTVManagementServerNonDomainIntegrated
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Surveillance / CCTV Management Server (Non-Domain Integrated)'
 category:  'IoT / OT'

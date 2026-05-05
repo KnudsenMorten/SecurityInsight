@@ -1,5 +1,6 @@
 id:        MulesoftAnypointRuntime
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'MuleSoft Anypoint Runtime'
 category:  'Integration'

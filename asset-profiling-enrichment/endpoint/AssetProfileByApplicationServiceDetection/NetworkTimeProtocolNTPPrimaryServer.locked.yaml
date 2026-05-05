@@ -1,5 +1,6 @@
 id:        NetworkTimeProtocolNTPPrimaryServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Network Time Protocol (NTP) Primary Server'
 category:  'Network Equipment'

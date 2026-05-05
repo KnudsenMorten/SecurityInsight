@@ -1,5 +1,6 @@
 id:        HclBigfixPlatform
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'BigFix Platform'
 category:  'Endpoint Mgmt'

@@ -1,5 +1,6 @@
 id:        DockerEngine
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Docker Engine'
 category:  'Containers'

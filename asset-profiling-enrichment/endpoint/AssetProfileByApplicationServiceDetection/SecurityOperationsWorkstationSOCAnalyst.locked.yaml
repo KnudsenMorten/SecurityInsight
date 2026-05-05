@@ -1,5 +1,6 @@
 id:        SecurityOperationsWorkstationSOCAnalyst
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Security Operations Workstation (SOC Analyst)'
 category:  'Client Devices'

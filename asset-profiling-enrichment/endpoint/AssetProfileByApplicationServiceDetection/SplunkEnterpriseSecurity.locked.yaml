@@ -1,5 +1,6 @@
 id:        SplunkEnterpriseSecurity
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Splunk Enterprise Security'
 category:  'SIEM'

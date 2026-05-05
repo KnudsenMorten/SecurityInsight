@@ -1,5 +1,6 @@
 id:        WireguardWireguard
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'WireGuard'
 category:  'VPN'

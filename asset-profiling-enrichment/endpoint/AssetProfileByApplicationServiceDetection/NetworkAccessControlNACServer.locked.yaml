@@ -1,5 +1,6 @@
 id:        NetworkAccessControlNACServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Network Access Control (NAC) Server'
 category:  'Infrastructure'

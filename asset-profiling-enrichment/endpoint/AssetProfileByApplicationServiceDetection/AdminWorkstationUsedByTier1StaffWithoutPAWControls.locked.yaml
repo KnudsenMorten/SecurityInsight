@@ -1,5 +1,6 @@
 id:        AdminWorkstationUsedByTier1StaffWithoutPAWControls
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Admin Workstation Used by Tier 1 Staff Without PAW Controls'
 category:  'Management'

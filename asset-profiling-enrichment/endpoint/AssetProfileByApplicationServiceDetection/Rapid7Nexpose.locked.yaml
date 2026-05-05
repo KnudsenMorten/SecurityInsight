@@ -1,5 +1,6 @@
 id:        Rapid7Nexpose
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Rapid7 Nexpose'
 category:  'Vulnerability Mgmt'

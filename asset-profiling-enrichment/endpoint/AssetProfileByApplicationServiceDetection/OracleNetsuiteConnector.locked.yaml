@@ -1,5 +1,6 @@
 id:        OracleNetsuiteConnector
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'NetSuite Connector'
 category:  'ERP'

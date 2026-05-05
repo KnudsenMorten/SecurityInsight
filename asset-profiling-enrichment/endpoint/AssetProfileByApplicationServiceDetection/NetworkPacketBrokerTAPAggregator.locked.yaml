@@ -1,5 +1,6 @@
 id:        NetworkPacketBrokerTAPAggregator
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Network Packet Broker / TAP Aggregator'
 category:  'Network Equipment'

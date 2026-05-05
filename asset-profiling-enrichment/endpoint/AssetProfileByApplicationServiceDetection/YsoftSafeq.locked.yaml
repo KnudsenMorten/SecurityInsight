@@ -1,5 +1,6 @@
 id:        YsoftSafeq
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'YSoft SafeQ'
 category:  'Print'

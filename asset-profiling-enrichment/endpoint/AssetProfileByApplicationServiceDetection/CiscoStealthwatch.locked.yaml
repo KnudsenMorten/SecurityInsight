@@ -1,5 +1,6 @@
 id:        CiscoStealthwatch
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Cisco Stealthwatch'
 category:  'NDR'

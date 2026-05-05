@@ -1,5 +1,6 @@
 id:        HypervisorHostRunningTier1GuestVMs
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Hypervisor Host Running Tier 1 Guest VMs'
 category:  'Hypervisor'

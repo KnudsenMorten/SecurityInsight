@@ -1,5 +1,6 @@
 id:        ExchangeServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Exchange Server'
 category:  'Server Roles'

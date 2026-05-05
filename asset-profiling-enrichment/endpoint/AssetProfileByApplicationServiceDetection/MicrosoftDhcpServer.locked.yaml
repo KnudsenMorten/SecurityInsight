@@ -1,5 +1,6 @@
 id:        MicrosoftDhcpServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft DHCP Server'
 category:  'Network'

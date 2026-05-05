@@ -1,5 +1,6 @@
 id:        ApacheKafka
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Apache Kafka'
 category:  'Messaging'

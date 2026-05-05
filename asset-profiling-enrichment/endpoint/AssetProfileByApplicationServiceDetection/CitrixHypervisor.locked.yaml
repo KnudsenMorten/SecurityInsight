@@ -1,5 +1,6 @@
 id:        CitrixHypervisor
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Citrix Hypervisor'
 category:  'Virtualization'

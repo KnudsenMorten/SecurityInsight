@@ -1,5 +1,6 @@
 id:        ADFSProxyServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'AD FS Proxy Server'
 category:  'Server Roles'

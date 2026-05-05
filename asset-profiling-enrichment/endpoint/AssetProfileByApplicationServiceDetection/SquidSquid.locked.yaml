@@ -1,5 +1,6 @@
 id:        SquidSquid
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Squid Web Proxy'
 category:  'Proxy'

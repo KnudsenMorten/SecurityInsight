@@ -1,5 +1,6 @@
 id:        MicrosoftAzureMfaNpsExtension
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft Entra multifactor authentication NPS extension'
 category:  'Authentication'

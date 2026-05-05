@@ -1,5 +1,6 @@
 id:        MicrosoftSharepointServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Microsoft SharePoint Server 2019'
 category:  'Collaboration'

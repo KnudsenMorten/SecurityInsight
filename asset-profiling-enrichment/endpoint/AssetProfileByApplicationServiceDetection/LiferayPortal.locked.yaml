@@ -1,5 +1,6 @@
 id:        LiferayPortal
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Liferay Portal'
 category:  'Portal'

@@ -1,5 +1,6 @@
 id:        VeeamBackupEnterpriseManager
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Veeam Backup Enterprise Manager'
 category:  'Backup'

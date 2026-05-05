@@ -1,5 +1,6 @@
 id:        DNSResolverInternalRecursive
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'DNS Resolver (Internal Recursive)'
 category:  'Network Equipment'

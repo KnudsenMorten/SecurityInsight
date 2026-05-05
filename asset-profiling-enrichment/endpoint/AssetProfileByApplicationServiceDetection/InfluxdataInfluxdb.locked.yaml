@@ -1,5 +1,6 @@
 id:        InfluxdataInfluxdb
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'InfluxDB'
 category:  'Database'

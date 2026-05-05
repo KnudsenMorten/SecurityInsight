@@ -1,5 +1,6 @@
 id:        LogAggregationServer
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Log Aggregation Server'
 category:  'Management'

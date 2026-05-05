@@ -1,5 +1,6 @@
 id:        CommvaultHedvig
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Commvault Hedvig'
 category:  'Storage'

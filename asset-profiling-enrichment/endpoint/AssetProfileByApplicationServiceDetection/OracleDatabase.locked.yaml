@@ -1,5 +1,6 @@
 id:        OracleDatabase
 appliesTo: endpoint
+osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Oracle Database 19c'
 category:  'Database'

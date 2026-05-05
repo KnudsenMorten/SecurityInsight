@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.24
+## v2.2.25
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
 - release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
 - release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
 - release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
@@ -33,13 +34,60 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - SI v2.2.0 stable: flatten v2.2/ to root, drop v2.1 layout, audit-pass RA fixes (536e1405)
 - ci(publish): per-channel sourceRef + README regression guard (43b6e88c)
 - docs(SI README): add 'New release v2.2 coming very soon !' teaser callout (9b283fcf)
-- feat+fix(SI v2.2): preview.196 — anne-tier fix, native logon rule, cross-merge guard, Match→CmdbMatch, Summary↔Detailed parity, YAML cleanup (b50f9220)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.25 — Privilege-tier catalog: locked + custom merge model + `$v22Root` rename
+
+### Privilege-tier catalog: locked + custom merge model
+
+PTC engine used to overwrite the shipped `.locked.json` on every run, which meant:
+1. Customer ran PTC once -> their tenant-specific catalog clobbered the baseline.
+2. Next `git pull` brought a NEW shipped `.locked.json` -> customer's tenant tweaks were wiped.
+3. Customer who DIDN'T re-run PTC after baseline updates fell behind on new Microsoft roles.
+
+New layered model:
+
+| File | Owner | Updated via | Engine reads |
+|---|---|---|---|
+| `privilege-tier-catalog.locked.json` | us (shipped) | `git pull` / AutomateIT_InstallUpdate | baseline |
+| `privilege-tier-catalog.custom.json` | customer (gitignored) | PTC engine OR hand-edit | overlay (wins on overlap) |
+
+Engine load order = both supported, baseline updates always flow:
+1. Load `.locked.json` -> full baseline.
+2. Load `.custom.json` -> customer overlay.
+3. Merge by key. Custom wins on conflicts; locked-only keys still apply.
+
+### Code changes
+
+- `IdentityCatalogTierComputer.ps1` -- `$CustomPath` default switched from the
+  legacy `asset-profiling-enrichment\identity\PrivilegeTierClassifier.json`
+  (which never received PTC output) to the canonical sibling
+  `privilege-tier-catalog\privilege-tier-catalog.custom.json`. Existing
+  custom-overlay merge logic now actually receives PTC's output.
+- `Invoke-PrivilegeTierClassifier.ps1` -- output switched from
+  `privilege-tier-catalog.locked.json` to `privilege-tier-catalog.custom.json`.
+  Shipped baseline never overwritten.
+
+### Effect
+
+- **Most customers (no customisation)**: nothing changes -- engine reads only
+  `.locked.json`, gets baseline updates via `git pull`.
+- **Customised customers (re-ran PTC)**: their PTC output becomes the overlay
+  in `.custom.json`. Baseline updates still flow through for keys not
+  shadowed in custom.
+- **Future quarterly refresh**: customer re-runs PTC every 3-6 months to
+  refresh their tenant snapshot; baseline updates apply between refreshes.
+
+### Variable rename: `$v22Root` -> `$siRoot` (33 files, 117 occurrences)
+
+`$v22Root` and `$_v22Root` had the version number baked into the variable name -- violates the project's "no version numbers in identifiers" rule. Renamed to `$siRoot` / `$_siRoot` (semantic, version-independent). 33 source files touched, 117 occurrences replaced. No behavior change; all 33 parse OK.
 
 ---
 

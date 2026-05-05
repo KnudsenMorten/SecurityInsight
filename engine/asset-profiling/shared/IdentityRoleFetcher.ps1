@@ -888,8 +888,8 @@ function Get-SIExposureGraphIdentities {
 
     # file moved from identity-catalog/ to engine/shared/.
     # $PSScriptRoot now = v2.2/engine/asset-profiling/shared/; three parents -> v2.2/
-    $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-    $hqPath  = Join-Path $v22Root 'engine\asset-profiling\shared\HuntingQuery.ps1'
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $hqPath  = Join-Path $siRoot 'engine\asset-profiling\shared\HuntingQuery.ps1'
     if (-not (Test-Path $hqPath)) {
         Write-Warning ('Get-SIExposureGraphIdentities: HuntingQuery.ps1 not found at {0} -- skipping' -f $hqPath)
         return $egMap

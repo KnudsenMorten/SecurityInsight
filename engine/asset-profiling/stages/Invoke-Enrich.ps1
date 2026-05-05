@@ -50,7 +50,7 @@ function Get-SIPostureRules {
         Import-Module 'powershell-yaml' -Force -ErrorAction Stop
     }
 
-    $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     $rules = New-Object System.Collections.ArrayList
 
     # Three folders, in order: locked (engine-shipped), custom (per-customer),
@@ -61,7 +61,7 @@ function Get-SIPostureRules {
     if ($global:SI_LoadPendingRules) { $folders += 'posture-rules-pending' }
 
     foreach ($folder in $folders) {
-        $path = Join-Path $v22Root (Join-Path $folder $Engine)
+        $path = Join-Path $siRoot (Join-Path $folder $Engine)
         if (-not (Test-Path $path)) { continue }
         Get-ChildItem -Path $path -Filter '*.yaml' -ErrorAction SilentlyContinue | ForEach-Object {
             try {

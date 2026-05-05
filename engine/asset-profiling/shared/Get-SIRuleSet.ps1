@@ -78,7 +78,7 @@ function Get-SIRuleSet {
 
     # Resolve v2.2 root from this script's location.
     # $PSScriptRoot = v2.2/engine/asset-profiling/shared -> three parents up = v2.2 root.
-    $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 
     # rules now live under asset-profiling-enrichment/<engine>/
     # (locked + custom coexist in the same dir, distinguished by file suffix
@@ -98,7 +98,7 @@ function Get-SIRuleSet {
     $scanRoots = @()
     foreach ($folder in $folders) {
         foreach ($sub in @($Engine, 'shared')) {
-            $p = Join-Path $v22Root (Join-Path $folder $sub)
+            $p = Join-Path $siRoot (Join-Path $folder $sub)
             if (Test-Path $p) { $scanRoots += [pscustomobject]@{ Folder = $folder; Path = $p; Sub = $sub } }
         }
     }
@@ -192,7 +192,7 @@ function Get-SIRuleSet {
                     Category    = $null
                     Description = $null
                     Detections  = @()
-                    File        = $f.FullName.Substring($v22Root.Length).TrimStart('\','/')
+                    File        = $f.FullName.Substring($siRoot.Length).TrimStart('\','/')
                     Folder      = $folder
                     SchemaShape = 'AssetProfileBy'
                 })
@@ -221,7 +221,7 @@ function Get-SIRuleSet {
                 Category    = if ($obj.category)    { [string]$obj.category }    else { $null }
                 Description = if ($obj.description) { [string]$obj.description } else { $null }
                 Detections  = $detections.ToArray()
-                File        = $f.FullName.Substring($v22Root.Length).TrimStart('\','/')
+                File        = $f.FullName.Substring($siRoot.Length).TrimStart('\','/')
                 Folder      = $folder
                 SchemaShape = 'AssetProfileBy'
             })

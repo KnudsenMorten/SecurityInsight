@@ -333,8 +333,8 @@ try {
     # SI_Endpoint_Profile_CL + SI_Azure_Profile_CL snapshots, calls Shodan REST,
     # ingests SI_VulnerabilityPIP_CL.
     $launcherDir = $PSScriptRoot
-    $v22RootForEngine = Split-Path -Parent (Split-Path -Parent $launcherDir)
-    $engine = Join-Path $v22RootForEngine 'engine\publicip\Invoke-PublicIpScanner.ps1'
+    $siRootForEngine = Split-Path -Parent (Split-Path -Parent $launcherDir)
+    $engine = Join-Path $siRootForEngine 'engine\publicip\Invoke-PublicIpScanner.ps1'
     if (-not (Test-Path -LiteralPath $engine)) {
         throw "Launcher: engine 'Invoke-PublicIpScanner.ps1' not found at $engine."
     }

@@ -328,11 +328,11 @@ $global:AutomationFramework = $false
 # launcher lives at v2.2/launcher/risk-analysis/. SettingsPath
 # (consolidated YAML + risk-index + riskscore_weighted) lives at sibling
 # v2.2/risk-analysis-detection/. 2-up from launcher = v2.2 root.
-$v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$siRoot  = Split-Path -Parent $v22Root   # SecurityInsight/ root, holds legacy DATA/
+$siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$siRoot  = Split-Path -Parent $siRoot   # SecurityInsight/ root, holds legacy DATA/
 $settingsResolved = $null
 foreach ($candidate in @(
-    (Join-Path $v22Root 'risk-analysis-detection'),
+    (Join-Path $siRoot 'risk-analysis-detection'),
     (Join-Path $siRoot  'DATA'),
     (Join-Path $siRoot  'data')
 )) {
@@ -469,10 +469,10 @@ try {
     # at v2.2/engine/risk-analysis/Invoke-RiskAnalysis.ps1 (per # self-contained tree). 2-up from launcher = v2.2 root.
     # Legacy fallback walks up to SOLUTIONS/<solution>/SCRIPTS/ for unmigrated repos.
     $launcherDir = $PSScriptRoot
-    $v22RootForEngine = Split-Path -Parent (Split-Path -Parent $launcherDir)
-    $engine = Join-Path $v22RootForEngine 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'
+    $siRootForEngine = Split-Path -Parent (Split-Path -Parent $launcherDir)
+    $engine = Join-Path $siRootForEngine 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'
     if (-not (Test-Path -LiteralPath $engine)) {
-        $engineOwner = Split-Path -Parent $v22RootForEngine   # SOLUTIONS/SecurityInsight/
+        $engineOwner = Split-Path -Parent $siRootForEngine   # SOLUTIONS/SecurityInsight/
         foreach ($case in 'SCRIPTS','scripts') {
             $candidate = Join-Path $engineOwner (Join-Path $case 'Invoke-RiskAnalysis.ps1')
             if (Test-Path -LiteralPath $candidate) { $engine = $candidate; break }

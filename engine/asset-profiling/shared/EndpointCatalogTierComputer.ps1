@@ -124,8 +124,8 @@ function Initialize-SIEndpointCatalog {
         # endpoint-catalog-custom/ deleted in . Customer
         # overrides now live in rules-custom/endpoint/. This loader's CustomPath
         # remains as a legacy override path; absent file = silent no-op.
-        $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-        $CustomPath = Join-Path $v22Root 'asset-profiling-enrichment\endpoint\endpoint-tiering.json'
+        $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        $CustomPath = Join-Path $siRoot 'asset-profiling-enrichment\endpoint\endpoint-tiering.json'
     }
 
     if (-not (Test-Path $Path)) {
@@ -464,8 +464,8 @@ function Initialize-SIServerAppCatalog {
     }
     if ([string]::IsNullOrWhiteSpace($CustomPath)) {
         # endpoint-catalog-custom/ deleted in . Silent no-op when absent.
-        $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-        $CustomPath = Join-Path $v22Root 'asset-profiling-enrichment\endpoint\server-applications.json'
+        $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        $CustomPath = Join-Path $siRoot 'asset-profiling-enrichment\endpoint\server-applications.json'
     }
 
     if (-not (Test-Path $Path)) {

@@ -1028,8 +1028,8 @@ function Invoke-SISentinelLakeQuery {
         [Parameter(Mandatory)][string]$WorkspaceResourceId
     )
 
-    $v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    . (Join-Path $v22Root 'auth\Get-SIGraphToken.ps1')
+    $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    . (Join-Path $siRoot 'auth\Get-SIGraphToken.ps1')
 
     if ($WorkspaceResourceId -notmatch '/subscriptions/[^/]+/resourceGroups/[^/]+/providers/[Mm]icrosoft\.[Oo]perational[Ii]nsights/workspaces/([^/]+)') {
         throw ('Invoke-SISentinelLakeQuery: invalid WorkspaceResourceId: {0}' -f $WorkspaceResourceId)
@@ -1404,8 +1404,8 @@ function Invoke-GraphHuntingQuery {
             # (multi-bucket runs would otherwise log it once per bucket).
             try {
                 if (-not $script:_RAStagingDir) {
-                    $v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-                    $script:_RAStagingDir = Join-Path $v22Root 'staging\risk-analysis'
+                    $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+                    $script:_RAStagingDir = Join-Path $siRoot 'staging\risk-analysis'
                 }
                 if (-not (Test-Path $script:_RAStagingDir)) { New-Item -ItemType Directory -Path $script:_RAStagingDir -Force | Out-Null }
                 if (-not $script:_RADumpedHashes) { $script:_RADumpedHashes = New-Object 'System.Collections.Generic.HashSet[string]' }
@@ -4072,8 +4072,8 @@ Write-Step "initializing"
 # Wipe the rendered-query staging dir at startup so dumps from previous runs
 # don't accumulate. Path is reused later by the hybrid path.
 try {
-    $v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $script:_RAStagingDir = Join-Path $v22Root 'staging\risk-analysis'
+    $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $script:_RAStagingDir = Join-Path $siRoot 'staging\risk-analysis'
     if (Test-Path $script:_RAStagingDir) {
         Get-ChildItem -Path $script:_RAStagingDir -Filter 'ra-rendered-*.kql' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     } else {

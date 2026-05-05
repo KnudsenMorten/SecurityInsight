@@ -332,8 +332,8 @@ try {
     # v2.2/engine/asset-profiling/Invoke-SIEngineRun.ps1. 2-up from launcher = v2.2/.
     # Asset-profiling is v2.2-only -- no legacy fallback.
     $launcherDir = $PSScriptRoot
-    $v22RootForEngine = Split-Path -Parent (Split-Path -Parent $launcherDir)
-    $engine = Join-Path $v22RootForEngine 'engine\asset-profiling\Invoke-SIEngineRun.ps1'
+    $siRootForEngine = Split-Path -Parent (Split-Path -Parent $launcherDir)
+    $engine = Join-Path $siRootForEngine 'engine\asset-profiling\Invoke-SIEngineRun.ps1'
     if (-not (Test-Path -LiteralPath $engine)) {
         throw "Launcher: engine 'Invoke-SIEngineRun.ps1' not found at $engine. Asset-profiling is v2.2-only; check the v2.2/engine/asset-profiling/ tree."
     }

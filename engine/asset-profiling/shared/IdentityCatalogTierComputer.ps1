@@ -116,12 +116,14 @@ function Initialize-SIIdentityCatalog {
     }
 
     if ([string]::IsNullOrWhiteSpace($CustomPath)) {
-        # Customer override path -- deleted identity-catalog-custom/.
-        # New convention: rules-custom/identity/AssetProfileByExtensionAttributes.yaml
-        # carries the equivalent customisation. This loader's CustomPath remains
-        # for legacy config-style overrides; absent path = silent no-op.
-        $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-        $CustomPath = Join-Path $v22Root 'asset-profiling-enrichment\identity\PrivilegeTierClassifier.json'
+        # Customer overlay = sibling .custom.json next to the shipped .locked.json.
+        # PrivilegeTierClassifier writes here on customer machines; gitignored
+        # so it survives `git pull` / AutomateIT_InstallUpdate. Engine merges
+        # this on top of .locked.json -- custom wins on key collisions, but
+        # NEW keys added in shipped .locked.json (via baseline updates) still
+        # apply because they're not shadowed in custom.
+        $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        $CustomPath = Join-Path $siRoot 'privilege-tier-catalog\privilege-tier-catalog.custom.json'
     }
 
     if (-not (Test-Path $Path)) {

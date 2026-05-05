@@ -24,8 +24,8 @@ function Read-EntraProviderData {
     }
 
     # Resolve discovery script paths
-    $v22Root  = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $discRoot = Join-Path $v22Root 'engine\asset-profiling\discovery'
+    $siRoot  = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $discRoot = Join-Path $siRoot 'engine\asset-profiling\discovery'
     $usersScript = Join-Path $discRoot 'Get-DiscoveryFromEntraUsers.ps1'
     $spsScript   = Join-Path $discRoot 'Get-DiscoveryFromEntraServicePrincipals.ps1'
 

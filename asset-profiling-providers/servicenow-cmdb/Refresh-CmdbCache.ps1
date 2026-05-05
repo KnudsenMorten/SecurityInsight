@@ -35,8 +35,8 @@ $ErrorActionPreference = 'Stop'
 # script is also runnable directly via the cron / KEDA path, in which case the
 # helpers aren't loaded yet. Idempotent: re-dot-source is a no-op.
 if (-not (Get-Command Write-SIInfo -ErrorAction SilentlyContinue)) {
-    $v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    . (Join-Path $v22Root 'engine\asset-profiling\_shared\Write-SIStyle.ps1')
+    $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    . (Join-Path $siRoot 'engine\asset-profiling\_shared\Write-SIStyle.ps1')
 }
 
 # CMDB provider DEFAULT-ON. Customers can opt out by explicitly
@@ -62,8 +62,8 @@ if (-not $StorageKey         -and $global:SI_StorageKey)     { $StorageKey      
 #   4. providers/servicenow-cmdb/sample/CMDB.csv -- last-resort sample shipped with the engine
 if (-not $CsvPath -and $global:SI_CmdbCsvPath) { $CsvPath = [string]$global:SI_CmdbCsvPath }
 if (-not $CsvPath) {
-    $v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $customerPath = Join-Path $v22Root 'asset-profiling-providers\servicenow-cmdb\CMDB.csv'
+    $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $customerPath = Join-Path $siRoot 'asset-profiling-providers\servicenow-cmdb\CMDB.csv'
     if (Test-Path $customerPath) { $CsvPath = $customerPath }
 }
 if (-not $CsvPath) { $CsvPath = Join-Path $PSScriptRoot 'sample\CMDB.csv' }
@@ -83,9 +83,9 @@ $pathSource = if ($CsvPath -like '*\asset-profiling-providers\*') { 'providers-c
               else { '-CsvPath param' }
 Write-SIInfo ('CMDB CSV path source: {0}' -f $pathSource)
 
-$v22Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-. (Join-Path $v22Root 'engine\asset-profiling\storage\StorageContext.ps1')
-. (Join-Path $v22Root 'engine\asset-profiling\storage\CmdbCache.ps1')
+$siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $siRoot 'engine\asset-profiling\storage\StorageContext.ps1')
+. (Join-Path $siRoot 'engine\asset-profiling\storage\CmdbCache.ps1')
 
 $ctx = New-SIStorageContext -AccountName $StorageAccountName -AccountKey $StorageKey
 Initialize-SICmdbCacheTables -Context $ctx | Out-Null

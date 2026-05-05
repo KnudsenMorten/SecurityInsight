@@ -51,12 +51,12 @@ function Get-SISchemaWithCustomMerge {
 
     # Resolve solution paths from this script's location.
     # $PSScriptRoot = v2.2/engine/asset-profiling/shared -> three parents = v2.2 root.
-    $v22Root    = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $siRoot    = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
     # publicip schema file is named 'public-ip.schema.json' (hyphen) for
     # readability; engine token stays 'publicip' everywhere else.
     $fileBase   = if ($Engine -eq 'publicip') { 'public-ip' } else { $Engine }
-    $lockedPath = Join-Path $v22Root ('asset-profiling-schema\{0}.schema.locked.json' -f $fileBase)
-    $customPath = Join-Path $v22Root ('asset-profiling-schema\{0}.schema.custom.json' -f $fileBase)
+    $lockedPath = Join-Path $siRoot ('asset-profiling-schema\{0}.schema.locked.json' -f $fileBase)
+    $customPath = Join-Path $siRoot ('asset-profiling-schema\{0}.schema.custom.json' -f $fileBase)
 
     if (-not (Test-Path $lockedPath)) {
         throw ('Locked schema not found at {0}' -f $lockedPath)

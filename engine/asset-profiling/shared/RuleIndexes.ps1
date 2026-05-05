@@ -69,8 +69,8 @@ function Build-SITvmSoftwareIndex {
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $idx = @{}
     try {
-        $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-        . (Join-Path $v22Root 'engine\asset-profiling\shared\HuntingQuery.ps1')
+        $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        . (Join-Path $siRoot 'engine\asset-profiling\shared\HuntingQuery.ps1')
         $kql = @'
 DeviceTvmSoftwareInventory
 | where isnotempty(SoftwareVendor) and isnotempty(SoftwareName)
@@ -403,8 +403,8 @@ function Build-SIEgKustoQuerySets {
     $sets = @{}
     $count = 0
     try {
-        $v22Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
-        . (Join-Path $v22Root 'engine\asset-profiling\shared\HuntingQuery.ps1')
+        $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        . (Join-Path $siRoot 'engine\asset-profiling\shared\HuntingQuery.ps1')
 
         foreach ($rule in $Rules) {
             foreach ($det in $rule.Detections) {

@@ -98,7 +98,12 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Root                    = 'C:\Demo\SecurityInsight',
+    # Default: walk up from this script's location -- if running from
+    # <install>\SOLUTIONS\SecurityInsight\tools\Run-AllEngines.ps1, $PSScriptRoot
+    # is .../tools, so two ups = the SI install root. Falls back to the
+    # legacy C:\Demo\SecurityInsight when $PSScriptRoot can't be resolved
+    # (e.g. dot-sourced from a wrapper that broke the script-root context).
+    [string]$Root                    = $(if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { 'C:\Demo\SecurityInsight' }),
     [switch]$Install,
     [string]$GitRepoUrl              = 'https://github.com/KnudsenMorten/SecurityInsight.git',
     [string]$Tag                     = '',
@@ -116,8 +121,20 @@ param(
 )
 $ErrorActionPreference = 'Continue'
 
+# Auto-redirect: if -Root points at an AutomateIT install root (no engine/ here
+# but SOLUTIONS\SecurityInsight\engine\ exists), silently rewrite to the SI dir.
+# Lets internal callers run `.\Run-AllEngines.ps1 -Root D:\AutomateIT` without
+# having to remember the SOLUTIONS\SecurityInsight suffix.
+if ($Root -and -not (Test-Path -LiteralPath (Join-Path $Root 'engine'))) {
+    $siUnderAutomateit = Join-Path $Root 'SOLUTIONS\SecurityInsight'
+    if (Test-Path -LiteralPath (Join-Path $siUnderAutomateit 'engine')) {
+        Write-Host ("  (auto-redirect: -Root '{0}' is an AutomateIT install -- using '{1}')" -f $Root, $siUnderAutomateit) -ForegroundColor DarkGray
+        $Root = $siUnderAutomateit
+    }
+}
+
 Write-Host ('=' * 80) -ForegroundColor Cyan
-Write-Host '  SecurityInsight -- Run-AllEngines (demo helper)' -ForegroundColor Cyan
+Write-Host '  SecurityInsight -- Run-AllEngines' -ForegroundColor Cyan
 Write-Host ('  Root: ' + $Root) -ForegroundColor Cyan
 if ($Install) { Write-Host '  Mode: -Install (fresh VM setup)' -ForegroundColor Yellow }
 Write-Host ('=' * 80) -ForegroundColor Cyan

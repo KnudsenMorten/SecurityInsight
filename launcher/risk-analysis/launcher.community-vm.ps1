@@ -325,11 +325,10 @@ Write-Ok ("Authentication established ({0})" -f $authMethodUsed)
 
 Write-Step "Setting engine globals"
 $global:AutomationFramework = $false
-# launcher lives at v2.2/launcher/risk-analysis/. SettingsPath
-# (consolidated YAML + risk-index + riskscore_weighted) lives at sibling
-# v2.2/risk-analysis-detection/. 2-up from launcher = v2.2 root.
+# launcher lives at <SI>/launcher/risk-analysis/. SettingsPath (consolidated
+# YAML + risk-index + riskscore_weighted) lives at sibling <SI>/risk-analysis-detection/.
+# 2-up from $PSScriptRoot = SI install root.
 $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$siRoot  = Split-Path -Parent $siRoot   # SecurityInsight/ root, holds legacy DATA/
 $settingsResolved = $null
 foreach ($candidate in @(
     (Join-Path $siRoot 'risk-analysis-detection'),

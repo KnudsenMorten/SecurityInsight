@@ -218,13 +218,25 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root 'engine'))) {
 # 3. Refresh repo (skip in -Install mode -- we just cloned)
 # ---------------------------------------------------------------------------
 if (-not $Install -and -not $SkipPull) {
-    Write-Host "`n==> git pull" -ForegroundColor Cyan
-    Push-Location $Root
-    try {
-        # Pipe to ForEach so PowerShell treats git's stderr lines as data, not exceptions.
-        # (`& git ... 2>&1 | Out-Host` still triggers the red 'NativeCommandError' display.)
-        & git pull 2>&1 | ForEach-Object { Write-Host $_ }
-    } finally { Pop-Location }
+    # Internal installs deployed via AutomateIT_InstallUpdate.ps1 are stream-extracts,
+    # not git clones -- no .git/ + no git binary on the host. Earlier versions still
+    # invoked `git pull` and crashed loudly with CommandNotFoundException + a stack trace.
+    # Now: silently skip when either prerequisite is missing (point user at the right
+    # updater).
+    $haveGit  = [bool](Get-Command git -ErrorAction SilentlyContinue)
+    $isGitRepo = Test-Path -LiteralPath (Join-Path $Root '.git')
+    if (-not $haveGit -or -not $isGitRepo) {
+        $reason = if (-not $haveGit) { 'git command not on PATH' } else { 'no .git/ in install root' }
+        Write-Host ("`n==> skipping git pull -- {0}. Use AutomateIT_InstallUpdate.ps1 for non-git installs." -f $reason) -ForegroundColor DarkGray
+    } else {
+        Write-Host "`n==> git pull" -ForegroundColor Cyan
+        Push-Location $Root
+        try {
+            # Pipe to ForEach so PowerShell treats git's stderr lines as data, not exceptions.
+            # (`& git ... 2>&1 | Out-Host` still triggers the red 'NativeCommandError' display.)
+            & git pull 2>&1 | ForEach-Object { Write-Host $_ }
+        } finally { Pop-Location }
+    }
 }
 $ver = Get-Content -LiteralPath (Join-Path $Root 'VERSION') -ErrorAction SilentlyContinue | Select-Object -First 1
 Write-Host ('VERSION: ' + $ver) -ForegroundColor Yellow
@@ -239,8 +251,12 @@ if ($PrivilegeTierClassifier) {
     Write-Host "`n==> -PrivilegeTierClassifier mode -- skipping stale-process kill (leave sibling launchers alone)" -ForegroundColor Cyan
 } else {
     Write-Host "`n==> killing stale launcher.$Flavour-vm.ps1 processes" -ForegroundColor Cyan
+    # Match the launcher name for the CURRENT flavour. Earlier versions hardcoded
+    # 'community-vm' regardless of -Flavour, so internal-vm reruns left every
+    # prior window alive -- the screen filled with N copies of each engine.
+    $launcherPattern = 'launcher\.{0}-vm\.ps1' -f [regex]::Escape($Flavour)
     $stale = Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.ProcessId -ne $mePid -and $_.CommandLine -match 'launcher\.community-vm\.ps1' }
+        Where-Object { $_.ProcessId -ne $mePid -and $_.CommandLine -match $launcherPattern }
     if ($stale) {
         foreach ($p in $stale) {
             Write-Host ('  killing PID ' + $p.ProcessId) -ForegroundColor Yellow

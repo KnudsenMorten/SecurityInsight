@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.29
+## v2.2.30
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
 - release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
 - release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
 - release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
 - release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
 - release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
-- fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.30 — Run-AllEngines: skip git on non-git installs + fix flavour-aware kill
+
+### `git pull` crash on non-git installs
+
+`F:\automateit` (and any install deployed via `AutomateIT_InstallUpdate.ps1`) is a stream-extract, not a git clone. Run-AllEngines unconditionally invoked `git pull` and crashed with `CommandNotFoundException` on hosts where git isn't on PATH, OR `fatal: not a git repository` on hosts where it is. Now:
+- Probe `Get-Command git` AND `Test-Path .git` first.
+- If either is missing, print one DarkGray hint pointing at `AutomateIT_InstallUpdate.ps1` and continue.
+- If both present, behave as before.
+
+### Stale-process kill ignored `-Flavour internal`
+
+The `Get-CimInstance ... -match 'launcher\.community-vm\.ps1'` filter was hardcoded — internal-vm fanout reruns never matched, so every prior window stacked on top of the new one (screenshot showed N copies of each engine). Pattern is now built from `$Flavour`: `launcher\.{Flavour}-vm\.ps1`. Internal customers re-running `Run-AllEngines.ps1 -Flavour internal` get the same clean-slate behaviour community demos already had.
 
 ---
 

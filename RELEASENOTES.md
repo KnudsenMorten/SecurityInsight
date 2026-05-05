@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.23
+## v2.2.24
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
 - release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
 - release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
 - release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - ci(publish): per-channel sourceRef + README regression guard (43b6e88c)
 - docs(SI README): add 'New release v2.2 coming very soon !' teaser callout (9b283fcf)
 - feat+fix(SI v2.2): preview.196 — anne-tier fix, native logon rule, cross-merge guard, Match→CmdbMatch, Summary↔Detailed parity, YAML cleanup (b50f9220)
-- fix(SI v2.2): preview.194 — routing: skip reports needing ExposureGraph + SI_*_Profile_CL when EG isn't reachable from LA (5d77492e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.24 — Run-AllEngines.ps1: -Flavour internal|community switch
+
+`tools/Run-AllEngines.ps1` was hardcoded to fire `launcher.community-vm.ps1` files. Internal customers (FVF-style, AutomationFramework + cert+KV auth) had no parallel-windows orchestrator.
+
+Added `-Flavour internal|community` switch (default `community`, so existing demo callers don't break). Launcher path now resolves to `launcher.$Flavour-vm.ps1`.
+
+```powershell
+# Default (community demo VMs)
+.\tools\Run-AllEngines.ps1
+
+# Internal env (FVF, 2linkit, etc. -- requires Initialize-PlatformAutomationFramework upstream)
+.\tools\Run-AllEngines.ps1 -Flavour internal
+
+# Internal + standalone PTC
+.\tools\Run-AllEngines.ps1 -Flavour internal -PrivilegeTierClassifier
+```
 
 ---
 

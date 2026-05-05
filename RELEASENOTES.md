@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.27
+## v2.2.28
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
 - release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
 - release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
 - release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
 - fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
 - SI v2.2.0 stable: flatten v2.2/ to root, drop v2.1 layout, audit-pass RA fixes (536e1405)
-- ci(publish): per-channel sourceRef + README regression guard (43b6e88c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.28 — Run-AllEngines.ps1: `-Flavour` mandatory
+
+`-Flavour` no longer defaults to `community`. Internal customers who forgot the switch were silently firing `launcher.community-vm.ps1`, which skips `Initialize-PlatformAutomationFramework` and the KV-backed secret fetch — auth then fell back to the missing `$Spn*` plaintext block in custom.ps1 and crashed mid-run with confusing errors. Forcing an explicit choice surfaces the decision at parameter-binding time.
+
+PowerShell will prompt interactively if `-Flavour` is omitted; pipelines / VisualCron / scheduled jobs that don't pass it will fail fast with a parameter-binding error instead of running the wrong flavour.
 
 ---
 

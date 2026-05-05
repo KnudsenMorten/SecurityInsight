@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.18
+## v2.2.19
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
 - release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
 - add: SOLUTIONS/SecurityInsight/auth/Get-SIKvSecret.ps1 -- runtime KV secret fetch (830319dc)
 - release: SecurityInsight v2.2.17 - SI_RunHealth DCR overridable (18efa17b)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI v2.2): preview.192 — wrap value-side tostring(<col>) in column_ifexists so case() Category/Subcategory parses when source column is missing (133fd01c)
 - fix(SI v2.2): preview.191 — drop CrossEngine completely + fix Subcategory undefined (3fc1ade1)
 - feat(SI v2.2): preview.190 — restore Category/Subcategory from legacy v2.1 (106 reports), drop CrossEngine, simpler risk-analysis.schema.json with Impact-by-Category map (440ec891)
-- fix(SI v2.2): preview.189 — engine-level row dedup by (ConfigurationName, ConfigurationId) collapses 50x mv-expand+join inflation (d89afb9a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.19 — Auto-init AutomationFramework + install-relative platform-config.json
+
+### Auto-init `Initialize-PlatformAutomationFramework` in internal mode
+
+`Initialize-LauncherConfig` (the layered-config loader inside every launcher) now auto-calls `Initialize-PlatformAutomationFramework` when `$Mode -eq 'internal'` and `$global:Context` is still null. This populates `$global:Context` + `$global:HighPriv_*` BEFORE Layer 3 (customer custom.ps1) dot-sources, so `Get-PlatformSecret -Context $global:Context -Name 'SI-StorageKey'` calls in custom.ps1 succeed on first run. Previously the launcher's `.NOTES` warned that the caller had to run init manually upstream; SYSTEM-context jobs (VisualCron, Task Scheduler as SYSTEM) skipped that step and got cryptic "Cannot bind argument to parameter 'Context' because it is null" bubbled up from the customer file.
+
+Idempotent — if `$global:Context` already exists (caller did init manually), the auto-init is skipped. Failure to auto-init logs an INFO line + suggests next steps; doesn't throw.
+
+### Install-relative `platform-config.json` lookup
+
+`Initialize-PlatformAutomationFramework` previously only checked `$env:USERPROFILE\.automateit\platform-config.json` — useless for SYSTEM-context jobs. Now also checks `<install>\SOLUTIONS\PlatformConfiguration\config\platform-config.json` (derived from the script's own location). Same folder as `platform-defaults.ps1`, same gitignore semantics, same update-in-place lifecycle.
+
+Lookup order: `-ConfigPath` param → `<install>/SOLUTIONS/PlatformConfiguration/config/platform-config.json` → `$env:USERPROFILE/.automateit/platform-config.json` → PLATFORM_* env vars.
+
+### Combined effect
+
+For internal customer onboarding:
+1. Drop `platform-config.json` at `<install>\SOLUTIONS\PlatformConfiguration\config\platform-config.json` (TenantId, SubscriptionId, KeyVaultName, BootstrapAppId, BootstrapThumbprint).
+2. Drop `platform-defaults.ps1` in same folder.
+3. Drop `SecurityInsight.custom.ps1` with `Get-PlatformSecret` calls for runtime KV fetch.
+4. Fire `launcher.internal-vm.ps1` — the launcher auto-inits the platform context, secrets land from KV, engine runs.
+
+No upstream wrapper script needed; works under SYSTEM context out of the box.
 
 ---
 

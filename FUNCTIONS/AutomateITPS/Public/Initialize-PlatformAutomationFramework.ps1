@@ -79,8 +79,26 @@ function Initialize-PlatformAutomationFramework {
     )
 
     # ---- 1. Resolve configuration --------------------------------------
+    # Lookup order for the JSON config file (first existing wins):
+    #   1. -ConfigPath param (explicit caller override)
+    #   2. <install>/SOLUTIONS/PlatformConfiguration/config/platform-config.json
+    #      -- derived from this script's location ($PSScriptRoot is
+    #      <install>/FUNCTIONS/AutomateITPS/Public, walk up 3). Lives next to
+    #      platform-defaults.ps1 -- canonical install-relative path that
+    #      works under SYSTEM context, scheduled tasks, VisualCron, etc.
+    #      (no per-user dependency).
+    #   3. $env:USERPROFILE/.automateit/platform-config.json
+    #      -- legacy per-user fallback. Works for interactive ops on a dev
+    #      box; doesn't help SYSTEM-context jobs.
     if (-not $ConfigPath) {
-        $ConfigPath = Join-Path $env:USERPROFILE '.automateit\platform-config.json'
+        $candidates = @()
+        try {
+            $installRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+            $candidates += (Join-Path $installRoot 'SOLUTIONS\PlatformConfiguration\config\platform-config.json')
+        } catch { }
+        $candidates += (Join-Path $env:USERPROFILE '.automateit\platform-config.json')
+        $ConfigPath = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+        if (-not $ConfigPath) { $ConfigPath = $candidates[0] }   # use first candidate in error messages
     }
     $fileCfg = $null
     if (Test-Path -LiteralPath $ConfigPath) {

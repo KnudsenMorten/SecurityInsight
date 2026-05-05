@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.45
+## v2.2.46
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.46 - fix v2.2.42 DCR diagnostic showing wrong DCE + new SI_SkipDcrAutoCreate opt-out (30bd8d85)
 - release: SecurityInsight v2.2.45 - skip kustoSets KQL for rules whose osPlatformScope can't match any loaded asset (134ce3ce)
 - release: SecurityInsight v2.2.44 - revive v2.2.40 OS-class bucketing (rule loader was dropping osPlatformScope) (d884f5ec)
 - release: SecurityInsight v2.2.43 - gate EG identity sample-dump diagnostics behind SI_Verbose (14e25cbf)
@@ -33,13 +34,39 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.18 - banner shows SI version on internal installs (65afcc43)
 - add: SOLUTIONS/SecurityInsight/auth/Get-SIKvSecret.ps1 -- runtime KV secret fetch (830319dc)
 - release: SecurityInsight v2.2.17 - SI_RunHealth DCR overridable (18efa17b)
-- release: SecurityInsight v2.2.16 - make RA DCR names overridable (dd9da5af)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.46 — Output: fix v2.2.42 DCR diagnostic showing wrong DCE + new `SI_SkipDcrAutoCreate` opt-out
+
+**1. v2.2.42 DCR pre-create diagnostic showed the WRONG DCE.** Bug: the diagnostic took `@($global:AzDceDetails)[0]` instead of filtering by name. On tenants where the SPN can read DCEs from other tools (Azure Monitor starter pack, etc.), the cache contains many DCEs and `[0]` returned a random unrelated record — typically logging `DceLocation = westeurope, DceResourceId = .../AMP-prod-DCE-westeurope` while `DceName = dce-si-securityinsight`. Operators saw inconsistent output and (correctly) thought the engine was about to use the wrong DCE.
+
+The MODULE wasn't actually picking the wrong DCE — its lookup at `AzLogDcrIngestPS.psm1:1575` is name-based and correctly returned `$null` when the configured name didn't exist. But the diagnostic was misleading.
+
+Fix: diagnostic now filters `$global:AzDceDetails | Where { $_.name -eq $global:SI_DceName } | Select -First 1`. When no match found, logs:
+```
+DceLocation        = <NOT FOUND in cache -- name does not match any DCE the SPN can read>
+DceResourceId      = <NOT FOUND in cache>
+[WARN] DCE 'dce-si-securityinsight' NOT visible to SPN. Module will fail with null location/id.
+[WARN] Fix: verify the DCE name in Azure (Get-AzDataCollectionEndpoint), or check SPN has Reader on the DCE RG.
+[WARN] Cache size: 47 DCEs visible. None named 'dce-si-securityinsight'.
+```
+Also adds `DceResourceGroup` line (parsed from id) so operator can confirm the DCE lives in the expected RG.
+
+**2. New global: `$global:SI_SkipDcrAutoCreate`.** Opt-out for the engine's auto-provision of DCR shape via `CheckCreateUpdate-TableDcr-Structure`. When `$true`, the engine assumes DCE + DCR + table already exist with the right schema and skips the ARM PUT entirely. Useful when:
+- operator manages DCE/DCR via IaC (Bicep/Terraform) and doesn't want the engine touching ARM
+- SPN has Reader-only on the DCR scope (can ingest but can't create/update DCR shape)
+- schema is known-stable and operator wants to skip the 5-15s round-trip per ingest
+
+Trade-off: schema drift in the data array (new column emitted upstream) won't auto-migrate the DCR — operator must update DCR by hand or re-enable for one run. Logged as `CheckCreateUpdate-TableDcr-Structure : SKIPPED ($global:SI_SkipDcrAutoCreate = $true)` so it's obvious from transcripts.
+
+Set in `SecurityInsight.custom.ps1`: `$global:SI_SkipDcrAutoCreate = $true`.
 
 ---
 

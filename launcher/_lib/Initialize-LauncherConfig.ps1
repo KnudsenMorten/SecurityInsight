@@ -433,6 +433,36 @@ function Initialize-LauncherConfig {
         _CfgRecordLayer 'Layer 1 - platform-defaults (internal)' $platformPath $false
     }
 
+    # ---- Layer 1.5: auto-init AutomationFramework (internal mode) -----------
+    # Layer 3 customer files often call Get-PlatformSecret -Context $global:Context
+    # to KV-fetch SI_StorageKey / SI_Shodan_ApiKey / OpenAI_apiKey at runtime.
+    # That requires $global:Context to be populated by Initialize-PlatformAutomationFramework
+    # BEFORE Layer 3 dot-sources. v2.2.18 and earlier expected the caller to
+    # have called it manually upstream (profile.ps1 / scheduled-task wrapper);
+    # SYSTEM-context jobs and fresh PS sessions skipped that step and got
+    # cryptic "Cannot bind argument to parameter 'Context' because it is null"
+    # bubbled up from the customer's KV fetch. Auto-init here when needed.
+    if ($Mode -eq 'internal' -and -not $global:Context) {
+        $aitpsPath = Join-Path $RepoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'
+        if (Test-Path -LiteralPath $aitpsPath) {
+            try {
+                Import-Module $aitpsPath -Force -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+                _CfgStep "Layer 1.5/5: Initialize-PlatformAutomationFramework (auto-init -- $global:Context was null)"
+                Initialize-PlatformAutomationFramework -ErrorAction Stop | Out-Null
+                if ($global:Context) {
+                    _CfgOk ("Context populated (CorrelationId={0})" -f $global:Context.CorrelationId)
+                } else {
+                    _CfgInfo "Initialize-PlatformAutomationFramework returned but `$global:Context still null"
+                }
+            } catch {
+                _CfgInfo ("auto-init skipped: {0}" -f $_.Exception.Message)
+                _CfgInfo "If Layer 3 custom.ps1 calls Get-PlatformSecret, that will fail; either call Initialize-PlatformAutomationFramework manually upstream OR drop platform-config.json at SOLUTIONS\PlatformConfiguration\config\platform-config.json"
+            }
+        } else {
+            _CfgInfo "auto-init skipped: AutomateITPS module not found at $aitpsPath"
+        }
+    }
+
     # ---- Layer 2: <Solution>.shared-defaults.ps1 (solution baseline, ours) ---
     $sharedPath = Join-Path (Split-Path -Parent $LauncherDir) ("_lib\{0}.shared-defaults.ps1" -f $Solution)
     _CfgStep "Layer 2/5: $Solution.shared-defaults.ps1 (solution baseline, ours)"

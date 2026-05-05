@@ -272,7 +272,18 @@ function Write-SIClassificationToLogAnalytics {
         try {
             $_dceRg  = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { $global:SI_DcrResourceGroup }
             $_dceSub = $global:SI_AzSubscriptionId   # correlate by sub too -- 'rg-securityinsight' is a generic name that may exist in multiple subs the SPN can read
-            if (-not $global:AzDceDetails) {
+            # ALWAYS rebuild $global:AzDceDetails + $global:AzDcrDetails fresh
+            # via the standard AzLogDcrIngestPS helpers. The canonical pattern
+            # in the module's docs rebuilds both before each ingest -- gives
+            # the engine a consistent post-bootstrap view of DCEs/DCRs the SPN
+            # can read AND undoes any prior-iteration prune by the collision
+            # guard (so every ingest starts from full ARG state, prunes if
+            # needed, and the next ingest sees the full list again).
+            if (-not $useMi) {
+                try { $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false } catch { Write-Warning ('Get-AzDceListAll refresh failed -- {0}' -f $_.Exception.Message) }
+                try { $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false } catch { Write-Warning ('Get-AzDcrListAll refresh failed -- {0}' -f $_.Exception.Message) }
+            } elseif (-not $global:AzDceDetails) {
+                # MI auth path: helper signature differs; only fetch DCE list when missing
                 try { $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false } catch { Write-Warning ('DCE list query failed -- {0}' -f $_.Exception.Message) }
             }
             if ($global:AzDceDetails) {

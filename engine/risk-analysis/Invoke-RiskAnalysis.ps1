@@ -6543,6 +6543,18 @@ Rules:
 # SEND OUTPUT VIA MAIL
 #####################################################################################################
 
+# Suppress the mail dispatch when zero rows were produced this run. A "0 findings"
+# email creates noise that erodes trust in real findings emails (operators stop
+# reading SI mail). Customer can force-send the empty report (e.g. as a heartbeat
+# that "SI ran successfully today") via $global:RA_MailEvenIfEmpty = $true.
+if ([bool]$global:Report_SendMail -and -not [bool]$global:RA_MailEvenIfEmpty) {
+    $__rowCount = if ($null -ne $global:final) { @($global:final).Count } else { 0 }
+    if ($__rowCount -eq 0) {
+        Write-Warn2 "mail dispatch suppressed: 0 rows produced this run. Set `$global:RA_MailEvenIfEmpty=`$true to receive empty-report emails as a heartbeat."
+        $global:Report_SendMail = $false
+    }
+}
+
 Write-Section "mail dispatch decision"
 
 if ([bool]$global:Report_SendMail -eq $true) {

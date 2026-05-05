@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.32
+## v2.2.33
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
 - release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
 - release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
 - release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
 - release: SecurityInsight v2.2.5 - Run-AllEngines public + race fix + Identity error (f0f482d6)
 - release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
-- release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.33 — RA: skip "0 findings" emails
+
+`Invoke-RiskAnalysis.ps1` used to send the empty-report email when `Report_SendMail=$true` and the run produced 0 rows. SOC operators learned to ignore SI mail because most days the report was empty -- which meant they also missed the days that DID have findings. Now the engine suppresses the dispatch when `$global:final.Count -eq 0`:
+
+```
+WARNING: mail dispatch suppressed: 0 rows produced this run. Set $global:RA_MailEvenIfEmpty=$true to receive empty-report emails as a heartbeat.
+```
+
+Opt-out: `$global:RA_MailEvenIfEmpty = $true` keeps the old behavior (useful when the customer wants the "yes, the run completed" heartbeat -- e.g. on Monday-morning ops review).
+
+XLSX + JSON artifacts are still written to `$global:OutputXlsx` (placeholder sheet) and ingested to LA when `SendToLogAnalytics=$true` -- only the email is suppressed.
 
 ---
 

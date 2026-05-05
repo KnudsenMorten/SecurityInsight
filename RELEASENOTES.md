@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.44
+## v2.2.45
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.45 - skip kustoSets KQL for rules whose osPlatformScope can't match any loaded asset (134ce3ce)
 - release: SecurityInsight v2.2.44 - revive v2.2.40 OS-class bucketing (rule loader was dropping osPlatformScope) (d884f5ec)
 - release: SecurityInsight v2.2.43 - gate EG identity sample-dump diagnostics behind SI_Verbose (14e25cbf)
 - release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - add: SOLUTIONS/SecurityInsight/auth/Get-SIKvSecret.ps1 -- runtime KV secret fetch (830319dc)
 - release: SecurityInsight v2.2.17 - SI_RunHealth DCR overridable (18efa17b)
 - release: SecurityInsight v2.2.16 - make RA DCR names overridable (dd9da5af)
-- release: SecurityInsight v2.2.15 - rename privilege-tier-catalog to .locked.json (b3d57422)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.45 — Profile: skip kustoSets KQL for rules whose `osPlatformScope` can't match any loaded asset
+
+`Build-SIEgKustoQuerySets` (Pass 2 BULK FETCH index builder) ran the per-rule Defender Advanced Hunting KQL for every rule with `kind: egKustoQuery`, regardless of whether any loaded asset could possibly match that rule's `osPlatformScope`. On a workstation-only smoke test the AD/DC rule (`osPlatformScope: [WindowsServer, Linux]`) still cost 11s of cold-query round-trip even though zero loaded assets were servers — pure waste.
+
+Fix: `Build-SIRuleIndexes` now computes the set of OS classes actually represented in `$Assets` (using the same `Get-SIAssetOsClass` helper Pass 3 uses) and passes it to `Build-SIEgKustoQuerySets`. The builder now pre-filters: rules with non-empty `osPlatformScope` whose scope doesn't intersect any present class are skipped without running KQL. Unscoped rules (empty `osPlatformScope`) always run.
+
+Build stat now includes `SkippedByOsClass=N` when any rule was filtered. Today there's only one `egKustoQuery` rule (`ADDomainController.locked.yaml`), so the win is binary: workstation-only runs save the full 11s; mixed-OS runs are unchanged. As more rules adopt `egKustoQuery`, the savings compound.
+
+Companion to v2.2.44 — relies on `osPlatformScope` actually being on the rule object (the v2.2.44 fix). Cumulative effect on small/scoped runs: Pass 2 + Pass 3 ~10-15x faster.
 
 ---
 

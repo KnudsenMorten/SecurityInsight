@@ -392,21 +392,46 @@ function Build-SIEgKustoQuerySets {
 
         Index shape:
             kustoSets = @{ <ruleId> = HashSet[string] of EntityIds }
+
+        OS-class skip: when -PresentOsClasses is supplied (the set of OS
+        classes actually represented in this run's asset population), rules
+        whose osPlatformScope doesn't intersect that set are skipped without
+        running KQL. Defender Advanced Hunting queries cost 5-30s each cold;
+        avoiding ones that can't possibly match any loaded asset is a big win
+        on small/scoped runs (e.g. workstation-only fleets skip the AD/DC
+        server rule's 11s round-trip).
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Rules,
-        [Parameter()]$RunContext
+        [Parameter()]$RunContext,
+        [Parameter()]$PresentOsClasses
     )
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     $sets = @{}
     $count = 0
+    $skipped = 0
     try {
         $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
         . (Join-Path $siRoot 'engine\asset-profiling\shared\HuntingQuery.ps1')
 
+        $hasPresentSet = ($PresentOsClasses -is [System.Collections.IEnumerable] -and @($PresentOsClasses).Count -gt 0)
+
         foreach ($rule in $Rules) {
+            # OS-class pre-filter: skip rules whose osPlatformScope doesn't intersect
+            # any OS class present in the asset population. Unscoped rules (empty
+            # osPlatformScope) always run since they apply to every asset class.
+            if ($hasPresentSet -and $rule.osPlatformScope -and @($rule.osPlatformScope).Count -gt 0) {
+                $intersects = $false
+                foreach ($_c in @($rule.osPlatformScope)) {
+                    if (@($PresentOsClasses) -contains [string]$_c) { $intersects = $true; break }
+                }
+                if (-not $intersects) {
+                    $skipped++
+                    continue
+                }
+            }
             foreach ($det in $rule.Detections) {
                 $list = if ($det.Detect.any) { $det.Detect.any } elseif ($det.Detect.all) { $det.Detect.all } else { @() }
                 foreach ($spec in $list) {
@@ -433,8 +458,10 @@ function Build-SIEgKustoQuerySets {
             }
         }
         $script:SIRuleIndexes.kustoSets = $sets
-        $script:SIRuleIndexes.BuildStats['kustoSets'] = @{ Built=$true; Rows=$count; Ms=$sw.ElapsedMilliseconds }
-        Write-Verbose ('Build-SIEgKustoQuerySets: {0} per-rule sets in {1} ms' -f $count, $sw.ElapsedMilliseconds)
+        $stats = @{ Built=$true; Rows=$count; Ms=$sw.ElapsedMilliseconds }
+        if ($skipped -gt 0) { $stats['SkippedByOsClass'] = $skipped }
+        $script:SIRuleIndexes.BuildStats['kustoSets'] = $stats
+        Write-Verbose ('Build-SIEgKustoQuerySets: {0} per-rule sets in {1} ms (skipped {2} via osPlatformScope)' -f $count, $sw.ElapsedMilliseconds, $skipped)
     } catch {
         Write-Warning ('Build-SIEgKustoQuerySets failed: {0}' -f $_.Exception.Message)
         $script:SIRuleIndexes.BuildStats['kustoSets'] = @{ Built=$false; Error=$_.Exception.Message }
@@ -479,7 +506,29 @@ function Build-SIRuleIndexes {
     if ($kinds.Contains('hasAzureTagDirectOrParent') -or $kinds.Contains('hasTag')) {
         Build-SIParentResourceChainIndex -RunContext $RunContext
     }
-    if ($kinds.Contains('egKustoQuery'))           { Build-SIEgKustoQuerySets  -Rules  $Rules  -RunContext $RunContext }
+    if ($kinds.Contains('egKustoQuery')) {
+        # Compute the set of OS classes actually represented in this run's
+        # asset population so Build-SIEgKustoQuerySets can skip rules whose
+        # osPlatformScope can't possibly match any loaded asset (e.g.
+        # WindowsServer-only AD/DC rule on a workstation-only run = skip 11s
+        # Defender Hunting round-trip).
+        $presentOsClasses = $null
+        if ($Assets) {
+            try {
+                . (Join-Path $PSScriptRoot 'RuleEval.ps1')
+                $presentSet = New-Object System.Collections.Generic.HashSet[string]
+                foreach ($a in $Assets) {
+                    $cls = Get-SIAssetOsClass -Asset $a
+                    if ($cls) { [void]$presentSet.Add([string]$cls) }
+                }
+                $presentOsClasses = @($presentSet)
+                Write-Verbose ('Build-SIRuleIndexes: present OS classes = {0}' -f ($presentOsClasses -join ','))
+            } catch {
+                Write-Verbose ('Build-SIRuleIndexes: present-OS-class probe failed -- {0} (continuing without filter)' -f $_.Exception.Message)
+            }
+        }
+        Build-SIEgKustoQuerySets -Rules $Rules -RunContext $RunContext -PresentOsClasses $presentOsClasses
+    }
 
     return $script:SIRuleIndexes.BuildStats
 }

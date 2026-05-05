@@ -106,7 +106,13 @@ param(
     [int]   $StaggerSeconds          = 2,
     [switch]$Sequential,
     [switch]$NoForceFullRun,
-    [switch]$PrivilegeTierClassifier
+    [switch]$PrivilegeTierClassifier,
+    # Launcher flavour. 'community' = launcher.$Flavour-vm.ps1 (auth from
+    # custom.ps1's $Spn* block; demo VMs / community customers). 'internal' =
+    # launcher.internal-vm.ps1 (auth via upstream Initialize-PlatformAutomationFramework
+    # cert+KV). Default 'community' so existing demo callers don't break.
+    [ValidateSet('community','internal')]
+    [string]$Flavour                 = 'community'
 )
 $ErrorActionPreference = 'Continue'
 
@@ -212,7 +218,7 @@ $mePid = $PID
 if ($PrivilegeTierClassifier) {
     Write-Host "`n==> -PrivilegeTierClassifier mode -- skipping stale-process kill (leave sibling launchers alone)" -ForegroundColor Cyan
 } else {
-    Write-Host "`n==> killing stale launcher.community-vm.ps1 processes" -ForegroundColor Cyan
+    Write-Host "`n==> killing stale launcher.$Flavour-vm.ps1 processes" -ForegroundColor Cyan
     $stale = Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue |
         Where-Object { $_.ProcessId -ne $mePid -and $_.CommandLine -match 'launcher\.community-vm\.ps1' }
     if ($stale) {
@@ -246,16 +252,16 @@ $ff = if ($NoForceFullRun) { '' } else { '-ForceFullRun' }
 # don't set it (PTC always runs solo when -PrivilegeTierClassifier is on).
 if ($PrivilegeTierClassifier) {
     $plan = @(
-        @{ Title = 'SI - PrivilegeTierClassifier'; Path = "$Root\launcher\privilege-tier-classifier\launcher.community-vm.ps1"; Args = '' }
+        @{ Title = 'SI - PrivilegeTierClassifier'; Path = "$Root\launcher\privilege-tier-classifier\launcher.$Flavour-vm.ps1"; Args = '' }
     )
 } else {
     $plan = @(
-        @{ Title = 'SI - Endpoint';                Path = "$Root\launcher\endpoint\launcher.community-vm.ps1";                  Args = $ff }
-        @{ Title = 'SI - Azure';                   Path = "$Root\launcher\azure\launcher.community-vm.ps1";                     Args = $ff }
-        @{ Title = 'SI - Identity';                Path = "$Root\launcher\identity\launcher.community-vm.ps1";                  Args = $ff }
-        @{ Title = 'SI - PublicIP';                Path = "$Root\launcher\publicip\launcher.community-vm.ps1";                  Args = $ff }
-        @{ Title = 'SI - RA Detailed';             Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Detailed"' }
-        @{ Title = 'SI - RA Summary';              Path = "$Root\launcher\risk-analysis\launcher.community-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Summary"' }
+        @{ Title = 'SI - Endpoint';                Path = "$Root\launcher\endpoint\launcher.$Flavour-vm.ps1";                  Args = $ff }
+        @{ Title = 'SI - Azure';                   Path = "$Root\launcher\azure\launcher.$Flavour-vm.ps1";                     Args = $ff }
+        @{ Title = 'SI - Identity';                Path = "$Root\launcher\identity\launcher.$Flavour-vm.ps1";                  Args = $ff }
+        @{ Title = 'SI - PublicIP';                Path = "$Root\launcher\publicip\launcher.$Flavour-vm.ps1";                  Args = $ff }
+        @{ Title = 'SI - RA Detailed';             Path = "$Root\launcher\risk-analysis\launcher.$Flavour-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Detailed"' }
+        @{ Title = 'SI - RA Summary';              Path = "$Root\launcher\risk-analysis\launcher.$Flavour-vm.ps1";             Args = '-ReportTemplate "RiskAnalysis_Summary"' }
     )
 }
 

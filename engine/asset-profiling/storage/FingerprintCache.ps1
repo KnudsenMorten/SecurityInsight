@@ -67,7 +67,12 @@ function Get-SIFingerprintRecord {
         return $null
     }
 
-    $url = "https://$($Context.AccountName).table.core.windows.net/$TableName(PartitionKey='$pk',RowKey='current')"
+    # OData v3 string literal escaping: single quote is doubled. Then URL-encode
+    # the literal so + & % etc. don't confuse URI parsing. Without this, an
+    # AssetId containing ' (e.g. an Azure resource named O'Brien) breaks the
+    # PartitionKey='...' OData literal and Azure Tables returns 400 Bad Request.
+    $pkLit = [Uri]::EscapeDataString(($pk -replace "'", "''"))
+    $url = "https://$($Context.AccountName).table.core.windows.net/$TableName(PartitionKey='$pkLit',RowKey='current')"
     $date = ConvertTo-SIRfc1123Date
     $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $url
     $headers = @{
@@ -80,7 +85,10 @@ function Get-SIFingerprintRecord {
         return Invoke-RestMethod -Method Get -Uri $url -Headers $headers -ErrorAction Stop
     } catch {
         if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { return $null }
-        throw
+        # Surface the AssetId + Azure JSON error body (the error path was bare
+        # "400 Bad Request" before; impossible to tell which row crashed).
+        $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+        throw ('Get-SIFingerprintRecord GET failed for asset={0}: {1}' -f $AssetId, $detail)
     }
 }
 
@@ -106,7 +114,9 @@ function Set-SIFingerprintRecord {
         return
     }
 
-    $url = "https://$($Context.AccountName).table.core.windows.net/$TableName(PartitionKey='$pk',RowKey='current')"
+    # See Get-SIFingerprintRecord for OData/URL-encoding rationale.
+    $pkLit = [Uri]::EscapeDataString(($pk -replace "'", "''"))
+    $url = "https://$($Context.AccountName).table.core.windows.net/$TableName(PartitionKey='$pkLit',RowKey='current')"
     $body = $entity | ConvertTo-Json -Compress -Depth 5
     $date = ConvertTo-SIRfc1123Date
     $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $url

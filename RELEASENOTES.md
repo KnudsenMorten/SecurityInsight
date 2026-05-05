@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.28
+## v2.2.29
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
 - release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
 - release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
 - release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
 - release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
 - fix(reconcile): skip Write-SIStageShard when records array is empty (39b7cdc8)
-- SI v2.2.0 stable: flatten v2.2/ to root, drop v2.1 layout, audit-pass RA fixes (536e1405)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.29 — FingerprintCache: 400 Bad Request on AssetIds with `'`
+
+`Get-SIFingerprintRecord` / `Set-SIFingerprintRecord` interpolated the PartitionKey raw into an OData literal (`PartitionKey='$pk'`). `ConvertTo-SISafeKey` strips control chars + slash/hash/?, but does NOT escape single quotes — any AssetId containing a `'` (Azure resource named `O'Brien-vm`, tag value with apostrophe, etc.) broke the OData literal and Azure Tables returned `400 Bad Request`. Engine crashed mid-Collect with no indication which row caused it.
+
+**Fix:**
+- Both call sites now OData-escape the PK (double `'` -> `''`) AND URL-encode via `[Uri]::EscapeDataString`. `+ & %` and friends now also flow through cleanly.
+- Get-side error path now surfaces the AssetId + Azure JSON body (was bare `400 Bad Request`).
+
+Repro: any tenant with an Azure resource whose name contains `'`. Crash always fires at the same row across reruns (deterministic).
 
 ---
 

@@ -1,6 +1,5 @@
 id:        USBOnlyPeripheralWithFirmwareUpdateCapability
 appliesTo: endpoint
-osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'USB-Only Peripheral with Firmware Update Capability'
 category:  'IoT / OT'

@@ -1,6 +1,5 @@
 id:        SharedClassroomLibraryComputer
 appliesTo: endpoint
-osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Shared Classroom / Library Computer'
 category:  'Client Devices'

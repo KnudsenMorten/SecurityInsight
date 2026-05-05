@@ -1,6 +1,5 @@
 id:        SharedDevice
 appliesTo: endpoint
-osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Shared Device'
 category:  'Client Devices'

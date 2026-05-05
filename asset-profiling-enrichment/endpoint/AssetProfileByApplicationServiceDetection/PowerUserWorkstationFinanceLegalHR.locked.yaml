@@ -1,6 +1,5 @@
 id:        PowerUserWorkstationFinanceLegalHR
 appliesTo: endpoint
-osPlatformScope: [WindowsServer, Linux]
 mode:      locked
 purpose:   'Power User Workstation (Finance, Legal, HR)'
 category:  'Client Devices'

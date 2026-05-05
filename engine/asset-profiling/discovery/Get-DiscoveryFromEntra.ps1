@@ -34,7 +34,10 @@ function Get-DiscoveryFromEntra {
     $rows = New-Object System.Collections.ArrayList
     # also $select deviceId (the AAD device GUID, distinct from the
     # Entra object id) -- it's the cross-source join key MDE + EG also expose.
-    $url = 'https://graph.microsoft.com/v1.0/devices?$select=id,deviceId,displayName,operatingSystem,deviceCategory,trustType,profileType,registrationDateTime&$top=999'
+    # approximateLastSignInDateTime drives the SI_ExcludeInactive_Endpoint /
+    # SI_RequireMdeActive_Endpoint filter so a device that's stale in MDE but
+    # signed in to Entra in last N days still counts as active.
+    $url = 'https://graph.microsoft.com/v1.0/devices?$select=id,deviceId,displayName,operatingSystem,deviceCategory,trustType,profileType,registrationDateTime,approximateLastSignInDateTime&$top=999'
 
     try {
         do {
@@ -77,6 +80,7 @@ function Get-DiscoveryFromEntra {
             ENTRA_ProfileType = $d.profileType
             ENTRA_Category    = $d.deviceCategory
             ENTRA_RegisteredAt= $d.registrationDateTime
+            ENTRA_ApproximateLastSignInDateTime = $d.approximateLastSignInDateTime
             # keep the unprefixed OS so the legacy `elseif ($a.OS)` branch
             # in Invoke-Collect still triggers for pure Entra-device records (devices
             # MDE + EG don't see). Cross-source-merged records hit the EG branch first

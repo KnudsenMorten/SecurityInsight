@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.30
+## v2.2.31
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
 - release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
 - release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
 - release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.4 — silence git-stderr noise in demo orchestrator (3953a88d)
 - release: SecurityInsight v2.2.3 — gate fixes + demo orchestrator (feaaab0c)
 - release: SecurityInsight v2.2.2 — README cosmetic fixes (082b8577)
-- release: SecurityInsight v2.2.1 — patch (publish-pipeline + Reconcile fixes) (dcec31e9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.31 — Endpoint: opt-in "active devices only" filter (MDE + EG + Entra)
+
+### What
+
+Two new opt-in globals on the **endpoint engine** for customers who want LA + RA reports trimmed to live-fleet only (defaults OFF -- engine still surfaces stale assets unless customer asks):
+
+| Global | Meaning |
+|---|---|
+| `$global:SI_ExcludeInactive_Endpoint = $true` | Keep a device if NOT MDE-offboarded AND any of: MDE sensor Active, MDE_LastSeen<staleDays, EG.lastSeen<staleDays, ENTRA_ApproximateLastSignInDateTime<staleDays. "Alive in at least one Microsoft surface." |
+| `$global:SI_RequireMdeActive_Endpoint = $true` | Strict MDE-only: keep ONLY MDE Active sensor or fresh MDE_LastSeen. Drops EG-only and Entra-only devices. Matches the MDE portal "Sensor health state: Active" filter exactly. |
+
+`$global:SI_ActiveStaleDays` (default 30) controls the freshness window for both modes.
+
+### Why
+
+Customer with 500 actual managed Windows boxes was seeing 4452 endpoint records in LA -- the dedup is correct but the engine surfaces every Entra registration, EG IoT node, and Arc-onboarded Linux server. MDE portal shows ~46 in this customer's tenant (sample); the rest are stale registrations or non-MDE devices. Customer wanted a live-fleet view in LA without giving up the full discovery the engine does.
+
+Filter runs at Stage Output BEFORE all sinks, so LA / JSON / Excel see the same filtered set.
+
+### Engine change
+
+`Get-DiscoveryFromEntra.ps1` now also $select's `approximateLastSignInDateTime` from `/v1.0/devices`. Emitted as `ENTRA_ApproximateLastSignInDateTime`, used by the new filter as the Entra freshness signal. Existing `ENTRA_RegisteredAt` field unchanged.
+
+### Not in scope
+
+Identity / Azure / PublicIp engines are unaffected. Identity already surfaces enabled+staleness via `IsEnabledActive` in the projected row -- a parallel filter there can come later if customers ask.
 
 ---
 

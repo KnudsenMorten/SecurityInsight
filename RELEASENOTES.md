@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.35
+## v2.2.36
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
 - release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
 - release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
 - release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.9 - fix RA Summary template name (dfd2e677)
 - release: SecurityInsight v2.2.8 - public repo .gitignore (bfda9aa4)
 - release: SecurityInsight v2.2.7 - Shodan key name unification (2e0bae79)
-- release: SecurityInsight v2.2.6 - PTC opt-in via -PrivilegeTierClassifier (62524773)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.36 — Endpoint filter: PS 5.1 TryParse crash in Stage Output
+
+v2.2.32's endpoint asset filter called `[datetime]::TryParse([string]$x, [ref]$ts)` with `$ts` initialized as `$null`. On PowerShell 5.1 the runtime can't bind the 2-arg `out DateTime` overload when the ref target is `[object]` rather than `[datetime]` -- the call fails with `Cannot find an overload for "TryParse" and the argument count: "2"`. Crashed Phase 8 OUTPUT after every other phase (1-7) had completed -- so a 1.8h Phase 6 Profile run was wasted on each retry.
+
+Switched to a try/catch + `[datetime]::Parse(...)` wrapper. Works on PS 5.1 and PS 7+ identically; no typed-ref dance.
+
+Identity filter wasn't affected (it uses integer `ENTRA_LastSignInDays`, no datetime parsing).
 
 ---
 

@@ -479,8 +479,13 @@ function Invoke-SIOutput {
                 foreach ($prop in $candidates) {
                     $p = $m.PSObject.Properties[$prop]
                     if ($p -and $p.Value) {
+                        # PS 5.1 can't bind [datetime]::TryParse(string,[ref]$ts) when $ts
+                        # is initialized as $null (the [ref] doesn't match `out DateTime`
+                        # because PowerShell sees [ref][object]). Use try/catch + Parse
+                        # instead -- works on PS 5.1 + 7+, no typed-ref dance.
                         $ts = $null
-                        if ([datetime]::TryParse([string]$p.Value, [ref]$ts) -and $ts.ToUniversalTime() -ge $staleCutoff) { return $true }
+                        try { $ts = [datetime]::Parse([string]$p.Value) } catch { $ts = $null }
+                        if ($ts -and $ts.ToUniversalTime() -ge $staleCutoff) { return $true }
                     }
                 }
                 return $false

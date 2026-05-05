@@ -259,6 +259,34 @@ function Write-SIClassificationToLogAnalytics {
             }
         }
 
+        # DCE name-collision guard.
+        # AzLogDcrIngestPS (line 1575) resolves $global:SI_DceName to a DCE id
+        # via $global:AzDceDetails | Where-Object { $_.name -eq $DceName }.
+        # When two DCEs share that name across subs/RGs (legacy + new is a
+        # common shape on long-lived tenants), the lookup returns BOTH records.
+        # $DceInfo.id then becomes a string[], which gets serialized as a JSON
+        # array into the DCR PUT body's properties.dataCollectionEndpointId.
+        # ARM rejects with: LinkedAuthorizationFailed: invalid types 'Array'.
+        # Pre-filter the cache to one entry by name + RG so the module's
+        # name-only lookup returns exactly one record.
+        try {
+            $_dceRg = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { $global:SI_DcrResourceGroup }
+            if (-not $global:AzDceDetails) {
+                try { $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false } catch { Write-Warning ('DCE list query failed -- {0}' -f $_.Exception.Message) }
+            }
+            if ($global:AzDceDetails) {
+                $_byNameAndRg = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName -and ($_.id -like "*/resourceGroups/$_dceRg/*") })
+                $_byName      = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
+                $_picked = if ($_byNameAndRg.Count -ge 1) { $_byNameAndRg | Select-Object -First 1 }
+                           elseif ($_byName.Count -ge 1)  { $_byName | Select-Object -First 1 }
+                           else { $null }
+                if ($_picked -and $_byName.Count -gt 1) {
+                    Write-SIInfo ("DCE collision guard: {0} DCEs named '{1}' visible -- pinned to RG '{2}' ({3})" -f $_byName.Count, $global:SI_DceName, $_dceRg, $_picked.id)
+                    $global:AzDceDetails = @($_picked)
+                }
+            }
+        } catch { Write-Warning ('DCE collision guard failed -- {0} (continuing)' -f $_.Exception.Message) }
+
         Write-Host ''
         Write-SIStep 'CheckCreateUpdate-TableDcr-Structure (schema check + auto-provision)'
         # Verbose dropped on every AzLogDcrIngestPS call below.

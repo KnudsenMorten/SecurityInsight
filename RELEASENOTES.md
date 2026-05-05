@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.40
+## v2.2.41
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
 - release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
 - release: SecurityInsight v2.2.39 - flip endpoint filter default back to MIXED (87316f19)
 - release: SecurityInsight v2.2.38 - Endpoint filter strict MDE-only by default (c0bc8e7f)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.14 - DCR-cache retry + Pre-Publish Gate exception (cc579806)
 - release: SecurityInsight v2.2.13 - ship privilege-tier-catalog + 10-step docs refresh (105614a7)
 - release: SecurityInsight v2.2.12 - PublicIP tolerate missing Profile tables (acfc2a9e)
-- release: SecurityInsight v2.2.11 - PublicIP surface KQL error body (73b03856)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.41 — Output: DCE name-collision guard (fix LA ingest LinkedAuthorizationFailed)
+
+Live customer hit `LinkedAuthorizationFailed: properties.dataCollectionEndpointId has values which are of invalid types 'Array'` on every DCR auto-create. Root cause: AzLogDcrIngestPS line 1575 resolves `$global:SI_DceName` via `$global:AzDceDetails | Where-Object { $_.name -eq $DceName }` — when two DCEs share that name across subs/RGs (legacy + new shape on long-lived tenants), the lookup returns BOTH records. `$DceInfo.id` becomes `string[]`, gets serialized as JSON array into the DCR PUT body, ARM rejects.
+
+Engine-side fix in `Invoke-Output.ps1` `Write-SIClassificationToLogAnalytics`: before calling `CheckCreateUpdate-TableDcr-Structure`, pre-filter `$global:AzDceDetails` to a single entry by name + RG. Honors new optional `$global:SI_DceResourceGroup` (falls back to `$global:SI_DcrResourceGroup` if not set). When the cache is empty, queries Azure Resource Graph via `Get-AzDceListAll` first.
+
+Logs `DCE collision guard: N DCEs named 'X' visible -- pinned to RG 'Y' (id)` only when collision detected — silent pass-through when there's a clean single match.
+
+No customer config required to benefit; setting `$global:SI_DceResourceGroup` makes the disambiguation explicit when the DCE lives in a different RG than the DCRs.
 
 ---
 

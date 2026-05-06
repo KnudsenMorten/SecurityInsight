@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.66
+## v2.2.67
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.67 - prestage also creates 'securityinsight' container (RA xlsx/json export target) (b5e05b9a)
 - release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
 - release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
 - release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
 - release: SecurityInsight v2.2.39 - flip endpoint filter default back to MIXED (87316f19)
 - release: SecurityInsight v2.2.38 - Endpoint filter strict MDE-only by default (c0bc8e7f)
-- release: SecurityInsight v2.2.37 - Run-AllEngines: 3 subset switches (7dc62844)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.67 — Prestage: also create the `securityinsight` blob container (RA xlsx/json export upload target)
+
+The RA engine writes its run artefacts (xlsx + json) to `$global:ExportDestination` — typically `https://<storage>.blob.core.windows.net/securityinsight/`. v2.2.54-66 prestage only created the `sistaging` container (engine staging blobs), leaving RA's export upload to fail with `ContainerNotFound` until the operator created the container by hand.
+
+Prestage now creates BOTH containers in one loop:
+- `sistaging` — engine shard blobs (Discover/Collect/Enrich/Classify/Output)
+- `securityinsight` — RA xlsx/json export upload target
+
+Logged as:
+```
+[OK]   Storage container      : sistaging  [exists]
+[OK]   Storage container      : securityinsight  [exists]
+```
+
+(or `[CREATED]` on first run.)
+
+Operators who use a different export-container name should set `$global:SI_ExportContainer` and compose `$global:ExportDestination` from `$global:SI_StorageAccount` in `custom.ps1` (see updated config sample). The hardcoded `securityinsight` is still always created — additional named containers are operator-managed for now.
+
+Custom config now composes the URL automatically, mirroring the `SI_WorkspaceResourceId` pattern:
+```powershell
+$global:SI_ExportContainer = 'securityinsight'
+$global:ExportDestination  = "https://$($global:SI_StorageAccount).blob.core.windows.net/$($global:SI_ExportContainer)/"
+```
 
 ---
 

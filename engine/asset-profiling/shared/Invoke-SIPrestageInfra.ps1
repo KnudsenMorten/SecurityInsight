@@ -270,20 +270,24 @@ function Invoke-SIPrestageInfra {
                 }
             } catch { Write-Warning ('Prestage: storage key fetch failed: {0} (set $global:SI_StorageKey manually or use -UseStorageOAuth)' -f $_.Exception.Message) }
 
-            # sistaging container (engine writes shard blobs here)
-            try {
-                $stCtx = $sa.Context
-                if ($stCtx) {
-                    $container = Get-AzStorageContainer -Name 'sistaging' -Context $stCtx -ErrorAction SilentlyContinue
-                    if ($container) {
-                        Write-SIOk ($_lbl -f 'Storage container', "sistaging  $(_Si_Status $false)")
-                    } else {
-                        $null = New-AzStorageContainer -Name 'sistaging' -Context $stCtx -Permission Off -ErrorAction Stop
-                        Write-SIOk ($_lbl -f 'Storage container', "sistaging  $(_Si_Status $true)")
-                        $changed = $true
+            # Storage containers:
+            #   - sistaging        : engine shard blobs (Discover/Collect/Enrich/Classify/Output stages)
+            #   - securityinsight  : RA xlsx/json export upload target (default for $global:ExportDestination)
+            $stCtx = $sa.Context
+            foreach ($cn in @('sistaging','securityinsight')) {
+                try {
+                    if ($stCtx) {
+                        $container = Get-AzStorageContainer -Name $cn -Context $stCtx -ErrorAction SilentlyContinue
+                        if ($container) {
+                            Write-SIOk ($_lbl -f 'Storage container', "$cn  $(_Si_Status $false)")
+                        } else {
+                            $null = New-AzStorageContainer -Name $cn -Context $stCtx -Permission Off -ErrorAction Stop
+                            Write-SIOk ($_lbl -f 'Storage container', "$cn  $(_Si_Status $true)")
+                            $changed = $true
+                        }
                     }
-                }
-            } catch { Write-Warning ('sistaging container ensure failed: {0}' -f $_.Exception.Message) }
+                } catch { Write-Warning ("'{0}' container ensure failed: {1}" -f $cn, $_.Exception.Message) }
+            }
         } catch { Write-Warning ('storage account ensure failed: {0}' -f $_.Exception.Message) }
     }
 

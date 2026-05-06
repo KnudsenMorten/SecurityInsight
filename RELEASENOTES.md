@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.70
+## v2.2.71
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.71 - RA \$laDceRg resolution honors \$global:SI_DceResourceGroup (was hardcoded rg-dce-securityinsight fallback) (58d5e600)
 - release: SecurityInsight v2.2.70 - PublicIP cast AssetTier to [int] (InvalidTransformOutput String vs Int) (98afd0b5)
 - release: SecurityInsight v2.2.69 - PrivilegeTierClassifier truncate file to first clean copy (was tripled with corruption fragments) (ed524b19)
 - release: SecurityInsight v2.2.68 - AssetTagging v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation) (9d017b0d)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.44 - revive v2.2.40 OS-class bucketing (rule loader was dropping osPlatformScope) (d884f5ec)
 - release: SecurityInsight v2.2.43 - gate EG identity sample-dump diagnostics behind SI_Verbose (14e25cbf)
 - release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
-- release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.71 — RA: `$laDceRg` resolution now honors `$global:SI_DceResourceGroup` (was hardcoded fallback to `rg-dce-securityinsight`)
+
+The RA engine resolved its DCE RG from `$global:DceResourceGroup` (legacy name) and fell back to the hardcoded default `'rg-dce-securityinsight'` when that wasn't set. Customers using the canonical SI globals (`$global:SI_DceResourceGroup = 'rg-securityinsight-community-v22'`) had RA's collision guard look in the wrong RG, log:
+
+```
+[WARN] DCE collision guard: 'dce-securityinsight-community-v22' NOT in sub '...' / RG 'rg-dce-securityinsight'
+```
+
+…then fall through to the module's name-only lookup, which picked a wrong record → 404 / Array bug.
+
+Fix: extend `$laDceRg` resolution to a 3-tier fallback chain:
+1. `$global:DceResourceGroup` (legacy explicit override)
+2. `$global:SI_DceResourceGroup` (asset-profiling canonical — shared by RA when set in custom.ps1)
+3. `'rg-dce-securityinsight'` (hardcoded default — last resort)
+
+Same global, single source of truth across all SI engines.
 
 ---
 

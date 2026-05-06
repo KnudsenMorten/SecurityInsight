@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.2.71
+## v2.2.72
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.74 - internal-vm launchers honor SI_UseStorageOAuth (0e77ae7d)
+- release: SecurityInsight v2.2.73 - asset-tagging idempotent framework init (4ea70e43)
+- release: SecurityInsight v2.2.72 - asset-tagging rename + RA fixes (a2727e42)
 - release: SecurityInsight v2.2.71 - RA \$laDceRg resolution honors \$global:SI_DceResourceGroup (was hardcoded rg-dce-securityinsight fallback) (58d5e600)
 - release: SecurityInsight v2.2.70 - PublicIP cast AssetTier to [int] (InvalidTransformOutput String vs Int) (98afd0b5)
 - release: SecurityInsight v2.2.69 - PrivilegeTierClassifier truncate file to first clean copy (was tripled with corruption fragments) (ed524b19)
@@ -31,15 +34,73 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
 - release: SecurityInsight v2.2.46 - fix v2.2.42 DCR diagnostic showing wrong DCE + new SI_SkipDcrAutoCreate opt-out (30bd8d85)
 - release: SecurityInsight v2.2.45 - skip kustoSets KQL for rules whose osPlatformScope can't match any loaded asset (134ce3ce)
-- release: SecurityInsight v2.2.44 - revive v2.2.40 OS-class bucketing (rule loader was dropping osPlatformScope) (d884f5ec)
-- release: SecurityInsight v2.2.43 - gate EG identity sample-dump diagnostics behind SI_Verbose (14e25cbf)
-- release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.74 — internal-vm launchers honor `$global:SI_UseStorageOAuth` from custom.ps1
+
+The four asset-profiling internal-vm launchers (`launcher/{azure,endpoint,identity,publicip}/launcher.internal-vm.ps1`) only read `-UseStorageOAuth` from the CLI switch — `$global:SI_UseStorageOAuth = $true` set in `SecurityInsight.custom.ps1` was silently ignored. Customers running shared-key with stale `SI_StorageKey` got 403 `AuthenticationFailed` from Azure Table REST in `Initialize-SIFingerprintTable` (`storage/FingerprintCache.ps1:46`) and had no obvious way to flip to OAuth without re-running the launcher with the explicit switch.
+
+Fix: each launcher now resolves `UseStorageOAuth` with the same CLI-wins-then-global pattern as `Sinks` / `AssetLimit` / `ForceFullRun`:
+
+```powershell
+$effectiveUseStorageOAuth = $false
+if ($cliBound.ContainsKey('UseStorageOAuth')) {
+    $effectiveUseStorageOAuth = [bool]$UseStorageOAuth
+} elseif ($global:SI_UseStorageOAuth) {
+    $effectiveUseStorageOAuth = [bool]$global:SI_UseStorageOAuth
+}
+```
+
+The `[LAUNCHER] ... UseStorageOAuth=` log line + the engine passthrough now both reflect the resolved value, so customers can drop `$global:SI_UseStorageOAuth = $true` in their `custom.ps1` once and never touch the launcher CLI again. Engine-side OAuth handling (`storage/StorageContext.ps1` -- bearer token from `Get-AzAccessToken -ResourceUrl 'https://storage.azure.com/'`) was already in place.
+
+community-vm launchers untouched (different param flow; community customers typically pass `-UseStorageOAuth` interactively and don't have a layered solution-wide custom.ps1 to inherit from).
+
+---
+
+## v2.2.73 — Asset-Tagging: skip Initialize-PlatformAutomationFramework re-init when launcher already ran it
+
+When invoked through `launcher.internal-vm.ps1`, the launcher's `Initialize-LauncherConfig` auto-runs `Initialize-PlatformAutomationFramework` at Layer 1.5/5 (when `$global:Context` is null). The asset-tagging engine then ran the same call AGAIN at `AssetTagging.ps1:1220`, producing duplicate `WARNING: Initialize-PlatformLegacyIdentity ... failed` lines (one from each call) when the customer KV is missing the optional `Legacy-*` / `Azure-VM-LocalAdmin-*` secrets.
+
+Fix: guard the engine's call with `if (-not $global:Context -or -not $global:AzureTenantId -or -not $global:HighPriv_Modern_ApplicationID_Azure)`. The SPN-alias assignments (`SpnTenantId` / `SpnClientId` / `SpnClientSecret`) still run unconditionally — they're idempotent and cheap.
+
+The engine still bootstraps the framework when called directly without a launcher (the guard's globals are null in that case). Same engine, half the warning noise when run through the launcher.
+
+---
+
+## v2.2.72 — Asset-Tagging: rename engine folder + RA fixes (DCE-RG priority, ImpactedAssetsList unification)
+
+Three fixes shipped together:
+
+**1. Asset-Tagging engine folder rename: `engine/asset-tagging-endpoint-exclusions/` → `engine/asset-tagging/`.** The old name was a misnomer — the engine tags ANY asset type (endpoint, identity, azure), not just endpoint exclusions. Launcher (`launcher/asset-tagging/launcher.internal-vm.ps1`) updated to dot-source the new path.
+
+If your VisualCron / scheduler currently invokes `engine/asset-tagging-endpoint-exclusions/AssetTagging.ps1` directly, it will throw `Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret)` at line 50 — the engine's SPN-globals guard fires when called outside `$global:AutomationFramework=$true` context. Fix: point the scheduler at the launcher instead:
+```
+-file <repo>\SOLUTIONS\SecurityInsight\launcher\asset-tagging\launcher.internal-vm.ps1
+```
+The launcher sets `$global:AutomationFramework=$true`, resolves `$global:SettingsPath` to `<repo>\SOLUTIONS\SecurityInsight\asset-tagging-rules\` automatically, and applies the v2.2 short YAML names (`AssetTagging.locked.yaml` / `AssetTagging.custom.yaml`).
+
+**2. RA: `$laDceRg` resolution priority fix.** The `Invoke-RiskAnalysis.ps1` collision guard read `$global:DceResourceGroup` (legacy Layer-0 default `'rg-dce-securityinsight'`) BEFORE the canonical `$global:SI_DceResourceGroup` set by customers, so the customer's RG override was masked and the collision guard tripped on every Summary ingest:
+```
+[WARN] DCE collision guard: '<dce>' NOT in sub '...' / RG 'rg-dce-securityinsight'
+```
+Fix: flipped priority — `SI_DceResourceGroup` (customer-only) wins over `DceResourceGroup` (legacy / Layer-0).
+
+**3. RA: `ImpactedAssetsList` unification across endpoint + identity Summary reports.** Endpoint Summary KQL emitted column `ImpactedAssetsList` (make_set array); Identity Summary KQL emitted column `ImpactedAssets` (semicolon string). Excel union-merged both columns; rows from one report family populated only one of them, so the screenshot column `ImpactedAssetsList` was empty for every Identity row even when `IAssets` count was non-zero.
+
+Fix: engine `Invoke-RiskAnalysis.ps1` post-process now canonicalizes on `ImpactedAssetsList`:
+- Reads value from whichever column the YAML emitted (`ImpactedAssets` or `ImpactedAssetsList`)
+- Splits semicolon-strings to arrays + dedupes/sorts
+- Stores under canonical `ImpactedAssetsList` key, drops `ImpactedAssets` alias
+- OutputPropertyOrder loop remaps `ImpactedAssets` → `ImpactedAssetsList` so YAMLs that still list the legacy name in OutputPropertyOrder slot the value into the canonical column
+
+YAMLs unchanged — the fix is engine-side, so all 50+ Identity Summary reports populate the same column in Excel from now on.
 
 ---
 

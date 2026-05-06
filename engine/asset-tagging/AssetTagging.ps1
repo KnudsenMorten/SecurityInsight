@@ -1217,7 +1217,13 @@ if ($AutomationFramework) {
   Write-Output "Repo root          -> $($global:PathScripts)"
 
   Import-Module (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1') -Global -Force -WarningAction SilentlyContinue
-  $null = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets
+  # Idempotent: skip re-init if the launcher's Initialize-LauncherConfig already
+  # ran Initialize-PlatformAutomationFramework at Layer 1.5/5. Re-running it
+  # produces duplicate "Initialize-PlatformLegacyIdentity ... failed" warnings
+  # (one from each call) when KV is missing the optional Legacy-* secrets.
+  if (-not $global:Context -or -not $global:AzureTenantId -or -not $global:HighPriv_Modern_ApplicationID_Azure) {
+      $null = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets
+  }
   $global:SpnTenantId     = $global:AzureTenantId
   $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure
   $global:SpnClientSecret = $global:HighPriv_Modern_Secret_Azure

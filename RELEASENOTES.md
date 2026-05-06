@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.50
+## v2.2.51
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
 - release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
 - release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
 - release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
@@ -33,13 +34,58 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
 - release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
 - release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
-- release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.51 — Output: rewrite LA ingest with the canonical AzLogDcrIngestPS pattern (drop ~300 lines of guards/diagnostics/self-heal)
+
+`Write-SIClassificationToLogAnalytics` had grown to ~590 lines of layered safety (DCE collision guard, DCR pre-create diagnostic, RBAC pre-flight check, `SI_SkipDcrAutoCreate` opt-out, 3-attempt retry with self-heal `New-AzRoleAssignment` on 403). Each fix made sense in isolation, but the cumulative complexity was fighting the canonical pattern instead of reinforcing it — and the self-heal kept failing because RBAC propagation can outlast 3×60s.
+
+Rewrite: the entire ingest block now mirrors the v2.1 RA engine (`Invoke-RiskAnalysis.ps1` lines 5914-6000) — six steps, no retries, no self-heal:
+
+1. `Get-AzDceListAll` + `Get-AzDcrListAll` — full caches fresh
+2. Schema sample (full dataset, CollectionTime stamped)
+3. `CheckCreateUpdate-TableDcr-Structure` — provision DCR + table
+4. `Start-Sleep 15s` + re-fetch caches (lets new DCR's immutableId land in ARG)
+5. Standard 4-step prep: CollectionTime / Add-Column (Computer/Fqdn/User) / ValidateFix / Build-DataArray
+6. `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` — single attempt, no retry
+
+File shrunk 786 → 489 lines.
+
+**What's required in `SecurityInsight.custom.ps1`** (all of these are non-negotiable; engine fails loud if missing):
+
+```powershell
+# Workspace + DCE/DCR identity
+$global:SI_WorkspaceResourceId = '/subscriptions/<sub>/resourcegroups/<rg>/providers/microsoft.operationalinsights/workspaces/<ws>'
+$global:SI_DceName             = 'dce-si-securityinsight'
+$global:SI_DcrResourceGroup    = 'rg-securityinsight'    # where DCRs live (auto-created if absent)
+
+# SPN auth (Bootstrap-Auth.ps1 populates these from KV)
+$global:SI_SPN_TenantId = '<tenant-id>'
+$global:SI_SPN_AppId    = '<spn-app-id>'
+$global:SI_SPN_Secret   = '<spn-client-secret>'
+$global:SI_SPN_ObjectId = '<spn-object-id>'   # SP ObjectId, NOT AppId
+```
+
+**What's required in Azure** (Bootstrap-Auth or Setup-SecurityInsight handles this once):
+- DCE exists at `$global:SI_DceName`
+- SPN has: `Contributor` + `Monitoring Metrics Publisher` on the DCR RG, `Reader` on the DCE RG, `Contributor` on the workspace
+
+If RBAC is missing, the ingest 403s. The engine no longer tries to grant — that's the bootstrap's job. Fix once, run forever.
+
+**Removed config knobs** (no longer honored, all were band-aids on the broken pattern):
+- `$global:SI_SkipDcrAutoCreate` — engine always provisions
+- `$global:SI_DcrMergeDiagnostic` — DCR-merge auditing dropped (use Azure Monitor's own audit logs)
+- `$global:SI_DceResourceGroup` — DCE RG is now derived from the cache lookup; engine doesn't need it told twice
+- `$global:SI_AzSubscriptionId` — derived from workspace ARM id
+
+The simplification deliberately gives up the multi-DCE collision guard. If a tenant has two DCEs with the same name across subs/RGs, the canonical module's name lookup will return both and the DCR PUT fails with `LinkedAuthorizationFailed: invalid types Array`. Fix that at the source: rename one DCE.
 
 ---
 

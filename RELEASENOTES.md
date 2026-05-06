@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.67
+## v2.2.68
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.68 - AssetTagging v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation) (9d017b0d)
 - release: SecurityInsight v2.2.67 - prestage also creates 'securityinsight' container (RA xlsx/json export target) (b5e05b9a)
 - release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
 - release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
@@ -33,13 +34,42 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
 - release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
 - release: SecurityInsight v2.2.39 - flip endpoint filter default back to MIXED (87316f19)
-- release: SecurityInsight v2.2.38 - Endpoint filter strict MDE-only by default (c0bc8e7f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.68 — AssetTagging: v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation)
+
+The legacy `engine/asset-tagging-endpoint-exclusions/AssetTagging.ps1` failed when invoked directly with two errors:
+1. `_shared\Ensure-Module.ps1 not recognized` — the helper folder didn't exist next to the engine
+2. `Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret)` — no launcher had set them
+
+Migration to v2.2 entry-point pattern:
+
+**1. Copied `engine/publicip/_shared/Ensure-Module.ps1` to `engine/asset-tagging-endpoint-exclusions/_shared/`** so the engine's `. (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')` line resolves cleanly.
+
+**2. New launcher: `launcher/asset-tagging/launcher.internal-vm.ps1`** (mirrors `launcher/azure/launcher.internal-vm.ps1` pattern):
+- Resolves repo root + version
+- Loads layered config (Layers 1-5)
+- Sets `$global:AutomationFramework = $true` so the SPN check in the engine skips (auth comes from AF + Bootstrap-Auth)
+- Defaults `$global:SettingsPath` to `<repo>/SOLUTIONS/SecurityInsight/asset-tagging-rules/`; falls back to the existing `asset-profiling-enrichment/endpoint/` when the dedicated folder isn't present (where today's `AssetTagging.custom.yaml` lives)
+- Overrides `$global:LockedYamlFile = 'AssetTagging.locked.yaml'` and `$global:CustomYamlFile = 'AssetTagging.custom.yaml'` to use the v2.2 short names instead of the legacy `SecurityInsight_CriticalAssetTagging_*.yaml`
+- Dot-sources `engine/asset-tagging-endpoint-exclusions/AssetTagging.ps1`
+- Standard transcript + override-file hooks
+
+**Operator ergonomics:**
+- Run `launcher/asset-tagging/launcher.internal-vm.ps1` instead of invoking the engine directly
+- Tag-rule YAMLs go in `asset-tagging-rules/AssetTagging.custom.yaml` (or stay in the existing `asset-profiling-enrichment/endpoint/` location — launcher auto-detects)
+- Override anything via `SecurityInsight.custom.ps1` or `launcher/asset-tagging/LauncherConfig.custom.ps1`
+
+Engine code unchanged — same 1300-line script, same YAML schema, same merge semantics. Just a clean entry path.
+
+Community-vm launcher + per-engine LauncherConfig samples are TODO for a follow-up — the internal-vm pattern is enough to unblock the immediate use case.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.69
+## v2.2.70
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.70 - PublicIP cast AssetTier to [int] (InvalidTransformOutput String vs Int) (98afd0b5)
 - release: SecurityInsight v2.2.69 - PrivilegeTierClassifier truncate file to first clean copy (was tripled with corruption fragments) (ed524b19)
 - release: SecurityInsight v2.2.68 - AssetTagging v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation) (9d017b0d)
 - release: SecurityInsight v2.2.67 - prestage also creates 'securityinsight' container (RA xlsx/json export target) (b5e05b9a)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.43 - gate EG identity sample-dump diagnostics behind SI_Verbose (14e25cbf)
 - release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
 - release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
-- release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.70 — PublicIP: cast `AssetTier` to `[int]` (`InvalidTransformOutput: AssetTier produced 'String' output 'Int'`)
+
+Same root cause as v2.2.61's `DaysInactive` cast bump. PublicIP row emission at `Invoke-PublicIpScanner.ps1:512` did `AssetTier = $t.AssetTier` without explicit cast. The upstream targets carry int values from KQL `toint(coalesce(Tier, 99))` (line 181 endpoint, line 199 azure) and `[int]$tier` (line 779 ExtraIPs), but PowerShell deserialization through the target enumeration loses the type, so the row arrives as String. The existing `dcr-si-publicip` DCR has `AssetTier` as `Int`, ARM rejects the PUT.
+
+Fix: `AssetTier = [int]$t.AssetTier` at line 512. Forward-compatible (new DCRs land as Int too); back-compatible (existing Int DCR accepts Int input).
+
+If you keep hitting this on other columns, the pattern is the same — find the row builder that emits the column, add an explicit `[int]` / `[int64]` / `[bool]` / `[string]` cast at the emission point.
 
 ---
 

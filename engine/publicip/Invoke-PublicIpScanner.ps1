@@ -509,7 +509,7 @@ function Invoke-ShodanScans {
             AssetName         = $t.AssetName
             AssetEngine       = $t.AssetEngine
             AssetType         = 'PublicIP'
-            AssetTier         = $t.AssetTier
+            AssetTier         = [int]$t.AssetTier   # Int -- matches existing DCR transform output type (avoids InvalidTransformOutput on schema migration)
             cmdbId              = $t.cmdbId
             cmdbName            = $t.cmdbName
             cmdbCriticality     = $t.cmdbCriticality

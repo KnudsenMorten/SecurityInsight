@@ -270,8 +270,13 @@ function Write-SIClassificationToLogAnalytics {
         # Pre-filter the cache to one entry by name + RG so the module's
         # name-only lookup returns exactly one record.
         try {
-            $_dceRg  = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { $global:SI_DcrResourceGroup }
-            $_dceSub = $global:SI_AzSubscriptionId   # correlate by sub too -- 'rg-securityinsight' is a generic name that may exist in multiple subs the SPN can read
+            # STRICT: don't fall back to SI_DcrResourceGroup -- DCE has its
+            # own home (often a different RG, e.g., split-RG community layouts
+            # with rg-dce-* / rg-securityinsight-*). When SI_DceResourceGroup
+            # / SI_AzSubscriptionId are unset, the picker degrades to
+            # name-only and the diagnostic stays silent (no false positives).
+            $_dceRg  = $global:SI_DceResourceGroup
+            $_dceSub = $global:SI_AzSubscriptionId
             # ALWAYS rebuild $global:AzDceDetails + $global:AzDcrDetails fresh
             # via the standard AzLogDcrIngestPS helpers. The canonical pattern
             # in the module's docs rebuilds both before each ingest -- gives
@@ -311,28 +316,33 @@ function Write-SIClassificationToLogAnalytics {
         # picked the location it did.
         try {
             # Look up the DCE the MODULE will actually pick. Correlate by
-            # name + sub + RG (same logic as the v2.2.41 collision guard) so
-            # the diagnostic accurately reflects which DCE the engine will
-            # use. Falls back through {name+sub+RG} -> {name+RG} -> {name}
-            # with a RG/sub-mismatch warning when the most-specific match
-            # doesn't exist -- this catches the case where 'rg-securityinsight'
-            # exists in multiple subs the SPN can read.
+            # name + (optional) sub + (optional) RG. STRICT semantics: only
+            # consider $global:SI_DceResourceGroup / $global:SI_AzSubscriptionId
+            # as expectations. If they're unset, do name-only matching and
+            # don't warn -- the operator simply hasn't told us which DCE to
+            # disambiguate against (common in single-DCE community layouts
+            # and split-RG layouts where DCE lives in dce-RG and DCRs in a
+            # different RG).
             $_dceForDcr     = $null
             $_dceWrongScope = $false
-            $_dceExpectRg   = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { $global:SI_DcrResourceGroup }
+            $_dceExpectRg   = $global:SI_DceResourceGroup    # NO fallback to DcrRg -- DCE has its own home
             $_dceExpectSub  = $global:SI_AzSubscriptionId
             if ($global:AzDceDetails -and $global:SI_DceName) {
                 $_dceMatches = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
-                $_dceInSubAndRg = @($_dceMatches | Where-Object { $_dceExpectSub -and $_dceExpectRg -and ($_.id -like "*/subscriptions/$_dceExpectSub/resourceGroups/$_dceExpectRg/*") })
-                $_dceInRg       = @($_dceMatches | Where-Object { $_dceExpectRg -and ($_.id -like "*/resourceGroups/$_dceExpectRg/*") })
+                $_dceInSubAndRg = if ($_dceExpectSub -and $_dceExpectRg) { @($_dceMatches | Where-Object { $_.id -like "*/subscriptions/$_dceExpectSub/resourceGroups/$_dceExpectRg/*" }) } else { @() }
+                $_dceInRg       = if ($_dceExpectRg)  { @($_dceMatches | Where-Object { $_.id -like "*/resourceGroups/$_dceExpectRg/*" }) } else { @() }
+                $_dceInSub      = if ($_dceExpectSub) { @($_dceMatches | Where-Object { $_.id -like "*/subscriptions/$_dceExpectSub/*" }) } else { @() }
                 if ($_dceInSubAndRg.Count -ge 1) {
                     $_dceForDcr = $_dceInSubAndRg | Select-Object -First 1
                 } elseif ($_dceInRg.Count -ge 1) {
-                    $_dceForDcr     = $_dceInRg | Select-Object -First 1
-                    $_dceWrongScope = $true   # right RG name, wrong sub
+                    $_dceForDcr = $_dceInRg | Select-Object -First 1
+                    if ($_dceExpectSub) { $_dceWrongScope = $true }   # sub was specified, didn't match
+                } elseif ($_dceInSub.Count -ge 1) {
+                    $_dceForDcr = $_dceInSub | Select-Object -First 1
+                    if ($_dceExpectRg) { $_dceWrongScope = $true }   # RG was specified, didn't match
                 } elseif ($_dceMatches.Count -ge 1) {
-                    $_dceForDcr     = $_dceMatches | Select-Object -First 1
-                    $_dceWrongScope = $true   # name match but wrong RG (and probably wrong sub)
+                    $_dceForDcr = $_dceMatches | Select-Object -First 1
+                    if ($_dceExpectSub -or $_dceExpectRg) { $_dceWrongScope = $true }   # something specified but nothing matched
                 }
             }
             $_dceLoc    = if ($_dceForDcr) { [string]$_dceForDcr.location } else { '<NOT FOUND in cache -- name does not match any DCE the SPN can read>' }

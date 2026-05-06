@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.49
+## v2.2.50
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
 - release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
 - release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
 - release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
 - release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
 - release: SecurityInsight v2.2.20 - capture Context from auto-init (d4ffc957)
-- release: SecurityInsight v2.2.19 - auto-init AutomationFramework in internal mode (e700c58a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.50 — Output: drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design
+
+v2.2.47 added a `SCOPE MISMATCH` warning when the DCE picker fell back from `name+sub+RG` to `name+RG` or `name`-only matching. v2.2.46/47 also kept the pre-existing fallback `SI_DceResourceGroup ?? SI_DcrResourceGroup` for the DCE-RG expectation. Combined, this fired a false-positive warning on **split-RG community layouts** where:
+- DCE lives in `rg-dce-securityinsight-community` (its own RG, by design)
+- DCRs live in `rg-securityinsight-community` (different RG)
+- `SI_DceResourceGroup` unset (community config relies on the DCE name being globally unique)
+
+The diagnostic incorrectly compared the DCE's actual RG against the DCR's RG (via the fallback), saw mismatch, fired:
+```
+WARNING: SCOPE MISMATCH -- expected sub='' RG='rg-securityinsight-community' but picked DCE is in sub='ef830ec3-...' RG='rg-dce-securityinsight-community'.
+```
+The picker found the right DCE — the warning was just wrong.
+
+Fix:
+1. **Drop the DcrRg fallback** in both the v2.2.41 collision guard and the v2.2.46 diagnostic. DCE has its own home; using DcrRg as a substitute is a conventional shortcut that breaks split-RG layouts. When `SI_DceResourceGroup` is unset, the picker now degrades cleanly to name-only matching.
+2. **Only warn on EXPLICIT mismatch.** New picker considers `SI_AzSubscriptionId` and `SI_DceResourceGroup` independently:
+   - If both set: try `name+sub+RG`; on miss try `name+RG` (warn: sub mismatch) → `name+sub` (warn: RG mismatch) → `name` only (warn: both mismatch)
+   - If only one set: try that one; degrade silently to name-only when not satisfiable
+   - If neither set: name-only matching, no warnings
+
+Net effect: the warning still fires when an operator explicitly told us where the DCE should live and the picker had to fall back. It no longer fires when the operator didn't specify expectations.
+
+To suppress this specific false positive without upgrading: set `$global:SI_DceResourceGroup = 'rg-dce-securityinsight-community'` (the DCE's actual RG) in `SecurityInsight.custom.ps1`.
 
 ---
 

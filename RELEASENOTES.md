@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.56
+## v2.2.57
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
 - release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
 - release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
 - release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
@@ -33,13 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
 - release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
 - release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
-- release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.57 — Prestage: writeback `SI_StorageKey` to custom.ps1 ONLY on first-create of the storage account
+
+v2.2.56 wrote the key on every cold start where `$global:SI_StorageKey` happened to be unset — including cases where the operator deleted the auto-persisted block intentionally (e.g. mid key-rotation, custom-secrets pattern, or just to test re-fetch). That re-wrote the file uninvited.
+
+Tighter gate: a new local `$saCreated` flag is set only when `New-AzStorageAccount` actually fired in this prestage call. The custom.ps1 writeback is gated on `$saCreated -and -not $global:SI_StorageKey`. So:
+
+| State | In-memory backfill | Writeback to custom.ps1 |
+|---|---|---|
+| First run, account missing → created | ✅ from key1 | ✅ first-time only |
+| Subsequent run, account exists, key in custom.ps1 | skipped (already set) | skipped |
+| Subsequent run, account exists, key NOT in custom.ps1 (operator deleted block) | ✅ from key1 | ❌ skipped — operator gesture respected |
+| Internal-vm with KV-fetch line | skipped (KV wins) | skipped |
+
+When the account exists but the key isn't persisted, the engine logs:
+```
+storage account already existed -- key in-memory only, not persisted (set $global:SI_StorageKey manually for cold-start)
+```
+
+So operators who deleted the block know the engine isn't writing it back, and operators who rotated the key know they need to drop a fresh `$global:SI_StorageKey = '...'` line themselves.
 
 ---
 

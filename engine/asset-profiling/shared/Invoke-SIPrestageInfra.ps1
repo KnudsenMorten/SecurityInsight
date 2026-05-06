@@ -172,12 +172,14 @@ function Invoke-SIPrestageInfra {
         } catch { Write-Warning ('Prestage: storage RG ensure failed: {0}' -f $_.Exception.Message) }
 
         # Storage account (Standard_LRS, HTTPS only, TLS 1.2+, public access on)
+        $saCreated = $false   # tracked separately from $changed so writeback fires only on first-create
         try {
             $sa = Get-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -ErrorAction SilentlyContinue
             if (-not $sa) {
                 Write-SIInfo ("  creating storage account '{0}' in {1}/{2} (Standard_LRS, HTTPS only)" -f $StorageAccountName, $stRg, $Location)
                 $sa = New-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -Location $Location -SkuName 'Standard_LRS' -Kind 'StorageV2' -EnableHttpsTrafficOnly $true -MinimumTlsVersion 'TLS1_2' -AllowBlobPublicAccess $false -ErrorAction Stop
-                $changed = $true
+                $changed   = $true
+                $saCreated = $true
             }
             # Storage Blob Data Contributor on the storage account (engine reads/writes blobs via OAuth when SI_UseStorageOAuth, otherwise uses key)
             $stScope = "/subscriptions/$SubscriptionId/resourceGroups/$stRg/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"
@@ -192,48 +194,42 @@ function Invoke-SIPrestageInfra {
                     }
                 } catch { Write-Warning ("Prestage: could not grant '{0}' on storage: {1}" -f $role, $_.Exception.Message) }
             }
-            # Fetch storage key + backfill $global:SI_StorageKey for this run
-            # so downstream stages (Discover/Collect/Enrich/Output) that use
-            # KeyAuth pick it up without operator intervention. New customers
-            # get zero-config storage; rotated keys auto-refresh on next run.
-            #
-            # ALSO: write the key back to the loaded custom.ps1 so subsequent
-            # cold-start runs don't need the Get-AzStorageAccountKey call.
-            # Path is tracked by Initialize-LauncherConfig.ps1 in
-            # $global:SI_LoadedCustomConfigPath. We only write when the file
-            # exists AND doesn't already have a non-empty SI_StorageKey line.
-            # Internal-vm operators using KV-fetch (custom.ps1 already has the
-            # Get-PlatformSecret line) keep their existing flow -- the
-            # already-set check prevents the writeback.
+            # Fetch storage key (in-memory) ONLY when SI_StorageKey isn't set
+            # this run. Persist to custom.ps1 ONLY when the storage account was
+            # JUST CREATED in this prestage call -- not on every cold start.
+            # This avoids re-writing the file when the operator deleted the
+            # auto-persisted block intentionally (e.g. after a key rotation
+            # they want to handle manually) or used a custom-secrets pattern.
             try {
                 if (-not $global:SI_StorageKey) {
                     $keys = Get-AzStorageAccountKey -ResourceGroupName $stRg -Name $StorageAccountName -ErrorAction Stop
                     $primary = $keys | Where-Object { $_.KeyName -eq 'key1' } | Select-Object -First 1
                     if ($primary -and $primary.Value) {
                         $global:SI_StorageKey = [string]$primary.Value
-                        Write-SIInfo ('  backfilled $global:SI_StorageKey from storage account key1')
+                        Write-SIInfo ('  backfilled $global:SI_StorageKey from storage account key1 (in-memory)')
 
-                        # Persist to custom.ps1 for cold-start runs
-                        try {
-                            $cfgPath = $global:SI_LoadedCustomConfigPath
-                            if ($cfgPath -and (Test-Path -LiteralPath $cfgPath)) {
-                                $content = Get-Content -LiteralPath $cfgPath -Raw -ErrorAction Stop
-                                # Check if any non-empty SI_StorageKey assignment already exists
-                                # (matches both `= 'x'` and `= "x"` forms; ignores lines where the
-                                # value is empty string or comes from a Get-PlatformSecret call)
-                                $hasKey = $content -match '(?im)^\s*\$global:SI_StorageKey\s*=\s*[''"][^''"]+[''"]'
-                                $hasKvFetch = $content -match '(?im)^\s*if\s*\(\s*-not\s+\$global:SI_StorageKey'
-                                if (-not $hasKey -and -not $hasKvFetch) {
-                                    $append = "`r`n`r`n# Auto-persisted by SI v2.2.56+ prestage (first-run storage account key1).`r`n# Remove this block to force re-fetch from Azure on next run.`r`n`$global:SI_StorageKey = '$($primary.Value)'`r`n"
-                                    Add-Content -LiteralPath $cfgPath -Value $append -Encoding UTF8 -NoNewline -ErrorAction Stop
-                                    Write-SIInfo ('  persisted $global:SI_StorageKey to {0}' -f $cfgPath)
-                                } elseif ($hasKvFetch) {
-                                    Write-SIInfo ('  custom.ps1 already has KV-fetch for SI_StorageKey -- not appending plaintext')
-                                } else {
-                                    Write-SIInfo ('  custom.ps1 already has $global:SI_StorageKey set -- not overwriting')
+                        # Persist to custom.ps1 ONLY on first-create
+                        if ($saCreated) {
+                            try {
+                                $cfgPath = $global:SI_LoadedCustomConfigPath
+                                if ($cfgPath -and (Test-Path -LiteralPath $cfgPath)) {
+                                    $content    = Get-Content -LiteralPath $cfgPath -Raw -ErrorAction Stop
+                                    $hasKey     = $content -match '(?im)^\s*\$global:SI_StorageKey\s*=\s*[''"][^''"]+[''"]'
+                                    $hasKvFetch = $content -match '(?im)^\s*if\s*\(\s*-not\s+\$global:SI_StorageKey'
+                                    if (-not $hasKey -and -not $hasKvFetch) {
+                                        $append = "`r`n`r`n# Auto-persisted by SI v2.2.56+ prestage on first-create of storage account.`r`n# Remove this block to force re-fetch from Azure on next run (e.g. after key rotation).`r`n`$global:SI_StorageKey = '$($primary.Value)'`r`n"
+                                        Add-Content -LiteralPath $cfgPath -Value $append -Encoding UTF8 -NoNewline -ErrorAction Stop
+                                        Write-SIInfo ('  persisted $global:SI_StorageKey to {0} (first-create only)' -f $cfgPath)
+                                    } elseif ($hasKvFetch) {
+                                        Write-SIInfo ('  custom.ps1 already has KV-fetch for SI_StorageKey -- not appending plaintext')
+                                    } else {
+                                        Write-SIInfo ('  custom.ps1 already has $global:SI_StorageKey set -- not overwriting')
+                                    }
                                 }
-                            }
-                        } catch { Write-Warning ('Prestage: storage key writeback to custom.ps1 failed: {0}' -f $_.Exception.Message) }
+                            } catch { Write-Warning ('Prestage: storage key writeback to custom.ps1 failed: {0}' -f $_.Exception.Message) }
+                        } else {
+                            Write-SIInfo ('  storage account already existed -- key in-memory only, not persisted (set $global:SI_StorageKey manually for cold-start)')
+                        }
                     }
                 }
             } catch { Write-Warning ('Prestage: storage key fetch failed: {0} (set $global:SI_StorageKey manually or use -UseStorageOAuth)' -f $_.Exception.Message) }

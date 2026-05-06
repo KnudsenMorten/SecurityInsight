@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.53
+## v2.2.54
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
 - release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
 - release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
 - release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
 - release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
 - release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
-- release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.54 — Prestage: also create storage account + sistaging container + grant Storage Data RBAC + backfill SI_StorageKey
+
+Extension to the v2.2.53 pre-stage helper. When `$global:SI_StorageAccount` is set, the engine now also creates the storage account if missing, grants the SPN the three Storage Data Contributor roles (Blob/Table/Queue), creates the `sistaging` container, and backfills `$global:SI_StorageKey` from the storage account's `key1` when the global is empty.
+
+Order of `SI_StorageKey` resolution (first non-empty wins):
+1. Operator's `custom.ps1` (`$global:SI_StorageKey = '...'`)
+2. Lazy KV-fetch line in `custom.ps1` (`Get-PlatformSecret -Name 'SI-StorageKey'`) — internal-vm pattern
+3. Prestage backfill from `Get-AzStorageAccountKey` — zero-config / community pattern
+
+Internal-vm operators who store the key in Key Vault keep their existing flow (KV-fetch wins, prestage sees `SI_StorageKey` set and skips). Community / zero-config operators get the key auto-populated on first run with no manual KV step.
+
+**New steps in `Invoke-SIPrestageInfra` (gated by non-empty `-StorageAccountName`):**
+
+9a. Create storage RG if missing (defaults to workspace RG)
+9b. Create storage account if missing (Standard_LRS, StorageV2, HTTPS only, TLS 1.2+, public blob access disabled)
+9c. Grant `Storage Blob Data Contributor` + `Storage Table Data Contributor` + `Storage Queue Data Contributor` on the storage account scope
+9d. Backfill `$global:SI_StorageKey` from `key1` if not already set
+9e. Create `sistaging` container if missing (private)
+
+**New optional global:**
+- `$global:SI_StorageResourceGroup` — defaults to workspace RG when unset
+
+**Required global** (unchanged):
+- `$global:SI_StorageAccount` — must be set for the storage block to run; lowercase + digits, 3-24 chars, globally unique
+
+If `SI_StorageAccount` is empty, the storage block is skipped entirely (LA-only deployments still work but staging features will fail downstream when the engine actually tries to use blob storage).
+
+**Storage RBAC requirement (operator-side):** the engine SPN needs `User Access Administrator` OR `Owner` somewhere up the scope chain to grant the three Storage Data roles. Same as v2.2.53; one bootstrap, runs forever.
+
+**Other infra not pre-staged** (separate solutions or out of scope):
+- Azure OpenAI (separate solution; key in `$global:OpenAI_apiKey`)
+- Power BI workspace (separate solution; deployed via Step 4)
+- Container App job + ACR + KEDA (only when `$global:SI_HostMode = 'container'`)
+- Defender XDR licensing (Microsoft-managed, not pre-stageable)
+- SMTP relay (external service)
+- ServiceNow CMDB CSV (file path)
 
 ---
 

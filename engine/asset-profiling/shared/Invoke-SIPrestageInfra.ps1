@@ -44,6 +44,13 @@ function Invoke-SIPrestageInfra {
         [Parameter(Mandatory)][string]$DceResourceGroup,
         [Parameter(Mandatory)][string]$DceName,
 
+        # Storage account for engine staging (sistaging container, fingerprint
+        # cache, CMDB tables). Optional -- when StorageAccountName is empty,
+        # the storage step is skipped (engine still works for LA-only flows
+        # but staging features will fail downstream).
+        [string]$StorageAccountName,
+        [string]$StorageResourceGroup,
+
         # Common
         [Parameter(Mandatory)][string]$Location,
         [Parameter(Mandatory)][string]$SubscriptionId,
@@ -151,7 +158,71 @@ function Invoke-SIPrestageInfra {
         }
     } catch { Write-Warning ('Prestage: DCE ensure failed: {0}' -f $_.Exception.Message) }
 
-    # ---- 9. Propagation sleep (only when something was created/granted) ----
+    # ---- 9. Storage account + sistaging container (engine staging) ----
+    # Skipped when -StorageAccountName is empty (LA-only deployments).
+    if (-not [string]::IsNullOrWhiteSpace($StorageAccountName)) {
+        $stRg = if (-not [string]::IsNullOrWhiteSpace($StorageResourceGroup)) { $StorageResourceGroup } else { $WorkspaceResourceGroup }
+        # Storage RG (might be a 4th distinct RG or shared with workspace)
+        try {
+            if (-not (Get-AzResourceGroup -Name $stRg -ErrorAction SilentlyContinue)) {
+                Write-SIInfo ("  creating storage RG '{0}' in {1}" -f $stRg, $Location)
+                $null = New-AzResourceGroup -Name $stRg -Location $Location -ErrorAction Stop
+                $changed = $true
+            }
+        } catch { Write-Warning ('Prestage: storage RG ensure failed: {0}' -f $_.Exception.Message) }
+
+        # Storage account (Standard_LRS, HTTPS only, TLS 1.2+, public access on)
+        try {
+            $sa = Get-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -ErrorAction SilentlyContinue
+            if (-not $sa) {
+                Write-SIInfo ("  creating storage account '{0}' in {1}/{2} (Standard_LRS, HTTPS only)" -f $StorageAccountName, $stRg, $Location)
+                $sa = New-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -Location $Location -SkuName 'Standard_LRS' -Kind 'StorageV2' -EnableHttpsTrafficOnly $true -MinimumTlsVersion 'TLS1_2' -AllowBlobPublicAccess $false -ErrorAction Stop
+                $changed = $true
+            }
+            # Storage Blob Data Contributor on the storage account (engine reads/writes blobs via OAuth when SI_UseStorageOAuth, otherwise uses key)
+            $stScope = "/subscriptions/$SubscriptionId/resourceGroups/$stRg/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"
+            foreach ($role in @('Storage Blob Data Contributor','Storage Table Data Contributor','Storage Queue Data Contributor')) {
+                try {
+                    $existing = Get-AzRoleAssignment -ObjectId $SpnObjectId -Scope $stScope -ErrorAction SilentlyContinue |
+                                  Where-Object { $_.RoleDefinitionName -eq $role -and $_.Scope -eq $stScope }
+                    if (-not $existing) {
+                        Write-SIInfo ("  granting '{0}' on storage account to SPN" -f $role)
+                        $null = New-AzRoleAssignment -ObjectId $SpnObjectId -RoleDefinitionName $role -Scope $stScope -ErrorAction Stop
+                        $changed = $true
+                    }
+                } catch { Write-Warning ("Prestage: could not grant '{0}' on storage: {1}" -f $role, $_.Exception.Message) }
+            }
+            # Fetch storage key + backfill $global:SI_StorageKey for this run
+            # so downstream stages (Discover/Collect/Enrich/Output) that use
+            # KeyAuth pick it up without operator intervention. New customers
+            # get zero-config storage; rotated keys auto-refresh on next run.
+            try {
+                if (-not $global:SI_StorageKey) {
+                    $keys = Get-AzStorageAccountKey -ResourceGroupName $stRg -Name $StorageAccountName -ErrorAction Stop
+                    $primary = $keys | Where-Object { $_.KeyName -eq 'key1' } | Select-Object -First 1
+                    if ($primary -and $primary.Value) {
+                        $global:SI_StorageKey = [string]$primary.Value
+                        Write-SIInfo ('  backfilled $global:SI_StorageKey from storage account key1')
+                    }
+                }
+            } catch { Write-Warning ('Prestage: storage key fetch failed: {0} (set $global:SI_StorageKey manually or use -UseStorageOAuth)' -f $_.Exception.Message) }
+
+            # sistaging container (engine writes shard blobs here)
+            try {
+                $stCtx = $sa.Context
+                if ($stCtx) {
+                    $container = Get-AzStorageContainer -Name 'sistaging' -Context $stCtx -ErrorAction SilentlyContinue
+                    if (-not $container) {
+                        Write-SIInfo ("  creating storage container 'sistaging'")
+                        $null = New-AzStorageContainer -Name 'sistaging' -Context $stCtx -Permission Off -ErrorAction Stop
+                        $changed = $true
+                    }
+                }
+            } catch { Write-Warning ('Prestage: sistaging container ensure failed: {0}' -f $_.Exception.Message) }
+        } catch { Write-Warning ('Prestage: storage account ensure failed: {0}' -f $_.Exception.Message) }
+    }
+
+    # ---- 10. Propagation sleep (only when something was created/granted) ----
     if ($changed) {
         Write-SIInfo '  sleeping 30s for ARM/RBAC propagation ...'
         Start-Sleep -Seconds 30

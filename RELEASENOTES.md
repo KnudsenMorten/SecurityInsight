@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.63
+## v2.2.64
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
 - release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
 - release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
 - release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.37 - Run-AllEngines: 3 subset switches (7dc62844)
 - release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
 - release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
-- release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.64 — PublicIP: prefetch DCE/DCR cache before collision guard (was silently no-op'ing)
+
+The v2.2.60 DCE collision guard in `engine/publicip/Invoke-PublicIpScanner.ps1` was gated on `if ($global:AzDceDetails -and ...)` — but the PublicIP engine has its own ingest path that doesn't share state with asset-profiling. On the typical greenfield first-engine run (PublicIP triggered before any asset-profiling engine populates the cache), `$global:AzDceDetails` was `$null`, the guard silently skipped, and the module's internal `Get-AzDceListAll` returned BOTH same-named DCEs → `LinkedAuthorizationFailed: dataCollectionEndpointId 'Array'`.
+
+Fix: explicitly call `Get-AzDceListAll` + `Get-AzDcrListAll` right before the guard so the cache is always populated when the guard runs. Same canonical helpers, same auth params, just explicit.
+
+```powershell
+$global:AzDceDetails = Get-AzDceListAll -AzAppId ... -AzAppSecret ... -TenantId ... 4>$null
+$global:AzDcrDetails = Get-AzDcrListAll -AzAppId ... -AzAppSecret ... -TenantId ... 4>$null
+
+# DCE collision guard (now actually fires)
+if ($global:AzDceDetails -and $global:SI_DceName -and ...) {
+    ...
+}
+```
+
+Asset-profiling Output stage already prefetches the cache (Step 1 of the canonical pattern in `Invoke-Output.ps1`), so this regression was PublicIP-only.
 
 ---
 

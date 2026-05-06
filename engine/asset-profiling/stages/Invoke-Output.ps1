@@ -246,6 +246,8 @@ function Write-SIClassificationToLogAnalytics {
                 if (-not $_subId) {
                     Write-Warning ('Prestage SKIPPED: no subscription id resolvable. Set $global:SI_AzSubscriptionId or $global:SI_WorkspaceResourceId.')
                 } else {
+                    $_stAcct = if ($global:SI_StorageAccount)       { $global:SI_StorageAccount }       else { '' }
+                    $_stRg   = if ($global:SI_StorageResourceGroup) { $global:SI_StorageResourceGroup } else { '' }
                     Invoke-SIPrestageInfra `
                         -WorkspaceName            $_wsName `
                         -WorkspaceResourceGroup   $_wsRg `
@@ -253,6 +255,8 @@ function Write-SIClassificationToLogAnalytics {
                         -DcrResourceGroup         $_dcrRg `
                         -DceResourceGroup         $_dceRg `
                         -DceName                  $_dceName `
+                        -StorageAccountName       $_stAcct `
+                        -StorageResourceGroup     $_stRg `
                         -Location                 $_loc `
                         -SubscriptionId           $_subId `
                         -SpnObjectId              $spnObjectId

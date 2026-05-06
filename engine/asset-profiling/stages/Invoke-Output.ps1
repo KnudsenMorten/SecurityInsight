@@ -301,17 +301,35 @@ function Write-SIClassificationToLogAnalytics {
         # Re-apply the DCE collision guard (Step 1b above) -- the cache rebuild
         # restored the full multi-DCE list, which would re-trigger the
         # LinkedAuthorizationFailed array bug on the upcoming Post-* call.
-        if ($global:AzDceDetails -and $global:SI_DceName) {
-            $_dceMatches = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
-            if ($_dceMatches.Count -gt 1) {
-                $_sub = $global:SI_AzSubscriptionId
-                $_rg  = $global:SI_DceResourceGroup
-                $_bySubAndRg = @($_dceMatches | Where-Object { $_sub -and $_rg -and ($_.id -like "*/subscriptions/$_sub/resourceGroups/$_rg/*") })
-                $_byRg       = @($_dceMatches | Where-Object { $_rg                  -and ($_.id -like "*/resourceGroups/$_rg/*") })
-                $_picked = if ($_bySubAndRg.Count -ge 1) { $_bySubAndRg | Select-Object -First 1 }
-                           elseif ($_byRg.Count -ge 1)   { $_byRg       | Select-Object -First 1 }
-                           else                          { $_dceMatches | Select-Object -First 1 }
-                $global:AzDceDetails = @($_picked)
+        if ($global:AzDceDetails -and $global:SI_DceName -and $global:SI_AzSubscriptionId -and $global:SI_DceResourceGroup) {
+            $_picked = @($global:AzDceDetails | Where-Object {
+                $_.name -eq $global:SI_DceName -and
+                $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DceResourceGroup)/*"
+            }) | Select-Object -First 1
+            if ($_picked) { $global:AzDceDetails = @($_picked) }
+        }
+
+        # SAME guard for DCRs. AzLogDcrIngestPS line 5457 calls
+        # Get-AzDcrDceDetails, which does its OWN name-only Where-Object lookup
+        # against $global:AzDcrDetails (line 3548). When same-named DCRs exist
+        # in other subs/RGs (typically previous installs the SPN can still
+        # read), $DcrInfo becomes ARRAY -> $DcrImmutableId becomes ARRAY ->
+        # implicit-return position shift -> $azDcrDceDetails[6] ends up as
+        # 'westeurope' (DcrLocation from second match) -> 404 NotFound:
+        # "Data collection rule with immutable Id 'westeurope' not found".
+        # Pre-filter to ONE entry by name + sub + RG.
+        if ($global:AzDcrDetails -and $dcrName -and $global:SI_AzSubscriptionId -and $global:SI_DcrResourceGroup) {
+            $_dcrMatches = @($global:AzDcrDetails | Where-Object { $_.name -eq $dcrName })
+            if ($_dcrMatches.Count -gt 1) {
+                $_pickedDcr = @($_dcrMatches | Where-Object {
+                    $_.id -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DcrResourceGroup)/*"
+                }) | Select-Object -First 1
+                if ($_pickedDcr) {
+                    Write-SIInfo ("DCR collision guard: {0} DCRs named '{1}' visible -- pinned to {2}" -f $_dcrMatches.Count, $dcrName, $_pickedDcr.id)
+                    $global:AzDcrDetails = @($global:AzDcrDetails | Where-Object { $_.name -ne $dcrName }) + @($_pickedDcr)
+                } else {
+                    Write-Warning ("DCR collision guard: {0} DCRs named '{1}' visible but NONE in sub '{2}' / RG '{3}' -- ingest will likely 404 with 'westeurope'." -f $_dcrMatches.Count, $dcrName, $global:SI_AzSubscriptionId, $global:SI_DcrResourceGroup)
+                }
             }
         }
 

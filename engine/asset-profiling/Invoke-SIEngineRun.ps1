@@ -140,6 +140,68 @@ if (-not $PSBoundParameters.ContainsKey('CollectionTime')) {
     }
 }
 
+# ============================================================================
+# Prestage infra (greenfield-friendly)
+# ============================================================================
+# Runs BEFORE the storage validation below so the prestage can create the
+# storage account + backfill $global:SI_StorageKey from key1, satisfying
+# the StorageAccountKey check on the first run. Also creates workspace + DCE
+# + DCR RGs + RBAC. Read-then-write idempotent. Skipped when:
+#   - $global:SI_PrestageInfra = $false (operator opt-out)
+#   - 'LA' is not in $Sinks (no LA ingest needed -> no infra needed)
+#   - Mock mode (no Azure)
+if ($PSCmdlet.ParameterSetName -ne 'Mock' -and $Sinks -contains 'LA' -and $global:SI_PrestageInfra -ne $false) {
+    try {
+        . (Join-Path $PSScriptRoot 'shared\Invoke-SIPrestageInfra.ps1')
+
+        $_subId  = $global:SI_AzSubscriptionId
+        $_wsRg   = if ($global:SI_WorkspaceResourceGroup) { $global:SI_WorkspaceResourceGroup } else { 'rg-securityinsight' }
+        $_wsName = if ($global:SI_WorkspaceName)          { $global:SI_WorkspaceName }          else { 'log-platform-management-securityinsight' }
+        # If WorkspaceResourceId is set, parse sub from it (canonical source)
+        if ($global:SI_WorkspaceResourceId -match '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/[^/]+/workspaces/([^/?]+)') {
+            if (-not $_subId)  { $_subId  = $Matches[1] }
+            if (-not $_wsRg -or $_wsRg -eq 'rg-securityinsight')                       { $_wsRg  = $Matches[2] }
+            if (-not $_wsName -or $_wsName -eq 'log-platform-management-securityinsight') { $_wsName = $Matches[3] }
+        }
+        $_dceRg   = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { 'rg-securityinsight' }
+        $_dcrRg   = if ($global:SI_DcrResourceGroup) { $global:SI_DcrResourceGroup } else { 'rg-securityinsight' }
+        $_dceName = if ($global:SI_DceName)          { $global:SI_DceName }          else { 'dce-si-securityinsight' }
+        $_loc     = if ($global:SI_Location)         { $global:SI_Location }         else { 'westeurope' }
+        $_wsId    = if ($global:SI_WorkspaceResourceId) { $global:SI_WorkspaceResourceId } else { "/subscriptions/$_subId/resourceGroups/$_wsRg/providers/Microsoft.OperationalInsights/workspaces/$_wsName" }
+        $_stAcct  = if ($StorageAccountName)            { $StorageAccountName }            else { $global:SI_StorageAccount }
+        $_stRg    = if ($global:SI_StorageResourceGroup) { $global:SI_StorageResourceGroup } else { '' }
+        $_spnObj  = if ($global:SI_SPN_ObjectId)         { $global:SI_SPN_ObjectId }         else { $global:SI_LogIngest_ObjectId }
+
+        if (-not $_subId) {
+            Write-Warning 'Prestage SKIPPED: $global:SI_AzSubscriptionId not set and not parseable from $global:SI_WorkspaceResourceId.'
+        } elseif (-not $_spnObj) {
+            Write-Warning 'Prestage SKIPPED: $global:SI_SPN_ObjectId not set (RBAC grants need it).'
+        } else {
+            Invoke-SIPrestageInfra `
+                -WorkspaceName            $_wsName `
+                -WorkspaceResourceGroup   $_wsRg `
+                -WorkspaceResourceId      $_wsId `
+                -DcrResourceGroup         $_dcrRg `
+                -DceResourceGroup         $_dceRg `
+                -DceName                  $_dceName `
+                -StorageAccountName       $_stAcct `
+                -StorageResourceGroup     $_stRg `
+                -Location                 $_loc `
+                -SubscriptionId           $_subId `
+                -SpnObjectId              $_spnObj
+
+            # Backfill canonical globals so downstream stages see the resolved values
+            if (-not $global:SI_WorkspaceResourceId) { $global:SI_WorkspaceResourceId = $_wsId }
+            if (-not $global:SI_DceName)             { $global:SI_DceName             = $_dceName }
+            if (-not $global:SI_DcrResourceGroup)    { $global:SI_DcrResourceGroup    = $_dcrRg }
+            if (-not $global:SI_DceResourceGroup)    { $global:SI_DceResourceGroup    = $_dceRg }
+            if (-not $global:SI_AzSubscriptionId)    { $global:SI_AzSubscriptionId    = $_subId }
+        }
+    } catch {
+        Write-Warning ('Prestage at engine entry failed (continuing -- storage / LA may fail downstream): {0}' -f $_.Exception.Message)
+    }
+}
+
 switch ($PSCmdlet.ParameterSetName) {
     'Mock'  {
         $ctx = New-SIStorageContext -Mock

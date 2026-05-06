@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.54
+## v2.2.55
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
 - release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
 - release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
 - release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
 - release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
 - release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
-- release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.55 — Prestage moved from Stage 8 (Output) to engine entry — fixes chicken-and-egg with `SI_StorageKey`
+
+The v2.2.54 prestage lived in `Write-SIClassificationToLogAnalytics` (Stage 8 / Output stage), so the storage account creation + `SI_StorageKey` backfill happened LATE in the run. But `Invoke-SIEngineRun.ps1` validates `$global:SI_StorageKey` at engine entry (line ~158) — long before Stage 8. Greenfield runs threw `StorageAccountKey is required` and never reached prestage.
+
+Fix: prestage call now lives in `Invoke-SIEngineRun.ps1` BEFORE the storage validation switch. Order is now:
+1. Parse params + resolve CollectionTime
+2. **Prestage** (creates RGs + workspace + DCE + storage account + RBAC, backfills `SI_StorageKey` from key1)
+3. Storage validation (passes — SI_StorageKey is now set)
+4. Stages 1-9 run normally
+
+Gated by:
+- `$PSCmdlet.ParameterSetName -ne 'Mock'` — no Azure in mock mode
+- `$Sinks -contains 'LA'` — no infra needed for JSON/Excel-only runs
+- `$global:SI_PrestageInfra -ne $false` — operator opt-out
+- `$global:SI_AzSubscriptionId` AND `$global:SI_SPN_ObjectId` non-empty (otherwise WARN + skip)
+
+The Stage 8 prestage block is removed (was running twice). Backfilled globals (`SI_WorkspaceResourceId`, `SI_DceName`, `SI_DcrResourceGroup`, `SI_DceResourceGroup`, `SI_AzSubscriptionId`) are visible to every downstream stage including Stage 8 ingest.
+
+Greenfield community first-run sequence now works cleanly:
+- Operator sets only auth + 4 names: `SI_AzSubscriptionId`, `SI_WorkspaceName`, `SI_DceName`, `SI_StorageAccount`
+- Engine creates 3 RGs + workspace + DCE + storage account + sistaging container + grants 7 role assignments
+- `SI_StorageKey` backfilled from key1
+- All stages proceed; LA ingest succeeds on first try
 
 ---
 

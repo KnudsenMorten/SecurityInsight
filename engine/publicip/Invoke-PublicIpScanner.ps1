@@ -597,6 +597,23 @@ function Send-RowsToLogAnalytics {
         # column-type inference; matches the RA / asset-profiling pattern).
         $schemaSample = @($Rows | Select-Object -First 100)
 
+        # DCE collision guard (mirrors v2.2.59 in Invoke-Output.ps1). Strict:
+        # pin $global:AzDceDetails to ONE entry by name + sub + RG so the
+        # AzLogDcrIngestPS line 1575 name-only lookup returns a single record
+        # (avoids the LinkedAuthorizationFailed array bug).
+        if ($global:AzDceDetails -and $global:SI_DceName -and $global:SI_AzSubscriptionId -and $global:SI_DceResourceGroup) {
+            $_picked = @($global:AzDceDetails | Where-Object {
+                $_.name -eq $global:SI_DceName -and
+                $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DceResourceGroup)/*"
+            }) | Select-Object -First 1
+            if ($_picked) {
+                $global:AzDceDetails = @($_picked)
+            } else {
+                $_byName = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
+                Write-Log ("DCE collision guard: '{0}' NOT in sub '{1}' / RG '{2}'. {3} same-named DCE(s) visible in other scopes -- module name-only lookup will pick wrong record. Verify SI_DceName / SI_AzSubscriptionId / SI_DceResourceGroup." -f $global:SI_DceName, $global:SI_AzSubscriptionId, $global:SI_DceResourceGroup, $_byName.Count) 'WARN'
+            }
+        }
+
         Write-Log 'CheckCreateUpdate-TableDcr-Structure (schema check + auto-provision)' 'STEP'
         try {
             $null = CheckCreateUpdate-TableDcr-Structure `

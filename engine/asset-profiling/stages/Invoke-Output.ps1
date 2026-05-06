@@ -268,9 +268,35 @@ function Write-SIClassificationToLogAnalytics {
 
         # Step 4: re-sync caches after DCR provisioning. Newly-created DCR's
         # immutableId needs to land in ARG before Post-* can resolve it.
-        Start-Sleep -Seconds 15
-        $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
-        $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+        # Poll for up to 120s -- when ARG hasn't indexed the new DCR yet, the
+        # module falls back to substituting the DCE's location ('westeurope')
+        # as the URL path segment, producing
+        #   404 NotFound: Data collection rule with immutable Id 'westeurope' not found.
+        $_dcrReady = $false
+        $_waitTotal = 0
+        $_waitMax   = 120
+        $_waitStep  = 15
+        while ($_waitTotal -lt $_waitMax) {
+            Start-Sleep -Seconds $_waitStep
+            $_waitTotal += $_waitStep
+            $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+            $_dcrRow = @($global:AzDcrDetails | Where-Object { $_.name -eq $dcrName } | Select-Object -First 1)[0]
+            $_immId  = if ($_dcrRow) {
+                if ($_dcrRow.properties -and $_dcrRow.properties.immutableId) { [string]$_dcrRow.properties.immutableId }
+                elseif ($_dcrRow.immutableId)                                  { [string]$_dcrRow.immutableId }
+                else                                                            { '' }
+            } else { '' }
+            if ($_immId -and $_immId -notlike '*location*' -and $_immId -ne $global:SI_Location) {
+                Write-SIInfo ("DCR immutableId resolved after {0}s: {1}" -f $_waitTotal, $_immId)
+                $_dcrReady = $true
+                break
+            }
+            Write-SIInfo ("waiting for DCR '{0}' immutableId in ARG ({1}s/{2}s) ..." -f $dcrName, $_waitTotal, $_waitMax)
+        }
+        if (-not $_dcrReady) {
+            Write-Warning ("DCR '{0}' immutableId not in ARG after {1}s -- ingest may 404. Will retry; if persistent, wait a few minutes and re-run." -f $dcrName, $_waitMax)
+        }
 
         # Re-apply the DCE collision guard (Step 1b above) -- the cache rebuild
         # restored the full multi-DCE list, which would re-trigger the

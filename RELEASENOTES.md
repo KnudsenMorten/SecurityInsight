@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.68
+## v2.2.69
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.69 - PrivilegeTierClassifier truncate file to first clean copy (was tripled with corruption fragments) (ed524b19)
 - release: SecurityInsight v2.2.68 - AssetTagging v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation) (9d017b0d)
 - release: SecurityInsight v2.2.67 - prestage also creates 'securityinsight' container (RA xlsx/json export target) (b5e05b9a)
 - release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.42 - DCR pre-create diagnostic + RBAC self-heal + Setup hardening + PublicIP AssetId (53a8835e)
 - release: SecurityInsight v2.2.41 - DCE name-collision guard fixes LA ingest (93dbc586)
 - release: SecurityInsight v2.2.40 - Profile pre-bucket rules by OS class (c02f965a)
-- release: SecurityInsight v2.2.39 - flip endpoint filter default back to MIXED (87316f19)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.69 — PrivilegeTierClassifier: truncate file to first clean copy (was tripled with corruption fragments between)
+
+`engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1` was 3,228 lines containing **three concatenated copies of itself** with corruption fragments between each:
+- Copy 1: lines 1-1221 (clean, ends with `Main` invocation)
+- Glue garbage: `siRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)` (missing `$` → PowerShell tried to invoke `siRoot` as a cmdlet) + `$OutputFolder = Join-Path #Requires -Version 5.1` (truncated assignment swallowed by start of next copy's `#Requires` line)
+- Copies 2 + 3: full re-emissions of the same script with similar glue between them
+
+Symptom on direct invocation:
+```
+The term 'siRoot' is not recognized as a name of a cmdlet, function, script file, or executable program.
+At Invoke-PrivilegeTierClassifier.ps1:1222 char:1
++ siRoot     = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+```
+
+Fix: truncate to lines 1-1221, the first complete + clean copy. Parse-check passes. The other two copies + glue fragments deleted.
+
+Likely cause: an editor / sync tool / merge gone wrong appended the file to itself twice. No content lost — copies 2 and 3 were byte-for-byte duplicates of copy 1 (modulo the glue fragments).
 
 ---
 

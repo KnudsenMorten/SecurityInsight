@@ -1,6 +1,6 @@
 # Release notes for SecurityInsight
 
-## v2.2.72
+## v2.2.73
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 

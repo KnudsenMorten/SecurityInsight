@@ -5876,7 +5876,13 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 # set only a name and it resolved to a cross-sub workspace).
                 if ($laWs -match '/subscriptions/([^/]+)/') { $laSubId = $Matches[1] }
 
-                $laDceRg = if (-not [string]::IsNullOrWhiteSpace([string]$global:DceResourceGroup)) { [string]$global:DceResourceGroup } else { 'rg-dce-securityinsight' }
+                $laDceRg = if (-not [string]::IsNullOrWhiteSpace([string]$global:DceResourceGroup)) {
+                                [string]$global:DceResourceGroup
+                            } elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SI_DceResourceGroup)) {
+                                [string]$global:SI_DceResourceGroup    # asset-profiling canonical -- shared by RA when SI_DceResourceGroup is set in custom.ps1
+                            } else {
+                                'rg-dce-securityinsight'
+                            }
 
                 $null = Ensure-SecurityInsightDce `
                               -DceName              $laDceName `

@@ -234,18 +234,16 @@ function Write-SIClassificationToLogAnalytics {
         #   has values which are of invalid types 'Array'.
         # Pre-filter the cache to ONE entry by name + (optional) sub + RG so
         # the module's name-only lookup returns exactly one record.
-        if ($global:AzDceDetails -and $global:SI_DceName) {
-            $_dceMatches = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
-            if ($_dceMatches.Count -gt 1) {
-                $_sub = $global:SI_AzSubscriptionId
-                $_rg  = $global:SI_DceResourceGroup
-                $_bySubAndRg = @($_dceMatches | Where-Object { $_sub -and $_rg -and ($_.id -like "*/subscriptions/$_sub/resourceGroups/$_rg/*") })
-                $_byRg       = @($_dceMatches | Where-Object { $_rg                  -and ($_.id -like "*/resourceGroups/$_rg/*") })
-                $_picked = if ($_bySubAndRg.Count -ge 1) { $_bySubAndRg | Select-Object -First 1 }
-                           elseif ($_byRg.Count -ge 1)   { $_byRg       | Select-Object -First 1 }
-                           else                          { $_dceMatches | Select-Object -First 1 }
-                Write-SIInfo ("DCE collision guard: {0} DCEs named '{1}' visible -- pinned to {2}" -f $_dceMatches.Count, $global:SI_DceName, $_picked.id)
+        if ($global:AzDceDetails -and $global:SI_DceName -and $global:SI_AzSubscriptionId -and $global:SI_DceResourceGroup) {
+            $_picked = @($global:AzDceDetails | Where-Object {
+                $_.name -eq $global:SI_DceName -and
+                $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DceResourceGroup)/*"
+            }) | Select-Object -First 1
+            if ($_picked) {
                 $global:AzDceDetails = @($_picked)
+            } else {
+                $_byName = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
+                Write-Warning ("DCE collision guard: '{0}' NOT in sub '{1}' / RG '{2}'. {3} same-named DCE(s) visible in other scopes -- module name-only lookup will pick wrong record. Verify SI_DceName / SI_AzSubscriptionId / SI_DceResourceGroup." -f $global:SI_DceName, $global:SI_AzSubscriptionId, $global:SI_DceResourceGroup, $_byName.Count)
             }
         }
 

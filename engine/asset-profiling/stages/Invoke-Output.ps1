@@ -190,33 +190,26 @@ function Write-SIClassificationToLogAnalytics {
     $dcrName   = $dcrPattern   -f $RunContext.Engine.ToLowerInvariant()
 
     try {
-        # UNCONDITIONAL silence of the AzLogDcrIngestPS / Az SDK VERBOSE
-        # storm for the duration of the ingest block. The per-call -Verbose:$false
-        # flag isn't enough -- the module reads $global:VerbosePreference internally.
-        # Az/DCR call traces are never useful for diagnosing AP issues, so silence
-        # regardless of operator -Verbose. Restored in the catch/finally below.
+        # Silence Az SDK + AzLogDcrIngestPS verbose stream for the ingest block.
+        # The module reads $global:VerbosePreference internally, so $env / per-call
+        # -Verbose:$false isn't enough. Restored in finally.
         $_savedVerbosePreference = $global:VerbosePreference
         $global:VerbosePreference = 'SilentlyContinue'
 
-        # SPN-secret is the primary auth (single SPN for both
-        # Graph reads + LA ingest; SI_SPN_* unified globals). UAMI path
-        # remains opt-in via $global:SI_PreferUami for legacy single-tenant
-        # deployments.
-        # Backwards-compat fallback: SI_LogIngest_* 25 names.
+        # Auth: SPN primary (SI_SPN_* unified globals from Bootstrap-Auth.ps1),
+        # SI_LogIngest_* legacy fallback. UAMI opt-in via $global:SI_PreferUami.
         $spnAppId    = if ($global:SI_SPN_AppId)    { $global:SI_SPN_AppId }    else { $global:SI_LogIngest_AppId }
         $spnSecret   = if ($global:SI_SPN_Secret)   { $global:SI_SPN_Secret }   else { $global:SI_LogIngest_Secret }
         $spnTenantId = if ($global:SI_SPN_TenantId) { $global:SI_SPN_TenantId } else { $global:SI_LogIngest_TenantId }
-        $spnObjectId = if ($global:SI_SPN_ObjectId) { $global:SI_SPN_ObjectId } else { $global:SI_LogIngest_ObjectId }
 
         $useMi = $global:SI_PreferUami -and -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
-
         $authParams = if ($useMi) {
             @{ UseManagedIdentity = $true; ManagedIdentityClientId = $global:SI_UAMI_ClientId }
         } else {
             @{ AzAppId = $spnAppId; AzAppSecret = $spnSecret; TenantId = $spnTenantId }
         }
-
         $authNote = if ($useMi) { 'UAMI' } else { 'SPN' }
+
         Write-Host ''
         Write-SIInfo ('table : {0}_CL' -f $tableName)
         Write-SIInfo ('DCR   : {0}  (rg={1})' -f $dcrName, $global:SI_DcrResourceGroup)
@@ -224,261 +217,49 @@ function Write-SIClassificationToLogAnalytics {
         Write-SIInfo ('auth  : {0}' -f $authNote)
         Write-SIInfo ('rows  : {0}' -f $flat.Count)
 
-        # ---- 1. Provision/update DCR + LA table from a schema sample ----
-        # flag set to $false. The $true setting
-        # had AzLogDcrIngestPS try to grant Monitoring Metrics Publisher
-        # at DCR-scope on every run -- that requires Owner / User Access
-        # Administrator on the DCR RG, which the LogIngest SPN typically
-        # doesn't have. Match v2.1 RA / IAC pattern: Bootstrap-Auth.ps1
-        # grants the role ONCE at $global:SI_DcrResourceGroup scope using
-        # the operator's elevated context.
-        # Pre-stamp CollectionTime on the schema sample too so the DCR schema
-        # declares the column up front -- otherwise the first ingest after
-        # provisioning would race the schema-extension on first sight.
-        # pass the FULL dataset to CheckCreateUpdate-TableDcr-Structure.
-        # The 50-row sample was missing rare/sparse columns whose values are null
-        # in early SP rows (UAC flags, MI-specific fields, etc.) -- AzLogDcrIngestPS
-        # then skipped them from the DCR/table schema. Full dataset = every column
-        # type correctly inferred, no silent drops downstream.
+        # ---- canonical AzLogDcrIngestPS pattern (mirrors RA engine line 5914+) ----
+        # Step 1: build full DCE + DCR caches via the standard helpers. Everything
+        # downstream (CheckCreateUpdate, Post-*) reads these caches to resolve
+        # name -> id / immutableId. Always rebuild fresh per ingest.
+        $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
+        $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+
+        # Step 2: schema sample (full dataset for type inference) + CollectionTime stamp.
         $schemaSample = @($flat | ForEach-Object {
             $_ | Add-Member -MemberType NoteProperty -Name CollectionTime -Value $RunContext.CollectionTime -Force -PassThru
         })
 
-        # optional DCR-merge diagnostic. Gated OFF by default --
-        # operator opts in via $global:SI_DcrMergeDiagnostic = $true in their
-        # custom.ps1 when they want to know WHICH columns are causing AzLog-
-        # DcrIngestPS to repeatedly re-merge the DCR. The helper compares the
-        # in-memory schema sample against the DCR's existing streamDeclarations.
-        # NEVER throws -- diagnostics must not break ingest.
-        if ($global:SI_DcrMergeDiagnostic) {
-            try {
-                . (Join-Path $PSScriptRoot '..\storage\DcrMergeDiagnostic.ps1')
-                Invoke-SIDcrMergeDiagnostic -DcrName $dcrName -DcrResourceGroup $global:SI_DcrResourceGroup -SchemaSample $schemaSample
-            } catch {
-                Write-Warning ('       dcr-merge-diag failed: {0} (diagnostic only, ingest continues)' -f $_.Exception.Message)
-            }
-        }
-
-        # DCE name-collision guard.
-        # AzLogDcrIngestPS (line 1575) resolves $global:SI_DceName to a DCE id
-        # via $global:AzDceDetails | Where-Object { $_.name -eq $DceName }.
-        # When two DCEs share that name across subs/RGs (legacy + new is a
-        # common shape on long-lived tenants), the lookup returns BOTH records.
-        # $DceInfo.id then becomes a string[], which gets serialized as a JSON
-        # array into the DCR PUT body's properties.dataCollectionEndpointId.
-        # ARM rejects with: LinkedAuthorizationFailed: invalid types 'Array'.
-        # Pre-filter the cache to one entry by name + RG so the module's
-        # name-only lookup returns exactly one record.
-        try {
-            # STRICT: don't fall back to SI_DcrResourceGroup -- DCE has its
-            # own home (often a different RG, e.g., split-RG community layouts
-            # with rg-dce-* / rg-securityinsight-*). When SI_DceResourceGroup
-            # / SI_AzSubscriptionId are unset, the picker degrades to
-            # name-only and the diagnostic stays silent (no false positives).
-            $_dceRg  = $global:SI_DceResourceGroup
-            $_dceSub = $global:SI_AzSubscriptionId
-            # ALWAYS rebuild $global:AzDceDetails + $global:AzDcrDetails fresh
-            # via the standard AzLogDcrIngestPS helpers. The canonical pattern
-            # in the module's docs rebuilds both before each ingest -- gives
-            # the engine a consistent post-bootstrap view of DCEs/DCRs the SPN
-            # can read AND undoes any prior-iteration prune by the collision
-            # guard (so every ingest starts from full ARG state, prunes if
-            # needed, and the next ingest sees the full list again).
-            if (-not $useMi) {
-                try { $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false } catch { Write-Warning ('Get-AzDceListAll refresh failed -- {0}' -f $_.Exception.Message) }
-                try { $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false } catch { Write-Warning ('Get-AzDcrListAll refresh failed -- {0}' -f $_.Exception.Message) }
-            } elseif (-not $global:AzDceDetails) {
-                # MI auth path: helper signature differs; only fetch DCE list when missing
-                try { $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false } catch { Write-Warning ('DCE list query failed -- {0}' -f $_.Exception.Message) }
-            }
-            if ($global:AzDceDetails) {
-                $_byName        = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
-                $_bySubAndRg    = @($_byName | Where-Object { $_dceSub -and $_dceRg -and ($_.id -like "*/subscriptions/$_dceSub/resourceGroups/$_dceRg/*") })
-                $_byNameAndRg   = @($_byName | Where-Object { $_.id -like "*/resourceGroups/$_dceRg/*" })
-                $_picked = if ($_bySubAndRg.Count -ge 1)   { $_bySubAndRg | Select-Object -First 1 }
-                           elseif ($_byNameAndRg.Count -ge 1) { $_byNameAndRg | Select-Object -First 1 }
-                           elseif ($_byName.Count -ge 1)      { $_byName | Select-Object -First 1 }
-                           else { $null }
-                if ($_picked -and $_byName.Count -gt 1) {
-                    Write-SIInfo ("DCE collision guard: {0} DCEs named '{1}' visible -- pinned to sub '{2}' / RG '{3}' ({4})" -f $_byName.Count, $global:SI_DceName, $_dceSub, $_dceRg, $_picked.id)
-                    $global:AzDceDetails = @($_picked)
-                }
-            }
-        } catch { Write-Warning ('DCE collision guard failed -- {0} (continuing)' -f $_.Exception.Message) }
-
-        # DCR pre-create diagnostic.
-        # AzLogDcrIngestPS (line ~1725) sets the new DCR's location = DCE.location
-        # ($DceInfo.location). $global:SI_Location is NOT consulted by the module
-        # for new-DCR creation. If the operator's tenant has an Allowed-locations
-        # policy denying anything other than (e.g.) westeurope, the DCR PUT will
-        # 403 with RequestDisallowedByPolicy even though SI_Location says westeurope.
-        # Emit the DCE / DCR / location triple so the operator can see WHY the PUT
-        # picked the location it did.
-        try {
-            # Look up the DCE the MODULE will actually pick. Correlate by
-            # name + (optional) sub + (optional) RG. STRICT semantics: only
-            # consider $global:SI_DceResourceGroup / $global:SI_AzSubscriptionId
-            # as expectations. If they're unset, do name-only matching and
-            # don't warn -- the operator simply hasn't told us which DCE to
-            # disambiguate against (common in single-DCE community layouts
-            # and split-RG layouts where DCE lives in dce-RG and DCRs in a
-            # different RG).
-            $_dceForDcr     = $null
-            $_dceWrongScope = $false
-            $_dceExpectRg   = $global:SI_DceResourceGroup    # NO fallback to DcrRg -- DCE has its own home
-            $_dceExpectSub  = $global:SI_AzSubscriptionId
-            if ($global:AzDceDetails -and $global:SI_DceName) {
-                $_dceMatches = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
-                $_dceInSubAndRg = if ($_dceExpectSub -and $_dceExpectRg) { @($_dceMatches | Where-Object { $_.id -like "*/subscriptions/$_dceExpectSub/resourceGroups/$_dceExpectRg/*" }) } else { @() }
-                $_dceInRg       = if ($_dceExpectRg)  { @($_dceMatches | Where-Object { $_.id -like "*/resourceGroups/$_dceExpectRg/*" }) } else { @() }
-                $_dceInSub      = if ($_dceExpectSub) { @($_dceMatches | Where-Object { $_.id -like "*/subscriptions/$_dceExpectSub/*" }) } else { @() }
-                if ($_dceInSubAndRg.Count -ge 1) {
-                    $_dceForDcr = $_dceInSubAndRg | Select-Object -First 1
-                } elseif ($_dceInRg.Count -ge 1) {
-                    $_dceForDcr = $_dceInRg | Select-Object -First 1
-                    if ($_dceExpectSub) { $_dceWrongScope = $true }   # sub was specified, didn't match
-                } elseif ($_dceInSub.Count -ge 1) {
-                    $_dceForDcr = $_dceInSub | Select-Object -First 1
-                    if ($_dceExpectRg) { $_dceWrongScope = $true }   # RG was specified, didn't match
-                } elseif ($_dceMatches.Count -ge 1) {
-                    $_dceForDcr = $_dceMatches | Select-Object -First 1
-                    if ($_dceExpectSub -or $_dceExpectRg) { $_dceWrongScope = $true }   # something specified but nothing matched
-                }
-            }
-            $_dceLoc    = if ($_dceForDcr) { [string]$_dceForDcr.location } else { '<NOT FOUND in cache -- name does not match any DCE the SPN can read>' }
-            $_dceId     = if ($_dceForDcr) { [string]$_dceForDcr.id }       else { '<NOT FOUND in cache>' }
-            $_dceRgSeen = if ($_dceForDcr -and $_dceForDcr.id -match '/resourceGroups/([^/]+)/') { $Matches[1] } else { '<unknown>' }
-            $_dceSubSeen = if ($_dceForDcr -and $_dceForDcr.id -match '/subscriptions/([^/]+)/') { $Matches[1] } else { '<unknown>' }
-            $_dcrRg     = $global:SI_DcrResourceGroup
-            $_intended  = if ($global:SI_Location) { [string]$global:SI_Location } else { '<unset>' }
-            Write-SIInfo ('DCR pre-create  : DcrName            = {0}' -f $dcrName)
-            Write-SIInfo ('DCR pre-create  : DcrResourceGroup   = {0}' -f $_dcrRg)
-            Write-SIInfo ('DCR pre-create  : SI_Location        = {0}  (engine intent; NOT used by module for new DCR)' -f $_intended)
-            Write-SIInfo ('DCR pre-create  : DceName (configured) = {0}' -f $global:SI_DceName)
-            Write-SIInfo ('DCR pre-create  : DceLocation        = {0}' -f $_dceLoc)
-            Write-SIInfo ('DCR pre-create  : DceSubscription    = {0}' -f $_dceSubSeen)
-            Write-SIInfo ('DCR pre-create  : DceResourceGroup   = {0}' -f $_dceRgSeen)
-            Write-SIInfo ('DCR pre-create  : DceResourceId      = {0}' -f $_dceId)
-            if (-not $_dceForDcr) {
-                Write-Warning ('DCR pre-create  : DCE ''{0}'' NOT visible to SPN. Module will fail with null location/id.' -f $global:SI_DceName)
-                Write-Warning ('DCR pre-create  : Fix: verify the DCE name in Azure (Get-AzDataCollectionEndpoint), or check SPN has Reader on the DCE RG.')
-                Write-Warning ('DCR pre-create  : Cache size: {0} DCEs visible. None named ''{1}''.' -f (@($global:AzDceDetails).Count), $global:SI_DceName)
-            } elseif ($_dceWrongScope) {
-                Write-Warning ('DCR pre-create  : SCOPE MISMATCH -- expected sub=''{0}'' RG=''{1}'' but picked DCE is in sub=''{2}'' RG=''{3}''.' -f $_dceExpectSub, $_dceExpectRg, $_dceSubSeen, $_dceRgSeen)
-                Write-Warning ('DCR pre-create  : Likely cause: the DCE name is reused across multiple subs/RGs in this tenant and the engine picked a same-named DCE the SPN can read. Set $global:SI_DceResourceGroup + $global:SI_AzSubscriptionId to disambiguate.')
-            } elseif ($_intended -and $_dceLoc -and $_intended -ne $_dceLoc) {
-                Write-Warning ('DCR pre-create  : LOCATION MISMATCH -- SI_Location=''{0}'' but DCE is in ''{1}''.' -f $_intended, $_dceLoc)
-                Write-Warning ('DCR pre-create  : new DCR will be created in ''{0}'' (DCE location). If a tenant policy denies that location, the PUT will 403 with RequestDisallowedByPolicy.' -f $_dceLoc)
-                Write-Warning ('DCR pre-create  : fix = recreate the DCE in ''{0}'' (or whatever location the policy allows).' -f $_intended)
-            }
-        } catch { Write-Warning ('DCR pre-create diagnostic failed -- {0} (continuing)' -f $_.Exception.Message) }
-
-        # Pre-flight RBAC check: Monitoring Metrics Publisher at DCR RG scope.
-        # Catches the silent-RBAC-gap case where bootstrap forgot to grant or
-        # the grant lives at a higher scope and hasn't propagated. Loud warning
-        # with the exact New-AzRoleAssignment to copy/paste -- no auto-grant
-        # here (that's (A)'s job at ingest time when the actual 403 fires).
-        try {
-            if ($spnObjectId -and $global:SI_DcrResourceGroup -and $global:SI_AzSubscriptionId) {
-                $_rgScope = "/subscriptions/{0}/resourceGroups/{1}" -f $global:SI_AzSubscriptionId, $global:SI_DcrResourceGroup
-                $_mmp = Get-AzRoleAssignment -ObjectId $spnObjectId -Scope $_rgScope -ErrorAction SilentlyContinue |
-                          Where-Object { $_.RoleDefinitionName -eq 'Monitoring Metrics Publisher' }
-                if (-not $_mmp) {
-                    Write-SIWarn ('RBAC pre-flight  : SPN {0} has NO ''Monitoring Metrics Publisher'' at {1}' -f $spnObjectId, $_rgScope)
-                    Write-SIWarn ('RBAC pre-flight  : ingest may 403 if no inherited grant exists. Fix:')
-                    Write-SIWarn ('RBAC pre-flight  :   New-AzRoleAssignment -ObjectId {0} -RoleDefinitionName ''Monitoring Metrics Publisher'' -Scope ''{1}''' -f $spnObjectId, $_rgScope)
-                } else {
-                    Write-SIInfo ('RBAC pre-flight  : SPN has ''Monitoring Metrics Publisher'' at DCR RG ({0})' -f $_rgScope)
-                }
-            }
-        } catch { Write-Warning ('RBAC pre-flight check failed -- {0} (continuing; ingest will reveal real state)' -f $_.Exception.Message) }
-
-        Write-Host ''
-        # Skip-auto-create opt-out: when $global:SI_SkipDcrAutoCreate = $true,
-        # the engine assumes the DCE + DCR + table already exist with the right
-        # schema and skips the CheckCreateUpdate-TableDcr-Structure call
-        # entirely. Useful when:
-        #   - operator manages DCE/DCR via IaC (Bicep/Terraform) and doesn't
-        #     want the engine touching ARM resources
-        #   - the SPN has Reader-only on the DCR scope (can ingest but not
-        #     create/update DCR shape) -- e.g., a tenant where DCR provisioning
-        #     is handled by a separate identity
-        #   - schema is known-stable and operator wants to skip the
-        #     ARG/ARM PUT round-trip per ingest (saves 5-15s per run)
-        # Trade-off: schema drift in $DataVariable (new column from upstream
-        # source) won't auto-migrate the DCR -- operator must update DCR by
-        # hand or re-enable this for one run.
-        if ($global:SI_SkipDcrAutoCreate) {
-            Write-SIInfo 'CheckCreateUpdate-TableDcr-Structure : SKIPPED ($global:SI_SkipDcrAutoCreate = $true) -- assuming DCE/DCR/table pre-exist'
-        } else {
-        Write-SIStep 'CheckCreateUpdate-TableDcr-Structure (schema check + auto-provision)'
-        # Verbose dropped on every AzLogDcrIngestPS call below.
-        # also wrap each call in Invoke-SIQuietBlock to silence the
-        # `VERBOSE: GET https://management.azure.com/...` / `VERBOSE: Schema
-        # mismatch...` storm that the module emits internally regardless of the
-        # per-call -Verbose flag. QuietBlock honors -Verbose at the engine entry
-        # (Invoke-SIEngineRun.ps1:107-113) -- if the operator opted in, the
-        # block is a no-op pass-through.
-        # stream redirection 4>$null is the only bulletproof silencer.
-        # AzLogDcrIngestPS sets its own $script:VerbosePreference internally, so
-        # neither $global:VerbosePreference nor -Verbose:$false stops the storm.
+        # Step 3: provision/update DCR + LA table.
         $null = CheckCreateUpdate-TableDcr-Structure `
-            -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
-            @authParams `
-            -DceName                                    $global:SI_DceName `
-            -DcrName                                    $dcrName `
-            -DcrResourceGroup                           $global:SI_DcrResourceGroup `
-            -TableName                                  $tableName `
-            -Data                                       $schemaSample `
-            -LogIngestServicePricipleObjectId           $spnObjectId `
-            -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
-            -AzLogDcrTableCreateFromAnyMachine          $true `
-            -AzLogDcrTableCreateFromReferenceMachine    @() 4>$null
-        }
+                    -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
+                    @authParams `
+                    -Verbose:$false `
+                    -DceName                                    $global:SI_DceName `
+                    -DcrName                                    $dcrName `
+                    -DcrResourceGroup                           $global:SI_DcrResourceGroup `
+                    -TableName                                  $tableName `
+                    -Data                                       $schemaSample `
+                    -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
+                    -AzLogDcrTableCreateFromAnyMachine          $true `
+                    -AzLogDcrTableCreateFromReferenceMachine    @() 4>$null
 
-        # ---- 2. ARM consistency sleep removed.
-        # The 15s sleep was a defence for newly-created DCRs (Post-* needs
-        # the immutableId discoverable in ARG before it can resolve DcrName).
-        # In steady state (DCR already exists from a prior run) the sleep
-        # adds latency for nothing. If a future first-run hits a 404 on the
-        # very first ingest after DCR creation, re-add the sleep guarded by
-        # 'is the DCR new?' state.
+        # Step 4: re-sync caches after DCR provisioning. Newly-created DCR's
+        # immutableId needs to land in ARG before Post-* can resolve it.
+        Start-Sleep -Seconds 15
+        $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
+        $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
 
-        # ---- 3. Refresh the DCR cache ($global:AzDcrDetails) ----
-        # Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output resolves DcrName
-        # -> immutableId via $global:AzDcrDetails. A newly created DCR isn't
-        # in the cache yet; rebuild it to avoid the bogus-id 404 path
-        # documented in v2.1's SecurityInsight_RiskAnalysis.ps1.
-        if (-not $useMi) {
-            Write-SIStep 'Get-AzDcrListAll (refresh DCE/DCR cache)'
-            try {
-                $global:AzDcrDetails = Get-AzDcrListAll `
-                                            -AzAppId     $spnAppId `
-                                            -AzAppSecret $spnSecret `
-                                            -TenantId    $spnTenantId 4>$null
-            } catch {
-                Write-Warning ('Get-AzDcrListAll failed: {0} -- continuing; Post-* will fall back to ARG.' -f $_.Exception.Message)
-            }
-        }
-
-        # ---- 4. Standard ingest pipeline (mirrors v2.1 RiskAnalysis 4-step) ----
+        # Step 5: standard 4-step prep pipeline (mirrors RA engine).
         $DataVariable = @($flat)
 
-        # 4a. Stamp the SHARED CollectionTime onto every row. Mirrors the v2.1
-        #     pre-stamp pattern. We do NOT call Add-CollectionTimeToAllEntriesInArray
-        #     because that function self-generates [datetime]::Now per call --
-        #     each replica would write a DIFFERENT time, breaking cross-shard
-        #     "latest dataset" queries.
+        # 5a. CollectionTime - shared across all rows in this run (cross-shard
+        # latest-snapshot queries depend on it). Pre-stamped on $flat upstream;
+        # also call the module helper as belt-and-suspenders for any row that slipped through.
         foreach ($entry in $DataVariable) {
-            $entry | Add-Member -MemberType NoteProperty `
-                                -Name  CollectionTime `
-                                -Value $RunContext.CollectionTime `
-                                -Force | Out-Null
+            $entry | Add-Member -MemberType NoteProperty -Name CollectionTime -Value $RunContext.CollectionTime -Force | Out-Null
         }
 
-        # 4b. Host identity (Computer / ComputerFqdn / UserLoggedOn) -- in a
-        #     container, these are the replica's hostname / N/A / runtime user.
-        #     Useful for forensics: which replica wrote a given row.
+        # 5b. Host identity columns (Computer / ComputerFqdn / UserLoggedOn).
         $hostName = $env:COMPUTERNAME
         if (-not $hostName) { $hostName = [System.Net.Dns]::GetHostName() }
         $hostFqdn = $hostName
@@ -486,103 +267,25 @@ function Write-SIClassificationToLogAnalytics {
         $hostUser = $env:USERNAME
         if (-not $hostUser) { $hostUser = $env:USER }
         if (-not $hostUser) { $hostUser = 'container' }
-
-        Write-SIStep 'Add-ColumnDataToAllEntriesInArray (Computer/Fqdn/User)'
         $DataVariable = Add-ColumnDataToAllEntriesInArray -Data $DataVariable `
                             -Column1Name Computer     -Column1Data $hostName `
                             -Column2Name ComputerFqdn -Column2Data $hostFqdn `
-                            -Column3Name UserLoggedOn -Column3Data $hostUser 4>$null
+                            -Column3Name UserLoggedOn -Column3Data $hostUser `
+                            -Verbose:$false 4>$null
 
-        # 4c. Validate + normalise column names (DCR schema rules)
-        Write-SIStep 'ValidateFix-AzLogAnalyticsTableSchemaColumnNames'
-        $DataVariable = ValidateFix-AzLogAnalyticsTableSchemaColumnNames -Data $DataVariable 4>$null
+        # 5c. Validate + normalize column names + align data structure with DCR schema.
+        $DataVariable = ValidateFix-AzLogAnalyticsTableSchemaColumnNames -Data $DataVariable -Verbose:$false 4>$null
+        $DataVariable = Build-DataArrayToAlignWithSchema                 -Data $DataVariable -Verbose:$false 4>$null
 
-        # 4d. Align data structure with the declared DCR schema
-        Write-SIStep 'Build-DataArrayToAlignWithSchema'
-        $DataVariable = Build-DataArrayToAlignWithSchema -Data $DataVariable 4>$null
-
-        # ---- 5. POST ----
-        # Retry-with-cache-refresh: a freshly auto-created DCR may be missing
-        # from $global:AzDcrDetails OR present with an unresolved/empty
-        # immutableId; AzLogDcrIngestPS sometimes falls back to the location
-        # string ('westeurope') as the URL path, producing
-        #   404 NotFound: Data collection rule with immutable Id 'westeurope' not found.
-        # Wait + re-call Get-AzDcrListAll between attempts so the DCR's
-        # immutableId has time to populate in ARG.
+        # Step 6: POST.
         $global:EnableCompressionDefault = $true
-        Write-SIStep ('Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output (compression={0}, rows={1})' -f $global:EnableCompressionDefault, $DataVariable.Count)
-        $maxAttempts = 3
-        $attempt = 0
-        while ($true) {
-            $attempt++
-            try {
-                $null = Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output `
+        $null = Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output `
                     -DceName     $global:SI_DceName `
                     -DcrName     $dcrName `
                     -Data        $DataVariable `
                     -TableName   $tableName `
-                    @authParams 4>$null
-                break  # success
-            } catch {
-                $msg  = $_.Exception.Message
-                $body = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { '' }
-                $combined = ($msg + ' ' + $body)
-                $isCacheTransient = $combined -match '404|NotFound|immutable Id|data collection rule'
-                # 403 with 'does not have access to ingest' = SPN missing Monitoring
-                # Metrics Publisher on the DCR. Two causes: (1) RG-scoped grant
-                # hasn't propagated to the just-created DCR yet (5-30 min lag),
-                # (2) grant was never made. Self-heal: grant MMP on the DCR
-                # resource scope (faster propagation than RG) + 60s sleep + retry.
-                # Requires the engine SPN to have User Access Administrator or
-                # Owner SOMEWHERE in the scope hierarchy. If the grant fails,
-                # surface the original 403 unchanged.
-                $isRbacIngest = $combined -match '403' -and $combined -match 'does not have access to ingest'
-                if (-not ($isCacheTransient -or $isRbacIngest) -or $attempt -ge $maxAttempts) {
-                    throw  # let outer catch surface the full error
-                }
-                $sleepSec = 30 * $attempt  # 30, 60s
-                if ($isRbacIngest) {
-                    Write-SIWarn ('LA ingest attempt {0}/{1} failed (403 -- SPN missing Monitoring Metrics Publisher on DCR): {2}' -f $attempt, $maxAttempts, $msg)
-                    try {
-                        $_dcr = $global:AzDcrDetails | Where-Object { $_.name -eq $dcrName } | Select-Object -First 1
-                        if (-not $_dcr) {
-                            $_dcr = Get-AzDataCollectionRule -ResourceGroupName $global:SI_DcrResourceGroup -Name $dcrName -ErrorAction SilentlyContinue
-                        }
-                        $_dcrId = if ($_dcr) { $_dcr.id } else { $null }
-                        if ($_dcrId -and $spnObjectId) {
-                            Write-SIInfo ('  self-heal: granting Monitoring Metrics Publisher to SPN {0} on DCR {1}' -f $spnObjectId, $_dcrId)
-                            $existing = Get-AzRoleAssignment -ObjectId $spnObjectId -Scope $_dcrId -ErrorAction SilentlyContinue |
-                                          Where-Object { $_.RoleDefinitionName -eq 'Monitoring Metrics Publisher' }
-                            if (-not $existing) {
-                                New-AzRoleAssignment -ObjectId $spnObjectId -RoleDefinitionName 'Monitoring Metrics Publisher' -Scope $_dcrId -ErrorAction Stop | Out-Null
-                                Write-SIInfo ('  self-heal: grant succeeded; sleeping 60s for propagation')
-                                $sleepSec = 60
-                            } else {
-                                Write-SIInfo ('  self-heal: MMP already assigned at DCR scope -- waiting for propagation')
-                                $sleepSec = 60
-                            }
-                        } else {
-                            Write-SIWarn ('  self-heal skipped: could not resolve DCR id (dcrId={0}, spnObjectId={1})' -f $_dcrId, $spnObjectId)
-                        }
-                    } catch {
-                        Write-SIWarn ('  self-heal grant failed: {0} -- continuing to next retry (engine SPN may lack User Access Administrator)' -f $_.Exception.Message)
-                    }
-                } else {
-                    Write-SIWarn ('LA ingest attempt {0}/{1} failed (transient DCR-cache issue): {2}. Refreshing DCE/DCR cache and retrying in {3}s ...' -f $attempt, $maxAttempts, $msg, $sleepSec)
-                }
-                Start-Sleep -Seconds $sleepSec
-                if (-not $useMi) {
-                    try {
-                        $global:AzDcrDetails = Get-AzDcrListAll `
-                                                    -AzAppId     $spnAppId `
-                                                    -AzAppSecret $spnSecret `
-                                                    -TenantId    $spnTenantId 4>$null
-                    } catch {
-                        Write-SIWarn ('Get-AzDcrListAll refresh failed during retry: {0}' -f $_.Exception.Message)
-                    }
-                }
-            }
-        }
+                    @authParams `
+                    -Verbose:$false 4>$null
 
         return ('OK -- {0} rows -> {1}_CL via {2}  ({3} auth, CollectionTime={4:o})' -f $DataVariable.Count, $tableName, $dcrName, $authNote, $RunContext.CollectionTime)
     }

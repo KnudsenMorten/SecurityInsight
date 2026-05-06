@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.57
+## v2.2.58
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
 - release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
 - release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
 - release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
 - release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
 - release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
-- release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.58 — Output: restore DCE name-collision guard (regression from v2.2.51 simplification)
+
+The v2.2.41 DCE collision guard was inadvertently dropped when v2.2.51 stripped the LA-ingest function down to the canonical AzLogDcrIngestPS pattern. Customers with multiple DCEs sharing a name across subs/RGs (legacy + new install on long-lived tenants) hit the same `LinkedAuthorizationFailed: properties.dataCollectionEndpointId has values which are of invalid types 'Array'` failure that originally motivated v2.2.41.
+
+Root cause unchanged: `AzLogDcrIngestPS.psm1:1575` resolves `$global:SI_DceName` via name-only `Where-Object` lookup. Two matches → `$DceInfo.id` is `string[]` → JSON serializes as array → ARM rejects the DCR PUT.
+
+Fix re-added as Step 1b in `Write-SIClassificationToLogAnalytics` (right after `Get-AzDceListAll`) and again after Step 4 (post-CheckCreateUpdate cache refresh). Pre-filters `$global:AzDceDetails` to ONE entry by name + (optional) sub + RG using the same most-specific-match-first strategy as v2.2.47:
+
+1. `name + sub + RG` (using `$global:SI_AzSubscriptionId` + `$global:SI_DceResourceGroup`)
+2. fall back to `name + RG`
+3. fall back to `name` only
+
+Logs `DCE collision guard: N DCEs named 'X' visible -- pinned to <id>` only when collision actually fires. Silent in single-DCE tenants.
+
+Smaller than the v2.2.42-50 versions (no diagnostic block, no SCOPE MISMATCH warning, no fallback-to-DcrRg quirks). Just the guard.
 
 ---
 

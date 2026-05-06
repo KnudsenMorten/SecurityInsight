@@ -142,6 +142,14 @@ function Get-SIRuleSet {
             # naming convention (AssetProfileByTags.custom.yaml). Strip the .custom
             # infix from basename before id-comparison so the override file pairs
             # cleanly with the locked file's id.
+            #
+            # Silently skip foreign schemas that live in the same engine folder
+            # but belong to other engines (e.g. AssetTagging.custom.yaml uses
+            # the asset-tagging-engine shape `AssetTagging: [...]` -- not a
+            # rule shape). These should not produce a noisy WARN every run.
+            if ($obj -and ($obj.PSObject.Properties.Name -contains 'AssetTagging')) {
+                $skipped++; continue
+            }
             $id = [string]$obj.id
             if ([string]::IsNullOrWhiteSpace($id)) {
                 Write-Warning ('Get-SIRuleSet: skipping {0} (no id field)' -f $f.Name)

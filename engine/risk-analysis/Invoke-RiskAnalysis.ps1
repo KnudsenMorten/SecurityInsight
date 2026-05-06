@@ -5924,6 +5924,22 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 # infer the target table schema. Same pattern as IAC.
                 $schemaSample = @($global:final | Select-Object -First 100)
 
+                # DCE collision guard (mirrors v2.2.59 in Invoke-Output.ps1). Strict
+                # name + sub + RG match; if the cache contains multiple DCEs with
+                # the same name across tenants/RGs the AzLogDcrIngestPS line 1575
+                # name-only lookup picks both -> 'Array' bug on DCR PUT.
+                if ($global:AzDceDetails -and $laDceName -and $global:SI_AzSubscriptionId -and $laDceRg) {
+                    $_picked = @($global:AzDceDetails | Where-Object {
+                        $_.name -eq $laDceName -and
+                        $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$laDceRg/*"
+                    }) | Select-Object -First 1
+                    if ($_picked) {
+                        $global:AzDceDetails = @($_picked)
+                    } else {
+                        Write-Warn ("DCE collision guard: '{0}' NOT in sub '{1}' / RG '{2}' -- module name-only lookup will pick wrong record." -f $laDceName, $global:SI_AzSubscriptionId, $laDceRg)
+                    }
+                }
+
                 # append `4>$null` to redirect the verbose STREAM to
                 # null. AzLogDcrIngestPS internally sets its own $script:VerbosePreference
                 # which $global doesn't override; -Verbose:$false on the call only

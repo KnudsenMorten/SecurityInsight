@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.59
+## v2.2.60
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
 - release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
 - release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
 - release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
 - release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
 - release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
-- release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.60 — Prestage: per-step `[OK]` infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines
+
+**1. Verbose `[OK]` infrastructure check.** The prestage helper was mostly silent on success — only logging when something was created or failed. Now each idempotent check emits a line:
+
+```
+[STEP] Infrastructure check (workspace + DCE/DCR RGs + RBAC + DCE + storage -- idempotent)
+ [INFO]   sub          : <sub-id>
+ [INFO]   workspace    : log-platform-management-securityinsight  (rg=rg-securityinsight)
+ [INFO]   DCE          : dce-securityinsight  (rg=rg-securityinsight)
+ [INFO]   DCR RG       : rg-securityinsight
+ [INFO]   Location     : westeurope
+
+ [OK]   Az context already on sub '<sub-id>'
+ [OK]   Resource group exists for workspace : 'rg-securityinsight'
+ [OK]   LA workspace exists                 : 'log-platform-management-securityinsight'
+ [OK]   Resource group exists for DCE       : 'rg-securityinsight'
+ [OK]   Resource group for DCR              : same as DCE RG ('rg-securityinsight')
+ [OK]   Permission 'Contributor' on workspace        : already granted
+ [OK]   Permission 'Contributor                    ' on RG 'rg-securityinsight' : already granted
+ [OK]   Permission 'Monitoring Metrics Publisher   ' on RG 'rg-securityinsight' : already granted
+ [OK]   DCE exists                          : 'dce-securityinsight' (location=westeurope)
+```
+
+When a step actually creates/grants something, the line says `CREATED` / `GRANTED` instead of `exists` / `already granted`, so first-run vs steady-state is visible at a glance.
+
+**2. DCE collision guard added to PublicIP + RiskAnalysis engines.** The v2.2.58/59 strict guard only lived in `engine/asset-profiling/stages/Invoke-Output.ps1`. The PublicIP engine (`engine/publicip/Invoke-PublicIpScanner.ps1`) and RiskAnalysis engine (`engine/risk-analysis/Invoke-RiskAnalysis.ps1`) have their own ingest paths and were still hitting `LinkedAuthorizationFailed: dataCollectionEndpointId 'Array'` on tenants with same-named DCEs across scopes. Same strict `name + sub + RG` guard now lives in both, right before each `CheckCreateUpdate-TableDcr-Structure` call.
 
 ---
 

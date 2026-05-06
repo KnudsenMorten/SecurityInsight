@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.58
+## v2.2.59
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
 - release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
 - release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
 - release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
 - release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
 - release: SecurityInsight v2.2.30 - Run-AllEngines: skip git on non-git installs + flavour-aware kill (1b2835da)
-- release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.59 — Output: DCE collision guard now strict (sub + RG only, no waterfall fallback)
+
+v2.2.58 reintroduced the collision guard with the v2.2.47 most-specific-match-first waterfall (`name+sub+RG` → `name+RG` → `name`). On reflection that's wrong for this case — silently picking a same-named DCE in the wrong scope masks a config bug.
+
+Now strict: pin to the entry that matches `name + sub + RG` (using `$global:SI_DceName` + `$global:SI_AzSubscriptionId` + `$global:SI_DceResourceGroup`). If nothing matches, leave the cache alone and emit a loud `[WARN]`:
+
+```
+DCE collision guard: 'dce-securityinsight' NOT in sub '<sub-id>' / RG 'rg-securityinsight'.
+3 same-named DCE(s) visible in other scopes -- module name-only lookup will pick wrong record.
+Verify SI_DceName / SI_AzSubscriptionId / SI_DceResourceGroup.
+```
+
+The downstream PUT will still fail (or pick a wrong record), but the operator sees exactly what's wrong and where to fix it. No silent picks.
+
+Guard is gated on all four globals being set (`AzDceDetails`, `SI_DceName`, `SI_AzSubscriptionId`, `SI_DceResourceGroup`) — single-DCE tenants without sub/RG explicitly set get the canonical AzLogDcrIngestPS path unchanged.
 
 ---
 

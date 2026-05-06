@@ -225,6 +225,30 @@ function Write-SIClassificationToLogAnalytics {
         $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
         $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
 
+        # Step 1b: DCE name-collision guard. AzLogDcrIngestPS line 1575 resolves
+        # SI_DceName via name-only Where-Object lookup. If two DCEs share that
+        # name across subs/RGs (legacy + new install on long-lived tenants),
+        # both records come back. $DceInfo.id becomes string[], JSON-serializes
+        # as an array into the DCR PUT body, ARM rejects with
+        #   LinkedAuthorizationFailed: properties.dataCollectionEndpointId
+        #   has values which are of invalid types 'Array'.
+        # Pre-filter the cache to ONE entry by name + (optional) sub + RG so
+        # the module's name-only lookup returns exactly one record.
+        if ($global:AzDceDetails -and $global:SI_DceName) {
+            $_dceMatches = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
+            if ($_dceMatches.Count -gt 1) {
+                $_sub = $global:SI_AzSubscriptionId
+                $_rg  = $global:SI_DceResourceGroup
+                $_bySubAndRg = @($_dceMatches | Where-Object { $_sub -and $_rg -and ($_.id -like "*/subscriptions/$_sub/resourceGroups/$_rg/*") })
+                $_byRg       = @($_dceMatches | Where-Object { $_rg                  -and ($_.id -like "*/resourceGroups/$_rg/*") })
+                $_picked = if ($_bySubAndRg.Count -ge 1) { $_bySubAndRg | Select-Object -First 1 }
+                           elseif ($_byRg.Count -ge 1)   { $_byRg       | Select-Object -First 1 }
+                           else                          { $_dceMatches | Select-Object -First 1 }
+                Write-SIInfo ("DCE collision guard: {0} DCEs named '{1}' visible -- pinned to {2}" -f $_dceMatches.Count, $global:SI_DceName, $_picked.id)
+                $global:AzDceDetails = @($_picked)
+            }
+        }
+
         # Step 2: schema sample (full dataset for type inference) + CollectionTime stamp.
         $schemaSample = @($flat | ForEach-Object {
             $_ | Add-Member -MemberType NoteProperty -Name CollectionTime -Value $RunContext.CollectionTime -Force -PassThru
@@ -249,6 +273,23 @@ function Write-SIClassificationToLogAnalytics {
         Start-Sleep -Seconds 15
         $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
         $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+
+        # Re-apply the DCE collision guard (Step 1b above) -- the cache rebuild
+        # restored the full multi-DCE list, which would re-trigger the
+        # LinkedAuthorizationFailed array bug on the upcoming Post-* call.
+        if ($global:AzDceDetails -and $global:SI_DceName) {
+            $_dceMatches = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
+            if ($_dceMatches.Count -gt 1) {
+                $_sub = $global:SI_AzSubscriptionId
+                $_rg  = $global:SI_DceResourceGroup
+                $_bySubAndRg = @($_dceMatches | Where-Object { $_sub -and $_rg -and ($_.id -like "*/subscriptions/$_sub/resourceGroups/$_rg/*") })
+                $_byRg       = @($_dceMatches | Where-Object { $_rg                  -and ($_.id -like "*/resourceGroups/$_rg/*") })
+                $_picked = if ($_bySubAndRg.Count -ge 1) { $_bySubAndRg | Select-Object -First 1 }
+                           elseif ($_byRg.Count -ge 1)   { $_byRg       | Select-Object -First 1 }
+                           else                          { $_dceMatches | Select-Object -First 1 }
+                $global:AzDceDetails = @($_picked)
+            }
+        }
 
         # Step 5: standard 4-step prep pipeline (mirrors RA engine).
         $DataVariable = @($flat)

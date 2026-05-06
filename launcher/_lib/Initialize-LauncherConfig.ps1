@@ -504,9 +504,16 @@ function Initialize-LauncherConfig {
     if (Test-Path -LiteralPath $solutionCustomPath) {
         _CfgUnblock $solutionCustomPath
         . $solutionCustomPath
+        # Track the loaded path so the engine prestage can write back
+        # auto-resolved values (e.g. SI_StorageKey from Get-AzStorageAccountKey)
+        # to persist across runs.
+        $global:SI_LoadedCustomConfigPath = $solutionCustomPath
         _CfgOk "loaded"
         _CfgRecordLayer 'Layer 3 - SecurityInsight.custom' $solutionCustomPath $true
     } else {
+        # Even when absent, record the would-be path so prestage can CREATE
+        # the file on first run with the auto-resolved values.
+        $global:SI_LoadedCustomConfigPath = $solutionCustomPath
         _CfgInfo "absent ($solutionCustomPath) -- skipping"
         _CfgRecordLayer 'Layer 3 - SecurityInsight.custom' $solutionCustomPath $false
     }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.65
+## v2.2.66
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
 - release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
 - release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
 - release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.39 - flip endpoint filter default back to MIXED (87316f19)
 - release: SecurityInsight v2.2.38 - Endpoint filter strict MDE-only by default (c0bc8e7f)
 - release: SecurityInsight v2.2.37 - Run-AllEngines: 3 subset switches (7dc62844)
-- release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.66 — Prestage: writeback `SI_StorageKey` whenever the file lacks it (drop too-narrow `$saCreated` gate)
+
+The v2.2.57 writeback was gated on `$saCreated -and -not $global:SI_StorageKey` — i.e. only fired when `New-AzStorageAccount` actually ran in this prestage call. Wrong gate: if a PRIOR run created the storage account (so `$saCreated=$true` then) but the writeback was unavailable / failed for any reason, every subsequent run sees `$saCreated=$false` and never re-attempts. The custom.ps1 file never gets the key, and `FingerprintCache.ps1` 403s on every run with `AuthenticationFailed: signature malformed` (empty key in the auth header).
+
+Fix: drop the `$saCreated` requirement. Writeback now fires whenever the in-memory backfill happens AND the file doesn't already have `$global:SI_StorageKey`. Idempotent — once persisted, the in-memory backfill at the top of the function skips (the global is already set from custom.ps1), and writeback skips too.
+
+Operator opt-outs (unchanged):
+- Existing plaintext line in custom.ps1 → `$hasKey` check skips writeback
+- KV-fetch line (`if (-not $global:SI_StorageKey) { Get-PlatformSecret ... }`) → `$hasKvFetch` check skips writeback
+
+Comment in the appended block now distinguishes "first-create of storage account" (account just created) from "first-fetch (account pre-existed)" so operators can see why it landed.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.55
+## v2.2.56
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
 - release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
 - release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
 - release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.29 - FingerprintCache 400 on AssetIds with ' (10cae8ec)
 - release: SecurityInsight v2.2.28 - Run-AllEngines.ps1 -Flavour mandatory (855017fc)
 - release: SecurityInsight v2.2.27 - RA SettingsPath overshoot fix + Run-AllEngines polish (672718ef)
-- release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.56 — Prestage: persist auto-fetched `SI_StorageKey` back to `SecurityInsight.custom.ps1` for cold-start runs
+
+v2.2.54+ prestage backfills `$global:SI_StorageKey` in-memory from `Get-AzStorageAccountKey` on first run, but the value vanished at process exit. Every subsequent cold-start paid the same ARM round-trip (and required the SPN to keep `Microsoft.Storage/storageAccounts/listkeys/action`).
+
+Now the prestage also **writes the key back** into the loaded `SecurityInsight.custom.ps1` so future runs read it from disk.
+
+**How it works:**
+
+1. `Initialize-LauncherConfig.ps1` records the loaded layer-3 path in `$global:SI_LoadedCustomConfigPath` (whether the file exists or not — supports CREATE-on-first-run too)
+2. After `Get-AzStorageAccountKey` succeeds in prestage, the helper:
+   - Reads the file content
+   - Skips the writeback if the file already has a non-empty `$global:SI_StorageKey = '...'` line (operator-set wins)
+   - Skips the writeback if the file has the canonical `if (-not $global:SI_StorageKey) { $global:SI_StorageKey = Get-PlatformSecret ... }` KV-fetch line (internal-vm pattern)
+   - Otherwise appends:
+     ```
+     # Auto-persisted by SI v2.2.56+ prestage (first-run storage account key1).
+     # Remove this block to force re-fetch from Azure on next run.
+     $global:SI_StorageKey = '<key1>'
+     ```
+
+**Operator escape hatches:**
+
+- Delete the auto-persisted block in `custom.ps1` → next run re-fetches and re-persists (use after a key rotation)
+- Set `$global:SI_StorageKey = '...'` manually → wins, writeback skipped
+- Use the KV-fetch line (internal-vm pattern) → wins, writeback skipped
+
+**Idempotent:** the writeback runs at most once per file. Subsequent runs see the value in custom.ps1, the in-memory `$global:SI_StorageKey` is already set, and the prestage skips both the ARM call and the writeback.
+
+**Security note:** the key lands in plaintext on disk. The SecurityInsight `.gitignore` already excludes `config/SecurityInsight.custom.ps1` — but operators with stricter handling requirements should set `$global:SI_StorageKey = '...'` manually from a vault-backed source instead.
 
 ---
 

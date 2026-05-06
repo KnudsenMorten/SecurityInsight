@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.64
+## v2.2.65
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
 - release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
 - release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
 - release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.38 - Endpoint filter strict MDE-only by default (c0bc8e7f)
 - release: SecurityInsight v2.2.37 - Run-AllEngines: 3 subset switches (7dc62844)
 - release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
-- release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.65 — Output: DCR collision guard (mirrors DCE one) -- fixes `404 'westeurope'` from indexed-return shift
+
+The v2.2.63 DCR-immutableId poll resolved the right DCR (`dcr-41f7cad...`), but the ingest still 404'd with `'westeurope'`. Root cause: AzLogDcrIngestPS line 5457 calls `Get-AzDcrDceDetails`, which internally does its OWN name-only `Where-Object` lookup against `$global:AzDcrDetails` (line 3548). When same-named DCRs exist in OTHER subs/RGs (typically previous installs the SPN can still read), `$DcrInfo` becomes an ARRAY → `$DcrImmutableId` becomes ARRAY → PowerShell unrolls them into the implicit return stream → indexes shift → caller's `$azDcrDceDetails[6]` ends up being `DcrLocation` from the second match (`westeurope`) instead of the real immutableId.
+
+Identical bug shape to the DCE collision but for DCRs. Fix: mirror the DCE collision guard. Pre-filter `$global:AzDcrDetails` to remove same-named DCRs that aren't in the expected sub + RG, leave the right one in the cache.
+
+```
+DCR collision guard: 3 DCRs named 'dcr-si-endpoint' visible -- pinned to /subscriptions/<sub>/resourceGroups/rg-securityinsight/providers/microsoft.insights/dataCollectionRules/dcr-si-endpoint
+```
+
+The poll-for-immutableId loop from v2.2.63 still runs (handles the ARG-propagation lag for fresh DCRs) — this guard handles the OTHER source of the same 404.
 
 ---
 

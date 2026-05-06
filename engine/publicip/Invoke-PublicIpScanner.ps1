@@ -597,6 +597,17 @@ function Send-RowsToLogAnalytics {
         # column-type inference; matches the RA / asset-profiling pattern).
         $schemaSample = @($Rows | Select-Object -First 100)
 
+        # Build the canonical DCE/DCR caches via the standard helpers BEFORE
+        # the collision guard. PublicIP engine doesn't share state with the
+        # asset-profiling engine, so the cache may be empty here. The guard
+        # below will silently skip if AzDceDetails is null, which is what was
+        # happening on greenfield community runs -> module's internal name-only
+        # lookup returned BOTH same-named DCEs -> 'Array' bug.
+        try {
+            $global:AzDceDetails = Get-AzDceListAll -AzAppId $global:LogIngestAppId -AzAppSecret $global:LogIngestAppSecret -TenantId $global:TenantId -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $global:LogIngestAppId -AzAppSecret $global:LogIngestAppSecret -TenantId $global:TenantId -Verbose:$false 4>$null
+        } catch { Write-Log ('Get-AzDceListAll/Get-AzDcrListAll prefetch failed: {0} -- collision guard may not fire' -f $_.Exception.Message) 'WARN' }
+
         # DCE collision guard (mirrors v2.2.59 in Invoke-Output.ps1). Strict:
         # pin $global:AzDceDetails to ONE entry by name + sub + RG so the
         # AzLogDcrIngestPS line 1575 name-only lookup returns a single record

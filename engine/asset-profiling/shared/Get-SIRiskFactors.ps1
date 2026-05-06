@@ -191,7 +191,7 @@ function Get-SIEndpointRiskFactors {
         UnsupportedOSDetected = [bool]$unsupported.Unsupported
         UnsupportedOSReason   = [string]$unsupported.Reason
         DefenderAvOutOfDate   = [bool]$avOutOfDate
-        DaysInactive          = [int]$days
+        DaysInactive          = [int64]$days   # Long, not Int -- matches existing DCR transform output type (avoids InvalidTransformOutput on schema migration)
         IsStaleAsset          = [bool]$stale
         IsCmdbOrphan          = [bool]$cmdbOrphan
         IsExcludedByTag       = [bool](Test-SIEndpointExcludedByTag -Record $Record)
@@ -275,7 +275,7 @@ function Get-SIIdentityRiskFactors {
         HasPasswordNeverExpires  = [bool]$hasPwdNeverExpires
         IsExternalIdentity       = [bool]$isExternal
         IsHighRiskPermissionGrant= [bool]$isHighRisk
-        DaysInactive             = [int]$days
+        DaysInactive             = [int64]$days   # Long, not Int -- matches existing DCR transform output type
         IsCmdbOrphan             = [bool]$cmdbOrphan
     }
 }

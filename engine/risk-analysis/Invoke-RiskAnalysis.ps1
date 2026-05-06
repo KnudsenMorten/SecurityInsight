@@ -3451,7 +3451,8 @@ function Calculate-RiskScore {
                 $tmp2['TotalIssues'] = [int]$totalIssues
             }
             $existingImpacted = $null
-            if ($tmp2.Contains('ImpactedAssets')) { $existingImpacted = $tmp2['ImpactedAssets'] }
+            if ($tmp2.Contains('ImpactedAssetsList'))   { $existingImpacted = $tmp2['ImpactedAssetsList'] }
+            elseif ($tmp2.Contains('ImpactedAssets'))   { $existingImpacted = $tmp2['ImpactedAssets'] }
             $hasYamlImpacted = $false
             if ($existingImpacted -is [System.Collections.IEnumerable] -and -not ($existingImpacted -is [string])) {
                 foreach ($x in $existingImpacted) {
@@ -3461,15 +3462,21 @@ function Calculate-RiskScore {
                 $hasYamlImpacted = $true
             }
             if ($hasYamlImpacted) {
-                # YAML produces a semicolon-joined string via strcat_array; split into an
-                # ordered/unique array so LA gets dynamic and Excel gets a clean cell.
+                # YAML produces a semicolon-joined string via strcat_array (Identity/most
+                # reports) or a dynamic array via make_set (Endpoint reports). Normalize
+                # both to an ordered/unique array so LA gets dynamic and Excel gets a
+                # clean cell -- and unify both YAML names ('ImpactedAssets' from Identity
+                # KQL + 'ImpactedAssetsList' from Endpoint KQL) on the canonical
+                # 'ImpactedAssetsList' column so Excel renders one populated column for
+                # every report row instead of two half-filled columns.
                 if ($existingImpacted -is [string]) {
-                    $parts = @($existingImpacted -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
-                    $tmp2['ImpactedAssets'] = $parts
+                    $existingImpacted = @($existingImpacted -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
                 }
             } else {
-                $tmp2['ImpactedAssets'] = $impactedAssets
+                $existingImpacted = $impactedAssets
             }
+            $tmp2['ImpactedAssetsList'] = $existingImpacted
+            if ($tmp2.Contains('ImpactedAssets')) { $tmp2.Remove('ImpactedAssets') }
             $tmp2['Issues_Details'] = $issuesDetails    # [string[]] -- ditto
 
             # Guarantee cross-cutting columns exist on every report (empty if the
@@ -3501,7 +3508,12 @@ function Calculate-RiskScore {
                 # after RiskFactor_Consequence.
                 $h2 = [ordered]@{}
                 foreach ($name in $OutputPropertyOrder) {
-                    if ($tmp2.Contains($name)) { $h2[$name] = $tmp2[$name] }
+                    # Treat 'ImpactedAssets' and 'ImpactedAssetsList' as aliases. The engine
+                    # canonicalizes on 'ImpactedAssetsList' a few lines above; YAMLs that
+                    # still list the legacy 'ImpactedAssets' name in OutputPropertyOrder
+                    # remap here so column-name parity is preserved for Excel + LA.
+                    $effectiveName = if ($name -eq 'ImpactedAssets') { 'ImpactedAssetsList' } else { $name }
+                    if ($tmp2.Contains($effectiveName)) { $h2[$effectiveName] = $tmp2[$effectiveName] }
                 }
                 foreach ($forceCol in 'RiskFactor_Consequence_Detailed','MITRE_Tactics','MITRE_Techniques','ComplianceTags','MoreDetails') {
                     if (-not $h2.Contains($forceCol)) { $h2[$forceCol] = $tmp2[$forceCol] }
@@ -5876,10 +5888,15 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 # set only a name and it resolved to a cross-sub workspace).
                 if ($laWs -match '/subscriptions/([^/]+)/') { $laSubId = $Matches[1] }
 
-                $laDceRg = if (-not [string]::IsNullOrWhiteSpace([string]$global:DceResourceGroup)) {
+                # Priority: SI_DceResourceGroup (canonical SI customer global, only set when
+                # the customer overrides) BEFORE DceResourceGroup (legacy unprefixed name --
+                # always populated by SecurityInsight.shared-defaults.ps1 Layer 0 to
+                # 'rg-dce-securityinsight'). Reading the legacy name first masks the
+                # customer's SI_* override and trips the DCE collision guard with the wrong RG.
+                $laDceRg = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_DceResourceGroup)) {
+                                [string]$global:SI_DceResourceGroup
+                            } elseif (-not [string]::IsNullOrWhiteSpace([string]$global:DceResourceGroup)) {
                                 [string]$global:DceResourceGroup
-                            } elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SI_DceResourceGroup)) {
-                                [string]$global:SI_DceResourceGroup    # asset-profiling canonical -- shared by RA when SI_DceResourceGroup is set in custom.ps1
                             } else {
                                 'rg-dce-securityinsight'
                             }

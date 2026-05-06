@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.51
+## v2.2.52
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
 - release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
 - release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
 - release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
 - release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
 - release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
-- release: SecurityInsight v2.2.21 - quiet down Graph 429-retry warnings (a3e460ac)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.52 — Profile: silently skip `AssetTagging.custom.yaml` foreign-schema files in the rule loader
+
+`Get-SIRuleSet` recursively scans `asset-profiling-enrichment/<engine>/` for `*.yaml` files and treats every match as a posture rule. When customers drop `AssetTagging.custom.yaml` (asset-tagging-engine shape: top-level key `AssetTagging: [...]`, no `id:`) into the same folder, the loader emits a noisy `WARNING: Get-SIRuleSet: skipping AssetTagging.custom.yaml (no id field)` on every run.
+
+The file is legitimate — it's consumed by the asset-tagging engine, just shares the folder. Loader now detects the asset-tagging shape (`obj.PSObject.Properties.Name -contains 'AssetTagging'`) and skips silently before the `id` check fires. Other malformed yaml files still get the `(no id field)` warning so genuine schema breakage is still surfaced.
 
 ---
 

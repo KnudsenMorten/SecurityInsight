@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.61
+## v2.2.62
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
 - release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
 - release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
 - release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
 - release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
 - release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
-- release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.62 — Prestage: tidier `[OK]` log format (fixed 22-char label, status in brackets)
+
+The v2.2.60 log format had alignment problems — padded role names inside quotes (`'Contributor                    '`) and inconsistent column widths between labels. Rewritten with a single `'{0,-22} : {1}'` template and `[exists]` / `[CREATED]` / `[GRANTED]` / `[already granted]` status suffixes:
+
+```
+[STEP] Infrastructure check (workspace + DCE/DCR RGs + RBAC + DCE + storage -- idempotent)
+ [INFO]   sub          : 54468121-...
+ [INFO]   workspace    : log-platform-management-securityinsight  (rg=rg-securityinsight)
+ [INFO]   DCE          : dce-securityinsight  (rg=rg-securityinsight)
+ [INFO]   DCR RG       : rg-securityinsight
+ [INFO]   Location     : westeurope
+
+ [OK]   Az context             : 54468121-98ba-48ba-ba59-ba10a9711ed3
+ [OK]   Workspace RG           : rg-securityinsight  [exists]
+ [OK]   LA workspace           : log-platform-management-securityinsight  [exists]
+ [OK]   DCE RG                 : rg-securityinsight  [exists]
+ [OK]   DCR RG                 : rg-securityinsight  [same as DCE RG]
+ [OK]   RBAC workspace         : Contributor  [already granted]
+ [OK]   RBAC RG rg-securityinsight : Contributor  [already granted]
+ [OK]   RBAC RG rg-securityinsight : Monitoring Metrics Publisher  [already granted]
+ [OK]   DCE                    : dce-securityinsight  (westeurope)  [exists]
+ [OK]   Storage RG             : rg-securityinsight  [exists]
+ [OK]   Storage account        : st2linkitsi  [exists]
+ [OK]   RBAC storage           : Storage Blob Data Contributor  [already granted]
+ [OK]   RBAC storage           : Storage Table Data Contributor  [already granted]
+ [OK]   RBAC storage           : Storage Queue Data Contributor  [already granted]
+ [OK]   Storage container      : sistaging  [exists]
+```
+
+First-run lines show `[CREATED]` / `[GRANTED]` instead. Same idempotent behaviour as v2.2.60, just a readable diff between exists vs created.
 
 ---
 

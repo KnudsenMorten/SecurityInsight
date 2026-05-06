@@ -67,14 +67,18 @@ function Invoke-SIPrestageInfra {
 
     $changed = $false
 
+    # Aligned label format: " [OK]   <label, 22 wide> : <value> [<status>]"
+    $_lbl = '{0,-22} : {1}'
+    function _Si_Status([bool]$Created) { if ($Created) { '[CREATED]' } else { '[exists]' } }
+
     # ---- 0. Set subscription context ----
     try {
         $ctx = Get-AzContext -ErrorAction SilentlyContinue
         if (-not $ctx -or [string]$ctx.Subscription.Id -ne $SubscriptionId) {
             $null = Set-AzContext -Subscription $SubscriptionId -ErrorAction Stop
-            Write-SIOk ("Az context switched to sub '{0}'" -f $SubscriptionId)
+            Write-SIOk ($_lbl -f 'Az context', "$SubscriptionId  [SWITCHED]")
         } else {
-            Write-SIOk ("Az context already on sub '{0}'" -f $SubscriptionId)
+            Write-SIOk ($_lbl -f 'Az context', "$SubscriptionId")
         }
     } catch {
         Write-Warning ('could not set sub context to {0}: {1} (continuing on default ctx)' -f $SubscriptionId, $_.Exception.Message)
@@ -83,11 +87,10 @@ function Invoke-SIPrestageInfra {
     # ---- 1. Workspace RG ----
     try {
         if (Get-AzResourceGroup -Name $WorkspaceResourceGroup -ErrorAction SilentlyContinue) {
-            Write-SIOk ("Resource group exists for workspace : '{0}'" -f $WorkspaceResourceGroup)
+            Write-SIOk ($_lbl -f 'Workspace RG', "$WorkspaceResourceGroup  $(_Si_Status $false)")
         } else {
-            Write-SIInfo ("creating workspace RG '{0}' in {1}" -f $WorkspaceResourceGroup, $Location)
             $null = New-AzResourceGroup -Name $WorkspaceResourceGroup -Location $Location -ErrorAction Stop
-            Write-SIOk ("Resource group CREATED for workspace : '{0}'" -f $WorkspaceResourceGroup)
+            Write-SIOk ($_lbl -f 'Workspace RG', "$WorkspaceResourceGroup  $(_Si_Status $true)")
             $changed = $true
         }
     } catch { Write-Warning ('workspace RG ensure failed: {0}' -f $_.Exception.Message) }
@@ -96,11 +99,10 @@ function Invoke-SIPrestageInfra {
     try {
         $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $WorkspaceResourceGroup -Name $WorkspaceName -ErrorAction SilentlyContinue
         if ($ws) {
-            Write-SIOk ("LA workspace exists                 : '{0}'" -f $WorkspaceName)
+            Write-SIOk ($_lbl -f 'LA workspace', "$WorkspaceName  $(_Si_Status $false)")
         } else {
-            Write-SIInfo ("creating LA workspace '{0}' in {1}/{2} (SKU PerGB2018, retention 90d)" -f $WorkspaceName, $WorkspaceResourceGroup, $Location)
             $null = New-AzOperationalInsightsWorkspace -ResourceGroupName $WorkspaceResourceGroup -Name $WorkspaceName -Location $Location -Sku 'PerGB2018' -RetentionInDays 90 -ErrorAction Stop
-            Write-SIOk ("LA workspace CREATED                : '{0}'" -f $WorkspaceName)
+            Write-SIOk ($_lbl -f 'LA workspace', "$WorkspaceName  $(_Si_Status $true) (PerGB2018, 90d)")
             $changed = $true
         }
     } catch { Write-Warning ('workspace ensure failed: {0}' -f $_.Exception.Message) }
@@ -108,26 +110,24 @@ function Invoke-SIPrestageInfra {
     # ---- 3. DCE RG ----
     try {
         if (Get-AzResourceGroup -Name $DceResourceGroup -ErrorAction SilentlyContinue) {
-            Write-SIOk ("Resource group exists for DCE       : '{0}'" -f $DceResourceGroup)
+            Write-SIOk ($_lbl -f 'DCE RG', "$DceResourceGroup  $(_Si_Status $false)")
         } else {
-            Write-SIInfo ("creating DCE RG '{0}' in {1}" -f $DceResourceGroup, $Location)
             $null = New-AzResourceGroup -Name $DceResourceGroup -Location $Location -ErrorAction Stop
-            Write-SIOk ("Resource group CREATED for DCE      : '{0}'" -f $DceResourceGroup)
+            Write-SIOk ($_lbl -f 'DCE RG', "$DceResourceGroup  $(_Si_Status $true)")
             $changed = $true
         }
     } catch { Write-Warning ('DCE RG ensure failed: {0}' -f $_.Exception.Message) }
 
     # ---- 4. DCR RG (skip if same as DCE RG) ----
     if ($DcrResourceGroup -eq $DceResourceGroup) {
-        Write-SIOk ("Resource group for DCR              : same as DCE RG ('{0}')" -f $DcrResourceGroup)
+        Write-SIOk ($_lbl -f 'DCR RG', "$DcrResourceGroup  [same as DCE RG]")
     } else {
         try {
             if (Get-AzResourceGroup -Name $DcrResourceGroup -ErrorAction SilentlyContinue) {
-                Write-SIOk ("Resource group exists for DCR       : '{0}'" -f $DcrResourceGroup)
+                Write-SIOk ($_lbl -f 'DCR RG', "$DcrResourceGroup  $(_Si_Status $false)")
             } else {
-                Write-SIInfo ("creating DCR RG '{0}' in {1}" -f $DcrResourceGroup, $Location)
                 $null = New-AzResourceGroup -Name $DcrResourceGroup -Location $Location -ErrorAction Stop
-                Write-SIOk ("Resource group CREATED for DCR      : '{0}'" -f $DcrResourceGroup)
+                Write-SIOk ($_lbl -f 'DCR RG', "$DcrResourceGroup  $(_Si_Status $true)")
                 $changed = $true
             }
         } catch { Write-Warning ('DCR RG ensure failed: {0}' -f $_.Exception.Message) }
@@ -138,10 +138,10 @@ function Invoke-SIPrestageInfra {
         $existing = Get-AzRoleAssignment -ObjectId $SpnObjectId -Scope $WorkspaceResourceId -ErrorAction SilentlyContinue |
                       Where-Object { $_.RoleDefinitionName -eq 'Contributor' -and $_.Scope -eq $WorkspaceResourceId }
         if ($existing) {
-            Write-SIOk  ("Permission 'Contributor' on workspace        : already granted")
+            Write-SIOk ($_lbl -f 'RBAC workspace', 'Contributor  [already granted]')
         } else {
             $null = New-AzRoleAssignment -ObjectId $SpnObjectId -RoleDefinitionName 'Contributor' -Scope $WorkspaceResourceId -ErrorAction Stop
-            Write-SIOk  ("Permission 'Contributor' on workspace        : GRANTED")
+            Write-SIOk ($_lbl -f 'RBAC workspace', 'Contributor  [GRANTED]')
             $changed = $true
         }
     } catch { Write-Warning ("could not grant 'Contributor' on workspace: {0}" -f $_.Exception.Message) }
@@ -156,11 +156,12 @@ function Invoke-SIPrestageInfra {
             try {
                 $existing = Get-AzRoleAssignment -ObjectId $SpnObjectId -Scope $scope -ErrorAction SilentlyContinue |
                               Where-Object { $_.RoleDefinitionName -eq $role -and $_.Scope -eq $scope }
+                $label = "RBAC RG $rg"
                 if ($existing) {
-                    Write-SIOk ("Permission '{0,-30}' on RG '{1}' : already granted" -f $role, $rg)
+                    Write-SIOk ($_lbl -f $label, "$role  [already granted]")
                 } else {
                     $null = New-AzRoleAssignment -ObjectId $SpnObjectId -RoleDefinitionName $role -Scope $scope -ErrorAction Stop
-                    Write-SIOk ("Permission '{0,-30}' on RG '{1}' : GRANTED" -f $role, $rg)
+                    Write-SIOk ($_lbl -f $label, "$role  [GRANTED]")
                     $changed = $true
                 }
             } catch {
@@ -173,11 +174,10 @@ function Invoke-SIPrestageInfra {
     try {
         $dce = Get-AzDataCollectionEndpoint -ResourceGroupName $DceResourceGroup -Name $DceName -ErrorAction SilentlyContinue
         if ($dce) {
-            Write-SIOk ("DCE exists                          : '{0}' (location={1})" -f $DceName, $dce.Location)
+            Write-SIOk ($_lbl -f 'DCE', "$DceName  ($($dce.Location))  $(_Si_Status $false)")
         } else {
-            Write-SIInfo ("creating DCE '{0}' in {1}/{2}" -f $DceName, $DceResourceGroup, $Location)
             $null = New-AzDataCollectionEndpoint -ResourceGroupName $DceResourceGroup -Name $DceName -Location $Location -NetworkAclsPublicNetworkAccess 'Enabled' -ErrorAction Stop
-            Write-SIOk ("DCE CREATED                         : '{0}' (location={1})" -f $DceName, $Location)
+            Write-SIOk ($_lbl -f 'DCE', "$DceName  ($Location)  $(_Si_Status $true)")
             $changed = $true
         }
     } catch { Write-Warning ('DCE ensure failed: {0}' -f $_.Exception.Message) }
@@ -188,20 +188,24 @@ function Invoke-SIPrestageInfra {
         $stRg = if (-not [string]::IsNullOrWhiteSpace($StorageResourceGroup)) { $StorageResourceGroup } else { $WorkspaceResourceGroup }
         # Storage RG (might be a 4th distinct RG or shared with workspace)
         try {
-            if (-not (Get-AzResourceGroup -Name $stRg -ErrorAction SilentlyContinue)) {
-                Write-SIInfo ("  creating storage RG '{0}' in {1}" -f $stRg, $Location)
+            if (Get-AzResourceGroup -Name $stRg -ErrorAction SilentlyContinue) {
+                Write-SIOk ($_lbl -f 'Storage RG', "$stRg  $(_Si_Status $false)")
+            } else {
                 $null = New-AzResourceGroup -Name $stRg -Location $Location -ErrorAction Stop
+                Write-SIOk ($_lbl -f 'Storage RG', "$stRg  $(_Si_Status $true)")
                 $changed = $true
             }
-        } catch { Write-Warning ('Prestage: storage RG ensure failed: {0}' -f $_.Exception.Message) }
+        } catch { Write-Warning ('storage RG ensure failed: {0}' -f $_.Exception.Message) }
 
         # Storage account (Standard_LRS, HTTPS only, TLS 1.2+, public access on)
         $saCreated = $false   # tracked separately from $changed so writeback fires only on first-create
         try {
             $sa = Get-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -ErrorAction SilentlyContinue
-            if (-not $sa) {
-                Write-SIInfo ("  creating storage account '{0}' in {1}/{2} (Standard_LRS, HTTPS only)" -f $StorageAccountName, $stRg, $Location)
+            if ($sa) {
+                Write-SIOk ($_lbl -f 'Storage account', "$StorageAccountName  $(_Si_Status $false)")
+            } else {
                 $sa = New-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -Location $Location -SkuName 'Standard_LRS' -Kind 'StorageV2' -EnableHttpsTrafficOnly $true -MinimumTlsVersion 'TLS1_2' -AllowBlobPublicAccess $false -ErrorAction Stop
+                Write-SIOk ($_lbl -f 'Storage account', "$StorageAccountName  $(_Si_Status $true) (Standard_LRS, TLS1_2)")
                 $changed   = $true
                 $saCreated = $true
             }
@@ -211,12 +215,14 @@ function Invoke-SIPrestageInfra {
                 try {
                     $existing = Get-AzRoleAssignment -ObjectId $SpnObjectId -Scope $stScope -ErrorAction SilentlyContinue |
                                   Where-Object { $_.RoleDefinitionName -eq $role -and $_.Scope -eq $stScope }
-                    if (-not $existing) {
-                        Write-SIInfo ("  granting '{0}' on storage account to SPN" -f $role)
+                    if ($existing) {
+                        Write-SIOk ($_lbl -f 'RBAC storage', "$role  [already granted]")
+                    } else {
                         $null = New-AzRoleAssignment -ObjectId $SpnObjectId -RoleDefinitionName $role -Scope $stScope -ErrorAction Stop
+                        Write-SIOk ($_lbl -f 'RBAC storage', "$role  [GRANTED]")
                         $changed = $true
                     }
-                } catch { Write-Warning ("Prestage: could not grant '{0}' on storage: {1}" -f $role, $_.Exception.Message) }
+                } catch { Write-Warning ("could not grant '{0}' on storage: {1}" -f $role, $_.Exception.Message) }
             }
             # Fetch storage key (in-memory) ONLY when SI_StorageKey isn't set
             # this run. Persist to custom.ps1 ONLY when the storage account was
@@ -263,14 +269,16 @@ function Invoke-SIPrestageInfra {
                 $stCtx = $sa.Context
                 if ($stCtx) {
                     $container = Get-AzStorageContainer -Name 'sistaging' -Context $stCtx -ErrorAction SilentlyContinue
-                    if (-not $container) {
-                        Write-SIInfo ("  creating storage container 'sistaging'")
+                    if ($container) {
+                        Write-SIOk ($_lbl -f 'Storage container', "sistaging  $(_Si_Status $false)")
+                    } else {
                         $null = New-AzStorageContainer -Name 'sistaging' -Context $stCtx -Permission Off -ErrorAction Stop
+                        Write-SIOk ($_lbl -f 'Storage container', "sistaging  $(_Si_Status $true)")
                         $changed = $true
                     }
                 }
-            } catch { Write-Warning ('Prestage: sistaging container ensure failed: {0}' -f $_.Exception.Message) }
-        } catch { Write-Warning ('Prestage: storage account ensure failed: {0}' -f $_.Exception.Message) }
+            } catch { Write-Warning ('sistaging container ensure failed: {0}' -f $_.Exception.Message) }
+        } catch { Write-Warning ('storage account ensure failed: {0}' -f $_.Exception.Message) }
     }
 
     # ---- 10. Propagation sleep (only when something was created/granted) ----

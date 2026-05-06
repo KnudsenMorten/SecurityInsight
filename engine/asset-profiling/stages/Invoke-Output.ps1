@@ -214,66 +214,9 @@ function Write-SIClassificationToLogAnalytics {
         Write-SIInfo ('auth  : {0}' -f $authNote)
         Write-SIInfo ('rows  : {0}' -f $flat.Count)
 
-        # ---- Prestage infra (gated by $global:SI_PrestageInfra; default ON) ----
-        # Creates workspace + DCE + DCR RGs if missing, ensures SPN has the right
-        # RBAC at workspace + DCE RG + DCR RG, creates the DCE if missing. Existing
-        # resources / role assignments are no-ops. Set $global:SI_PrestageInfra
-        # = $false to skip (IaC-managed deployments).
-        if ($global:SI_PrestageInfra -ne $false) {
-            try {
-                . (Join-Path $PSScriptRoot '..\shared\Invoke-SIPrestageInfra.ps1')
-
-                # Resolve sub + workspace name + workspace RG. Prefer the parsed values
-                # from SI_WorkspaceResourceId (canonical); fall back to per-global
-                # overrides; final fallback to defaults.
-                $_subId = $null; $_wsRg = $null; $_wsName = $null
-                if ($global:SI_WorkspaceResourceId -match '/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/[^/]+/workspaces/([^/?]+)') {
-                    $_subId  = $Matches[1]; $_wsRg = $Matches[2]; $_wsName = $Matches[3]
-                }
-                if (-not $_subId)  { $_subId  = $global:SI_AzSubscriptionId }
-                if (-not $_wsRg)   { $_wsRg   = if ($global:SI_WorkspaceResourceGroup) { $global:SI_WorkspaceResourceGroup } else { 'rg-securityinsight' } }
-                if (-not $_wsName) { $_wsName = if ($global:SI_WorkspaceName)          { $global:SI_WorkspaceName }          else { 'log-platform-management-securityinsight' } }
-                $_dceRg   = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { 'rg-securityinsight' }
-                $_dcrRg   = if ($global:SI_DcrResourceGroup) { $global:SI_DcrResourceGroup } else { 'rg-securityinsight' }
-                $_dceName = if ($global:SI_DceName)          { $global:SI_DceName }          else { 'dce-si-securityinsight' }
-                $_loc     = if ($global:SI_Location)         { $global:SI_Location }         else { 'westeurope' }
-                $_wsId    = if ($global:SI_WorkspaceResourceId) {
-                                $global:SI_WorkspaceResourceId
-                            } else {
-                                "/subscriptions/$_subId/resourceGroups/$_wsRg/providers/Microsoft.OperationalInsights/workspaces/$_wsName"
-                            }
-
-                if (-not $_subId) {
-                    Write-Warning ('Prestage SKIPPED: no subscription id resolvable. Set $global:SI_AzSubscriptionId or $global:SI_WorkspaceResourceId.')
-                } else {
-                    $_stAcct = if ($global:SI_StorageAccount)       { $global:SI_StorageAccount }       else { '' }
-                    $_stRg   = if ($global:SI_StorageResourceGroup) { $global:SI_StorageResourceGroup } else { '' }
-                    Invoke-SIPrestageInfra `
-                        -WorkspaceName            $_wsName `
-                        -WorkspaceResourceGroup   $_wsRg `
-                        -WorkspaceResourceId      $_wsId `
-                        -DcrResourceGroup         $_dcrRg `
-                        -DceResourceGroup         $_dceRg `
-                        -DceName                  $_dceName `
-                        -StorageAccountName       $_stAcct `
-                        -StorageResourceGroup     $_stRg `
-                        -Location                 $_loc `
-                        -SubscriptionId           $_subId `
-                        -SpnObjectId              $spnObjectId
-
-                    # Backfill globals so downstream calls (CheckCreateUpdate,
-                    # Post-*) see the resolved defaults even when the operator
-                    # didn't set them in custom.ps1.
-                    if (-not $global:SI_WorkspaceResourceId) { $global:SI_WorkspaceResourceId = $_wsId;    Write-SIInfo ('Prestage: backfilled $global:SI_WorkspaceResourceId = {0}' -f $_wsId) }
-                    if (-not $global:SI_DceName)             { $global:SI_DceName             = $_dceName; Write-SIInfo ('Prestage: backfilled $global:SI_DceName = {0}' -f $_dceName) }
-                    if (-not $global:SI_DcrResourceGroup)    { $global:SI_DcrResourceGroup    = $_dcrRg;   Write-SIInfo ('Prestage: backfilled $global:SI_DcrResourceGroup = {0}' -f $_dcrRg) }
-                    if (-not $global:SI_DceResourceGroup)    { $global:SI_DceResourceGroup    = $_dceRg;   Write-SIInfo ('Prestage: backfilled $global:SI_DceResourceGroup = {0}' -f $_dceRg) }
-                    if (-not $global:SI_AzSubscriptionId)    { $global:SI_AzSubscriptionId    = $_subId;   Write-SIInfo ('Prestage: backfilled $global:SI_AzSubscriptionId = {0}' -f $_subId) }
-                }
-            } catch {
-                Write-Warning ('Prestage block failed (continuing -- ingest may 403 if RBAC missing): {0}' -f $_.Exception.Message)
-            }
-        }
+        # Prestage moved to Invoke-SIEngineRun.ps1 entry (v2.2.55) so the storage
+        # account exists + SI_StorageKey is backfilled BEFORE the entry-time
+        # storage validation. By the time we get here, all infra is in place.
 
         # ---- canonical AzLogDcrIngestPS pattern (mirrors RA engine line 5914+) ----
         # Step 1: build full DCE + DCR caches via the standard helpers. Everything

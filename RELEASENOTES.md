@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.52
+## v2.2.53
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
 - release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
 - release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
 - release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
@@ -33,13 +34,54 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.25 - locked+custom merge + \$v22Root rename (dcf55d9e)
 - release: SecurityInsight v2.2.24 - Run-AllEngines -Flavour internal|community switch (b37f8edd)
 - release: SecurityInsight v2.2.23 - PublicIP drop dead DCE URI lookup (split RG fix) (842b8b96)
-- release: SecurityInsight v2.2.22 - SP sign-in: query the Defender workspace + visible target log (f0d1d0a6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.53 — Output: idempotent infra pre-stage (LA workspace + DCE + DCR RGs + RBAC) before LA ingest
+
+After v2.2.51 stripped the engine's RBAC self-heal, customers hit the well-known propagation lag: a freshly-auto-created DCR's RG-scoped `Monitoring Metrics Publisher` grant doesn't reach the data plane in time, so the very first ingest 403s on it. Older DCRs in the same RG worked fine because their grants had propagated long ago.
+
+New `engine/asset-profiling/shared/Invoke-SIPrestageInfra.ps1` runs once per ingest, BEFORE `Get-AzDceListAll`, gated by `$global:SI_PrestageInfra` (default ON). Read-then-write idempotent — existing resources / role assignments are no-ops.
+
+**Steps (each isolated in its own try/catch — one failure doesn't kill the rest):**
+
+1. Set Az subscription context
+2. Create **workspace RG** if missing (default: `rg-securityinsight`)
+3. Create **LA workspace** if missing (default: `log-platform-management-securityinsight`, SKU PerGB2018, retention 90d)
+4. Create **DCE RG** if missing (default: `rg-securityinsight`)
+5. Create **DCR RG** if missing (default: `rg-securityinsight`)
+6. Grant `Contributor` on **workspace** (table create/update needs it)
+7. Grant `Contributor` + `Monitoring Metrics Publisher` on **DCE RG**
+8. Grant `Contributor` + `Monitoring Metrics Publisher` on **DCR RG**
+9. Create **DCE** if missing (default: `dce-si-securityinsight`, public network access enabled)
+10. Sleep 30s for ARM/RBAC propagation IF anything was actually created/granted
+
+**New globals (all optional — sensible defaults baked in):**
+
+| Global | Default | Purpose |
+|---|---|---|
+| `$global:SI_PrestageInfra` | `$true` | Skip the entire pre-stage (set `$false` for IaC-managed deployments) |
+| `$global:SI_AzSubscriptionId` | parsed from `SI_WorkspaceResourceId` | Sub for all created resources |
+| `$global:SI_WorkspaceName` | `log-platform-management-securityinsight` | LA workspace name |
+| `$global:SI_WorkspaceResourceGroup` | `rg-securityinsight` | LA workspace RG |
+| `$global:SI_DceName` | `dce-si-securityinsight` | DCE name (was previously required) |
+| `$global:SI_DceResourceGroup` | `rg-securityinsight` | DCE RG |
+| `$global:SI_DcrResourceGroup` | `rg-securityinsight` | DCR RG (was previously required) |
+| `$global:SI_Location` | `westeurope` | Region for any newly-created resource |
+
+If `SI_WorkspaceResourceId` is set, the workspace name + RG + sub are parsed from it (canonical source). Resolved values are written back to `$global:` so downstream code (CheckCreateUpdate, Post-*) sees them. The **previously-required** trio (`SI_WorkspaceResourceId`, `SI_DceName`, `SI_DcrResourceGroup`) are now optional — engine will derive defaults and create resources.
+
+**RBAC requirement (operator-side, one-time):**
+
+The engine SPN now needs `User Access Administrator` OR `Owner` SOMEWHERE in the scope hierarchy (sub or higher) to perform the role grants. If the SPN can't grant, individual steps log a `WARN` and continue; ingest may still 403 if MMP propagation hasn't finished, but the operator sees WHY in the transcript.
+
+**Zero-config first run:** an operator with only SPN auth set in `custom.ps1` can now run the engine end-to-end — pre-stage creates everything, ingest succeeds.
 
 ---
 

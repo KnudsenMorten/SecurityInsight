@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.62
+## v2.2.63
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
 - release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
 - release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
 - release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
@@ -33,13 +34,39 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.36 - PS 5.1 TryParse crash in endpoint filter (b3b68ccb)
 - release: SecurityInsight v2.2.35 - narrow osPlatformScope tagging to TVM-driven rules only (85bbc413)
 - release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
-- release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.63 — Output: poll for DCR `immutableId` in ARG (fix `404 NotFound 'westeurope'` on first ingest)
+
+When `CheckCreateUpdate-TableDcr-Structure` creates a fresh DCR, Azure Resource Graph (ARG) takes 15-120s to index it. During the gap:
+
+- `Get-AzDcrListAll` returns the DCR row, but `properties.immutableId` is empty
+- `AzLogDcrIngestPS` falls back to substituting the DCE's location string (`westeurope`) as the URL path segment
+- The ingest PUT goes to `.../dataCollectionRules/westeurope/...`
+- ARM 404s: `Data collection rule with immutable Id 'westeurope' not found`
+
+The v2.2.51 fix was a hardcoded `Start-Sleep -Seconds 15`. That works on small tenants but loses the race on slow ARG-indexing days.
+
+Replaced with a poll loop:
+
+```
+Step 4: re-sync caches after DCR provisioning. Poll up to 120s for the
+DCR's immutableId to land in ARG.
+  waiting for DCR 'dcr-si-endpoint' immutableId in ARG (15s/120s) ...
+  waiting for DCR 'dcr-si-endpoint' immutableId in ARG (30s/120s) ...
+  DCR immutableId resolved after 30s: dcr-abc123def456...
+```
+
+15s polling interval, 120s ceiling. On most runs the immutableId resolves in 15-30s and the loop exits early. If it never lands, log a `[WARN]` and let the ingest attempt proceed (will surface the 404 with the original error).
+
+Detects "fake" immutableIds (the DCE's location string fallback) so the loop doesn't accept e.g. `westeurope` as a valid id and proceed to a 404.
 
 ---
 

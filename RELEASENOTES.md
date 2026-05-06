@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.60
+## v2.2.61
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
 - release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
 - release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
 - release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.34 - Profile osPlatformScope + tag 557 AppService rules (b5cd4d2a)
 - release: SecurityInsight v2.2.33 - RA: skip '0 findings' emails (363586eb)
 - release: SecurityInsight v2.2.32 - Endpoint + Identity 'active assets only' DEFAULT ON (d0c9b384)
-- release: SecurityInsight v2.2.31 - Endpoint opt-in 'active devices only' filter (08a1869d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.61 — Profile: cast `DaysInactive` to `[int64]` to match existing DCR `Long` stream type
+
+`Get-SIRiskFactors.ps1` was casting `DaysInactive = [int]$days` (Int32 → Kusto `Int`). When the DCR was originally created from a sample where `$days` happened to fit `Int64` storage, the stream's column type landed as `Long`. Subsequent runs producing `Int` triggered:
+
+```
+"InvalidTransformOutput","message":"Types of transform output columns do not match the ones defined by the output stream:
+  DaysInactive [produced:'Int', output:'Long']"
+```
+
+ARM rejects with `400 BadRequest` because `CheckCreateUpdate-TableDcr-Structure` can ADD columns but can't change a column TYPE on an existing DCR/stream.
+
+Fix: cast `[int64]$days` in both row-builder code paths (endpoint risk factors line 194, identity risk factors line 278). Now produced type is always `Long`, matching whatever the DCR has. Forward-compatible (new DCRs land as `Long` too). Same flow, same canonical AzLogDcrIngestPS pattern — just one type-coercion line per call site.
 
 ---
 

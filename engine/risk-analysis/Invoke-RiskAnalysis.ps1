@@ -3306,37 +3306,86 @@ function Calculate-RiskScore {
             }
         }
 
-        # 2) Portal links (raw URL only, no label prefix). Lookup order intentionally
-        # puts the actual Profile-schema column name FIRST per engine:
-        #   Endpoint -> MdeDeviceId  (EG-source endpoint reports may also carry AadDeviceId)
-        #   Identity -> EntraAccountObjectId  (NOT 'EntraObjectId' -- that name doesn't exist
-        #              in identity.schema.locked.json; older alias kept as fallback)
-        #   Azure    -> AzureResourceId  (with AssetId fallback for ARG-shape rows)
+        # 2) Portal links -- AssetType-conditional so we don't emit an Entra User-profile
+        # URL for a ServicePrincipal / Endpoint / Azure resource. Engine row schema
+        # carries an 'AssetType' column populated by the Profile pipeline:
+        #   'Endpoint'                     -> Defender machine page
+        #   'User' / 'Identity'            -> Entra User Profile blade
+        #   'AppRegistrationSP' / '*SP'    -> Entra App detail blade (App ID, not Object ID)
+        #   'MultiTenantSP'                -> Same App blade
+        #   'Azure*' / starts with /subs/  -> Azure portal resource blade
+        $assetType = ''
+        if ($r.PSObject.Properties['AssetType']) { $assetType = [string]$r.AssetType }
+
+        # Endpoint -> Defender Security Center machine page
         $mdeId = $null
         foreach ($cand in 'MdeDeviceId','AadDeviceId','DeviceId') {
             if ($r.PSObject.Properties[$cand]) {
                 $val = [string]$r.$cand
-                if (-not [string]::IsNullOrWhiteSpace($val)) { $mdeId = $val; break }
+                if ($val -match '^[0-9a-fA-F-]{36}$') { $mdeId = $val; break }
             }
         }
-        if (-not [string]::IsNullOrWhiteSpace($mdeId)) {
+        if (-not [string]::IsNullOrWhiteSpace($mdeId) -and ($assetType -eq 'Endpoint' -or $assetType -eq '' -or $assetType -eq 'Device')) {
             [void]$mdLines.Add('https://security.microsoft.com/machines/{0}/overview' -f $mdeId)
         }
-        $entraOid = $null
-        foreach ($cand in 'EntraAccountObjectId','EntraObjectId','AccountObjectId','UserObjectId','ENTRA_UserId','PrincipalId','ObjectId','AssetId') {
-            if ($r.PSObject.Properties[$cand]) {
-                $val = [string]$r.$cand
-                if ($val -match '^[0-9a-fA-F-]{36}$') { $entraOid = $val; break }
+
+        # User identity -> Entra User Profile blade. ONLY when AssetType clearly indicates
+        # a User; never for ServicePrincipal / Endpoint / Azure (that was the v2.2.75 bug).
+        if ($assetType -eq 'User' -or $assetType -eq 'Identity') {
+            $entraOid = $null
+            foreach ($cand in 'EntraAccountObjectId','EntraObjectId','AccountObjectId','UserObjectId','ENTRA_UserId','PrincipalId','ObjectId','AssetId') {
+                if ($r.PSObject.Properties[$cand]) {
+                    $val = [string]$r.$cand
+                    if ($val -match '^[0-9a-fA-F-]{36}$') { $entraOid = $val; break }
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($entraOid)) {
+                [void]$mdLines.Add('https://portal.azure.com/#view/Microsoft_AAD_IAM/UserDetailsMenuBlade/~/Profile/userId/{0}' -f $entraOid)
             }
         }
-        if (-not [string]::IsNullOrWhiteSpace($entraOid)) {
-            [void]$mdLines.Add('https://portal.azure.com/#view/Microsoft_AAD_IAM/UserDetailsMenuBlade/~/Profile/userId/{0}' -f $entraOid)
+
+        # ServicePrincipal -> Entra App Registration / Enterprise Application blade.
+        # Prefer AppId (the user-facing GUID) over ObjectId for the URL; ObjectId
+        # opens a per-tenant copy, AppId opens the multi-tenant primary.
+        if ($assetType -like '*SP*' -or $assetType -eq 'ServicePrincipal' -or $assetType -eq 'AppRegistration') {
+            $appId = $null
+            foreach ($cand in 'AppId','ApplicationId','ServicePrincipalAppId','AssetId','EntraAccountObjectId','ObjectId') {
+                if ($r.PSObject.Properties[$cand]) {
+                    $val = [string]$r.$cand
+                    if ($val -match '^[0-9a-fA-F-]{36}$') { $appId = $val; break }
+                }
+            }
+            if (-not [string]::IsNullOrWhiteSpace($appId)) {
+                [void]$mdLines.Add('https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/{0}' -f $appId)
+            }
         }
+
+        # Azure resource -> portal resource blade
         $azResId = $null
         if ($r.PSObject.Properties['AzureResourceId']) { $azResId = [string]$r.AzureResourceId }
         elseif ($r.PSObject.Properties['AssetId'] -and ([string]$r.AssetId).StartsWith('/subscriptions/')) { $azResId = [string]$r.AssetId }
         if (-not [string]::IsNullOrWhiteSpace($azResId)) {
             [void]$mdLines.Add('https://portal.azure.com/#@/resource{0}' -f $azResId)
+        }
+
+        # 2b) CVE links -- harvest CVE-YYYY-NNNNN from any field on the row and append
+        # NVD detail URLs. Mostly populates from IssueList / Issues / IssuesList /
+        # Recommendations columns where the YAML KQL rolls up `mv-expand` CVEs.
+        $cveSeen = New-Object System.Collections.Generic.HashSet[string]
+        foreach ($p in $r.PSObject.Properties) {
+            $v = $p.Value
+            if ($null -eq $v) { continue }
+            $items = if ($v -is [System.Collections.IEnumerable] -and -not ($v -is [string])) { @($v) } else { @($v) }
+            foreach ($item in $items) {
+                $s = [string]$item
+                if ([string]::IsNullOrWhiteSpace($s)) { continue }
+                foreach ($cveMatch in ([regex]::Matches($s, 'CVE-\d{4}-\d{4,}'))) {
+                    $cve = $cveMatch.Value.ToUpperInvariant()
+                    if ($cveSeen.Add($cve)) {
+                        [void]$mdLines.Add('https://nvd.nist.gov/vuln/detail/{0}' -f $cve)
+                    }
+                }
+            }
         }
 
         # 3) MITRE links derived from MITRE_Tactics / MITRE_Techniques

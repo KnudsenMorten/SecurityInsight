@@ -23934,6 +23934,7 @@ Reports:
                 | extend cmdbDataSensitivity  = tostring(column_ifexists('cmdbDataSensitivity', ''))
                 | extend CmdbMatchPhase           = tostring(column_ifexists('CmdbMatchPhase', ''))
                 | extend CmdbMatchState           = tostring(column_ifexists('CmdbMatchState', ''))   // __SI_CMDB_DEFENSIVE__
+        | extend DisabledPrivilegedUser = tobool(column_ifexists('DisabledPrivilegedUser', false))   // defensive -- column may be absent on tenants whose identity engine hasn't computed verdict
         | where DisabledPrivilegedUser == true
         | extend MoreInfoUrl = strcat("https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserProfileMenuBlade/~/overview/userId/", coalesce(EntityIds,Upn))
         | extend Links = dynamic_to_json(pack_array(pack("label","User profile","url",MoreInfoUrl)))
@@ -24874,6 +24875,7 @@ Reports:
                 | extend cmdbDataSensitivity  = tostring(column_ifexists('cmdbDataSensitivity', ''))
                 | extend CmdbMatchPhase           = tostring(column_ifexists('CmdbMatchPhase', ''))
                 | extend CmdbMatchState           = tostring(column_ifexists('CmdbMatchState', ''))   // __SI_CMDB_DEFENSIVE__
+        | extend RiskFactorCount = toint(column_ifexists('RiskFactorCount', 0))   // defensive -- column may be absent if engine hasn't aggregated risk-factors yet
         | where RiskFactorCount >= 4
         | extend MoreInfoUrl = iff(IdentityType == "ServicePrincipal",
             strcat("https://entra.microsoft.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/", AppId),
@@ -25093,6 +25095,7 @@ Reports:
                 | extend cmdbDataSensitivity  = tostring(column_ifexists('cmdbDataSensitivity', ''))
                 | extend CmdbMatchPhase           = tostring(column_ifexists('CmdbMatchPhase', ''))
                 | extend CmdbMatchState           = tostring(column_ifexists('CmdbMatchState', ''))
+        | extend DisabledPrivilegedUser = tobool(column_ifexists('DisabledPrivilegedUser', false))   // defensive -- column may be absent on tenants whose identity engine hasn't computed verdict
         | where DisabledPrivilegedUser == true
         | extend DeviceKey = coalesce(tostring(column_ifexists("AppId","")), tostring(column_ifexists("Upn","")), tostring(column_ifexists("DisplayName","")))
         //__BUCKET_FILTER_BEGIN__
@@ -26280,6 +26283,7 @@ Reports:
                 | extend cmdbDataSensitivity  = tostring(column_ifexists('cmdbDataSensitivity', ''))
                 | extend CmdbMatchPhase           = tostring(column_ifexists('CmdbMatchPhase', ''))
                 | extend CmdbMatchState           = tostring(column_ifexists('CmdbMatchState', ''))
+        | extend RiskFactorCount = toint(column_ifexists('RiskFactorCount', 0))   // defensive -- column may be absent if engine hasn't aggregated risk-factors yet
         | where RiskFactorCount >= 4
         | extend DeviceKey = coalesce(tostring(column_ifexists("AppId","")), tostring(column_ifexists("Upn","")), tostring(column_ifexists("DisplayName","")))
         //__BUCKET_FILTER_BEGIN__

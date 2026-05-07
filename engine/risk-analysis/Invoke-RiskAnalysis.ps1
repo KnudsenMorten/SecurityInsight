@@ -6701,7 +6701,10 @@ if ([bool]$global:BuildSummaryByAI) {
                 [string]$CmdbId,
                 [string]$CmdbName,
                 [string]$CmdbCriticality,
-                [string]$CmdbDataSensitivity
+                [string]$CmdbDataSensitivity,
+                [double]$RiskScoreUnweighted = 0.0,
+                [double]$RiskScoreWeighted   = 0.0,
+                [string]$MoreDetails         = ''
             )
 
             if ([string]::IsNullOrWhiteSpace($Asset)) { return }
@@ -6711,21 +6714,26 @@ if ([bool]$global:BuildSummaryByAI) {
                     Asset               = $Asset
                     TierLevel           = $TierLevel
                     Findings            = 0
-                    RiskScoreTotal      = 0.0
-                    MaxRiskScore        = 0.0
+                    # v2.2.99: separated regular + weighted totals so the AI summary
+                    # can show 'Total Risk Score' AND 'Weighted Risk Score' per asset
+                    # (operators were confused by a single ambiguous 'RiskScoreTotal'
+                    # column that summed whichever score was the active sort target).
+                    TotalRiskScore           = 0.0
+                    TotalRiskScore_Weighted  = 0.0
                     CmdbId              = $CmdbId
                     CmdbName            = $CmdbName
                     CmdbCriticality     = $CmdbCriticality
                     CmdbDataSensitivity = $CmdbDataSensitivity
                     Domains             = New-Object System.Collections.Generic.HashSet[string]
                     TopItems            = New-Object System.Collections.Generic.List[string]
+                    Links               = New-Object System.Collections.Generic.HashSet[string]
                 }
             }
 
             $o = $assetAgg[$Asset]
             $o.Findings++
-            $o.RiskScoreTotal += $RiskScore
-            if ($RiskScore -gt $o.MaxRiskScore) { $o.MaxRiskScore = $RiskScore }
+            $o.TotalRiskScore          += $RiskScoreUnweighted
+            $o.TotalRiskScore_Weighted += $RiskScoreWeighted
             # Sticky: keep first-seen non-empty cmdb fields (assets typically have one cmdb identity).
             if (-not $o.CmdbId              -and $CmdbId)              { $o.CmdbId              = $CmdbId }
             if (-not $o.CmdbName            -and $CmdbName)            { $o.CmdbName            = $CmdbName }
@@ -6737,6 +6745,17 @@ if ([bool]$global:BuildSummaryByAI) {
             if ($o.TopItems.Count -lt 12) {
                 $o.TopItems.Add(("{0} [{1}] ({2}/{3})" -f $ConfName, $ConfId, $Category, $Subcat))
             }
+
+            # Harvest a few reference URLs from MoreDetails so the AI can hyperlink them
+            # in the email summary. Cap at 6 unique URLs per asset to keep the prompt
+            # bounded.
+            if (-not [string]::IsNullOrWhiteSpace($MoreDetails) -and $o.Links.Count -lt 6) {
+                foreach ($urlMatch in ([regex]::Matches([string]$MoreDetails, 'https?://[^\s,;<>"`)\]]+'))) {
+                    if ($o.Links.Count -ge 6) { break }
+                    $u = $urlMatch.Value.TrimEnd('.', ',', ';', ')', ']', '"', "'")
+                    [void]$o.Links.Add($u)
+                }
+            }
         }
 
         $i = 0
@@ -6746,6 +6765,16 @@ if ([bool]$global:BuildSummaryByAI) {
             $riskScoreText = Get-RowValue -Row $r -Names @($colRiskScore, "RiskScore")
             [double]$riskScore = 0
             [void][double]::TryParse(($riskScoreText -replace ',', '.'), [ref]$riskScore)
+
+            # v2.2.99: pull BOTH risk-score variants per row so the AI summary
+            # can show 'Total Risk Score' (unweighted) AND 'Weighted Risk Score'.
+            $riskScoreUnText = Get-RowValue -Row $r -Names @("RiskScoreTotal", "RiskScore")
+            [double]$riskScoreUn = 0
+            [void][double]::TryParse(($riskScoreUnText -replace ',', '.'), [ref]$riskScoreUn)
+            $riskScoreWtText = Get-RowValue -Row $r -Names @("RiskScoreTotal_Weighted")
+            [double]$riskScoreWt = 0
+            [void][double]::TryParse(($riskScoreWtText -replace ',', '.'), [ref]$riskScoreWt)
+            $rowMoreDetails = Get-RowValue -Row $r -Names @("MoreDetails")
 
             $severity    = Get-RowValue -Row $r -Names @("SecuritySeverity", "Severity", "securityseverity")
             $tierLevel   = Get-RowValue -Row $r -Names @("CriticalityTierLevel", "CriticalityTier", "Tier", "criticalitytierlevel")
@@ -6777,7 +6806,8 @@ if ([bool]$global:BuildSummaryByAI) {
                 foreach ($a in $assetList) {
                     Add-AssetAgg -Asset $a -RiskScore $riskScore -TierLevel $tierLevel -Severity $severity -Domain $domain `
                         -Category $category -Subcat $subcat -ConfName $confName -ConfId $confId `
-                        -CmdbId $cmdbId -CmdbName $cmdbName -CmdbCriticality $cmdbCrit -CmdbDataSensitivity $cmdbSens
+                        -CmdbId $cmdbId -CmdbName $cmdbName -CmdbCriticality $cmdbCrit -CmdbDataSensitivity $cmdbSens `
+                        -RiskScoreUnweighted $riskScoreUn -RiskScoreWeighted $riskScoreWt -MoreDetails $rowMoreDetails
                 }
             } else {
                 Write-Warn2 ("AI rollup: no asset resolved for row {0}. Config={1} [{2}]" -f $i, $confName, $confId)
@@ -6789,7 +6819,7 @@ if ([bool]$global:BuildSummaryByAI) {
         $assetRanked = @()
         if ($assetAgg.Count -gt 0) {
             $assetRanked = $assetAgg.Values |
-                Sort-Object -Property @{Expression="MaxRiskScore";Descending=$true}, @{Expression="RiskScoreTotal";Descending=$true}, @{Expression="Findings";Descending=$true} |
+                Sort-Object -Property @{Expression="TotalRiskScore_Weighted";Descending=$true}, @{Expression="TotalRiskScore";Descending=$true}, @{Expression="Findings";Descending=$true} |
                 Select-Object -First $TopAssetsN
         }
 
@@ -6804,8 +6834,11 @@ if ([bool]$global:BuildSummaryByAI) {
             $topItems = ""
             if ($a.TopItems.Count -gt 0) { $topItems = ($a.TopItems | Select-Object -First 8) -join "; " }
 
-            $assetLines += ("{0}. Asset={1}; Tier={2}; CMDB={3} [{4}] (Criticality={5}, DataSensitivity={6}); Findings={7}; MaxRiskScore={8:N2}; RiskScoreTotal={9:N2}; Domains=[{10}]; TopItems={11}" -f `
-                $rank, $a.Asset, $a.TierLevel, $a.CmdbName, $a.CmdbId, $a.CmdbCriticality, $a.CmdbDataSensitivity, $a.Findings, $a.MaxRiskScore, $a.RiskScoreTotal, $domainSummary, $topItems)
+            $linkList = ""
+            if ($a.Links.Count -gt 0) { $linkList = (@($a.Links) | Select-Object -First 6) -join "; " }
+
+            $assetLines += ("{0}. Asset={1}; Tier={2}; CMDB={3} [{4}] (Criticality={5}, DataSensitivity={6}); Findings={7}; TotalRiskScore={8:N0}; WeightedRiskScore={9:N0}; Domains=[{10}]; TopItems={11}; Links={12}" -f `
+                $rank, $a.Asset, $a.TierLevel, $a.CmdbName, $a.CmdbId, $a.CmdbCriticality, $a.CmdbDataSensitivity, $a.Findings, $a.TotalRiskScore, $a.TotalRiskScore_Weighted, $domainSummary, $topItems, $linkList)
         }
 
         $assetsTextForAI = $assetLines -join "`n"
@@ -6856,9 +6889,11 @@ Do not wrap in code fences. Do not add a preamble or closing remarks.
 
 ## Top 25 risky assets
 
-One bullet per asset, in rank order:
+One bullet per asset, in rank order. Use ONLY the two score numbers provided
+(TotalRiskScore = unweighted sum, WeightedRiskScore = weighted sum). Do NOT
+invent a 'MaxRiskScore' field. Format numbers with thousands separators.
 
-- **<Rank>. <AssetName>** -- Tier **<Tier>** | MaxRiskScore **<Max>** | RiskScoreTotal **<Total>** | Findings **<Count>** | Domains: <Domains>
+- **<Rank>. <AssetName>** -- Tier **<Tier>** | Total Risk Score **<TotalRiskScore>** | Weighted Risk Score **<WeightedRiskScore>** | Findings **<Count>** | Domains: <Domains>
 
 ## Top 10 asset drilldown
 
@@ -6866,15 +6901,16 @@ For each of the Top 10 assets, output exactly this structure (separate each asse
 
 ### <Rank>. <AssetName>
 
-- **Tier:** <Tier> | **MaxRiskScore:** <Max> | **RiskScoreTotal:** <Total>
-- **Why it is high risk:** <one sentence citing MaxRiskScore + 2-3 TopItems>
-- **Top 5 actions to reduce RiskScore FAST:**
+- **Tier:** <Tier> | **Total Risk Score:** <TotalRiskScore> | **Weighted Risk Score:** <WeightedRiskScore>
+- **Why it is high risk:** <one sentence citing the two top TopItems>
+- **Top 5 actions to reduce risk FAST:**
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
 - **Expected overall risk reduction:** High | Medium | Low
+- **Reference links:** when the asset's `Links=` field includes URLs, render them as inline markdown anchors `[label](url)`. Pick descriptive labels from the URL itself (e.g. `[CVE-2026-33824](https://nvd.nist.gov/vuln/detail/CVE-2026-33824)`, `[ATT&CK T1078](https://attack.mitre.org/techniques/T1078/)`). Maximum 3 links per asset; omit this line if the asset has no links.
 
 ## Cross-asset quick wins
 
@@ -6887,6 +6923,7 @@ Rules:
 - Do NOT merge multiple assets into one line.
 - Keep the output concise. No long paragraphs.
 - Use **bold** for all labels and field values exactly as shown above.
+- ONLY use the two score columns provided (Total Risk Score, Weighted Risk Score). Do NOT invent or carry over old field names like 'MaxRiskScore' or 'RiskScoreTotal' from prior outputs.
 "@
 
         Write-Host "`n[AI SUMMARY RESPONSE]`n" -ForegroundColor Cyan
@@ -7206,8 +7243,20 @@ if ([bool]$global:Report_SendMail -eq $true) {
         # 1. HTML-escape, normalize newlines.
         $s = $src -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;'
         $s = $s -replace "`r`n","`n" -replace "`r","`n"
-        # 2. Inline conversions (bold + italic). Italic: avoid eating intra-word _ by anchoring
-        # the open marker at start-of-line / whitespace.
+        # 2. Inline conversions (links + bold + italic). Links FIRST so the
+        # bracket+paren form ([text](url)) doesn't get clobbered by later passes.
+        # Note: at this point '<' / '>' are already &lt; / &gt;, so the pattern
+        # works on the post-escape text -- the rendered <a> tag we emit is fine
+        # because we use &gt; only inside text, never inside our own tags.
+        $s = [regex]::Replace($s, '\[([^\]\n]+)\]\((https?://[^\s)]+)\)', {
+            param($m)
+            $label = $m.Groups[1].Value
+            $url   = $m.Groups[2].Value -replace '"','&quot;'
+            return ('<a href="' + $url + '" style="color:#2c5a8e;text-decoration:underline;" target="_blank" rel="noopener">' + $label + '</a>')
+        })
+        # Bare URLs not inside a markdown link -- auto-link them too so the AI
+        # can drop a raw URL and it still renders as a click.
+        $s = [regex]::Replace($s, '(?<![">])(https?://[^\s<>"`)\]]+)', '<a href="$1" style="color:#2c5a8e;text-decoration:underline;" target="_blank" rel="noopener">$1</a>')
         $s = [regex]::Replace($s, '\*\*([^\*\n]+?)\*\*', '<strong>$1</strong>')
         $s = [regex]::Replace($s, '(^|\s)_([^_\n]+?)_(\s|[\.,;:\)\]]|$)', '$1<em>$2</em>$3')
         # 3. Block conversions, line by line, with bullet group folding.

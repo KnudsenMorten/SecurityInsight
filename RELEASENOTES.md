@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.98
+## v2.2.99
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
 - release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
 - release: SecurityInsight v2.2.97 - README: KPI bullet to last + add 2 mail screenshots (f7648270)
 - release: SecurityInsight v2.2.96 - RiskScoreKPI: MS-inspired secure score (higher=better) (c45fd1c3)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.72 - asset-tagging rename + RA fixes (a2727e42)
 - release: SecurityInsight v2.2.71 - RA \$laDceRg resolution honors \$global:SI_DceResourceGroup (was hardcoded rg-dce-securityinsight fallback) (58d5e600)
 - release: SecurityInsight v2.2.70 - PublicIP cast AssetTier to [int] (InvalidTransformOutput String vs Int) (98afd0b5)
-- release: SecurityInsight v2.2.69 - PrivilegeTierClassifier truncate file to first clean copy (was tripled with corruption fragments) (ed524b19)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.99 — AI summary: real Total + Weighted Risk Score per asset, plus inline reference links
+
+The AI summary's per-asset line was emitting two confusing numbers — `MaxRiskScore` (max single-row score) and `RiskScoreTotal` (sum of whichever score was the active sort target, often `RiskScoreTotal_Weighted`). Operators couldn't reconcile them with the per-row columns they know.
+
+Replaced both with the two real totals, summed per asset across that asset's findings:
+
+- **Total Risk Score** — sum of per-row `RiskScoreTotal` for findings impacting this asset
+- **Weighted Risk Score** — sum of per-row `RiskScoreTotal_Weighted` for findings impacting this asset
+
+New per-asset line in the AI rollup:
+
+```
+1. dc1.2linkit.local | Tier 0 | Total Risk Score 950 | Weighted Risk Score 1,065 | Findings 17 | Domains: Endpoint
+```
+
+Sort key updated to `WeightedRiskScore` (descending), then `TotalRiskScore`, then `Findings`.
+
+**Reference links inline.** Each per-asset rollup row now also carries up to 6 unique URLs harvested from the `MoreDetails` column of that asset's findings (CVE NVD pages, MITRE technique pages, etc.). The AI prompt instructs the model to render up to 3 of them per asset as inline markdown links `[label](url)`. The email's markdown→HTML renderer was extended to convert both `[text](url)` and bare URLs into proper `<a>` tags so the links land clickable in the recipient's mailbox.
 
 ---
 

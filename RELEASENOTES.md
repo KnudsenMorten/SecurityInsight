@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.75
+## v2.2.76
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.76 - RA visible-noise fixes (placeholder/URLs/CVEs) (279fcba7)
 - release: SecurityInsight v2.2.75 - Send-SIRunHealthRow DCR collision guard (d67c9ceb)
 - release: SecurityInsight v2.2.74 - internal-vm launchers honor SI_UseStorageOAuth (0e77ae7d)
 - release: SecurityInsight v2.2.73 - asset-tagging idempotent framework init (4ea70e43)
@@ -33,13 +34,40 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
 - release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
 - release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
-- release: SecurityInsight v2.2.46 - fix v2.2.42 DCR diagnostic showing wrong DCE + new SI_SkipDcrAutoCreate opt-out (30bd8d85)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.76 — RA spreadsheet visible-noise fixes: placeholder text, MoreDetails URLs, CVE links
+
+Three cosmetic-but-confusing bugs in the Detailed/Summary spreadsheet output:
+
+**1. `(engine-substituted at runtime)` placeholder text leaking into Excel.** The YAML `__WEIGHTED_FACTORS_BEGIN__` ... `__WEIGHTED_FACTORS_END__` block carried a default fallback that spelled out `"cmdbCriticality=Critical (engine-substituted at runtime)"` so authors knew the engine was supposed to substitute it. The substitution only fires when `riskscore_weighted.schema.custom.json` has a per-engine `weightedRiskFactors.<engine>.fields[]` block; without that, the fallback text reached Excel as-is — confusing customers into thinking the engine had failed.
+
+Fix: rewrite the YAML defaults to emit a clean value with no diagnostic text:
+- Endpoint/Azure/PublicIP reports: `iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")` — shows the value when cmdb-enriched, empty otherwise.
+- Identity reports (which aggregate above per-row cmdb): `""` — no per-row factor data anyway.
+- Replaced 122 occurrences across the YAML.
+
+**2. MoreDetails URL only ever pointed at Entra User Profile blade — even for ServicePrincipals, Endpoints, and Azure resources.** `Invoke-RiskAnalysis.ps1:3326` walked a fallback chain ending in `'AssetId'` and emitted the `Microsoft_AAD_IAM/UserDetailsMenuBlade/.../userId/<oid>` URL whenever any candidate matched a 36-char GUID — so SP rows (where AssetId is the AppId) and Endpoint rows (where AssetId is the MdeDeviceId) all got a malformed userId blade URL.
+
+Fix: the URL builder is now AssetType-aware:
+- `AssetType='Endpoint'` → `https://security.microsoft.com/machines/<MdeDeviceId>/overview` only
+- `AssetType='User'` / `'Identity'` → User Profile blade only
+- `AssetType` matches `*SP*` / `'ServicePrincipal'` / `'AppRegistration'` → `Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/<AppId>`
+- `AzureResourceId` or AssetId starting with `/subscriptions/` → portal resource blade
+- Endpoint MdeDeviceId fallback also fires when AssetType is empty (legacy rows without AssetType set).
+
+**3. CVE links missing from MoreDetails despite CVE strings in `IssueList`.** The harvester scanned for `^https?://` only; CVE-IDs in the row's columns never got hyperlinked.
+
+Fix: added CVE regex harvest (`CVE-\d{4}-\d{4,}` across every column on the row), each unique CVE appended as `https://nvd.nist.gov/vuln/detail/<CVE>`. Dedupe + 25-URL cap + 4000-char cell cap still apply.
+
+This release does NOT touch: Identity Summary `RiskScoreTotal=0`, missing `cmdbId` projection, missing `MITRE_Tactics`/`Techniques`. Those are queued for v2.2.77+.
 
 ---
 

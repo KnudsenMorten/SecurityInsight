@@ -188,7 +188,7 @@ Reports:
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=1.0 so you see real per-row signals without engine substitution.
               //__WEIGHTED_FACTORS_BEGIN__
-              | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+              | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
@@ -467,7 +467,7 @@ Reports:
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
               //__WEIGHTED_FACTORS_BEGIN__
-              | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+              | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
@@ -754,7 +754,7 @@ Reports:
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
               //__WEIGHTED_FACTORS_BEGIN__
-              | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+              | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
@@ -1041,7 +1041,7 @@ Reports:
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
               //__WEIGHTED_FACTORS_BEGIN__
-              | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+              | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
@@ -1251,7 +1251,7 @@ Reports:
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
               //__WEIGHTED_FACTORS_BEGIN__
-              | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+              | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
@@ -1495,7 +1495,7 @@ Reports:
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
               //__WEIGHTED_FACTORS_BEGIN__
-              | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+              | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
@@ -2420,7 +2420,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -3041,7 +3041,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -3894,7 +3894,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -4510,7 +4510,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -5279,7 +5279,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -5843,7 +5843,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -6578,7 +6578,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -7183,7 +7183,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -7858,7 +7858,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -8540,7 +8540,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -9080,7 +9080,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -9817,7 +9817,7 @@ Reports:
         // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
         // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -10009,7 +10009,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -10132,7 +10132,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -10288,7 +10288,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -10437,7 +10437,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -10587,7 +10587,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -10731,7 +10731,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -10855,7 +10855,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11013,7 +11013,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11153,7 +11153,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11274,7 +11274,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11435,7 +11435,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11576,7 +11576,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11713,7 +11713,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11852,7 +11852,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -11990,7 +11990,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -12130,7 +12130,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -12269,7 +12269,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -12407,7 +12407,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -12551,7 +12551,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -12695,7 +12695,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -12867,7 +12867,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -13015,7 +13015,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -13201,7 +13201,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -13370,7 +13370,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -13531,7 +13531,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -13696,7 +13696,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -13853,7 +13853,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -13999,7 +13999,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -14143,7 +14143,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -14288,7 +14288,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -14434,7 +14434,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -14575,7 +14575,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -14717,7 +14717,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -14888,7 +14888,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15033,7 +15033,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15176,7 +15176,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15292,7 +15292,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15448,7 +15448,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15591,7 +15591,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15705,7 +15705,7 @@ Reports:
                   RiskFactor_Probability_Detailed, RiskFactor_Probability_DetailedScore,
                   AssetCount, TotalIssues, ImpactedAssets
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15848,7 +15848,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -15993,7 +15993,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -16136,7 +16136,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -16277,7 +16277,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -16435,7 +16435,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -16573,7 +16573,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -16744,7 +16744,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -16902,7 +16902,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -17060,7 +17060,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -17200,7 +17200,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -17377,7 +17377,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -17551,7 +17551,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -17704,7 +17704,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -17854,7 +17854,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -18025,7 +18025,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -18174,7 +18174,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -18331,7 +18331,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -18485,7 +18485,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -18639,7 +18639,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -18813,7 +18813,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -18964,7 +18964,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -19143,7 +19143,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -19322,7 +19322,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -19497,7 +19497,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -19672,7 +19672,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -19848,7 +19848,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -20025,7 +20025,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -20198,7 +20198,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -20369,7 +20369,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -20524,7 +20524,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -20657,7 +20657,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -20791,7 +20791,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -20942,7 +20942,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -21122,7 +21122,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -21307,7 +21307,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -21488,7 +21488,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -21667,7 +21667,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -21846,7 +21846,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -22029,7 +22029,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -22213,7 +22213,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -22397,7 +22397,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -22556,7 +22556,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -22691,7 +22691,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -22843,7 +22843,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -23017,7 +23017,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -23180,7 +23180,7 @@ Reports:
             cmdbCriticality     = _si_cmdbCriticality,
             cmdbDataSensitivity = _si_cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = strcat("cmdbCriticality=", tostring(coalesce(cmdbCriticality, "")), " (engine-substituted at runtime)")
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -23303,7 +23303,7 @@ Reports:
              CriticalityTier, CriticalityTierLevel, SecuritySeverity,
              cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity = ""
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -23384,7 +23384,7 @@ Reports:
         | where 1 == 1
         //__BUCKET_FILTER_END__
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         //__WEIGHTED_FACTORS_END__
         | project SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
@@ -23490,7 +23490,7 @@ Reports:
              CriticalityTier, CriticalityTierLevel, SecuritySeverity,
              cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity = ""
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -23563,7 +23563,7 @@ Reports:
         | where 1 == 1
         //__BUCKET_FILTER_END__
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         //__WEIGHTED_FACTORS_END__
         | project SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
@@ -23676,7 +23676,7 @@ Reports:
                CriticalityTier, CriticalityTierLevel, SecuritySeverity,
                cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity, MsCriticalityLevel, MachineRiskState
           //__WEIGHTED_FACTORS_BEGIN__
-          | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above asset, no per-row cmdb)"
+          | extend RiskScore_Weight_Detailed = ""
           | extend RiskScore_Weight_Factor   = 100
           | extend RiskFactor_Weight         = 100
           //__WEIGHTED_FACTORS_END__
@@ -23769,7 +23769,7 @@ Reports:
           | where 1 == 1
           //__BUCKET_FILTER_END__
           //__WEIGHTED_FACTORS_BEGIN__
-          | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime)"
+          | extend RiskScore_Weight_Detailed = ""
           | extend RiskScore_Weight_Factor   = 100
           | extend RiskFactor_Weight         = 100
           //__WEIGHTED_FACTORS_END__
@@ -25025,7 +25025,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25141,7 +25141,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25260,7 +25260,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25377,7 +25377,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25493,7 +25493,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25612,7 +25612,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25737,7 +25737,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25855,7 +25855,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -25976,7 +25976,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -26092,7 +26092,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -26212,7 +26212,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
@@ -26328,7 +26328,7 @@ Reports:
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity, cmdbCriticality, cmdbDataSensitivity
         //__WEIGHTED_FACTORS_BEGIN__
-        | extend RiskScore_Weight_Detailed = "(engine-substituted at runtime; aggregated above identity, no per-row cmdb)"
+        | extend RiskScore_Weight_Detailed = ""
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__

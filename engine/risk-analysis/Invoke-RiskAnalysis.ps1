@@ -3300,88 +3300,50 @@ function Calculate-RiskScore {
                 foreach ($item in $items) {
                     $s = [string]$item
                     if ([string]::IsNullOrWhiteSpace($s)) { continue }
-                    if ($s.Length -gt 2048) { continue }   # cell guard: skip oversized blobs
-                    if ($s -match '^https?://' -and $seen.Add($s.Trim())) { [void]$mdLines.Add($s.Trim()) }
+                    if ($s.Length -gt 4096) { continue }   # cell guard: skip oversized blobs
+                    if ($s -notmatch 'https?://') { continue }
+                    # Pull out EVERY URL from the field. Prior version used $s -match '^https?://'
+                    # which kept the WHOLE string as one entry -- if a YAML rollup had
+                    # concatenated two URLs without a separator (e.g.
+                    # 'https://nvd.nist.gov/vuln/detail/CVE-2016-9535https://nvd.nist.gov/...')
+                    # the cell rendered as one un-clickable run-on. Iterate matches instead.
+                    foreach ($urlMatch in ([regex]::Matches($s, 'https?://[^\s,;<>"`)\]]+'))) {
+                        $u = $urlMatch.Value.TrimEnd('.', ',', ';', ')', ']', '"', "'")
+                        if ($seen.Add($u)) { [void]$mdLines.Add($u) }
+                    }
                 }
             }
         } else {
             # Preserve YAML-populated MoreDetails as line-per-URL. Some vuln reports
             # build entries like 'CVE-2026-33824 => https://nvd.nist.gov/vuln/detail/CVE-2026-33824'
-            # in KQL via strcat. Strip the 'CVE-XXX => ' / generic 'label => ' prefix so the
-            # cell is clickable URLs only, matching the harvested-side format. Each CVE
-            # becomes its own line (line-break separator added when joined later).
+            # in KQL via strcat. KQL strcat without an explicit separator can also produce
+            # 'https://...CVE-X-Yhttps://...' run-ons -- iterate every URL match instead of
+            # splitting on a single delimiter so concatenated pairs land as separate lines.
+            $seenY = New-Object System.Collections.Generic.HashSet[string]
             foreach ($piece in ($existingMd -split '\s*;\s*')) {
                 $pTrim = $piece.Trim()
                 if ([string]::IsNullOrWhiteSpace($pTrim)) { continue }
-                # If the entry contains '=> https://...', keep only the URL portion.
-                if ($pTrim -match '^.*?=>\s*(https?://\S+)\s*$') {
-                    $pTrim = $matches[1].Trim()
+                # Extract every URL embedded in the piece (handles 'label => URL' AND
+                # 'URL1URL2URL3' run-ons). Falls back to the literal piece if no URL is
+                # found (preserves rare non-URL labels for downstream consumers).
+                $urlMatches = [regex]::Matches($pTrim, 'https?://[^\s,;<>"`)\]]+')
+                if ($urlMatches.Count -eq 0) {
+                    if ($seenY.Add($pTrim)) { [void]$mdLines.Add($pTrim) }
+                    continue
                 }
-                [void]$mdLines.Add($pTrim)
-            }
-        }
-
-        # 2) Portal links -- AssetType-conditional so we don't emit an Entra User-profile
-        # URL for a ServicePrincipal / Endpoint / Azure resource. Engine row schema
-        # carries an 'AssetType' column populated by the Profile pipeline:
-        #   'Endpoint'                     -> Defender machine page
-        #   'User' / 'Identity'            -> Entra User Profile blade
-        #   'AppRegistrationSP' / '*SP'    -> Entra App detail blade (App ID, not Object ID)
-        #   'MultiTenantSP'                -> Same App blade
-        #   'Azure*' / starts with /subs/  -> Azure portal resource blade
-        $assetType = ''
-        if ($r.PSObject.Properties['AssetType']) { $assetType = [string]$r.AssetType }
-
-        # Endpoint -> Defender Security Center machine page
-        $mdeId = $null
-        foreach ($cand in 'MdeDeviceId','AadDeviceId','DeviceId') {
-            if ($r.PSObject.Properties[$cand]) {
-                $val = [string]$r.$cand
-                if ($val -match '^[0-9a-fA-F-]{36}$') { $mdeId = $val; break }
-            }
-        }
-        if (-not [string]::IsNullOrWhiteSpace($mdeId) -and ($assetType -eq 'Endpoint' -or $assetType -eq '' -or $assetType -eq 'Device')) {
-            [void]$mdLines.Add('https://security.microsoft.com/machines/{0}/overview' -f $mdeId)
-        }
-
-        # User identity -> Entra User Profile blade. ONLY when AssetType clearly indicates
-        # a User; never for ServicePrincipal / Endpoint / Azure (that was the v2.2.75 bug).
-        if ($assetType -eq 'User' -or $assetType -eq 'Identity') {
-            $entraOid = $null
-            foreach ($cand in 'EntraAccountObjectId','EntraObjectId','AccountObjectId','UserObjectId','ENTRA_UserId','PrincipalId','ObjectId','AssetId') {
-                if ($r.PSObject.Properties[$cand]) {
-                    $val = [string]$r.$cand
-                    if ($val -match '^[0-9a-fA-F-]{36}$') { $entraOid = $val; break }
+                foreach ($urlMatch in $urlMatches) {
+                    $u = $urlMatch.Value.TrimEnd('.', ',', ';', ')', ']', '"', "'")
+                    if ($seenY.Add($u)) { [void]$mdLines.Add($u) }
                 }
             }
-            if (-not [string]::IsNullOrWhiteSpace($entraOid)) {
-                [void]$mdLines.Add('https://portal.azure.com/#view/Microsoft_AAD_IAM/UserDetailsMenuBlade/~/Profile/userId/{0}' -f $entraOid)
-            }
         }
 
-        # ServicePrincipal -> Entra App Registration / Enterprise Application blade.
-        # Prefer AppId (the user-facing GUID) over ObjectId for the URL; ObjectId
-        # opens a per-tenant copy, AppId opens the multi-tenant primary.
-        if ($assetType -like '*SP*' -or $assetType -eq 'ServicePrincipal' -or $assetType -eq 'AppRegistration') {
-            $appId = $null
-            foreach ($cand in 'AppId','ApplicationId','ServicePrincipalAppId','AssetId','EntraAccountObjectId','ObjectId') {
-                if ($r.PSObject.Properties[$cand]) {
-                    $val = [string]$r.$cand
-                    if ($val -match '^[0-9a-fA-F-]{36}$') { $appId = $val; break }
-                }
-            }
-            if (-not [string]::IsNullOrWhiteSpace($appId)) {
-                [void]$mdLines.Add('https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationMenuBlade/~/Overview/appId/{0}' -f $appId)
-            }
-        }
-
-        # Azure resource -> portal resource blade
-        $azResId = $null
-        if ($r.PSObject.Properties['AzureResourceId']) { $azResId = [string]$r.AzureResourceId }
-        elseif ($r.PSObject.Properties['AssetId'] -and ([string]$r.AssetId).StartsWith('/subscriptions/')) { $azResId = [string]$r.AssetId }
-        if (-not [string]::IsNullOrWhiteSpace($azResId)) {
-            [void]$mdLines.Add('https://portal.azure.com/#@/resource{0}' -f $azResId)
-        }
+        # 2) Portal/security links removed by request -- MoreDetails now contains
+        # ONLY harvested URLs (CVE / NVD / external references). Operators told us
+        # the portal.azure.com and security.microsoft.com links were noise, not
+        # navigation aids: the asset name + AssetType already tell you where to go,
+        # and the portal blade URLs broke when assets moved tenants. Re-enable per
+        # report by adding the URL into the YAML rollup directly.
 
         # 2b) CVE links -- harvest CVE-YYYY-NNNNN from any field on the row and append
         # NVD detail URLs. Mostly populates from IssueList / Issues / IssuesList /
@@ -3812,7 +3774,7 @@ function Calculate-RiskScore {
                     $effectiveName = if ($name -eq 'ImpactedAssets') { 'ImpactedAssetsList' } else { $name }
                     if ($tmp2.Contains($effectiveName)) { $h2[$effectiveName] = $tmp2[$effectiveName] }
                 }
-                foreach ($forceCol in 'RiskFactor_Consequence_Detailed','MITRE_Tactics','MITRE_Techniques','ComplianceTags','MoreDetails') {
+                foreach ($forceCol in 'RiskFactor_Consequence_Detailed','MITRE_Tactics','MITRE_Techniques','ComplianceTags','MoreDetails','RiskScoreDomainKPI','RiskScoreKPI') {
                     if (-not $h2.Contains($forceCol)) { $h2[$forceCol] = $tmp2[$forceCol] }
                 }
                 # Post-hoc reorder: place RiskFactor_Consequence_Detailed immediately
@@ -6873,25 +6835,43 @@ $assetsTextForAI
 B) Top findings:
 $findingsText
 
-Return format (STRICT):
-1) Top 25 risky assets (one line per asset):
-   - <Rank>. <AssetName> | Tier=<Tier> | MaxRiskScore=<Max> | RiskScoreTotal=<Total> | Findings=<Count> | Domains=<Domains>
+Return format (STRICT MARKDOWN). Use the exact section headers, bold labels,
+and bullet structure below. Every header MUST start at the beginning of a line.
+Do not wrap in code fences. Do not add a preamble or closing remarks.
 
-2) For the Top 10 assets only, include per asset:
-   - Asset: <AssetName>
-     - Why it is high risk (cite MaxRiskScore + 2-3 TopItems)
-     - Top 5 actions to reduce RiskScore FAST (each action MUST reference ConfigName [ConfigId])
-       Format each action line as:
-       - <Action> | <Why> | <Expected impact> | <References: ConfigName [ConfigId]>
-     - Expected overall risk reduction (High/Medium/Low)
+## Top 25 risky assets
 
-3) Cross-asset quick wins (max 8):
-   - <Action> [ConfigId] | Affects <N> assets | Example assets: <up to 4>
+One bullet per asset, in rank order:
+
+- **<Rank>. <AssetName>** -- Tier **<Tier>** | MaxRiskScore **<Max>** | RiskScoreTotal **<Total>** | Findings **<Count>** | Domains: <Domains>
+
+## Top 10 asset drilldown
+
+For each of the Top 10 assets, output exactly this structure (separate each asset with a blank line):
+
+### <Rank>. <AssetName>
+
+- **Tier:** <Tier> | **MaxRiskScore:** <Max> | **RiskScoreTotal:** <Total>
+- **Why it is high risk:** <one sentence citing MaxRiskScore + 2-3 TopItems>
+- **Top 5 actions to reduce RiskScore FAST:**
+  - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
+  - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
+  - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
+  - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
+  - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
+- **Expected overall risk reduction:** High | Medium | Low
+
+## Cross-asset quick wins
+
+Max 8 bullets:
+
+- **<Action>** [<ConfigId>] -- Affects <N> assets | Example: <up to 4 asset names>
 
 Rules:
-- Do NOT write generic advice. Every action must tie back to ConfigName [ConfigId] and assets.
-- Do NOT merge multiple assets into one line. Each line must be one asset.
-- Keep the output concise and structured. No long paragraphs.
+- Do NOT write generic advice. Every action must tie back to ConfigName [ConfigId] and concrete assets.
+- Do NOT merge multiple assets into one line.
+- Keep the output concise. No long paragraphs.
+- Use **bold** for all labels and field values exactly as shown above.
 "@
 
         Write-Host "`n[AI SUMMARY RESPONSE]`n" -ForegroundColor Cyan
@@ -7133,14 +7113,69 @@ if ([bool]$global:Report_SendMail -eq $true) {
 
     $aiEnabled = [bool]$global:BuildSummaryByAI
 
+    # ----- minimal markdown -> HTML for the AI section -----
+    # Handles the subset the AI prompt produces:
+    #   ## H2 / ### H3
+    #   **bold** / _italic_
+    #   - bullet (line-leading "- ")
+    #   blank line -> paragraph break
+    function _MdToHtml([string]$src) {
+        if ([string]::IsNullOrWhiteSpace($src)) { return '' }
+        # 1. HTML-escape, normalize newlines.
+        $s = $src -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;'
+        $s = $s -replace "`r`n","`n" -replace "`r","`n"
+        # 2. Inline conversions (bold + italic). Italic: avoid eating intra-word _ by anchoring
+        # the open marker at start-of-line / whitespace.
+        $s = [regex]::Replace($s, '\*\*([^\*\n]+?)\*\*', '<strong>$1</strong>')
+        $s = [regex]::Replace($s, '(^|\s)_([^_\n]+?)_(\s|[\.,;:\)\]]|$)', '$1<em>$2</em>$3')
+        # 3. Block conversions, line by line, with bullet group folding.
+        $lines = $s -split "`n"
+        $out   = New-Object System.Collections.Generic.List[string]
+        $inUl  = $false
+        $closeUl = { if ($inUl) { [void]$out.Add('</ul>'); $script:inUl = $false } }
+        $script:inUl = $false
+        for ($i = 0; $i -lt $lines.Length; $i++) {
+            $ln  = $lines[$i]
+            $raw = $ln.TrimEnd()
+            # nested-bullet: "  - text" -> indented li
+            if ($raw -match '^(\s{2,})-\s+(.+)$') {
+                if (-not $script:inUl) { [void]$out.Add('<ul style="margin:4px 0 8px 22px;padding:0;">'); $script:inUl = $true }
+                [void]$out.Add('<li style="margin:4px 0 4px 14px;color:#555;">' + $matches[2] + '</li>')
+                continue
+            }
+            if ($raw -match '^-\s+(.+)$') {
+                if (-not $script:inUl) { [void]$out.Add('<ul style="margin:4px 0 10px 18px;padding:0;">'); $script:inUl = $true }
+                [void]$out.Add('<li style="margin:4px 0;">' + $matches[1] + '</li>')
+                continue
+            }
+            if ($raw -match '^###\s+(.+)$') {
+                if ($script:inUl) { [void]$out.Add('</ul>'); $script:inUl = $false }
+                [void]$out.Add('<h4 style="margin:14px 0 4px 0;font-size:13px;color:#1a3a5e;">' + $matches[1] + '</h4>')
+                continue
+            }
+            if ($raw -match '^##\s+(.+)$') {
+                if ($script:inUl) { [void]$out.Add('</ul>'); $script:inUl = $false }
+                [void]$out.Add('<h3 style="margin:18px 0 6px 0;font-size:15px;color:#1a3a5e;border-bottom:1px solid #e0e6ed;padding-bottom:4px;">' + $matches[1] + '</h3>')
+                continue
+            }
+            if ([string]::IsNullOrWhiteSpace($raw)) {
+                if ($script:inUl) { [void]$out.Add('</ul>'); $script:inUl = $false }
+                continue
+            }
+            # plain paragraph
+            if ($script:inUl) { [void]$out.Add('</ul>'); $script:inUl = $false }
+            [void]$out.Add('<p style="margin:6px 0;">' + $raw + '</p>')
+        }
+        if ($script:inUl) { [void]$out.Add('</ul>'); $script:inUl = $false }
+        return ($out -join "`n")
+    }
+
     # ----- AI summary block (if enabled) -----
     $aiSection = ''
     if ($aiEnabled) {
         $aiHtml = ''
         if (-not [string]::IsNullOrWhiteSpace($global:AI_SummaryText)) {
-            $aiHtml = ($global:AI_SummaryText.Trim() -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;')
-            $aiHtml = $aiHtml -replace "`r`n","`n" -replace "`r","`n"
-            $aiHtml = $aiHtml -replace "`n",'<br>'
+            $aiHtml = _MdToHtml ($global:AI_SummaryText.Trim())
         } else {
             $aiHtml = 'AI summary was enabled, but no AI summary output was produced.'
         }
@@ -7267,7 +7302,6 @@ $tilePublicIP
       <!-- Body copy -->
       <tr><td style="padding:18px 28px 4px 28px;font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#333;line-height:1.55;">
         <p style="margin:0 0 10px 0;">The attached Excel report contains the full prioritized list of findings ranked by RiskScore, with evidence and asset detail on the <em>Details</em> sheet.</p>
-        <p style="margin:0;color:#5a6a7a;font-size:12px;">Risk Score model: <strong>Severity &times; Asset Tier &times; Domain weight</strong>, normalized to 0&ndash;100. Trend data is persisted to <code>SI_RiskScore_CL</code> for 31-day reporting in Power BI / Workbook.</p>
 $aiSection
       </td></tr>
 

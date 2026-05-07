@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Security vulnerability — report privately
-    url: https://github.com/KnudsenMorten/SecurityInsight/security/advisories/new
-    about: Do NOT open a public issue for credential exposure or exploitable bugs. Use GitHub Security Advisories.
-  - name: Email the author
-    url: mailto:mok@mortenknudsen.net
-    about: For anything not covered by the forms below.

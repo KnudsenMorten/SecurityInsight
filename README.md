@@ -99,17 +99,18 @@
    - 3.3 [Outputs — supported sinks](#33-outputs)
    - 3.4 [Setup file checklist — which sample files to copy](#34-setup-file-checklist)
 4. [How to Implement (Quick Start)](#how-to-implement-quick-start)
-   - 4.1 [High-level overview](#high-level-overview)
-   - 4.2 [Try out a preview release](#try-out-a-preview-release)
-   - 4.3 [Pre-requisite configuration](#pre-requisite-configuration)
-   - 4.4 [Connectivity — SPN or Managed Identity](#connectivity-spn-or-managed-identity)
-   - 4.5 [Identity infrastructure — Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
-   - 4.6 [Azure OpenAI (optional)](#azure-openai-optional)
-   - 4.7 [LauncherConfig files](#understand-the-launcherconfig-files)
-   - 4.8 [Run the Risk Analysis](#run-the-risk-analysis)
-   - 4.9 [Distribution model — community + internal launchers](#39-distribution-model)
-   - 4.10 [Asset-profiling engine catalog](#310-asset-profiling-engine-catalog)
-   - 4.11 [Container & KEDA host-mode](#311-container-keda)
+   - 4.1 [Three-step quick start (recommended)](#41-three-step-quick-start-recommended)
+   - 4.2 [High-level overview](#high-level-overview)
+   - 4.3 [Try out a preview release](#try-out-a-preview-release)
+   - 4.4 [Pre-requisite configuration](#pre-requisite-configuration)
+   - 4.5 [Connectivity — SPN or Managed Identity](#connectivity-spn-or-managed-identity)
+   - 4.6 [Identity infrastructure — Workspace + DCE + DCR](#identity-infrastructure-workspace--dce--dcr)
+   - 4.7 [Azure OpenAI (optional)](#azure-openai-optional)
+   - 4.8 [LauncherConfig files](#understand-the-launcherconfig-files)
+   - 4.9 [Run the Risk Analysis](#run-the-risk-analysis)
+   - 4.10 [Distribution model — community + internal launchers](#39-distribution-model)
+   - 4.11 [Asset-profiling engine catalog](#310-asset-profiling-engine-catalog)
+   - 4.12 [Container & KEDA host-mode](#311-container-keda)
 5. [Severity & Criticality Definitions](#severity--criticality-definitions)
    - 5.1 [Severity definitions](#severity-definitions)
    - 5.2 [Criticality definitions](#criticality-definitions)
@@ -544,10 +545,19 @@ For a fresh install, you'll copy these sample files to their `.custom.` siblings
 
 > 💡 **Naming convention rule of thumb**: any file with `.sample.` in the name is documentation. Drop `.sample.` to make it active. Files ending in `.custom.<ext>` (no `.sample.`) are gitignored and yours to keep across upgrades.
 
-<a id="35-ten-step-newbie-setup"></a>
-### 3.5 Ten-step newbie setup — first run, end to end
+---
 
-Never seen SecurityInsight before? Follow these 10 steps in order. Estimated time: **45–60 min** the first time (most of it is waiting for Azure resource provisioning).
+## 🚀 4. How to Implement (Quick Start)
+
+[⤴ Back to top](#top)
+
+<a id="how-to-implement-quick-start"></a><a id="35-ten-step-newbie-setup"></a><a id="41-three-step-quick-start-recommended"></a>
+
+### 4.1 Three-step quick start (recommended)
+
+Never seen SecurityInsight before? It's three steps: clone the repo, run the Setup Wizard, run the engines. Estimated time first run: **30–45 min** — most of it is Azure provisioning during Step 2.
+
+If you'd rather drive each phase by hand (one script per provisioning task), Steps 4–7 below are the manual equivalent of what the wizard does for you in Step 2 — exactly the same actions, just without the GUI.
 
 > ✅ **Before you start**
 > - Windows machine with **PowerShell 7+** (`pwsh`) installed
@@ -561,25 +571,34 @@ Never seen SecurityInsight before? Follow these 10 steps in order. Estimated tim
 ```powershell
 # Pick ONE:
 
-# Option A: clone the public preview branch
-git clone -b preview https://github.com/KnudsenMorten/SecurityInsight.git C:\SecurityInsight
+# Option A: clone the latest stable release (default branch, tagged builds)
+git clone "https://github.com/KnudsenMorten/SecurityInsight.git" "C:\SecurityInsightTest" 2>&1
 
-# Option B: download the zip
-Invoke-WebRequest -Uri 'https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/preview.zip' -OutFile $env:TEMP\si.zip
-Expand-Archive $env:TEMP\si.zip -DestinationPath C:\SecurityInsight -Force
+# Option B: download the zip of the latest stable
+Invoke-WebRequest -Uri 'https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip' -OutFile $env:TEMP\si.zip
+Expand-Archive $env:TEMP\si.zip -DestinationPath C:\SecurityInsightTest -Force
 
-cd C:\SecurityInsight
+cd C:\SecurityInsightTest
+
+# Bleeding-edge alternative -- only if you want the next release's HEAD (see § 3.2):
+#   git clone -b preview "https://github.com/KnudsenMorten/SecurityInsight.git" "C:\SecurityInsightTest" 2>&1
 ```
 
-#### Step 2 — Install required PowerShell modules
+#### Step 2 — Run the Setup Wizard (one-shot, end to end)
 
 ```powershell
-Install-Module Az, AutomateITPS, AutomateITPS.AD, AutomateITPS.Compat, `
-                AzLogDcrIngestPS, MicrosoftGraphPS, ImportExcel `
-                -Scope CurrentUser -Force -AllowClobber
+.\setup\ConfigWizard\Start-SetupWizard.ps1
 ```
 
-> ℹ️ The `community-vm` launcher flavour expects `FUNCTIONS\AutomateITPS*` to be inlined under your install root. If you cloned from the public preview branch, those modules are already bundled at `FUNCTIONS\`. Otherwise run the install above.
+The wizard opens in your browser at `http://localhost:8766` and walks you through 10 short pages. On the final **Apply** page it does **everything for you, automatically**:
+
+- **Creates the SPN + cred** — type a name, pick *Client secret* or *Self-signed certificate*; pick where the cred lives (Azure Key Vault preferred, local cert store for cert, inline for secret). Wizard creates the Entra app reg + SPN, generates the cred, applies Microsoft Graph + Azure permissions, requests admin consent, assigns RBAC at tenant-root MG.
+- **Creates Log Analytics + DCE + DCRs + Storage** — Workspace, DCE, per-engine DCRs, and the Storage Account. RBAC granted to the SPN automatically (`Storage Blob/Table/Queue Data Contributor`) so the engine reaches storage via OAuth — **no shared key written to your config**. Same generated config works for VM-pinned runs and Azure Container Apps Job runs.
+- **Writes `config\SecurityInsight.custom.ps1`** — fully populated with every required value (SPN, tenant, workspace, DCE/DCR names, storage). Optional sections (SMTP / Azure OpenAI / Shodan / CMDB CSV / per-engine JSON sink) are added only when you toggle them on.
+
+Cross-platform: runs on **Windows 11** + **Windows Server**, both **on-prem** and **Azure-hosted**. On Azure-hosted runners with a Managed Identity, the wizard offers an MSI alternative for storage RBAC instead of an SPN cred.
+
+> 🚧 **Status — building incrementally on `main`.** The HTML wizard (config-snippet generator) ships today; the *Apply* page automation rolls in across `v2.2.103+`. Per-tag scope: [`setup/ConfigWizard/ROADMAP.md`](./setup/ConfigWizard/ROADMAP.md). Until the Apply page is fully wired, Steps 4–7 below are the manual-equivalent path — exactly what the wizard will orchestrate for you, just one script per phase.
 
 #### Step 3 — Create your customer config (the ONLY file you must edit)
 
@@ -724,14 +743,7 @@ Each takes 15–30 min. The engine emits:
 
 That's the full first-run loop. Once it works once, schedule the launchers (Windows Task Scheduler, or Container Apps Job cron) for daily / hourly / on-demand cadence.
 
----
-
-## 🚀 4. How to Implement (Quick Start)
-
-[⤴ Back to top](#top)
-
-<a id="31-high-level-overview"></a><a id="high-level-overview"></a>
-### 🗺️ 3.1 High-level overview
+### 4.2 High-level overview
 
 [⤴ Back to top](#top)
 
@@ -750,7 +762,7 @@ flowchart TD
 **Cadence.** Steps 2–4 are once-per-tenant setup (Bootstrap-Auth → Bootstrap-Storage → optional Bootstrap-ContainerAppJob — run in order, then forget about them). Step 1 re-runs whenever you want to pull a newer release; `config/SecurityInsight.custom.ps1` and `*.custom.yaml` files are preserved. Step 5 (asset profiling — identity + endpoint + azure) typically runs daily; tier-driven cadence lets Tier 0 refresh hourly while Tier 3 refreshes weekly. Step 6 (Shodan public-IP scan) runs daily for Tier 0/1 IPs. Step 7 (Risk Analysis Summary + Detailed) runs daily / weekly / on-demand. Container mode + KEDA queue-depth scaling auto-scales replicas based on the shard queue.
 
 <a id="32-install-fresh-machine"></a><a id="install-fresh-machine"></a>
-### 🧪 3.2 Try out a preview release
+### 🧪 4.3 Try out a preview release
 
 [⤴ Back to top](#top)
 
@@ -770,7 +782,7 @@ $SI_InstallPath = 'C:\SCRIPTS\SecurityInsight-preview'
 </details>
 
 <a id="35-pre-requisite-configuration"></a><a id="pre-requisite-configuration"></a>
-### 🔧 3.3 Pre-requisite configuration
+### 🔧 4.4 Pre-requisite configuration
 
 [⤴ Back to top](#top)
 
@@ -778,7 +790,7 @@ Before you can run any launcher, the solution needs to know **your** values — 
 
 <a id="config-file-model"></a>
 
-#### 🧱 3.5.1 Config-file model — `.defaults.ps1` vs `.custom.ps1`
+#### 🧱 4.4.1 Config-file model — `.defaults.ps1` vs `.custom.ps1`
 
 | Filename pattern | Who owns it | Gets overwritten on update? | When to edit |
 |---|---|---|---|
@@ -814,7 +826,7 @@ flowchart TD
 
 <a id="setup-configurator"></a>
 
-#### ⭐ 3.5.2 Setup Configurator — GUI that writes your `.custom.ps1` files
+#### ⭐ 4.4.2 Setup Configurator — GUI that writes your `.custom.ps1` files
 
 The solution ships an **offline, single-file HTML tool** that generates the `SecurityInsight.custom.ps1` + per-engine `LauncherConfig.custom.ps1` files for you. Form fields + live preview + one-click copy-to-clipboard. Zero dependencies; all processing stays in your browser — no data leaves your machine.
 
@@ -831,7 +843,7 @@ Each tab corresponds to one launcher or the solution-wide `SecurityInsight.custo
 
 <a id="solution-component-overview"></a>
 
-#### 🧩 3.5.3 Solution component overview
+#### 🧩 4.4.3 Solution component overview
 
 Every SI component ships as its own launcher folder under `launcher/`. Two groups: **Steps** (once per tenant, during onboarding) and **Engines** (on a schedule after onboarding).
 
@@ -884,7 +896,7 @@ Every SI component ships as its own launcher folder under `launcher/`. Two group
 ---
 
 <a id="354-defender-xdr-licensing--onboarding-requirements"></a><a id="defender-xdr-licensing"></a>
-#### 🛡️ 3.5.4 Defender XDR licensing & onboarding requirements
+#### 🛡️ 4.4.4 Defender XDR licensing & onboarding requirements
 
 [⤴ Back to top](#top)
 
@@ -928,7 +940,7 @@ The RiskAnalysis engine submits KQL queries through Microsoft Graph advanced hun
 ---
 
 <a id="355-no-sentinel-routing-and-entra-diagnostics"></a><a id="no-sentinel-setup"></a>
-#### 🛰️ 3.5.5 No Sentinel? Routing model + Entra diagnostic-settings setup
+#### 🛰️ 4.4.5 No Sentinel? Routing model + Entra diagnostic-settings setup
 
 [⤴ Back to top](#top)
 
@@ -1019,7 +1031,7 @@ If you only have P1 / DfB and don't plan to upgrade, you can still get value fro
 ---
 
 <a id="351-connectivity-spn-or-managed-identity"></a><a id="connectivity-spn-or-managed-identity"></a>
-### 🔐 3.4 Connectivity — SPN or Managed Identity
+### 🔐 4.5 Connectivity — SPN or Managed Identity
 
 [⤴ Back to top](#top)
 
@@ -1068,7 +1080,7 @@ The OnboardValidate engine is **idempotent** — re-run it any time as a validat
 > **Required permissions** are listed in [§ 7.1](#permissions-catalog).
 
 <a id="352-identity-infrastructure-workspace--dce--dcr"></a><a id="identity-infrastructure-workspace--dce--dcr"></a>
-### 🏗️ 3.5 Identity infrastructure — Workspace + DCE + DCR
+### 🏗️ 4.6 Identity infrastructure — Workspace + DCE + DCR
 
 [⤴ Back to top](#top)
 
@@ -1113,7 +1125,7 @@ At the end of the run, the engine prints a **mode-aware cheat-sheet** with the e
 > **Which option do I need?** Run `Validate-SIPermissions_OnboardValidate-SecurityInsight-Permissions` (§ 3.5.1) first. If it grants `Owner` or `Contributor + UAA` on the target sub, Option A Just Works™. If your SPN ends up with `Reader`-only, use Option B.
 
 <a id="353-azure-openai-optional"></a><a id="azure-openai-optional"></a>
-### 🤖 3.6 Azure OpenAI (optional)
+### 🤖 4.7 Azure OpenAI (optional)
 
 [⤴ Back to top](#top)
 
@@ -1136,7 +1148,7 @@ $global:OpenAI_apiKey     = '<your-azure-openai-key>'
 > AI summary is appended both to the **Excel report** (as a 'Summary' worksheet) and the **email body**. Token budget is configurable via `$global:OpenAI_MaxTokensPerRequest` (default 16384).
 
 <a id="37-understand-the-launcherconfig-files"></a><a id="understand-the-launcherconfig-files"></a>
-### 📂 3.7 LauncherConfig files
+### 📂 4.8 LauncherConfig files
 
 [⤴ Back to top](#top)
 
@@ -1484,7 +1496,7 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 </details>
 
 <a id="36-run-the-risk-analysis"></a><a id="run-the-risk-analysis"></a>
-### ▶️ 3.8 Run the Risk Analysis
+### ▶️ 4.9 Run the Risk Analysis
 
 [⤴ Back to top](#top)
 
@@ -1539,7 +1551,7 @@ Two report templates ship out of the box:
 
 <a id="38-endpoint-asset-tagging"></a><a id="endpoint-asset-tagging"></a>
 <a id="39-distribution-model"></a>
-### 🚚 3.9 Distribution model — community + internal launchers
+### 🚚 4.10 Distribution model — community + internal launchers
 
 [⤴ Back to top](#top)
 
@@ -1571,7 +1583,7 @@ git clone -b preview https://github.com/KnudsenMorten/SecurityInsight.git
 The `Push-PreviewBundle.ps1` helper bundles the dev tree + `AutomateITPS` / `AutomateITPS.AD` / `AutomateITPS.Compat` modules in either layout, ready for an offline customer hand-off (USB drive, email, internal share). The Zip layout produces a single `SI-Preview.zip` with the Internal directory shape inside.
 
 <a id="310-asset-profiling-engine-catalog"></a>
-### 📐 3.10 Asset-profiling engine catalog
+### 📐 4.11 Asset-profiling engine catalog
 
 [⤴ Back to top](#top)
 
@@ -1587,7 +1599,7 @@ The `Push-PreviewBundle.ps1` helper bundles the dev tree + `AutomateITPS` / `Aut
 **Configuration pattern across all engines:** every rule YAML has a `.locked.yaml` (engine-shipped, never edited by customer) and matching `.custom.yaml` (customer-owned, gitignored). The two merge by `id`; Custom wins on conflict and adds new entries. Provider connectors are pluggable under `asset-profiling-providers/<provider>/` — currently `entra/` (built-in) and `servicenow-cmdb/` (read-only CSV pull).
 
 <a id="311-container-keda"></a>
-### 🐳 3.11 Container & KEDA host-mode
+### 🐳 4.12 Container & KEDA host-mode
 
 [⤴ Back to top](#top)
 

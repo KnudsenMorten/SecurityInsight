@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.91
+## v2.2.92
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
 - release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
 - release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
 - release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
 - release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
 - release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
-- release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.92 — RA: KPI columns now survive strict mode + MoreDetails URL split + nicer AI summary
+
+Three fixes that were visible in the v2.2.91 output:
+
+**1. Risk Score KPI showed 0/100 in the email.** The new `RiskScoreDomainKPI` and `RiskScoreKPI` columns were getting computed per-row but **stripped at output time** because every report runs in strict-mode `OutputPropertyOrder` (only declared columns survive). The KPI rollup downstream then summed zeroes. Added both columns to the strict-mode force-include list (alongside `MoreDetails`, `MITRE_Tactics`, `ComplianceTags`, etc).
+
+**2. MoreDetails URLs concatenated without line break.** Two paths were broken:
+- *Auto-harvest* — used `^https?://` to detect URL fields, which kept the WHOLE field value as a single line. When a YAML rollup `strcat`'d two URLs without a separator (e.g. `https://nvd.../CVE-2016-9535https://nvd.../CVE-2025-15556`), the cell rendered as one un-clickable run-on.
+- *YAML-populated* — split on `;` only, missing the same run-on case.
+
+Both paths now extract every URL via `regex::Matches('https?://[^\s,;<>"`)\]]+')` so each URL becomes its own line. Trailing punctuation is stripped.
+
+Removed the four portal/security blade auto-links (Defender machine page, Entra User profile, Entra App Registration, Azure resource blade) — operators reported them as noise rather than navigation. MoreDetails now contains only harvested URLs (mostly NVD CVE links + external references). Reports that need a portal link can put it in the YAML rollup directly.
+
+Also dropped the "Risk Score model: Severity × Asset Tier × Domain weight…" footer line from the email — it duplicated what's already obvious from the KPI tiles.
+
+**3. AI summary in the email is now nicely formatted.** The AI prompt was producing a plain bulleted list that rendered as a wall of dashes. Updated the prompt to emit strict markdown (`##` section headers, `###` subheaders, `**bold**` field labels, `_italic_` references), and added a small markdown-to-HTML renderer for the email body so the result lands as proper `<h3>` headers + `<ul>`/`<li>` lists + `<strong>` labels.
 
 ---
 

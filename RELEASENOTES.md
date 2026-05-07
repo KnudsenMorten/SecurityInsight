@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.95
+## v2.2.96
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.96 - RiskScoreKPI: MS-inspired secure score (higher=better) (c45fd1c3)
 - release: SecurityInsight v2.2.95 - Risk Score re-tuned + viewer column UX (554afe84)
 - release: SecurityInsight v2.2.94 - email: dark-mode tolerance + total at the bottom (7e38cd7a)
 - release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
@@ -33,13 +34,57 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.69 - PrivilegeTierClassifier truncate file to first clean copy (was tripled with corruption fragments) (ed524b19)
 - release: SecurityInsight v2.2.68 - AssetTagging v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation) (9d017b0d)
 - release: SecurityInsight v2.2.67 - prestage also creates 'securityinsight' container (RA xlsx/json export target) (b5e05b9a)
-- release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.96 — Risk Score KPI: Microsoft-inspired secure-score model (higher = better)
+
+`RiskScoreTotal` and `RiskScoreTotal_Weighted` are **untouched** — the OG Risk Score people are big fans of stays the same.
+
+What changes is the **per-row KPI** columns and the run-end aggregation. Rebuilt to mirror Microsoft's Cloud Secure Score shape: scale-independent, easy to explain, **higher = better**.
+
+**Per-row math (new):**
+
+```
+sevPenalty         = SeverityWeight / 10                                (0..1)
+RiskScoreKPI       = round((1 - sevPenalty) * 100)                      (0..100)
+RiskScoreDomainKPI = round((1 - sevPenalty) * TierFraction * 100)       (0..100)
+                     TierFraction = TierWeight / 4                       (T0=1.00, T1=0.50, T2=0.25, T3=0.125)
+```
+
+Per row: Critical = 0, High = 50, Medium = 80, Low = 90.
+
+**Run-end rollup (new) — tier-weighted average, like MS Cloud Secure Score:**
+
+```
+DomainScore = sum(RiskScoreKPI × TierWeight) / sum(TierWeight)
+GlobalScore = sum(DomainScore × DomainWeight) / sum(DomainWeight)
+```
+
+Independent of asset count by construction — a 10-machine lab and a 150k-machine bank produce directly comparable scores.
+
+**Bands (mirrors Microsoft):**
+
+| Band       | Range  | Color        |
+|------------|-------:|--------------|
+| Very Good  | 90–100 | dark green   |
+| Good       |  75–89 | light green  |
+| Moderate   |  50–74 | orange       |
+| At Risk    |   0–49 | red          |
+
+**Email + viewer flipped to match:**
+- Hero label changed from "GLOBAL RISK SCORE" to "RISK SCORE KPI" with "(higher = better)" subtitle.
+- Big number is colored by band (green at the top, red at the bottom).
+- Domain tiles use the new band colors so green = healthy, red = needs work.
+- `[SCORE]` log line annotates direction explicitly: `Direction: HIGHER = BETTER (Microsoft-inspired)`.
+
+The old per-row `RiskScoreKPI` formula (Severity × Tier sum) emitted by v2.2.89–v2.2.95 is replaced. If a customer KQL dashboard reads `SI_RiskAnalysis_*_CL.RiskScoreKPI`, the values will look different starting v2.2.96 — they're now 0–100 secure-score numbers (higher = better) instead of unbounded sums.
 
 ---
 

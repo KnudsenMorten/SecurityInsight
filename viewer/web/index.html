@@ -147,7 +147,7 @@
 
 <div class="kpi-row" id="kpi-row" style="display:none;">
   <div class="kpi-card">
-    <div class="lbl">Global Risk Score</div>
+    <div class="lbl">Risk Score KPI <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#8a99aa;">(higher = better)</span></div>
     <div class="val"><span id="kpi-global">-</span><span class="sub"> /100</span></div>
     <div class="sub"><span class="pill" id="kpi-level">-</span></div>
     <div class="bar"><i id="kpi-global-bar" style="width:0%"></i></div>
@@ -193,8 +193,9 @@ function distinct(rows, col) {
     rows.forEach(r => { const v = r[col]; if (v !== null && v !== undefined && v !== '') set.add(String(v)); });
     return Array.from(set).sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
 }
+// Higher = better (MS Cloud Secure Score bands).
 function levelClass(level) {
-    const m = { Critical: 'crit', High: 'high', Elevated: 'elev', Moderate: 'mod', Low: 'low' };
+    const m = { 'Very Good': 'low', 'Good': 'mod', 'Moderate': 'elev', 'At Risk': 'high' };
     return m[level] || '';
 }
 function setBar(id, score) {
@@ -202,41 +203,64 @@ function setBar(id, score) {
     if (!el) return;
     const v = Math.max(0, Math.min(100, Number(score) || 0));
     el.style.width = v + '%';
-    el.style.background = v >= 60 ? 'var(--c-high)' : v >= 40 ? 'var(--c-elev)' : v >= 20 ? 'var(--c-mod)' : 'var(--c-low)';
+    // Higher is better -> green at top, red at bottom.
+    el.style.background = v >= 90 ? 'var(--c-low)' : v >= 75 ? '#66bb6a' : v >= 50 ? 'var(--c-elev)' : 'var(--c-high)';
 }
 function levelFor(score) {
-    if (score >= 80) return 'Critical';
-    if (score >= 60) return 'High';
-    if (score >= 40) return 'Elevated';
-    if (score >= 20) return 'Moderate';
-    return 'Low';
+    if (score >= 90) return 'Very Good';
+    if (score >= 75) return 'Good';
+    if (score >= 50) return 'Moderate';
+    return 'At Risk';
 }
 
-// ---------- KPI rollup (mirrors engine math) ----------
+// ---------- KPI rollup (Microsoft-inspired secure score, higher = better) ----------
+// Per row: RiskScoreKPI is already the row's secure score 0-100 (higher = better).
+// Aggregation: tier-weighted average across rows, weighted by domain weight for
+// the global rollup. Matches the engine math in Invoke-RiskAnalysis.ps1.
+function tierWeightFor(t) {
+    switch (Number(t)) {
+        case 0: return 4.0;
+        case 1: return 2.0;
+        case 2: return 1.0;
+        case 3: return 0.5;
+        default: return 1.0;
+    }
+}
 function computeKPI(rows) {
-    const domainRaw = { Endpoint:0, Identity:0, Azure:0, PublicIP:0 };
-    let globalRaw = 0;
+    const acc = {
+        Endpoint: { numer: 0, denom: 0, rows: 0 },
+        Identity: { numer: 0, denom: 0, rows: 0 },
+        Azure:    { numer: 0, denom: 0, rows: 0 },
+        PublicIP: { numer: 0, denom: 0, rows: 0 }
+    };
     rows.forEach(r => {
         let dom = String(r.SecurityDomain || '');
         if (dom === 'PublicIp') dom = 'PublicIP';
-        const dKpi = Number(r.RiskScoreDomainKPI || 0);
-        const gKpi = Number(r.RiskScoreKPI || 0);
-        if (dom in domainRaw) domainRaw[dom] += dKpi;
-        globalRaw += gKpi;
+        if (!(dom in acc)) return;
+        const rowKpi = Number(r.RiskScoreKPI != null ? r.RiskScoreKPI : 100);
+        const tw     = tierWeightFor(r.CriticalityTier);
+        acc[dom].numer += rowKpi * tw;
+        acc[dom].denom += tw;
+        acc[dom].rows  += 1;
     });
-    // MUST match engine defaults in Invoke-RiskAnalysis.ps1 -- otherwise the
-    // viewer's KPI strip disagrees with the email + log [SCORE] line.
-    const domainCeiling = 2500;
-    const globalCeiling = 1000;
-    const norm = (raw, ceil) => Math.min(100, Math.max(0, Math.round((raw / ceil) * 100)));
+    const domainScore = (d) => acc[d].denom > 0 ? Math.round(acc[d].numer / acc[d].denom) : 100;
+    const dEndpoint = domainScore('Endpoint');
+    const dIdentity = domainScore('Identity');
+    const dAzure    = domainScore('Azure');
+    const dPublicIP = domainScore('PublicIP');
+    const w = { Endpoint: 0.30, Identity: 0.30, Azure: 0.20, PublicIP: 0.20 };
+    const wSum = w.Endpoint + w.Identity + w.Azure + w.PublicIP;
+    const global = Math.round(
+        (dEndpoint * w.Endpoint + dIdentity * w.Identity + dAzure * w.Azure + dPublicIP * w.PublicIP) / wSum
+    );
     const result = {
-        global: norm(globalRaw, globalCeiling),
-        Endpoint: norm(domainRaw.Endpoint, domainCeiling),
-        Identity: norm(domainRaw.Identity, domainCeiling),
-        Azure:    norm(domainRaw.Azure,    domainCeiling),
-        PublicIP: norm(domainRaw.PublicIP, domainCeiling)
+        global: global,
+        Endpoint: dEndpoint,
+        Identity: dIdentity,
+        Azure:    dAzure,
+        PublicIP: dPublicIP
     };
-    result.level = levelFor(result.global);
+    result.level = levelFor(global);   // band label
     return result;
 }
 function renderKPI(rows) {

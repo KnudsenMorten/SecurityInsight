@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.89
+## v2.2.90
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
 - release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
 - release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
 - release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
 - release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
 - release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
-- release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.90 — Risk Analysis Viewer (test rig: localhost web UI for the JSON output)
+
+A self-contained, internal-only web viewer for the Risk Analysis JSON. **No IIS, no auth, no cloud — just a PowerShell HttpListener bound to `localhost`.** Built to evaluate the experience before deciding whether to host it under IIS with Entra ID.
+
+Lives at `tools/viewer/` inside the SecurityInsight solution. Run `.\Start-SIViewer.ps1` and it:
+
+- spins up `http://localhost:8765/` and opens the browser
+- auto-discovers every `RiskAnalysis_*.json` in `<solution>/output/` (override via `-OutputDir`)
+- serves a single-page UI with two tabs:
+  - **Grid** — ag-Grid Community: per-column filters, drag-to-group panel, severity/tier color coding, paginated, links rendered live in `MoreDetails`
+  - **Pivot** — PivotTable.js: drag any column to rows/cols, switch aggregator (Count / Sum / Avg / etc), heatmap renderer
+- shows a top KPI strip: Global Risk Score (0–100) with color-coded level pill + 4 domain tiles (Endpoint / Identity / Azure / PublicIP). Math mirrors the engine.
+- top-bar filters: Domain / Severity / Tier dropdowns + a global search box piped into ag-Grid's filter model
+- file picker shows size + age (newest first)
+
+Security model: listener binds **`localhost` only**, so anyone on the VM can use it but nothing on the network can. Don't put it on a multi-user box without auth.
+
+Path forward: when you're ready for shared access, move `web/` under IIS, drop in MSAL.js for Entra sign-in, and delete `Start-SIViewer.ps1`.
 
 ---
 

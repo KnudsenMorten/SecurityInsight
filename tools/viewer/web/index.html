@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SecurityInsight - Risk Analysis Viewer</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-grid.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-theme-quartz.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pivottable@2.23.0/dist/pivot.min.css">
+<style>
+  :root {
+    --c-primary:    #1a3a5e;
+    --c-primary-2:  #2c5a8e;
+    --c-bg:         #f3f5f8;
+    --c-card:       #ffffff;
+    --c-border:     #e0e6ed;
+    --c-muted:      #5a6a7a;
+    --c-soft:       #8a99aa;
+    --c-crit:       #7b1fa2;
+    --c-high:       #c62828;
+    --c-elev:       #ef6c00;
+    --c-mod:        #f9a825;
+    --c-low:        #2e7d32;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--c-bg);
+              font-family: 'Segoe UI', Arial, sans-serif; color: #222; }
+  header { background: linear-gradient(135deg, var(--c-primary) 0%, var(--c-primary-2) 100%);
+           color: #fff; padding: 14px 22px; display: flex; align-items: center;
+           justify-content: space-between; }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; letter-spacing: .3px; }
+  header .meta { font-size: 12px; color: #cfdce8; }
+  header .meta b { color: #fff; }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+             padding: 12px 22px; background: var(--c-card); border-bottom: 1px solid var(--c-border); }
+  .toolbar label { font-size: 12px; color: var(--c-muted); margin-right: 4px; }
+  .toolbar select, .toolbar input[type=text] {
+        font-family: inherit; font-size: 13px; padding: 6px 10px;
+        border: 1px solid var(--c-border); border-radius: 4px; background: #fff;
+        outline: none;
+  }
+  .toolbar input[type=text]:focus, .toolbar select:focus {
+        border-color: var(--c-primary-2);
+        box-shadow: 0 0 0 2px rgba(44, 90, 142, 0.15);
+  }
+  .toolbar input[type=text] { min-width: 240px; }
+  .toolbar .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 12px;
+          font-size: 11px; font-weight: 600; letter-spacing: .3px;
+          background: #eef2f7; color: var(--c-muted); }
+  .pill.crit { background: var(--c-crit); color: #fff; }
+  .pill.high { background: var(--c-high); color: #fff; }
+  .pill.elev { background: var(--c-elev); color: #fff; }
+  .pill.mod  { background: var(--c-mod);  color: #fff; }
+  .pill.low  { background: var(--c-low);  color: #fff; }
+
+  .kpi-row { display: flex; gap: 10px; padding: 12px 22px; background: var(--c-bg); }
+  .kpi-card { flex: 1; background: var(--c-card); border: 1px solid var(--c-border);
+              border-radius: 6px; padding: 12px 14px; min-width: 140px; }
+  .kpi-card .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .5px;
+                   color: var(--c-muted); }
+  .kpi-card .val { font-size: 26px; font-weight: 700; color: var(--c-primary); margin-top: 2px; }
+  .kpi-card .sub { font-size: 12px; color: var(--c-soft); }
+  .kpi-card .bar { height: 5px; border-radius: 3px; background: #eef2f7;
+                   overflow: hidden; margin-top: 6px; }
+  .kpi-card .bar > i { display: block; height: 100%; background: var(--c-primary-2); }
+
+  .tabs { display: flex; padding: 0 22px; background: var(--c-card);
+          border-bottom: 1px solid var(--c-border); gap: 4px; }
+  .tabs button { background: none; border: none; padding: 10px 16px; font: inherit;
+                 color: var(--c-muted); cursor: pointer; border-bottom: 2px solid transparent;
+                 font-size: 13px; }
+  .tabs button:hover { color: var(--c-primary); }
+  .tabs button.active { color: var(--c-primary); border-bottom-color: var(--c-primary-2);
+                        font-weight: 600; }
+
+  main { padding: 14px 22px 22px 22px; }
+  .pane { display: none; }
+  .pane.active { display: block; }
+
+  #grid { width: 100%; height: calc(100vh - 320px); min-height: 420px;
+          border: 1px solid var(--c-border); border-radius: 6px; overflow: hidden; }
+  .pvt-wrap { background: var(--c-card); border: 1px solid var(--c-border);
+              border-radius: 6px; padding: 14px; overflow: auto;
+              max-height: calc(100vh - 320px); }
+  .pvtUi { font-family: inherit; }
+
+  .empty { text-align: center; padding: 60px 20px; color: var(--c-muted);
+           font-size: 14px; }
+  .err { background: #fdecea; border: 1px solid var(--c-high); color: var(--c-high);
+         padding: 12px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SecurityInsight &middot; Risk Analysis Viewer</h1>
+  <div class="meta">
+    <span id="meta-rows">-</span> rows
+    &middot; <span id="meta-file">no file</span>
+    &middot; <span id="meta-mtime">-</span>
+    &middot; build <b id="meta-ver">-</b>
+  </div>
+</header>
+
+<div class="toolbar">
+  <label for="sel-file">Source</label>
+  <select id="sel-file"></select>
+
+  <label for="sel-domain" style="margin-left:6px;">Domain</label>
+  <select id="sel-domain"><option value="">All</option></select>
+
+  <label for="sel-sev" style="margin-left:6px;">Severity</label>
+  <select id="sel-sev"><option value="">All</option></select>
+
+  <label for="sel-tier" style="margin-left:6px;">Tier</label>
+  <select id="sel-tier"><option value="">All</option></select>
+
+  <input id="search" type="text" placeholder="Search every column..." style="margin-left:auto;">
+  <span class="pill" id="pill-result">0 / 0</span>
+</div>
+
+<div class="kpi-row" id="kpi-row" style="display:none;">
+  <div class="kpi-card">
+    <div class="lbl">Global Risk Score</div>
+    <div class="val"><span id="kpi-global">-</span><span class="sub"> /100</span></div>
+    <div class="sub"><span class="pill" id="kpi-level">-</span></div>
+    <div class="bar"><i id="kpi-global-bar" style="width:0%"></i></div>
+  </div>
+  <div class="kpi-card"><div class="lbl">Endpoint</div><div class="val" id="kpi-endpoint">-<span class="sub"> /100</span></div><div class="bar"><i id="kpi-endpoint-bar" style="width:0%;background:var(--c-elev)"></i></div></div>
+  <div class="kpi-card"><div class="lbl">Identity</div><div class="val" id="kpi-identity">-<span class="sub"> /100</span></div><div class="bar"><i id="kpi-identity-bar" style="width:0%;background:var(--c-elev)"></i></div></div>
+  <div class="kpi-card"><div class="lbl">Azure</div><div class="val"    id="kpi-azure">-<span class="sub"> /100</span></div><div class="bar"><i id="kpi-azure-bar" style="width:0%;background:var(--c-elev)"></i></div></div>
+  <div class="kpi-card"><div class="lbl">Public IP</div><div class="val" id="kpi-publicip">-<span class="sub"> /100</span></div><div class="bar"><i id="kpi-publicip-bar" style="width:0%;background:var(--c-elev)"></i></div></div>
+</div>
+
+<div class="tabs">
+  <button data-tab="grid"  class="active">Grid</button>
+  <button data-tab="pivot">Pivot</button>
+</div>
+
+<main>
+  <div id="pane-grid" class="pane active">
+    <div id="grid" class="ag-theme-quartz"></div>
+  </div>
+  <div id="pane-pivot" class="pane">
+    <div class="pvt-wrap"><div id="pivot"></div></div>
+  </div>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/dist/ag-grid-community.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jquery-ui@1.13.2/dist/jquery-ui.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pivottable@2.23.0/dist/pivot.min.js"></script>
+
+<script>
+'use strict';
+
+const $  = (id) => document.getElementById(id);
+const fmt = (n) => (n === null || n === undefined || n === '') ? '' : n;
+
+let allRows = [];
+let gridApi = null;
+let currentFile = null;
+
+// ---------- helpers ----------
+function distinct(rows, col) {
+    const set = new Set();
+    rows.forEach(r => { const v = r[col]; if (v !== null && v !== undefined && v !== '') set.add(String(v)); });
+    return Array.from(set).sort((a,b) => a.localeCompare(b, undefined, {numeric:true}));
+}
+function levelClass(level) {
+    const m = { Critical: 'crit', High: 'high', Elevated: 'elev', Moderate: 'mod', Low: 'low' };
+    return m[level] || '';
+}
+function setBar(id, score) {
+    const el = $(id);
+    if (!el) return;
+    const v = Math.max(0, Math.min(100, Number(score) || 0));
+    el.style.width = v + '%';
+    el.style.background = v >= 60 ? 'var(--c-high)' : v >= 40 ? 'var(--c-elev)' : v >= 20 ? 'var(--c-mod)' : 'var(--c-low)';
+}
+function levelFor(score) {
+    if (score >= 80) return 'Critical';
+    if (score >= 60) return 'High';
+    if (score >= 40) return 'Elevated';
+    if (score >= 20) return 'Moderate';
+    return 'Low';
+}
+
+// ---------- KPI rollup (mirrors engine math) ----------
+function computeKPI(rows) {
+    const domainRaw = { Endpoint:0, Identity:0, Azure:0, PublicIP:0 };
+    let globalRaw = 0;
+    rows.forEach(r => {
+        let dom = String(r.SecurityDomain || '');
+        if (dom === 'PublicIp') dom = 'PublicIP';
+        const dKpi = Number(r.RiskScoreDomainKPI || 0);
+        const gKpi = Number(r.RiskScoreKPI || 0);
+        if (dom in domainRaw) domainRaw[dom] += dKpi;
+        globalRaw += gKpi;
+    });
+    const domainCeiling = 1000;
+    const globalCeiling = 500;
+    const norm = (raw, ceil) => Math.min(100, Math.max(0, Math.round((raw / ceil) * 100)));
+    const result = {
+        global: norm(globalRaw, globalCeiling),
+        Endpoint: norm(domainRaw.Endpoint, domainCeiling),
+        Identity: norm(domainRaw.Identity, domainCeiling),
+        Azure:    norm(domainRaw.Azure,    domainCeiling),
+        PublicIP: norm(domainRaw.PublicIP, domainCeiling)
+    };
+    result.level = levelFor(result.global);
+    return result;
+}
+function renderKPI(rows) {
+    const row = $('kpi-row');
+    if (!rows.length) { row.style.display = 'none'; return; }
+    const k = computeKPI(rows);
+    row.style.display = 'flex';
+    $('kpi-global').textContent = k.global;
+    $('kpi-level').textContent  = k.level.toUpperCase();
+    $('kpi-level').className = 'pill ' + levelClass(k.level);
+    setBar('kpi-global-bar',   k.global);
+    $('kpi-endpoint').firstChild.textContent = k.Endpoint;  setBar('kpi-endpoint-bar', k.Endpoint);
+    $('kpi-identity').firstChild.textContent = k.Identity;  setBar('kpi-identity-bar', k.Identity);
+    $('kpi-azure').firstChild.textContent    = k.Azure;     setBar('kpi-azure-bar',    k.Azure);
+    $('kpi-publicip').firstChild.textContent = k.PublicIP;  setBar('kpi-publicip-bar', k.PublicIP);
+}
+
+// ---------- column config ----------
+function buildColumns(rows) {
+    if (!rows.length) return [];
+    // Use union of keys of first ~50 rows so mixed schemas don't lose columns
+    const keys = new Set();
+    rows.slice(0, 50).forEach(r => Object.keys(r).forEach(k => keys.add(k)));
+    // Stable ordering -- prioritize the most useful columns first
+    const priority = [
+        'SecurityDomain','Category','Subcategory','SecuritySeverity','CriticalityTier',
+        'AssetName','AssetType','AssetCount','TotalIssuesImpactedAssets',
+        'RiskScoreKPI','RiskScoreDomainKPI','RiskScoreTotal','RiskScoreTotal_Weighted',
+        'ConfigurationName','Recommendation','MoreDetails','ComplianceTags','MitreTactics',
+        'CollectionTime'
+    ];
+    const ordered = [];
+    priority.forEach(p => { if (keys.has(p)) { ordered.push(p); keys.delete(p); } });
+    Array.from(keys).sort().forEach(k => ordered.push(k));
+
+    return ordered.map(k => {
+        const isNum = ['RiskScoreKPI','RiskScoreDomainKPI','RiskScoreTotal','RiskScoreTotal_Weighted',
+                       'AssetCount','TotalIssuesImpactedAssets','CriticalityTier'].includes(k);
+        const col = {
+            field: k,
+            headerName: k,
+            sortable: true,
+            filter: isNum ? 'agNumberColumnFilter' : 'agTextColumnFilter',
+            resizable: true,
+            enableRowGroup: true,
+            valueFormatter: isNum ? null : null
+        };
+        if (k === 'SecuritySeverity') {
+            col.cellStyle = (p) => {
+                const v = String(p.value || '').toLowerCase();
+                if (v.includes('critical') || v.includes('very high')) return { color:'#fff', background:'var(--c-crit)', fontWeight:600 };
+                if (v.includes('high'))   return { color:'#fff', background:'var(--c-high)', fontWeight:600 };
+                if (v.includes('medium')) return { color:'#fff', background:'var(--c-mod)' };
+                if (v.includes('low'))    return { color:'#fff', background:'var(--c-low)' };
+                return null;
+            };
+        }
+        if (k === 'CriticalityTier') {
+            col.cellStyle = (p) => {
+                const v = Number(p.value);
+                if (v === 0) return { background:'#fdecea', color:'var(--c-high)', fontWeight:600 };
+                if (v === 1) return { background:'#fff4e5' };
+                return null;
+            };
+        }
+        if (k === 'MoreDetails' || k === 'EvidenceURL') {
+            col.cellRenderer = (p) => {
+                const v = String(p.value || '').trim();
+                if (!v) return '';
+                if (/^https?:\/\//i.test(v)) {
+                    return '<a href="' + v.replace(/"/g,'&quot;') + '" target="_blank" rel="noopener">link</a>';
+                }
+                return v;
+            };
+        }
+        return col;
+    });
+}
+
+// ---------- grid ----------
+function ensureGrid(rows) {
+    const cols = buildColumns(rows);
+    const opts = {
+        columnDefs: cols,
+        rowData:    rows,
+        animateRows: false,
+        defaultColDef: { sortable: true, filter: true, resizable: true, floatingFilter: true,
+                         minWidth: 100, flex: 1 },
+        rowGroupPanelShow: 'always',
+        groupDisplayType: 'groupRows',
+        suppressAggFuncInHeader: true,
+        pagination: true,
+        paginationPageSize: 100,
+        paginationPageSizeSelector: [50, 100, 250, 500, 1000],
+        onModelUpdated: () => {
+            const total = allRows.length;
+            const after = gridApi ? gridApi.getDisplayedRowCount() : total;
+            $('pill-result').textContent = after.toLocaleString() + ' / ' + total.toLocaleString();
+        }
+    };
+    const gridDiv = $('grid');
+    gridDiv.innerHTML = '';
+    gridApi = agGrid.createGrid(gridDiv, opts);
+}
+
+// ---------- pivot ----------
+let pivotRendered = false;
+function ensurePivot(rows) {
+    pivotRendered = false;
+    $('pivot').innerHTML = '';
+}
+function renderPivot(rows) {
+    if (pivotRendered) return;
+    pivotRendered = true;
+    if (!rows.length) { $('pivot').innerHTML = '<div class="empty">No rows.</div>'; return; }
+    $('#pivot').length; // ensure jquery is loaded
+    jQuery(function($){
+        $('#pivot').pivotUI(rows, {
+            rows: ['SecurityDomain'],
+            cols: ['SecuritySeverity'],
+            aggregatorName: 'Count',
+            rendererName:   'Heatmap'
+        });
+    });
+}
+
+// ---------- filters wiring ----------
+function applyFilters() {
+    if (!gridApi) return;
+    const dom  = $('sel-domain').value;
+    const sev  = $('sel-sev').value;
+    const tier = $('sel-tier').value;
+    const q    = $('search').value;
+
+    const fm = {};
+    if (dom)  fm.SecurityDomain   = { type:'equals', filter: dom };
+    if (sev)  fm.SecuritySeverity = { type:'equals', filter: sev };
+    if (tier) fm.CriticalityTier  = { type:'equals', filter: Number(tier) };
+    gridApi.setFilterModel(fm);
+    gridApi.setGridOption('quickFilterText', q);
+}
+
+function fillFilterOptions(rows) {
+    const fill = (id, vals) => {
+        const sel = $(id);
+        const cur = sel.value;
+        sel.innerHTML = '<option value="">All</option>';
+        vals.forEach(v => {
+            const o = document.createElement('option');
+            o.value = v; o.textContent = v; sel.appendChild(o);
+        });
+        sel.value = cur;
+    };
+    fill('sel-domain', distinct(rows, 'SecurityDomain'));
+    fill('sel-sev',    distinct(rows, 'SecuritySeverity'));
+    fill('sel-tier',   distinct(rows, 'CriticalityTier'));
+}
+
+// ---------- file load ----------
+async function loadFile(name) {
+    if (!name) return;
+    currentFile = name;
+    try {
+        const r = await fetch('/api/data?file=' + encodeURIComponent(name));
+        if (!r.ok) {
+            const err = await r.text();
+            $('grid').innerHTML = '<div class="err">Failed to load ' + name + ': ' + err + '</div>';
+            return;
+        }
+        const data = await r.json();
+        const rows = Array.isArray(data) ? data : (data.rows || data.value || []);
+        allRows = rows;
+        $('meta-rows').textContent = rows.length.toLocaleString();
+        $('meta-file').textContent = name;
+        renderKPI(rows);
+        fillFilterOptions(rows);
+        ensureGrid(rows);
+        ensurePivot(rows);
+        // if pivot tab is active, render now
+        if ($('pane-pivot').classList.contains('active')) renderPivot(rows);
+        applyFilters();
+    } catch (e) {
+        $('grid').innerHTML = '<div class="err">Error: ' + (e.message || e) + '</div>';
+    }
+}
+
+async function listFiles() {
+    try {
+        const r = await fetch('/api/files');
+        const data = await r.json();
+        const sel = $('sel-file');
+        sel.innerHTML = '';
+        if (!data.files || !data.files.length) {
+            const o = document.createElement('option');
+            o.value = ''; o.textContent = '(no JSON files in ' + (data.outputDir || 'output/') + ')';
+            sel.appendChild(o);
+            $('grid').innerHTML = '<div class="empty">No RiskAnalysis_*.json files found in <code>' + (data.outputDir || 'output/') + '</code>.<br>Run the engine, or set -OutputDir on the launcher.</div>';
+            return;
+        }
+        data.files.forEach(f => {
+            const o = document.createElement('option');
+            o.value = f.name;
+            const mb = (f.sizeBytes / 1024 / 1024).toFixed(1);
+            const ageMin = Math.round(f.age);
+            const ageStr = ageMin < 60 ? (ageMin + 'm ago') : (Math.round(ageMin/60) + 'h ago');
+            o.textContent = f.name + '  (' + mb + ' MB, ' + ageStr + ')';
+            sel.appendChild(o);
+        });
+        const first = data.files[0];
+        $('meta-mtime').textContent = new Date(first.mtime).toLocaleString();
+        sel.value = first.name;
+        loadFile(first.name);
+    } catch (e) {
+        $('grid').innerHTML = '<div class="err">Failed to list files: ' + (e.message || e) + '</div>';
+    }
+}
+
+// ---------- tabs ----------
+document.querySelectorAll('.tabs button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.pane').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.getAttribute('data-tab');
+        $('pane-' + tab).classList.add('active');
+        if (tab === 'pivot') renderPivot(allRows);
+    });
+});
+
+// ---------- inputs ----------
+$('sel-file').addEventListener('change', (e) => loadFile(e.target.value));
+['sel-domain','sel-sev','sel-tier'].forEach(id => $(id).addEventListener('change', applyFilters));
+let searchTimer = null;
+$('search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(applyFilters, 150);
+});
+
+// ---------- boot ----------
+listFiles();
+</script>
+</body>
+</html>

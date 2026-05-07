@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.78
+## v2.2.79
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
 - release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
 - release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
 - release: SecurityInsight v2.2.76 - RA visible-noise fixes (placeholder/URLs/CVEs) (279fcba7)
@@ -33,13 +34,63 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
 - release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
 - release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
-- release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.79 — RA output folder + storage OAuth auto-detect
+
+Two operator-facing changes bundled.
+
+### Output folder moved out of `risk-analysis-detection/OUTPUT/`
+
+`RiskAnalysis_Detailed.xlsx` and `_Summary.xlsx` were buried under `SOLUTIONS/SecurityInsight/risk-analysis-detection/OUTPUT/` — annoying to find. New default:
+
+```
+SOLUTIONS/SecurityInsight/output/
+├── RiskAnalysis_Detailed.xlsx
+├── RiskAnalysis_Detailed.json
+├── RiskAnalysis_Summary.xlsx
+└── RiskAnalysis_Summary.json
+```
+
+`Invoke-RiskAnalysis.ps1` now resolves `$global:OutputDir` to `<solutionRoot>/output/`. Customers who had automation pinned to the old path can override with `$global:SI_RiskAnalysis_OutputDir = '<your-path>'` in `SecurityInsight.custom.ps1`. The old folder is left in place for any in-flight artifacts; `.gitignore` excludes both paths.
+
+### Storage auth auto-defaults to OAuth when no SharedKey is configured
+
+The asset-profiling engine (`Invoke-SIEngineRun.ps1`) now picks the auth method based on what's available:
+
+1. **Explicit `$global:SI_UseStorageOAuth = $true`** → OAuth
+2. **No `$global:SI_StorageKey` set** → OAuth (sensible default since v2.2.55 prestage grants Storage Blob/Table/Queue Data Contributor on the SA)
+3. **Otherwise** → SharedKey (back-compat for installs that already have a working key in KV)
+
+Force SharedKey on a customer with both globals set: explicitly `$global:SI_UseStorageOAuth = $false`.
+
+This avoids the need for customers to either rotate keys into KV, or set `SI_UseStorageOAuth=$true` manually after the prestage. New installs Just Work.
+
+Edge cases not affected:
+- SPN missing Storage *_Data Contributor RBAC → 403 (already broken; rerun prestage to grant)
+- Network-restricted SA without VNet line of sight → both methods fail equally
+- AzLogDcrIngestPS module's DCR ingest path uses Bearer tokens directly; storage auth flag only affects blob staging + fingerprint table operations
+
+### Status of original spreadsheet bug findings
+
+| Finding | Status | Tag |
+|---|---|---|
+| `(engine-substituted at runtime)` placeholder text leaking into Excel | Fixed | v2.2.76 (YAML edit, 122 occurrences) |
+| MoreDetails URL always Entra User-profile blade (wrong for SP/Endpoint/Azure) | Fixed | v2.2.76 (AssetType-aware URL builder) |
+| CVE strings in IssueList not hyperlinked in MoreDetails | Fixed | v2.2.76 (CVE harvester → nvd.nist.gov links) |
+| MITRE_Tactics + MITRE_Techniques empty | Fixed | v2.2.77 (engine-side inference from SecurityDomain + keywords) |
+| AI summary collapsed to 1 asset | Fixed | v2.2.78 (lookup chain stale post-v2.2.72 column rename) |
+| RunHealth 404 `'westeurope'` immutableId | Fixed | v2.2.75 (DCR collision guard + cache prefetch) |
+| Identity Summary `RiskScoreTotal=0` rows | **Not fixed (data/scoping)** | Report scoping issue: e.g. `Identity_PrivilegedUser_NoMFA_*` doesn't filter `where IsPrivileged == true`, so non-privileged users land in the report with `Probability=0`, `Total=Consequence×0=0`. Per-report YAML fix needed; flag specific reports if you want them tightened. |
+| `cmdbId` empty for many Identity rows | **Not fixed (data)** | Customer KV/CMDB feed not populating cmdb columns in `SI_Identity_Profile_CL` for those PrimaryEntityIds. Engine join is correct; data is missing. |
+| All `RiskScore_Weight_Factor=100` (no per-row weighting) | **Not fixed (config)** | By design when no `riskscore_weighted.schema.custom.json` is set. v2.2.76 dropped the misleading "(engine-substituted at runtime)" text; values still default to 100 (basis-100 = 1.0x = no lift). Customer needs to author the JSON to get differential weighting. |
 
 ---
 

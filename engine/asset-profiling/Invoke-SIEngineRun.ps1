@@ -217,8 +217,27 @@ switch ($PSCmdlet.ParameterSetName) {
         if (-not $StorageAccountName -and $global:SI_StorageAccount) { $StorageAccountName = [string]$global:SI_StorageAccount }
         if (-not $StorageAccountKey  -and $global:SI_StorageKey)     { $StorageAccountKey  = [string]$global:SI_StorageKey }
         if (-not $StorageAccountName) { throw 'StorageAccountName is required (pass -StorageAccountName or set $global:SI_StorageAccount in custom.ps1).' }
-        if (-not $StorageAccountKey)  { throw 'StorageAccountKey is required (pass -StorageAccountKey or set $global:SI_StorageKey in custom.ps1; or use -UseStorageOAuth for AAD-based storage auth).' }
-        $ctx = New-SIStorageContext -AccountName $StorageAccountName -AccountKey $StorageAccountKey
+
+        # Auth resolution priority (v2.2.79+):
+        #   1. $global:SI_UseStorageOAuth = $true  -> OAuth (explicit operator opt-in)
+        #   2. No StorageAccountKey AND no $global:SI_StorageKey -> OAuth (sensible default;
+        #      since v2.2.55 the prestage grants the SPN Storage Blob/Table/Queue Data
+        #      Contributor on the SA, so OAuth Just Works for new installs).
+        #   3. Otherwise -> SharedKey (back-compat for installs that already have a key).
+        # To force SharedKey on a customer with both globals set, set
+        # $global:SI_UseStorageOAuth = $false explicitly in custom.ps1.
+        $useOAuth = $false
+        if ($PSBoundParameters.ContainsKey('SI_UseStorageOAuth') -or ($null -ne $global:SI_UseStorageOAuth)) {
+            $useOAuth = [bool]$global:SI_UseStorageOAuth
+        } elseif ([string]::IsNullOrWhiteSpace($StorageAccountKey)) {
+            $useOAuth = $true
+        }
+        if ($useOAuth) {
+            $ctx = New-SIStorageContext -AccountName $StorageAccountName -UseOAuth
+        } else {
+            if (-not $StorageAccountKey) { throw 'StorageAccountKey is required (pass -StorageAccountKey or set $global:SI_StorageKey in custom.ps1; or use -UseStorageOAuth for AAD-based storage auth).' }
+            $ctx = New-SIStorageContext -AccountName $StorageAccountName -AccountKey $StorageAccountKey
+        }
     }
 }
 

@@ -4915,6 +4915,12 @@ if (-not (Get-Variable -Name AutoBucketMemo -Scope Script -ErrorAction SilentlyC
 }
 
 function Test-IsBucketOverflowError {
+  # ONLY true-overflow signals -- the kind that bucketing actually solves.
+  # 'A task was canceled' / 'timeout' / 'TaskCanceledException' are TRANSIENT
+  # (re-auth needed, Defender Graph backend hiccup, throttle); escalating bucket
+  # count amplifies them (more buckets = more API calls = more throttle). They
+  # are now classified separately via Test-IsTransientPlatformError below, which
+  # the outer bucket loop reacts to with re-auth + same-bucket retry instead.
   param(
     [Parameter(Mandatory=$true)]
     [object] $Err
@@ -4933,18 +4939,58 @@ function Test-IsBucketOverflowError {
   $m = $msg.ToLowerInvariant()
 
   # Signatures for "too many rows / result limit / response too large"
+  # (deterministic overflow -- bucketing is the right answer)
   if (
     $m -match "too many" -or
     $m -match "result.*limit" -or
-    $m -match "exceed" -or
     $m -match "response.*too large" -or
+    $m -match "payload.*too large" -or
+    $m -match "request entity too large" -or
+    $m -match "exceeded the allowed result size" -or
+    $m -match "exceeded the allowed limits" -or
+    ($m -match "rows" -and $m -match "limit")
+  ) { return $true }
+
+  return $false
+}
+
+function Test-IsTransientPlatformError {
+  # Re-auth needed / Defender Graph backend hiccup / throttle. NOT row-overflow.
+  # Right response is reconnect + same-bucket retry, NOT bucket escalation.
+  param([Parameter(Mandatory=$true)][object]$Err)
+
+  $msg = ""
+  if ($Err -is [System.Management.Automation.ErrorRecord]) {
+    $detailMsg = ""
+    try { if ($Err.ErrorDetails) { $detailMsg = [string]$Err.ErrorDetails.Message } } catch {}
+    $msg = [string]($Err.Exception.Message + " " + $detailMsg)
+  } else {
+    $msg = [string]$Err
+  }
+  $m = $msg.ToLowerInvariant()
+
+  if ($Err -is [System.Management.Automation.ErrorRecord] -and
+      $Err.Exception -is [System.Threading.Tasks.TaskCanceledException]) { return $true }
+
+  if (
     $m -match "a task was canceled" -or
     $m -match "taskcanceledexception" -or
     $m -match "timed out" -or
     $m -match "timeout" -or
-    $m -match "payload.*too large" -or
-    $m -match "request entity too large" -or
-    ($m -match "rows" -and $m -match "limit")
+    $m -match "too many requests" -or
+    $m -match "\b429\b" -or
+    $m -match "throttl" -or
+    $m -match "\b503\b" -or
+    $m -match "\b502\b" -or
+    $m -match "\b504\b" -or
+    $m -match "service unavailable" -or
+    $m -match "bad gateway" -or
+    $m -match "gateway timeout" -or
+    $m -match "invalidauthenticationtoken" -or
+    $m -match "access token" -or
+    $m -match "\b401\b" -or
+    $m -match "unauthorized" -or
+    $m -match "forbidden temporarily"
   ) { return $true }
 
   return $false
@@ -5494,28 +5540,80 @@ while (-not $bucketRunSucceeded) {
 
       Write-Info ("bucket {0}/{1}: running query (auto-routed: LA-direct or XDR Advanced Hunting based on table mix)" -f $bucketNo, $bucketCountToUse)
       Tock
-      try {
-          $resp = Invoke-GraphHuntingQuery -Query $thisQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
-          Tick ("hunting query bucket {0}/{1}" -f $bucketNo, $bucketCountToUse)
-      } catch {
 
-          # If a single bucket exceeds limits/timeouts, the current bucket count is not safe.
-          # Escalate and restart the WHOLE run with more buckets.
-          if (Test-IsBucketOverflowError $_) {
-              $lastBucketRunError = $_.Exception.Message
-              Write-Warn2 ("bucket {0}/{1} exceeded limits/timeout. Escalating bucket count and restarting this report. Error: {2}" -f `
-                $bucketNo, $bucketCountToUse, $lastBucketRunError)
+      # Per-bucket retry loop. Inner Invoke-GraphHuntingQuery already retries on
+      # short transient errors (default 4 attempts via $global:GraphQueryMaxRetries);
+      # this OUTER loop adds a longer-cycle retry+re-auth pass for the case where
+      # the inner retry exhausted on a still-transient signal -- usually:
+      #   - Az / Graph access token expired mid-run (long RA jobs commonly outlive 1h tokens)
+      #   - Defender Graph backend hiccup (502/503/504, gateway timeout)
+      #   - Throttle that the inner backoff didn't escape
+      # Each outer attempt re-authenticates BOTH Graph AND Az before retrying the
+      # same bucket; only escalate bucket count on TRUE overflow signals.
+      $bucketTransientRetries = if ($null -ne $global:SI_BucketTransientRetries) {
+          [int]$global:SI_BucketTransientRetries
+      } else { 3 }
+      $bucketAttempt          = 0
+      $bucketAttemptDone      = $false
+      $resp                   = $null
 
-              $needEscalation = $true
-              break
+      while (-not $bucketAttemptDone) {
+          $bucketAttempt++
+          try {
+              $resp = Invoke-GraphHuntingQuery -Query $thisQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
+              Tick ("hunting query bucket {0}/{1}" -f $bucketNo, $bucketCountToUse)
+              $bucketAttemptDone = $true
+          } catch {
+              $errMsg = $_.Exception.Message
+
+              # 1) TRUE overflow -> escalate bucket count (existing behaviour).
+              if (Test-IsBucketOverflowError $_) {
+                  $lastBucketRunError = $errMsg
+                  Write-Warn2 ("bucket {0}/{1} exceeded result-size limits. Escalating bucket count and restarting this report. Error: {2}" -f `
+                    $bucketNo, $bucketCountToUse, $errMsg)
+                  $needEscalation    = $true
+                  $bucketAttemptDone = $true
+                  $resp              = $null
+              }
+              # 2) Transient platform error -> re-auth (Az + Graph) and retry SAME bucket.
+              elseif (Test-IsTransientPlatformError $_) {
+                  if ($bucketAttempt -ge $bucketTransientRetries) {
+                      Write-Err2 ("bucket {0}/{1}: transient platform error after {2} retry attempt(s) -- skipping bucket and continuing. Error: {3}" -f `
+                        $bucketNo, $bucketCountToUse, $bucketTransientRetries, $errMsg)
+                      $bucketAttemptDone = $true
+                      $resp              = $null
+                  } else {
+                      $sleepSec = [Math]::Min(180, 30 * [Math]::Pow(2, ($bucketAttempt - 1)))   # 30s, 60s, 120s
+                      Write-Warn2 ("bucket {0}/{1}: transient platform error (likely token expiry / 503 / throttle). Re-auth + retry attempt {2}/{3} after {4}s. Error: {5}" -f `
+                        $bucketNo, $bucketCountToUse, $bucketAttempt, $bucketTransientRetries, $sleepSec, $errMsg)
+                      Start-Sleep -Seconds $sleepSec
+                      # Re-authenticate BOTH Graph and Az (the most common transient root cause).
+                      try { Connect-GraphHighPriv } catch { Write-Warn2 ("Graph reconnect failed: {0}" -f $_.Exception.Message) }
+                      try {
+                          if (Get-Command -Name 'Connect-AzAccount' -ErrorAction SilentlyContinue) {
+                              if ($global:SpnClientId -and $global:SpnClientSecret -and $global:SpnTenantId) {
+                                  $secStr = ConvertTo-SecureString -String ([string]$global:SpnClientSecret) -AsPlainText -Force
+                                  $cred   = New-Object System.Management.Automation.PSCredential ([string]$global:SpnClientId, $secStr)
+                                  $null   = Connect-AzAccount -ServicePrincipal -Credential $cred -Tenant ([string]$global:SpnTenantId) -ErrorAction Stop -WarningAction SilentlyContinue
+                              } elseif ($global:SpnClientId -and $global:SpnCertificateThumbprint -and $global:SpnTenantId) {
+                                  $null = Connect-AzAccount -ServicePrincipal -ApplicationId ([string]$global:SpnClientId) -CertificateThumbprint ([string]$global:SpnCertificateThumbprint) -Tenant ([string]$global:SpnTenantId) -ErrorAction Stop -WarningAction SilentlyContinue
+                              }
+                          }
+                      } catch { Write-Warn2 ("Az reconnect failed (non-fatal -- the bucket may still complete on Graph creds): {0}" -f $_.Exception.Message) }
+                      # Loop continues; bucketAttempt now incremented, retry same bucket.
+                  }
+              }
+              # 3) Anything else -> log + skip bucket (existing behaviour).
+              else {
+                  Write-Err2 ("query failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $errMsg)
+                  $bucketAttemptDone = $true
+                  $resp              = $null
+              }
           }
-
-          # drop the misleading "advanced hunting" label -- routing
-          # decided LA-direct vs XDR/AH per query. Just say "query failed" + the
-          # underlying API message.
-          Write-Err2 ("query failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $_.Exception.Message)
-          continue
       }
+
+      if ($needEscalation) { break }
+      if ($null -eq $resp) { continue }   # bucket skipped (transient exhausted or other error)
 
       # v2.1.202 LA-direct marker check (see matching block further down / Invoke-GraphHuntingQuery).
       if ($null -ne $resp -and $resp -is [pscustomobject] -and $resp.PSObject.Properties['_SIDirectRows']) {

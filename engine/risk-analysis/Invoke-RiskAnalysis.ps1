@@ -3748,10 +3748,25 @@ function Calculate-RiskScore {
                 'AttackPath' { 0.0 }   # attack-path rows already counted in their target domain
                 default      { 0.20 }
             }
-            $domainKpi = [Math]::Round($sevWeight * $tierMult, 2)
-            $totalKpi  = [Math]::Round($domainKpi * $globalWeight, 2)
-            $tmp2['RiskScoreDomainKPI'] = $domainKpi
-            $tmp2['RiskScoreKPI']       = $totalKpi
+            # v2.2.96: per-row KPI is a SECURE SCORE (HIGHER = BETTER, 0-100),
+            # inspired by Microsoft Cloud Secure Score. The original RiskScore
+            # math (Severity x Probability x Weight = RiskScoreTotal) is left
+            # untouched -- the OG number people are fans of stays on every row.
+            #
+            # Per-row formula:
+            #   sevPenalty = SeverityWeight / 10        (0..1, 1.0 = critical)
+            #   RiskScoreKPI = round((1 - sevPenalty) * 100)
+            #     -> Critical 0 | High 50 | Medium 80 | Low 90 | Other 95
+            #   RiskScoreDomainKPI = RiskScoreKPI x TierWeight / 4
+            #     -> normalized 0..100 with T0 carrying full weight (4/4),
+            #        T1 half weight (2/4), T2 quarter (1/4), T3 eighth (0.5/4)
+            #     -> aggregator: DomainScore = sum(RiskScoreDomainKPI) / sum(TierWeight/4) -> mgmt KPI
+            $sevPenalty   = [Math]::Min(1.0, $sevWeight / 10.0)
+            $rowKpi       = [int][Math]::Round((1.0 - $sevPenalty) * 100.0, 0)
+            $tierFraction = $tierMult / 4.0   # T0 1.00, T1 0.50, T2 0.25, T3 0.125
+            $rowDomainKpi = [int][Math]::Round((1.0 - $sevPenalty) * $tierFraction * 100.0, 0)
+            $tmp2['RiskScoreKPI']       = $rowKpi
+            $tmp2['RiskScoreDomainKPI'] = $rowDomainKpi
 
             if ($OutputPropertyOrder -and $OutputPropertyOrder.Count -gt 0) {
                 # STRICT mode -- when OutputPropertyOrder is declared, emit ONLY those
@@ -6975,34 +6990,32 @@ Rules:
 }
 
 #####################################################################################################
-# RISK SCORE KPI ROLLUP (v2.2.89)
+# RISK SCORE KPI ROLLUP (v2.2.96 -- Microsoft-inspired, simple weighted avg)
 #####################################################################################################
-# Aggregate per-row RiskScoreDomainKPI / RiskScoreKPI into one global score
-# (0-100) and four per-domain scores (Endpoint / Identity / Azure / PublicIP).
-# The math is intentionally simple to explain to leadership:
-#   global score = min(sum(RiskScoreKPI)        / $GlobalCeiling x 100, 100)
-#   domain score = min(sum(RiskScoreDomainKPI[d]) / $DomainCeiling x 100, 100)
-# Ceilings tunable via $global:SI_RiskReport_GlobalCeiling / _DomainCeiling.
+# Per-row KPI is a SECURE SCORE (HIGHER = BETTER, 0-100):
+#   RiskScoreKPI       = round((1 - SeverityWeight/10) * 100)        (per row)
+#   RiskScoreDomainKPI = round((1 - SeverityWeight/10) * TierFraction * 100)
+#                        TierFraction = TierWeight / 4               (T0=1.00, T1=0.50, T2=0.25, T3=0.125)
+#
+# Run-end rollup is a tier-weighted average -- same shape as Microsoft's
+# Cloud Secure Score (numerator weighted by criticality, denominator equal
+# total criticality). Scale-independent: 10-machine lab and 150k-machine
+# enterprise produce comparable scores.
+#
+#   DomainKPI  = sum(RiskScoreKPI x TierWeight) / sum(TierWeight)
+#   GlobalKPI  = sum(DomainKPI    x DomainWeight) / sum(DomainWeight)
+#
+# Bands: At Risk 0-49 | Moderate 50-74 | Good 75-89 | Very Good 90-100.
+#
+# RiskScoreTotal / RiskScoreTotal_Weighted (the OG per-row Risk Score) are
+# left untouched -- people are big fans of them, they keep working.
 #####################################################################################################
 $global:RA_KPI = $null
 try {
     $rows = if ($null -ne $global:final) { @($global:final) } else { @() }
-    # Defaults tuned 2026-05-07: prior values (1000 / 500) saturated at 100 with
-    # only ~200 findings on a small internal lab. New defaults (2500 / 1000)
-    # give a graduated curve: ~200 findings on Tier 0 lands around 50 (Elevated),
-    # ~1000 findings lands in High/Critical territory. Customers can still
-    # override via $global:SI_RiskReport_DomainCeiling / _GlobalCeiling for
-    # very large or very small environments. The [SCORE-RAW] log line below
-    # surfaces the raw sums so operators can pick informed ceilings.
-    $domainCeiling = if ($null -ne $global:SI_RiskReport_DomainCeiling -and [double]$global:SI_RiskReport_DomainCeiling -gt 0) { [double]$global:SI_RiskReport_DomainCeiling } else { 2500.0 }
-    $globalCeiling = if ($null -ne $global:SI_RiskReport_GlobalCeiling -and [double]$global:SI_RiskReport_GlobalCeiling -gt 0) { [double]$global:SI_RiskReport_GlobalCeiling } else { 1000.0 }
+    $DomainSet = @('Endpoint','Identity','Azure','PublicIP')
 
-    $domainRaw = @{ Endpoint = 0.0; Identity = 0.0; Azure = 0.0; PublicIP = 0.0 }
-    $globalRaw = 0.0
-    $sevCount  = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0 }
-    # Severity x Domain breakdown (each domain -> own sev tally) for the email
-    # mgmt summary table. Keep an Other bucket for rows whose SecurityDomain
-    # doesn't match the four canonical buckets so totals still reconcile.
+    $sevCount    = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0 }
     $sevByDomain = @{
         Endpoint = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
         Identity = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
@@ -7010,22 +7023,34 @@ try {
         PublicIP = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
     }
 
+    # Per-domain weighted-avg accumulators (numerator = sum(rowKpi * tierWeight),
+    # denominator = sum(tierWeight)). Plus a per-domain row counter.
+    $domainAcc = @{
+        Endpoint = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
+        Identity = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
+        Azure    = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
+        PublicIP = @{ Numer = 0.0; Denom = 0.0; Rows = 0 }
+    }
+
+    function _TierWeight([int]$tier) {
+        switch ($tier) {
+            0       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T0) { [double]$global:SI_RiskReport_TierMultiplier_T0 } else { 4.0 } }
+            1       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T1) { [double]$global:SI_RiskReport_TierMultiplier_T1 } else { 2.0 } }
+            2       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T2) { [double]$global:SI_RiskReport_TierMultiplier_T2 } else { 1.0 } }
+            3       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T3) { [double]$global:SI_RiskReport_TierMultiplier_T3 } else { 0.5 } }
+            default { 1.0 }
+        }
+    }
+
     foreach ($r in $rows) {
         $dom = ''
         if ($r.PSObject.Properties['SecurityDomain']) { $dom = [string]$r.SecurityDomain }
         if ($dom -eq 'PublicIp') { $dom = 'PublicIP' }
 
-        $dKpi = 0.0
-        if ($r.PSObject.Properties['RiskScoreDomainKPI']) { [void][double]::TryParse([string]$r.RiskScoreDomainKPI, [ref]$dKpi) }
-        if ($domainRaw.ContainsKey($dom)) { $domainRaw[$dom] += $dKpi }
-
-        $gKpi = 0.0
-        if ($r.PSObject.Properties['RiskScoreKPI']) { [void][double]::TryParse([string]$r.RiskScoreKPI, [ref]$gKpi) }
-        $globalRaw += $gKpi
-
-        $sev = ''
-        if ($r.PSObject.Properties['SecuritySeverity']) { $sev = [string]$r.SecuritySeverity }
-        $sevBucket = switch -Regex ($sev) {
+        # Severity tally (used by the email's Domain x Severity table)
+        $sevText = ''
+        if ($r.PSObject.Properties['SecuritySeverity']) { $sevText = [string]$r.SecuritySeverity }
+        $sevBucket = switch -Regex ($sevText) {
             '^(?i)(critical|very high)$' { 'Critical'; break }
             '^(?i)high$'                 { 'High';     break }
             '^(?i)medium-?high$'         { 'High';     break }
@@ -7038,48 +7063,75 @@ try {
             $sevByDomain[$dom][$sevBucket]++
             $sevByDomain[$dom]['Total']++
         }
+
+        if (-not ($DomainSet -contains $dom)) { continue }
+
+        # Pull the per-row RiskScoreKPI (already computed upstream)
+        $rowKpi = 100.0
+        if ($r.PSObject.Properties['RiskScoreKPI']) { [void][double]::TryParse([string]$r.RiskScoreKPI, [ref]$rowKpi) }
+
+        # Tier weight for this row
+        $tierVal = -1
+        if ($r.PSObject.Properties['CriticalityTier']) { [void][int]::TryParse([string]$r.CriticalityTier, [ref]$tierVal) }
+        $tw = _TierWeight $tierVal
+
+        $domainAcc[$dom].Numer += $rowKpi * $tw
+        $domainAcc[$dom].Denom += $tw
+        $domainAcc[$dom].Rows++
     }
 
-    function _NormalizeScore([double]$raw, [double]$ceiling) {
-        if ($ceiling -le 0) { return 0 }
-        $v = [Math]::Round(($raw / $ceiling) * 100.0, 0)
-        if ($v -lt 0)   { return 0 }
-        if ($v -gt 100) { return 100 }
-        return [int]$v
-    }
-
+    # ----- per-domain weighted average -----
     $domainScore = @{}
-    foreach ($d in $domainRaw.Keys) { $domainScore[$d] = _NormalizeScore $domainRaw[$d] $domainCeiling }
-    $globalScore = _NormalizeScore $globalRaw $globalCeiling
+    foreach ($d in $DomainSet) {
+        if ($domainAcc[$d].Denom -gt 0) {
+            $domainScore[$d] = [int][Math]::Round($domainAcc[$d].Numer / $domainAcc[$d].Denom, 0)
+        } else {
+            $domainScore[$d] = 100   # no findings -> Very Good
+        }
+    }
 
-    $riskLevel = if     ($globalScore -ge 80) { 'Critical' }
-                 elseif ($globalScore -ge 60) { 'High' }
-                 elseif ($globalScore -ge 40) { 'Elevated' }
-                 elseif ($globalScore -ge 20) { 'Moderate' }
-                 else                          { 'Low' }
+    # ----- global = weighted average of domain scores by domain weight -----
+    $domainWeights = @{
+        Endpoint = if ($null -ne $global:SI_RiskReport_GlobalWeight_Endpoint) { [double]$global:SI_RiskReport_GlobalWeight_Endpoint } else { 0.30 }
+        Identity = if ($null -ne $global:SI_RiskReport_GlobalWeight_Identity) { [double]$global:SI_RiskReport_GlobalWeight_Identity } else { 0.30 }
+        Azure    = if ($null -ne $global:SI_RiskReport_GlobalWeight_Azure)    { [double]$global:SI_RiskReport_GlobalWeight_Azure }    else { 0.20 }
+        PublicIP = if ($null -ne $global:SI_RiskReport_GlobalWeight_PublicIP) { [double]$global:SI_RiskReport_GlobalWeight_PublicIP } else { 0.20 }
+    }
+    $gNumer = 0.0; $gDenom = 0.0
+    foreach ($d in $DomainSet) {
+        $w = $domainWeights[$d]
+        $gNumer += $domainScore[$d] * $w
+        $gDenom += $w
+    }
+    $globalScore = if ($gDenom -gt 0) { [int][Math]::Round($gNumer / $gDenom, 0) } else { 100 }
+
+    # ----- band (mirrors Microsoft Cloud Secure Score bands) -----
+    $band = if     ($globalScore -ge 90) { 'Very Good' }
+            elseif ($globalScore -ge 75) { 'Good' }
+            elseif ($globalScore -ge 50) { 'Moderate' }
+            else                         { 'At Risk' }
+
+    # Back-compat alias for code that still reads RiskLevel from the old shape.
+    $bcRiskLevel = if     ($band -eq 'Very Good') { 'Low' }
+                   elseif ($band -eq 'Good')      { 'Moderate' }
+                   elseif ($band -eq 'Moderate')  { 'Elevated' }
+                   elseif ($band -eq 'At Risk')   { if ($globalScore -lt 25) { 'Critical' } else { 'High' } }
+                   else                            { 'Unknown' }
 
     $global:RA_KPI = [pscustomobject]@{
         GlobalScore  = $globalScore
-        GlobalRaw    = [Math]::Round($globalRaw, 2)
-        RiskLevel    = $riskLevel
+        Band         = $band
+        RiskLevel    = $bcRiskLevel
         DomainScore  = $domainScore
-        DomainRaw    = $domainRaw
         SevCount     = $sevCount
         SevByDomain  = $sevByDomain
         TotalRows    = $rows.Count
+        Direction    = 'higher-is-better'
     }
 
-    Write-Info ("[SCORE] Global={0} ({1}) Endpoint={2} Identity={3} Azure={4} PublicIP={5} | Sev: C={6} H={7} M={8} L={9} | Rows={10}" -f `
-        $globalScore, $riskLevel, $domainScore['Endpoint'], $domainScore['Identity'], $domainScore['Azure'], $domainScore['PublicIP'], `
+    Write-Info ("[SCORE] Global={0} ({1}) Endpoint={2} Identity={3} Azure={4} PublicIP={5} | Sev: C={6} H={7} M={8} L={9} | Rows={10} | Direction: HIGHER = BETTER (Microsoft-inspired)" -f `
+        $globalScore, $band, $domainScore['Endpoint'], $domainScore['Identity'], $domainScore['Azure'], $domainScore['PublicIP'], `
         $sevCount['Critical'], $sevCount['High'], $sevCount['Medium'], $sevCount['Low'], $rows.Count)
-    # Surface raw sums + ceilings used so operators can decide whether the score
-    # makes sense for their environment and tune ceilings accordingly. Score
-    # math: score_0_100 = min(100, round(raw / ceiling * 100)).
-    Write-Info ("[SCORE-RAW] GlobalRaw={0} / GlobalCeiling={1} | EndpointRaw={2} IdentityRaw={3} AzureRaw={4} PublicIPRaw={5} / DomainCeiling={6}" -f `
-        ([Math]::Round($globalRaw, 1)), $globalCeiling, `
-        ([Math]::Round($domainRaw['Endpoint'], 1)), ([Math]::Round($domainRaw['Identity'], 1)), `
-        ([Math]::Round($domainRaw['Azure'], 1)), ([Math]::Round($domainRaw['PublicIP'], 1)), `
-        $domainCeiling)
 } catch {
     Write-Warn2 ("KPI rollup failed: {0} (continuing -- mail will degrade gracefully)" -f $_.Exception.Message)
 }
@@ -7220,12 +7272,12 @@ if ([bool]$global:Report_SendMail -eq $true) {
 "@
     }
 
-    # ----- KPI banner color per risk level -----
+    # ----- KPI banner color per band (Microsoft Cloud Secure Score bands) -----
     $kpi = $global:RA_KPI
     if ($null -eq $kpi) {
         $kpi = [pscustomobject]@{
-            GlobalScore = 0; RiskLevel = 'Unknown';
-            DomainScore = @{ Endpoint=0; Identity=0; Azure=0; PublicIP=0 };
+            GlobalScore = 100; Band = 'Very Good'; RiskLevel = 'Low';
+            DomainScore = @{ Endpoint=100; Identity=100; Azure=100; PublicIP=100 };
             SevCount    = @{ Critical=0; High=0; Medium=0; Low=0; Other=0 };
             SevByDomain = @{
                 Endpoint = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
@@ -7237,8 +7289,6 @@ if ([bool]$global:Report_SendMail -eq $true) {
         }
     }
     if (-not $kpi.PSObject.Properties['SevByDomain']) {
-        # Older shape (pre-v2.2.93) -- back-fill empty so the email template
-        # doesn't NRE. Fresh runs always have SevByDomain populated.
         $kpi | Add-Member -NotePropertyName SevByDomain -NotePropertyValue @{
             Endpoint = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
             Identity = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
@@ -7246,19 +7296,27 @@ if ([bool]$global:Report_SendMail -eq $true) {
             PublicIP = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
         } -Force
     }
-    $levelColor = switch ($kpi.RiskLevel) {
-        'Critical' { '#7b1fa2' }
-        'High'     { '#c62828' }
-        'Elevated' { '#ef6c00' }
-        'Moderate' { '#f9a825' }
-        'Low'      { '#2e7d32' }
-        default    { '#546e7a' }
+    if (-not $kpi.PSObject.Properties['Band']) {
+        $kpi | Add-Member -NotePropertyName Band -NotePropertyValue 'Unknown' -Force
     }
+    # Higher = better. Bands: At Risk 0-49 (red) | Moderate 50-74 (orange) |
+    # Good 75-89 (light green) | Very Good 90-100 (dark green).
+    $bandColor = switch ($kpi.Band) {
+        'Very Good' { '#1b5e20' }
+        'Good'      { '#2e7d32' }
+        'Moderate'  { '#ef6c00' }
+        'At Risk'   { '#c62828' }
+        default     { '#546e7a' }
+    }
+    $levelColor = $bandColor   # back-compat alias for any remaining $levelColor refs
 
     # ----- Domain tile builder -----
+    # New direction: HIGHER = BETTER. Color bands match Microsoft Cloud Secure Score:
+    #   90-100 Very Good (dark green) | 75-89 Good (light green) |
+    #   50-74 Moderate (orange)       | 0-49  At Risk (red)
     function _DomainTile([string]$name, [int]$score) {
-        $bg = if ($score -ge 60) { '#fdecea' } elseif ($score -ge 40) { '#fff4e5' } elseif ($score -ge 20) { '#fffbe6' } else { '#e8f5e9' }
-        $bar = if ($score -ge 60) { '#c62828' } elseif ($score -ge 40) { '#ef6c00' } elseif ($score -ge 20) { '#f9a825' } else { '#2e7d32' }
+        $bg  = if ($score -ge 90) { '#e8f5e9' } elseif ($score -ge 75) { '#f1f8f1' } elseif ($score -ge 50) { '#fff4e5' } else { '#fdecea' }
+        $bar = if ($score -ge 90) { '#1b5e20' } elseif ($score -ge 75) { '#2e7d32' } elseif ($score -ge 50) { '#ef6c00' } else { '#c62828' }
         $w = [Math]::Max(2, [Math]::Min(100, $score))
         return @"
             <td width="25%" valign="top" style="padding:6px;">
@@ -7373,9 +7431,10 @@ $cLow
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
             <td width="32%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;">
-              <div style="font-size:12px;color:#5a6a7a;text-transform:uppercase;letter-spacing:.5px;">Global Risk Score</div>
-              <div style="font-size:54px;font-weight:700;color:#1a3a5e;line-height:1;margin:6px 0 4px 0;">$($kpi.GlobalScore)<span style="font-size:22px;color:#8a99aa;font-weight:400;"> /100</span></div>
-              <div style="display:inline-block;background:$levelColor;color:#ffffff;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600;letter-spacing:.5px;">$($kpi.RiskLevel.ToUpper())</div>
+              <div style="font-size:12px;color:#5a6a7a;text-transform:uppercase;letter-spacing:.5px;">Risk Score KPI</div>
+              <div style="font-size:54px;font-weight:700;color:$bandColor;line-height:1;margin:6px 0 4px 0;">$($kpi.GlobalScore)<span style="font-size:22px;color:#8a99aa;font-weight:400;"> /100</span></div>
+              <div style="display:inline-block;background:$bandColor;color:#ffffff;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600;letter-spacing:.5px;">$($kpi.Band.ToUpper())</div>
+              <div style="font-size:10px;color:#8a99aa;margin-top:6px;">higher = better &middot; 90+ Very Good &middot; 75+ Good &middot; 50+ Moderate &middot; &lt;50 At Risk</div>
             </td>
             <td width="68%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;font-size:12px;color:#333;padding-left:18px;">
               <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse;">

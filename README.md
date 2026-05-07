@@ -176,7 +176,7 @@ flowchart TB
 
 Defender will happily tell you about every vulnerability, misconfiguration, and exposure in your environment. What it won't tell you is which one an attacker would reach for first. **That's the prioritization gap — and it's where most security teams lose the battle.**
 
-**SecurityInsight** is a free, community-built add-on to Microsoft Defender that applies a tier-based risk scoring model designed to think like a hacker and act like a defender. Every finding across Endpoint, Azure, and Identity is evaluated on four dimensions:
+**SecurityInsight** is a free, community-built add-on that consolidates security telemetry from Microsoft Defender, Entra ID, Active Directory, Azure, and Microsoft ExposureGraph and applies a tier-based risk scoring model designed to think like a hacker and act like a defender. Every finding across Endpoint, Azure, and Identity is evaluated on four dimensions:
 
 - the **security consequence** of the missing control,
 - the **criticality tier** (0–3) of the affected asset,

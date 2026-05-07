@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.93
+## v2.2.94
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.94 - email: dark-mode tolerance + total at the bottom (7e38cd7a)
 - release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
 - release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
 - release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.67 - prestage also creates 'securityinsight' container (RA xlsx/json export target) (b5e05b9a)
 - release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
 - release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
-- release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.94 — RA email: dark-mode tolerance + grand total moved to the bottom
+
+**Layout polish.** Moved the `All` row from the top of the severity-by-domain table to the bottom and renamed it `Total`. Reads spreadsheet-style now — per-domain rows first, then a bold totals row at the foot with a thicker top border to visually separate it from the per-domain rows above.
+
+**Dark-mode tolerance.** Some recipients read mail in clients that auto-invert colors in dark mode (Outlook desktop dark, Yahoo dark) while others honor explicit color hints (Apple Mail, modern Outlook). Two changes so the email reads cleanly in both:
+
+- **Color-scheme hints** — added `<meta name="color-scheme" content="light only">` and `<meta name="supported-color-schemes" content="light only">` plus an MSO conditional `color-scheme: light only !important` to opt out of dark-mode inversion in clients that respect those signals.
+- **Cells encode severity with both bg and text color** — every severity cell in the breakdown table now uses a tinted background (red/orange/yellow/green) AND a saturated text color, so even when a client force-inverts colors the cells stay visually distinct (the semantic encoding doesn't depend on a single color attribute).
+
+| Domain    | Total | Critical | High | Medium | Low |
+|-----------|------:|---------:|-----:|-------:|----:|
+| Endpoint  |   142 |       18 |   58 |     52 |  14 |
+| Identity  |    31 |        4 |   12 |     11 |   4 |
+| Azure     |    18 |        2 |    4 |      5 |   7 |
+| Public IP |     6 |        0 |    1 |      1 |   4 |
+| **Total** | **197** | **24** | **75** | **69** | **29** |
 
 ---
 

@@ -3555,12 +3555,68 @@ function Calculate-RiskScore {
             if (-not $tmp2.Contains('MoreDetails'))                     { $tmp2['MoreDetails']                     = '' }
             if (-not $tmp2.Contains('RiskFactor_Consequence_Detailed')) { $tmp2['RiskFactor_Consequence_Detailed'] = '' }
 
-            # MITRE inference: when YAML didn't pre-populate MITRE_Tactics / MITRE_Techniques,
-            # derive a sensible default from SecurityDomain + Subcategory + ConfigurationName.
-            # Coverage is intentionally broad (TA-tactic level, common technique IDs) so customers
-            # can refine per-report in custom YAML; better than empty cells across the whole sheet.
+            # MITRE inference: priority order
+            #   1. YAML-projected MITRE_Tactics + MITRE_Techniques  (already filled -- skip)
+            #   2. Defender-native fields on the row:
+            #        - 'Categories' / 'AlertCategories' (AlertInfo / AlertEvidence)  -> name->TA#### lookup
+            #        - 'AttackTechniques' (AlertInfo / DeviceEvents / EG edges)      -> already T#### IDs
+            #   3. Keyword regex over SecurityDomain + Subcategory + ConfigurationName.
+            #   4. SecurityDomain-level fallback (broad TA-tactic).
+            #
+            # Categories -> Tactic ID lookup (MITRE ATT&CK 14 enterprise tactics).
+            # Defender XDR's 'Categories' column carries human-readable tactic names
+            # like "Credential Access", "Lateral Movement". Customers want TA#### IDs
+            # for downstream tooling, so engine maps once.
+            $mitreCategoryToTactic = @{
+                'reconnaissance'         = 'TA0043'
+                'resource development'   = 'TA0042'
+                'initial access'         = 'TA0001'
+                'execution'              = 'TA0002'
+                'persistence'            = 'TA0003'
+                'privilege escalation'   = 'TA0004'
+                'defense evasion'        = 'TA0005'
+                'credential access'      = 'TA0006'
+                'discovery'              = 'TA0007'
+                'lateral movement'       = 'TA0008'
+                'collection'             = 'TA0009'
+                'command and control'    = 'TA0011'
+                'exfiltration'           = 'TA0010'
+                'impact'                 = 'TA0040'
+            }
+
             $mitreTactics    = if ($tmp2.Contains('MITRE_Tactics'))    { [string]$tmp2['MITRE_Tactics']    } else { '' }
             $mitreTechniques = if ($tmp2.Contains('MITRE_Techniques')) { [string]$tmp2['MITRE_Techniques'] } else { '' }
+
+            # Step 2: Defender-native columns. Read regardless of MITRE_Tactics state --
+            # if YAML projected RAW Categories/AttackTechniques but no MITRE_Tactics, we can
+            # still translate. If YAML projected MITRE_Tactics directly, we honor that.
+            if ([string]::IsNullOrWhiteSpace($mitreTactics)) {
+                $catRaw = ''
+                foreach ($colName in 'Categories','AlertCategories','MITRE_Categories') {
+                    if ($tmp2.Contains($colName) -and -not [string]::IsNullOrWhiteSpace([string]$tmp2[$colName])) {
+                        $catRaw = [string]$tmp2[$colName]; break
+                    }
+                }
+                if (-not [string]::IsNullOrWhiteSpace($catRaw)) {
+                    # Comma- or semicolon- separated tactic names. Map each to TA####.
+                    $tids = @($catRaw -split '[,;]' | ForEach-Object {
+                        $name = $_.Trim().ToLowerInvariant()
+                        if ($mitreCategoryToTactic.ContainsKey($name)) { $mitreCategoryToTactic[$name] }
+                    } | Where-Object { $_ } | Sort-Object -Unique)
+                    if ($tids.Count -gt 0) { $mitreTactics = ($tids -join ';') }
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($mitreTechniques)) {
+                foreach ($colName in 'AttackTechniques','MITRE_AttackTechniques') {
+                    if ($tmp2.Contains($colName) -and -not [string]::IsNullOrWhiteSpace([string]$tmp2[$colName])) {
+                        # Already T#### IDs (Defender's shape). Normalize comma/space/semicolon to ';'.
+                        $raw = [string]$tmp2[$colName]
+                        $tlist = @($raw -split '[,;\s]+' | Where-Object { $_ -match '^T\d+(\.\d+)?$' } | Sort-Object -Unique)
+                        if ($tlist.Count -gt 0) { $mitreTechniques = ($tlist -join ';'); break }
+                    }
+                }
+            }
+
             if ([string]::IsNullOrWhiteSpace($mitreTactics) -and [string]::IsNullOrWhiteSpace($mitreTechniques)) {
                 $secDomain  = if ($tmp2.Contains('SecurityDomain'))  { [string]$tmp2['SecurityDomain']  } else { '' }
                 $subcat     = if ($tmp2.Contains('Subcategory'))     { [string]$tmp2['Subcategory']     } else { '' }
@@ -3598,8 +3654,12 @@ function Calculate-RiskScore {
                 $tmp2['MITRE_Tactics']    = $tactics
                 $tmp2['MITRE_Techniques'] = $techniques
             } else {
-                if (-not $tmp2.Contains('MITRE_Tactics'))    { $tmp2['MITRE_Tactics']    = '' }
-                if (-not $tmp2.Contains('MITRE_Techniques')) { $tmp2['MITRE_Techniques'] = '' }
+                # At least one of mitreTactics/mitreTechniques came from row data
+                # (Step 2 Defender-native). Persist whatever we resolved; fill the
+                # missing side with empty string so downstream readers can rely on
+                # the column existing.
+                $tmp2['MITRE_Tactics']    = if ($mitreTactics)    { $mitreTactics }    else { '' }
+                $tmp2['MITRE_Techniques'] = if ($mitreTechniques) { $mitreTechniques } else { '' }
             }
 
             # ComplianceTags inference: when YAML didn't pre-populate, derive a sensible
@@ -3613,30 +3673,65 @@ function Calculate-RiskScore {
                 $cfgName    = if ($tmp2.Contains('ConfigurationName')){ [string]$tmp2['ConfigurationName']} else { '' }
                 $blob       = ($secDomain + ' ' + $subcat + ' ' + $cfgName).ToLowerInvariant()
 
+                # Each keyword now anchors against:
+                #   - NIST 800-53 (US federal)        - NIST CSF 2.0     (US framework)
+                #   - ISO 27001 Annex A (international) - CIS Controls v8 (community)
+                #   - PCI DSS 4.0 (payments)          - HIPAA Security Rule (US healthcare)
+                #   - SOC 2 Trust Services Criteria   - NIS2 (EU) / DORA (EU finance)
+                #   - GDPR (EU privacy, data sensitivity only)
+                # Customers refine via per-report YAML; these defaults are best-fit anchors.
                 $tags = $null
                 switch -Regex ($blob) {
-                    'mfa|conditional access|multi.factor'                 { $tags = 'NIST 800-53 IA-2(1);ISO 27001 A.9.4.2;CIS 5.1;PCI DSS 8.4'; break }
-                    'brute.?force|password spray'                         { $tags = 'NIST 800-53 AC-7;ISO 27001 A.9.4.2;CIS 5.2'; break }
-                    'impossible travel|nontrusted location|risky.sign'    { $tags = 'NIST 800-53 AC-17;ISO 27001 A.9.4.2;CIS 6.5'; break }
-                    'permanent.*role|privileged.*role|never.*expire'      { $tags = 'NIST 800-53 AC-2,AC-5,AC-6;ISO 27001 A.9.2.3;CIS 5.4'; break }
-                    'shadow admin|nested.*group|stale.*group'             { $tags = 'NIST 800-53 AC-2;ISO 27001 A.9.2.5;CIS 5.4'; break }
-                    'guest|external user|departed|stale.*user|stale.*account' { $tags = 'NIST 800-53 AC-2(2),AC-2(3);ISO 27001 A.9.2.5,A.9.2.6;CIS 5.3'; break }
-                    'spn|service principal|app registration|mailbox'      { $tags = 'NIST 800-53 IA-3;ISO 27001 A.9.4.5;CIS 5.5'; break }
-                    'cve|vulnerab|recommendation|patch'                   { $tags = 'NIST 800-53 SI-2,RA-5;ISO 27001 A.12.6.1;CIS 7.1;PCI DSS 6.2'; break }
-                    'public.*ip|exposed|open port|public.*facing'         { $tags = 'NIST 800-53 SC-7,CA-3;ISO 27001 A.13.1;CIS 12.1;PCI DSS 1.1'; break }
-                    'lateral|exploitable.*device|logon.*to'               { $tags = 'NIST 800-53 SC-7(13),AC-4;ISO 27001 A.13.1.3;CIS 12.4'; break }
-                    'attack path'                                          { $tags = 'NIST 800-53 RA-3,SC-7;ISO 27001 A.12.6.1'; break }
-                    'data sensitivity|sensitive data|key vault'            { $tags = 'NIST 800-53 SC-12,SC-13,MP-2;ISO 27001 A.8.2,A.10.1;GDPR Art.32;PCI DSS 3'; break }
-                    'firewall|defender'                                    { $tags = 'NIST 800-53 SC-7,SI-3;ISO 27001 A.13.1.1;CIS 9.2'; break }
-                    'tls|encryption|unencrypted'                           { $tags = 'NIST 800-53 SC-8,SC-13;ISO 27001 A.10.1;PCI DSS 4'; break }
+                    'mfa|conditional access|multi.factor' {
+                        $tags = 'NIST 800-53 IA-2(1);NIST CSF PR.AA-3;ISO 27001 A.9.4.2;CIS 5.1;PCI DSS 8.4;HIPAA 164.312(a)(1);SOC 2 CC6.1;NIS2 Art.21(2)(d)'
+                        break }
+                    'brute.?force|password spray' {
+                        $tags = 'NIST 800-53 AC-7;NIST CSF DE.CM-1;ISO 27001 A.9.4.2;CIS 5.2;HIPAA 164.308(a)(5)(ii)(D);SOC 2 CC6.6'
+                        break }
+                    'impossible travel|nontrusted location|risky.sign' {
+                        $tags = 'NIST 800-53 AC-17,SI-4;NIST CSF DE.AE-3;ISO 27001 A.9.4.2;CIS 6.5;SOC 2 CC7.2'
+                        break }
+                    'permanent.*role|privileged.*role|never.*expire' {
+                        $tags = 'NIST 800-53 AC-2,AC-5,AC-6;NIST CSF PR.AC-4;ISO 27001 A.9.2.3;CIS 5.4;SOC 2 CC6.2;NIS2 Art.21(2)(i);DORA Art.9'
+                        break }
+                    'shadow admin|nested.*group|stale.*group' {
+                        $tags = 'NIST 800-53 AC-2;NIST CSF PR.AC-1;ISO 27001 A.9.2.5;CIS 5.4;SOC 2 CC6.2'
+                        break }
+                    'guest|external user|departed|stale.*user|stale.*account' {
+                        $tags = 'NIST 800-53 AC-2(2),AC-2(3);NIST CSF PR.AC-1;ISO 27001 A.9.2.5,A.9.2.6;CIS 5.3;HIPAA 164.308(a)(3)(ii)(C);SOC 2 CC6.3'
+                        break }
+                    'spn|service principal|app registration|mailbox' {
+                        $tags = 'NIST 800-53 IA-3,IA-9;NIST CSF PR.AA-1;ISO 27001 A.9.4.5;CIS 5.5;SOC 2 CC6.1'
+                        break }
+                    'cve|vulnerab|recommendation|patch' {
+                        $tags = 'NIST 800-53 SI-2,RA-5;NIST CSF ID.RA-1,PR.IP-12;ISO 27001 A.12.6.1;CIS 7.1;PCI DSS 6.2;HIPAA 164.308(a)(1)(ii)(B);SOC 2 CC7.1;NIS2 Art.21(2)(e);DORA Art.10'
+                        break }
+                    'public.*ip|exposed|open port|public.*facing' {
+                        $tags = 'NIST 800-53 SC-7,CA-3;NIST CSF PR.AC-5;ISO 27001 A.13.1;CIS 12.1;PCI DSS 1.1;HIPAA 164.312(e)(1);SOC 2 CC6.6;NIS2 Art.21(2)(c)'
+                        break }
+                    'lateral|exploitable.*device|logon.*to' {
+                        $tags = 'NIST 800-53 SC-7(13),AC-4;NIST CSF PR.AC-5;ISO 27001 A.13.1.3;CIS 12.4;SOC 2 CC6.6'
+                        break }
+                    'attack path' {
+                        $tags = 'NIST 800-53 RA-3,SC-7;NIST CSF ID.RA-3;ISO 27001 A.12.6.1;SOC 2 CC3.1;NIS2 Art.21(2)(b);DORA Art.8'
+                        break }
+                    'data sensitivity|sensitive data|key vault' {
+                        $tags = 'NIST 800-53 SC-12,SC-13,MP-2;NIST CSF PR.DS-1,PR.DS-5;ISO 27001 A.8.2,A.10.1;GDPR Art.32;PCI DSS 3;HIPAA 164.312(a)(2)(iv);SOC 2 CC6.7;DORA Art.9'
+                        break }
+                    'firewall|defender' {
+                        $tags = 'NIST 800-53 SC-7,SI-3;NIST CSF PR.PT-4,DE.CM-4;ISO 27001 A.13.1.1;CIS 9.2;PCI DSS 1;SOC 2 CC6.6'
+                        break }
+                    'tls|encryption|unencrypted' {
+                        $tags = 'NIST 800-53 SC-8,SC-13;NIST CSF PR.DS-2;ISO 27001 A.10.1;PCI DSS 4;HIPAA 164.312(e)(2)(ii);SOC 2 CC6.7'
+                        break }
                 }
                 if ($null -eq $tags) {
                     switch ($secDomain) {
-                        'Identity'   { $tags = 'NIST 800-53 AC-2,IA-2;ISO 27001 A.9' }
-                        'Endpoint'   { $tags = 'NIST 800-53 SI-2,SI-3;ISO 27001 A.12.6' }
-                        'Azure'      { $tags = 'NIST 800-53 AC-3,AC-6;ISO 27001 A.9.4' }
-                        'PublicIp'   { $tags = 'NIST 800-53 SC-7;ISO 27001 A.13.1' }
-                        'AttackPath' { $tags = 'NIST 800-53 RA-3,SC-7;ISO 27001 A.12.6' }
+                        'Identity'   { $tags = 'NIST 800-53 AC-2,IA-2;NIST CSF PR.AA-1;ISO 27001 A.9;SOC 2 CC6.1' }
+                        'Endpoint'   { $tags = 'NIST 800-53 SI-2,SI-3;NIST CSF DE.CM-4;ISO 27001 A.12.6;SOC 2 CC7.1' }
+                        'Azure'      { $tags = 'NIST 800-53 AC-3,AC-6;NIST CSF PR.AC-4;ISO 27001 A.9.4;SOC 2 CC6.1' }
+                        'PublicIp'   { $tags = 'NIST 800-53 SC-7;NIST CSF PR.AC-5;ISO 27001 A.13.1;SOC 2 CC6.6' }
+                        'AttackPath' { $tags = 'NIST 800-53 RA-3,SC-7;NIST CSF ID.RA-3;ISO 27001 A.12.6;SOC 2 CC3.1' }
                         default      { $tags = '' }
                     }
                 }

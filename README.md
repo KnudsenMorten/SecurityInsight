@@ -72,6 +72,8 @@
 
 👉 **136+ Risk Analysis reports**, covering Identity, Azure, Endpoints, CVEs, Public IPs
 
+👉 **Management-friendly Risk Score** — every run produces one global Risk Score (0–100) plus a per-domain breakdown (Endpoint / Identity / Azure / PublicIP), surfaced in the email header + Excel report and persisted to `SI_RiskScore_CL` for 31-day trend reporting. The math is intentionally simple to explain to leadership — Severity × AssetTier × domain weight, no opaque AI weighting
+
 👉 **Data model** includes schema files (JSON) for fields, exclusions, detection rules + YAML files
 
 👉 **Dynamic scaling** with Azure Container Apps Jobs to support large enterprises. Built-in performance includes KEDA scaling, fingerprint caching, hash caching, tier schedules and more

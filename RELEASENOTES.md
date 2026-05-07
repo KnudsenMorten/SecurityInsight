@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.88
+## v2.2.89
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
 - release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
 - release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
 - release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
 - release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
 - release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
-- release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.89 — RA: management-friendly Risk Score KPI + redesigned email report
+
+Two changes that make the Risk Analysis output far easier to land with leadership.
+
+**1. Risk Score KPI (per-row + per-run rollups).** Every Risk Analysis row now carries two new columns:
+
+- `RiskScoreDomainKPI` = `SeverityWeight × AssetTierMultiplier`
+- `RiskScoreKPI`       = `RiskScoreDomainKPI × DomainGlobalWeight`
+
+These are independent of the existing `RiskScoreTotal` / `RiskScoreTotal_Weighted` math (customer dashboards built on those columns keep working). At run end the engine aggregates them into one global Risk Score (0–100) plus a per-domain breakdown for Endpoint / Identity / Azure / PublicIP, with a risk level label (Low / Moderate / Elevated / High / Critical). Logged as `[SCORE] Global=NN (Level) Endpoint=NN Identity=NN Azure=NN PublicIP=NN` and exposed on `$global:RA_KPI` for downstream code.
+
+All weights and ceilings are tunable via `$global:SI_RiskReport_*` overrides:
+- `SeverityWeight_{Critical|High|Medium|Low}` — defaults `10 / 5 / 2 / 1`
+- `TierMultiplier_{T0|T1|T2|T3}` — defaults `4 / 2 / 1 / 0.5`
+- `GlobalWeight_{Endpoint|Identity|Azure|PublicIP}` — defaults `0.30 / 0.30 / 0.20 / 0.20`
+- `DomainCeiling` (default `1000`) and `GlobalCeiling` (default `500`) — divisors used to normalize raw sums to 0–100
+
+**2. Redesigned mgmt-friendly email.** The Risk Analysis email body has been rebuilt as a polished HTML report:
+
+- Banner with report name, tenant, and generated timestamp
+- **Executive summary hero** — big global Risk Score with color-coded level pill (green → purple), total findings, severity breakdown
+- **Risk by domain** — 4 KPI tiles (Endpoint / Identity / Azure / PublicIP) with score, score bar, and color-coded background per threshold
+- AI-generated narrative (when `$global:BuildSummaryByAI = $true`)
+- Footer with **engine build version** stamped from `VERSION` so support can confirm what build produced the output
+
+Bonus: VERSION-file lookup now finds both `VERSION` and `VERSION.txt`, fixing the long-standing `(dev)` stamping in logs and Log Analytics.
 
 ---
 

@@ -21,7 +21,7 @@ Tiny local-only web UI for browsing the JSON output of `Invoke-RiskAnalysis.ps1`
 ## Run
 
 ```powershell
-cd C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\tools\viewer
+cd C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\viewer
 .\Start-SIViewer.ps1
 ```
 

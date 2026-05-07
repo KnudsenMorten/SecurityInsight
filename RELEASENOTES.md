@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.90
+## v2.2.91
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
 - release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
 - release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
 - release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
 - release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
 - release: SecurityInsight v2.2.62 - tidier prestage [OK] log format (fixed 22-char label, status in brackets) (abc788b7)
-- release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
 
 ---
 
@@ -43,11 +43,17 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 
 ---
 
+## v2.2.91 — Viewer: move from `tools/viewer/` to top-level `viewer/`
+
+Path-only change — the viewer is a customer-facing tool, not an internal repo helper, so it lives at the same level as `engine/`, `launcher/`, `output/` rather than buried under `tools/`. Update any shortcuts that pointed at the old location.
+
+---
+
 ## v2.2.90 — Risk Analysis Viewer (test rig: localhost web UI for the JSON output)
 
 A self-contained, internal-only web viewer for the Risk Analysis JSON. **No IIS, no auth, no cloud — just a PowerShell HttpListener bound to `localhost`.** Built to evaluate the experience before deciding whether to host it under IIS with Entra ID.
 
-Lives at `tools/viewer/` inside the SecurityInsight solution. Run `.\Start-SIViewer.ps1` and it:
+Lives at `viewer/` inside the SecurityInsight solution. Run `.\Start-SIViewer.ps1` and it:
 
 - spins up `http://localhost:8765/` and opens the browser
 - auto-discovers every `RiskAnalysis_*.json` in `<solution>/output/` (override via `-OutputDir`)

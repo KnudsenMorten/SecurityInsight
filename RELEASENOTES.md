@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.97
+## v2.2.98
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
 - release: SecurityInsight v2.2.97 - README: KPI bullet to last + add 2 mail screenshots (f7648270)
 - release: SecurityInsight v2.2.96 - RiskScoreKPI: MS-inspired secure score (higher=better) (c45fd1c3)
 - release: SecurityInsight v2.2.95 - Risk Score re-tuned + viewer column UX (554afe84)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.71 - RA \$laDceRg resolution honors \$global:SI_DceResourceGroup (was hardcoded rg-dce-securityinsight fallback) (58d5e600)
 - release: SecurityInsight v2.2.70 - PublicIP cast AssetTier to [int] (InvalidTransformOutput String vs Int) (98afd0b5)
 - release: SecurityInsight v2.2.69 - PrivilegeTierClassifier truncate file to first clean copy (was tripled with corruption fragments) (ed524b19)
-- release: SecurityInsight v2.2.68 - AssetTagging v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation) (9d017b0d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.98 — README: drop the "See § 10 What's New…" pointer line at the top
+
+Removed the introductory pointer paragraph that linked to § 10 What's New / § 7.8 Locked catalog. It was clutter above the "Why you need SecurityInsight" section — readers find the appendices via the TOC.
 
 ---
 

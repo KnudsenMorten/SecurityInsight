@@ -7274,41 +7274,68 @@ if ([bool]$global:Report_SendMail -eq $true) {
     $rowsTotal = [int]$kpi.TotalRows
 
     # ----- Severity x Domain breakdown table builder -----
-    # Row order: All (totals first as we read left-to-right), then per-domain.
-    # Columns: Domain | Total | Critical | High | Medium | Low
+    # Row order: per-domain rows first, then a bold Total row at the bottom
+    # (spreadsheet-style subtotal). Columns: Domain | Total | Critical | High |
+    # Medium | Low.
+    #
+    # Each severity cell uses BOTH a tinted background AND a saturated text color
+    # so the semantic encoding survives clients that auto-invert colors in dark
+    # mode (Outlook desktop dark, Yahoo dark) -- the cells stay visually distinct
+    # even after inversion.
+    function _SevCell([int]$value, [string]$bg, [string]$fg, [string]$weight, [string]$top) {
+        $cellStyle = "padding:6px 10px;background-color:$bg;color:$fg;font-weight:$weight;$top"
+        return "                  <td align=`"right`" style=`"$cellStyle`">$value</td>"
+    }
     function _SevRow([string]$label, [hashtable]$d, [bool]$isTotalRow) {
-        $bg = if ($isTotalRow) { '#f3f5f8' } else { '#ffffff' }
-        $weight = if ($isTotalRow) { '600' } else { '500' }
+        $rowBg  = if ($isTotalRow) { '#f3f5f8' } else { '#ffffff' }
+        $weight = if ($isTotalRow) { '700' }     else { '500' }
+        $top    = if ($isTotalRow) { 'border-top:2px solid #1a3a5e;' } else { 'border-top:1px solid #eef2f7;' }
+        $cCrit = _SevCell ([int]$d['Critical']) '#fdecea' '#7a1414' $weight $top
+        $cHigh = _SevCell ([int]$d['High'])     '#fff4e5' '#8a3d00' $weight $top
+        $cMed  = _SevCell ([int]$d['Medium'])   '#fffde7' '#7a5d00' $weight $top
+        $cLow  = _SevCell ([int]$d['Low'])      '#e8f5e9' '#1b5e20' $weight $top
         return @"
-                <tr style="background:$bg;">
-                  <td style="padding:6px 10px;color:#1a3a5e;font-weight:$weight;border-top:1px solid #eef2f7;">$label</td>
-                  <td align="right" style="padding:6px 10px;color:#1a3a5e;font-weight:600;border-top:1px solid #eef2f7;">$($d['Total'])</td>
-                  <td align="right" style="padding:6px 10px;color:#c62828;font-weight:600;border-top:1px solid #eef2f7;">$($d['Critical'])</td>
-                  <td align="right" style="padding:6px 10px;color:#ef6c00;font-weight:600;border-top:1px solid #eef2f7;">$($d['High'])</td>
-                  <td align="right" style="padding:6px 10px;color:#f9a825;font-weight:600;border-top:1px solid #eef2f7;">$($d['Medium'])</td>
-                  <td align="right" style="padding:6px 10px;color:#2e7d32;font-weight:600;border-top:1px solid #eef2f7;">$($d['Low'])</td>
+                <tr style="background-color:$rowBg;">
+                  <td style="padding:6px 10px;background-color:$rowBg;color:#1a3a5e;font-weight:$weight;$top">$label</td>
+                  <td align="right" style="padding:6px 10px;background-color:$rowBg;color:#1a3a5e;font-weight:$weight;$top">$($d['Total'])</td>
+$cCrit
+$cHigh
+$cMed
+$cLow
                 </tr>
 "@
     }
     $sbd = $kpi.SevByDomain
-    $allRow = @{
+    $totalRow = @{
         Total = $rowsTotal
         Critical = [int]$sev['Critical']
         High     = [int]$sev['High']
         Medium   = [int]$sev['Medium']
         Low      = [int]$sev['Low']
     }
-    $sevTableRows = (_SevRow 'All' $allRow $true) +
-                    (_SevRow 'Endpoint'  $sbd['Endpoint'] $false) +
+    $sevTableRows = (_SevRow 'Endpoint'  $sbd['Endpoint'] $false) +
                     (_SevRow 'Identity'  $sbd['Identity'] $false) +
                     (_SevRow 'Azure'     $sbd['Azure']    $false) +
-                    (_SevRow 'Public IP' $sbd['PublicIP'] $false)
+                    (_SevRow 'Public IP' $sbd['PublicIP'] $false) +
+                    (_SevRow 'Total'     $totalRow        $true)
 
     $bodyHtml = @"
 <!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"></head>
-<body style="margin:0;padding:0;background:#f3f5f8;">
+<head>
+<meta charset="UTF-8">
+<!-- Pin to light rendering across clients that support color-scheme so we stay
+     visually consistent in Apple Mail / iOS Mail / modern Outlook dark-mode
+     setups. Most major clients honor at least one of these two hints. -->
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
+<!--[if mso]>
+<style type="text/css">
+  body, table, td, h1, h2, h3, h4, p, span, a { color-scheme: light only !important; }
+</style>
+<![endif]-->
+</head>
+<body style="margin:0;padding:0;background:#f3f5f8;color:#1a3a5e;">
 <table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f8;padding:20px 0;">
   <tr><td align="center">
     <table width="720" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e0e6ed;border-radius:8px;max-width:720px;">

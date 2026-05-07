@@ -4248,11 +4248,18 @@ if ([bool]$global:AutomationFramework) {
     Tick "graph connect"
 
     #------------------------------------------------------------------------------------------------------------
-    # Output File -- write into the solution's DATA\OUTPUT\ folder (same as
-    # community mode), NOT the monorepo root. $global:SettingsPath is set to
-    # the engine's DATA folder by the launcher.
+    # Output File -- write into the solution's <solutionRoot>/output/ folder so
+    # operators don't have to dig through risk-analysis-detection/OUTPUT/. The
+    # old path stays customizable via $global:SI_RiskAnalysis_OutputDir for
+    # anyone who already had automation pointed at the deeper path.
+    # $global:SettingsPath = <solutionRoot>/risk-analysis-detection (set by launcher).
     #------------------------------------------------------------------------------------------------------------
-    $global:OutputDir  = Join-Path $global:SettingsPath 'OUTPUT'
+    if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_OutputDir)) {
+        $global:OutputDir = [string]$global:SI_RiskAnalysis_OutputDir
+    } else {
+        $solutionRoot      = Split-Path -Parent $global:SettingsPath
+        $global:OutputDir  = Join-Path $solutionRoot 'output'
+    }
     Ensure-Directory -Path $global:OutputDir
     $global:OutputXlsx = Join-Path $global:OutputDir ("{0}.xlsx" -f $global:ReportTemplate)
 
@@ -4394,9 +4401,14 @@ if ([bool]$global:AutomationFramework) {
     Write-Info ("Mail routing: Report_SendMail={0}, Report_To={1}" -f $global:Report_SendMail, ($global:Report_To -join ', '))
 
     #------------------------------------------------------------------------------------------------------------
-    # ExposureInsight settings
+    # ExposureInsight settings -- mirror the OutputDir resolution above (community-mode branch).
     #------------------------------------------------------------------------------------------------------------
-    $global:OutputDir  = Join-Path $global:SettingsPath 'OUTPUT'
+    if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RiskAnalysis_OutputDir)) {
+        $global:OutputDir = [string]$global:SI_RiskAnalysis_OutputDir
+    } else {
+        $solutionRoot      = Split-Path -Parent $global:SettingsPath
+        $global:OutputDir  = Join-Path $solutionRoot 'output'
+    }
     Ensure-Directory -Path $global:OutputDir
     $global:OutputXlsx = Join-Path $global:OutputDir ("{0}.xlsx" -f $global:ReportTemplate)
 

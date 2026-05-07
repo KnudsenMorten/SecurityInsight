@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.92
+## v2.2.93
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
 - release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
 - release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
 - release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
 - release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
 - release: SecurityInsight v2.2.64 - PublicIP engine prefetches DCE/DCR cache before collision guard (was silently no-op'ing) (d03b4cec)
-- release: SecurityInsight v2.2.63 - poll for DCR immutableId in ARG (fix 404 'westeurope' on first ingest) (389381f2)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.93 — RA email: severity-by-domain breakdown table in the exec summary
+
+The right side of the executive summary section in the email is now a proper severity-by-domain breakdown table instead of a flat severity tally. Reading left-to-right:
+
+| Domain    | Total | Critical | High | Medium | Low |
+|-----------|------:|---------:|-----:|-------:|----:|
+| **All**   |   197 |       24 |   75 |     69 |  29 |
+| Endpoint  |   142 |       18 |   58 |     52 |  14 |
+| Identity  |    31 |        4 |   12 |     11 |   4 |
+| Azure     |    18 |        2 |    4 |      5 |   7 |
+| Public IP |     6 |        0 |    1 |      1 |   4 |
+
+Total column comes first (left), followed by the four severity columns. The "All" row is shaded and bolded so the total reads first; per-domain rows below break down where the findings actually live. Colors match the rest of the report (Critical=red, High=orange, Medium=yellow, Low=green).
+
+Engine side: the run-end KPI rollup now also tracks `SevByDomain` per the four canonical buckets (Endpoint / Identity / Azure / PublicIP) and exposes it on `$global:RA_KPI.SevByDomain` so the same data can drive Workbook tiles or Power BI cards later.
 
 ---
 

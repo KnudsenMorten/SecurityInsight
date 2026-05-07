@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.81
+## v2.2.82
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
 - release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
 - release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
 - release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
@@ -33,13 +34,37 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
 - release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
 - release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
-- release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.82 — Revert v2.2.80 missing-table silencing (keep the warnings loud)
+
+v2.2.80's "table not found → 0 rows + Write-Verbose" graceful skip in `Invoke-LogAnalyticsKqlQuery` was wrong policy. `Failed to resolve table or column expression named 'SI_<Engine>_Profile_CL'` (or `SI_VulnerabilityPIP_CL`) is a **report-design bug**, not transient state — it means a report is shipping with a hard dependency on a source table that the customer's environment hasn't satisfied. Hiding it means report authors don't see when their KQL has invalid source-table references, and customers don't know which collector engine they need to run first.
+
+Reverted: the engine surfaces the LA `Failed to resolve table` error loudly as before — diagnostic body dump + `[WARN] LA query failed` per bucket. Same for the AdvancedHunting probe path (no `2>$null`).
+
+NOT reverted (different category — these are real config defaults, not query bugs):
+- `Initialize-PlatformLegacyIdentity` Write-Verbose under -IgnoreMissing (v2.2.80 #1)
+- LauncherConfig auto-init passes `-IgnoreMissingSecrets` (v2.2.80 #2)
+- PublicIP_*_Detailed duplicate-AssetName project fix (v2.2.80 #3)
+
+Forward-looking proper fix: each report YAML should declare `SourceTables: [SI_Identity_Profile_CL, SI_Endpoint_Profile_CL, ...]`. Engine pre-flights table existence at run start, skips reports whose source tables are missing with `[SKIP] <ReportName> -- requires <table> (asset-profiling <engine> hasn't ingested yet)`. That's a data-driven skip with intent in the message, not a hidden error.
+
+Failing reports observed on the 2026-05-07 04:05 customer run (for the SourceTables manifest follow-up):
+
+| Report | Missing source |
+|---|---|
+| Identity_AdNestedCriticalGroup_NoEntraRole_Detailed | SI_Identity_Profile_CL |
+| Identity_Departed_AccountStillEnabled_Detailed | SI_Identity_Profile_CL |
+| Identity_DisabledPrivilegedUser_Detailed | SI_Identity_Profile_CL |
+| Identity_HighRiskFactorComposite4Plus_Detailed | multiple SI_*_Profile_CL |
+| PublicIP_Vulnerabilities_Detailed | SI_VulnerabilityPIP_CL |
 
 ---
 

@@ -34,7 +34,12 @@ function Initialize-PlatformLegacyIdentity {
         }
         catch {
             if (-not $IgnoreMissing) { throw }
-            Write-Warning "Initialize-PlatformLegacyIdentity: '$path' failed: $($_.Exception.Message)"
+            # -IgnoreMissing semantics: caller accepts that legacy on-prem creds
+            # (Azure-VM-LocalAdmin-*, Legacy-*-Internal/DMZ-Prod, etc.) are optional
+            # in v2 cloud-only deployments. Don't fire Write-Warning -- most customer
+            # KVs don't carry these secrets, and the noise on every launcher start
+            # was misleading. Use -Verbose for diagnostic runs.
+            Write-Verbose "Initialize-PlatformLegacyIdentity: '$path' skipped -- $($_.Exception.Message)"
         }
     }
 

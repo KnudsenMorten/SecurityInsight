@@ -23392,7 +23392,7 @@ Reports:
                   AssetId,
                   AssetType,
                   SecuritySeverity, CriticalityTier, CriticalityTierLevel,
-                  AssetName, AssetEngine, IpAddress, Port,
+                  AssetEngine, IpAddress, Port,
                   cmdbName, cmdbCriticality, Country, Org, ISP, Hostnames, LastShodanUpdate,
                   RiskFactor_Consequence, RiskFactor_Probability,
                   RiskScore_Weight_Detailed, RiskScore_Weight_Factor
@@ -23571,7 +23571,7 @@ Reports:
                   AssetId,
                   AssetType,
                   SecuritySeverity, CriticalityTier, CriticalityTierLevel,
-                  AssetName, AssetEngine, IpAddress, Cve,
+                  AssetEngine, IpAddress, Cve,
                   cmdbName, cmdbCriticality, Country, Org, ISP, LastShodanUpdate,
                   RiskFactor_Consequence, RiskFactor_Probability,
                   RiskScore_Weight_Detailed, RiskScore_Weight_Factor

@@ -1105,6 +1105,37 @@ function Invoke-LogAnalyticsKqlQuery {
     try {
         $resp = Invoke-AzOperationalInsightsQuery -WorkspaceId $custId -Query $Query -Wait $TimeoutSec -ErrorAction Stop
     } catch {
+        # Pre-check: if the failure is "table doesn't exist", treat as 0 rows
+        # without diagnostic noise. Common in v2.2 first-runs where a report
+        # queries SI_*_CL that hasn't been ingested yet (e.g. PublicIP reports
+        # run before the Shodan engine has produced SI_VulnerabilityPIP_CL).
+        # Walk the exception chain + every body source for the LA semantic
+        # error pattern. Bare-message check first (cheap), then deeper paths.
+        $_tableNotFound = $false
+        $_pat = "Failed to resolve table or column expression named|isn't a known table"
+        try {
+            $_msg = [string]$_.Exception.Message
+            if ($_msg -match $_pat) { $_tableNotFound = $true }
+            if (-not $_tableNotFound -and $_.Exception.InnerException) {
+                $_inner = $_.Exception.InnerException
+                while ($null -ne $_inner) {
+                    if (([string]$_inner.Message) -match $_pat) { $_tableNotFound = $true; break }
+                    $_inner = $_inner.InnerException
+                }
+            }
+            if (-not $_tableNotFound -and $_.Exception.Body) {
+                $_bodyJson = try { $_.Exception.Body | ConvertTo-Json -Depth 6 } catch { [string]$_.Exception.Body }
+                if ($_bodyJson -match $_pat) { $_tableNotFound = $true }
+            }
+            if (-not $_tableNotFound -and $_.ErrorDetails -and $_.ErrorDetails.Message -match $_pat) {
+                $_tableNotFound = $true
+            }
+        } catch { }
+        if ($_tableNotFound) {
+            Write-Verbose ("LA query: source table missing -- treating as 0 rows. {0}" -f [string]$_.Exception.Message)
+            return ,@()
+        }
+
         # Diagnostic dump: when LA returns 400/BadRequest, Az.OperationalInsights surfaces only
         # the bare HTTP status -- the actual KQL parse error is in the inner exception's response
         # body. Persist query + full exception chain + body to staging so we can see exactly which

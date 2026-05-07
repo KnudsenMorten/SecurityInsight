@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.79
+## v2.2.80
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
 - release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
 - release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
 - release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
@@ -33,13 +34,59 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
 - release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
 - release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
-- release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.80 — Quiet launcher startup + PublicIP_*_Detailed KQL fix + table-not-found skip
+
+Four small fixes that flush warning noise from RA runs.
+
+### 1. Initialize-PlatformLegacyIdentity quiet under -IgnoreMissing
+
+`Initialize-PlatformLegacyIdentity` was emitting `Write-Warning` for every missing legacy KV secret even when called with `-IgnoreMissing` — meaning every launcher start logged something like:
+
+```
+WARNING: Initialize-PlatformLegacyIdentity: 'Legacy.ProvisionVMLocalAdmin' failed:
+Get-PlatformSecretKeyVault: secret 'Azure-VM-LocalAdmin-UserName' not found in vault 'kv-2linkit-automation-p'.
+```
+
+Most v2 cloud-only deployments don't carry the legacy on-prem creds (Azure-VM-LocalAdmin-*, Legacy-*-Internal/DMZ-Prod). Demoted to `Write-Verbose`, so `-Verbose` still surfaces the per-key skip when diagnosing.
+
+### 2. Initialize-LauncherConfig auto-init now passes -IgnoreMissingSecrets
+
+The launcher's auto-init at Layer 1.5/5 (`Initialize-LauncherConfig.ps1:454`) called `Initialize-PlatformAutomationFramework` without `-IgnoreMissingSecrets`. Combined with #1, that produced:
+
+```
+WARNING: Initialize-PlatformLegacyIdentity failed (legacy creds unavailable): ...
+WARNING: SMTP credentials not found in KV (secrets 'SMTPuser' / 'SMTPpassword'). ...
+```
+
+…on every launcher startup whose customer KV didn't carry those optional secrets. Now passes `-IgnoreMissingSecrets` so the framework treats missing legacy + SMTP secrets as expected. Customers who DO require strict SMTP/legacy can call `Initialize-PlatformAutomationFramework` upstream without the switch.
+
+### 3. PublicIP_*_Detailed reports: duplicate `AssetName` in `project`
+
+`PublicIP_OpenPorts_Detailed` and `PublicIP_Vulnerabilities_Detailed` had `AssetName` listed TWICE in the final `| project ...` clause. KQL rejects duplicate column names → 400 BadRequest on every run, even when `SI_VulnerabilityPIP_CL` had data:
+
+```
+[WARN] LA query failed -- full detail dumped to ...\ra-laerr-...txt
+[WARN] AutoBucket failed for report 'PublicIP_OpenPorts_Detailed'. Falling back to configured BucketCount=2.
+[ERR]  query failed for bucket 1/2: Operation returned an invalid status code 'BadRequest'
+[ERR]  query failed for bucket 2/2: Operation returned an invalid status code 'BadRequest'
+```
+
+Fix: dropped the duplicate `AssetName` from the project list in both reports. Summary variants were already correct (no duplicate). Now Detailed actually returns rows when Shodan has data.
+
+### 4. LA query: graceful skip on "table not found"
+
+`Invoke-LogAnalyticsKqlQuery` now catches the LA semantic error pattern `Failed to resolve table or column expression named '<table>'` (or `isn't a known table`) and returns 0 rows + a `Write-Verbose` line — instead of dumping a diagnostic error file and surfacing a `[WARN]` per bucket.
+
+Triggered by reports that query an SI_*_CL table that hasn't been ingested yet (e.g., RA running before the matching collector engine has produced data). Customers see a clean "No rows returned from query" instead of the "BadRequest x N buckets" cascade.
 
 ---
 

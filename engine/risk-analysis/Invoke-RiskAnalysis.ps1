@@ -3533,15 +3533,60 @@ function Calculate-RiskScore {
             # / mail-template consumers always find them with a stable schema.
             #   MoreDetails                       -- harvested URLs + portal links + MITRE links
             #   RiskFactor_Consequence_Detailed   -- engine-derived consequence breakdown
-            #   MITRE_Tactics / Techniques        -- attack-coverage tags (rare in YAML; usually empty)
+            #   MITRE_Tactics / Techniques        -- inferred from SecurityDomain + Subcategory
             #   ComplianceTags                    -- benchmark / framework tags (rare in YAML; usually empty)
             # STRICT-mode reorder below also force-injects all of these into the
             # output when YAML's OutputPropertyOrder doesn't list them explicitly.
             if (-not $tmp2.Contains('MoreDetails'))                     { $tmp2['MoreDetails']                     = '' }
             if (-not $tmp2.Contains('RiskFactor_Consequence_Detailed')) { $tmp2['RiskFactor_Consequence_Detailed'] = '' }
-            if (-not $tmp2.Contains('MITRE_Tactics'))                   { $tmp2['MITRE_Tactics']                   = '' }
-            if (-not $tmp2.Contains('MITRE_Techniques'))                { $tmp2['MITRE_Techniques']                = '' }
             if (-not $tmp2.Contains('ComplianceTags'))                  { $tmp2['ComplianceTags']                  = '' }
+
+            # MITRE inference: when YAML didn't pre-populate MITRE_Tactics / MITRE_Techniques,
+            # derive a sensible default from SecurityDomain + Subcategory + ConfigurationName.
+            # Coverage is intentionally broad (TA-tactic level, common technique IDs) so customers
+            # can refine per-report in custom YAML; better than empty cells across the whole sheet.
+            $mitreTactics    = if ($tmp2.Contains('MITRE_Tactics'))    { [string]$tmp2['MITRE_Tactics']    } else { '' }
+            $mitreTechniques = if ($tmp2.Contains('MITRE_Techniques')) { [string]$tmp2['MITRE_Techniques'] } else { '' }
+            if ([string]::IsNullOrWhiteSpace($mitreTactics) -and [string]::IsNullOrWhiteSpace($mitreTechniques)) {
+                $secDomain  = if ($tmp2.Contains('SecurityDomain'))  { [string]$tmp2['SecurityDomain']  } else { '' }
+                $subcat     = if ($tmp2.Contains('Subcategory'))     { [string]$tmp2['Subcategory']     } else { '' }
+                $cfgName    = if ($tmp2.Contains('ConfigurationName')){[string]$tmp2['ConfigurationName']} else { '' }
+                $blob       = ($secDomain + ' ' + $subcat + ' ' + $cfgName).ToLowerInvariant()
+
+                # Match most-specific keywords first, then broader domain defaults.
+                $tactics    = $null
+                $techniques = $null
+                switch -Regex ($blob) {
+                    'mfa|conditional access|multi.factor'                 { $tactics = 'TA0006';        $techniques = 'T1078;T1110';            break }
+                    'brute.?force|password spray'                         { $tactics = 'TA0006';        $techniques = 'T1110;T1110.003';        break }
+                    'impossible travel|nontrusted location|risky.sign'    { $tactics = 'TA0006;TA0001'; $techniques = 'T1078;T1078.004';        break }
+                    'permanent.*role|privileged.*role|never.*expire'      { $tactics = 'TA0004;TA0003'; $techniques = 'T1078;T1098.003';        break }
+                    'shadow admin|nested.*group|stale.*group'             { $tactics = 'TA0004';        $techniques = 'T1078;T1484.001';        break }
+                    'guest|external user|departed|stale'                  { $tactics = 'TA0006';        $techniques = 'T1078;T1078.004';        break }
+                    'spn|service principal|app registration|mailbox'      { $tactics = 'TA0004;TA0003'; $techniques = 'T1078.004;T1098.001';    break }
+                    'cve|vulnerab|recommendation|patch'                   { $tactics = 'TA0001';        $techniques = 'T1190';                  break }
+                    'public.*ip|exposed|open port|public.*facing'         { $tactics = 'TA0001;TA0007'; $techniques = 'T1190;T1133';            break }
+                    'lateral|exploitable.*device|logon.*to'               { $tactics = 'TA0008';        $techniques = 'T1021;T1078';            break }
+                    'attack path'                                          { $tactics = 'TA0008;TA0004'; $techniques = 'T1078;T1021';            break }
+                    'data sensitivity|sensitive data|key vault'            { $tactics = 'TA0009;TA0010'; $techniques = 'T1213;T1530';            break }
+                }
+                # Domain-level fallback if no specific keyword hit.
+                if ($null -eq $tactics) {
+                    switch ($secDomain) {
+                        'Identity'   { $tactics = 'TA0006';        $techniques = 'T1078'             }
+                        'Endpoint'   { $tactics = 'TA0001;TA0008'; $techniques = 'T1190;T1021'      }
+                        'Azure'      { $tactics = 'TA0004;TA0001'; $techniques = 'T1078.004;T1190'  }
+                        'PublicIp'   { $tactics = 'TA0001;TA0007'; $techniques = 'T1190;T1133'      }
+                        'AttackPath' { $tactics = 'TA0008;TA0004'; $techniques = 'T1078;T1021'      }
+                        default      { $tactics = '';              $techniques = ''                 }
+                    }
+                }
+                $tmp2['MITRE_Tactics']    = $tactics
+                $tmp2['MITRE_Techniques'] = $techniques
+            } else {
+                if (-not $tmp2.Contains('MITRE_Tactics'))    { $tmp2['MITRE_Tactics']    = '' }
+                if (-not $tmp2.Contains('MITRE_Techniques')) { $tmp2['MITRE_Techniques'] = '' }
+            }
 
             if ($OutputPropertyOrder -and $OutputPropertyOrder.Count -gt 0) {
                 # STRICT mode -- when OutputPropertyOrder is declared, emit ONLY those

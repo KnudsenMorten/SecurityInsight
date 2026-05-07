@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.76
+## v2.2.77
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
 - release: SecurityInsight v2.2.76 - RA visible-noise fixes (placeholder/URLs/CVEs) (279fcba7)
 - release: SecurityInsight v2.2.75 - Send-SIRunHealthRow DCR collision guard (d67c9ceb)
 - release: SecurityInsight v2.2.74 - internal-vm launchers honor SI_UseStorageOAuth (0e77ae7d)
@@ -33,13 +34,40 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
 - release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
 - release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
-- release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.77 — RA: MITRE_Tactics / MITRE_Techniques inference
+
+`MITRE_Tactics` and `MITRE_Techniques` columns were always blank — YAMLs hadn't been hand-authored with MITRE coverage and the engine forced them to `''` as a fallback at `Invoke-RiskAnalysis.ps1:3486-3487`.
+
+Fix: when YAML doesn't pre-populate either column, the engine now infers a sensible default from `SecurityDomain + Subcategory + ConfigurationName`. Keyword regex first (specific), then SecurityDomain-level fallback. Coverage is intentionally broad — TA-tactic IDs + the most common technique IDs — so customers can still refine per-report in custom YAML and have those overrides win.
+
+Examples:
+
+| Trigger keywords | MITRE_Tactics | MITRE_Techniques |
+|---|---|---|
+| MFA / Conditional Access | TA0006 | T1078;T1110 |
+| Brute force / password spray | TA0006 | T1110;T1110.003 |
+| Privileged role / permanent role | TA0004;TA0003 | T1078;T1098.003 |
+| ServicePrincipal / app registration | TA0004;TA0003 | T1078.004;T1098.001 |
+| CVE / vulnerability / recommendation | TA0001 | T1190 |
+| Public IP / open port / exposure | TA0001;TA0007 | T1190;T1133 |
+| Lateral / logon-to / exploitable device | TA0008 | T1021;T1078 |
+| Attack path | TA0008;TA0004 | T1078;T1021 |
+| Data sensitivity / key vault | TA0009;TA0010 | T1213;T1530 |
+
+Domain fallbacks (when no keyword hits) cover Identity / Endpoint / Azure / PublicIp / AttackPath. The MITRE link harvester at line 3343-3353 then turns those IDs into `https://attack.mitre.org/...` URLs in MoreDetails — completing the loop.
+
+If a report's MITRE tagging looks wrong, set explicit `MITRE_Tactics` / `MITRE_Techniques` in your custom YAML for that report; engine treats existing values as authoritative and skips inference.
+
+This release does NOT touch: Identity Summary `RiskScoreTotal=0` rows (root cause is conceptual — non-privileged users without MFA in a "PrivilegedUser_NoMFA" report; report scoping needs a `where IsPrivileged == true` filter, deferred), missing `cmdbId` (root cause is data — customer KV/CMDB feed not populated for those PrimaryEntityIds; not an engine bug).
 
 ---
 

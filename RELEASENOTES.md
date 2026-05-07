@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.84
+## v2.2.85
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
 - release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
 - release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
 - release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
@@ -33,13 +34,61 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
 - release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
 - release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
-- release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.85 — RA: Defender-native MITRE plumbing + ComplianceTags expanded to 9 frameworks
+
+Two related changes shipped together; engine groundwork for v2.2.86's report-by-report YAML migration.
+
+### MITRE: read Defender-native fields when projected
+
+The MITRE inference (added v2.2.77) only worked on `SecurityDomain + Subcategory + ConfigurationName` keyword regex. But many reports query `AlertInfo` / `AlertEvidence` / `ExposureGraphEdges` which carry MITRE data **natively**:
+
+| Defender column | Format | Source tables |
+|---|---|---|
+| `Categories` | comma-separated tactic names ("Credential Access,Defense Evasion") | AlertInfo, AlertEvidence |
+| `AttackTechniques` | comma-separated `T####` IDs | AlertInfo, DeviceEvents |
+| `EdgeProperties.rawData.attackTechniqueIds` | JSON array of `T####` | ExposureGraphEdges |
+
+Engine now reads these columns when present on the row and prefers them over keyword inference. New resolution priority:
+
+1. YAML-projected `MITRE_Tactics` / `MITRE_Techniques` (already filled — wins)
+2. Defender native: `Categories` / `AlertCategories` / `MITRE_Categories` → mapped to `TA####` IDs via the static 14-tactic lookup baked into the engine
+3. Defender native: `AttackTechniques` / `MITRE_AttackTechniques` → kept as-is (already `T####`)
+4. Keyword regex (v2.2.77 inference)
+5. SecurityDomain-level fallback
+
+For v2.2.86 to actually wire this up, the 26 alert/EG-querying reports need a small KQL addition like:
+
+```kql
+| extend MITRE_Categories       = tostring(Categories)
+| extend MITRE_AttackTechniques = tostring(AttackTechniques)
+```
+
+…which will be the next commit. Until then the engine's groundwork is in but inference still drives most rows.
+
+### ComplianceTags: expanded to 9 frameworks
+
+Defender XDR doesn't ship a unified compliance-tag column, so this stays engine-side. Extended every keyword + domain-fallback entry with **HIPAA Security Rule, SOC 2 Trust Services, NIST CSF 2.0, NIS2 (EU), DORA (EU finance)** alongside the existing NIST 800-53 / ISO 27001 Annex A / CIS Controls / PCI DSS / GDPR coverage.
+
+Examples (each row in any RA Summary now shows ~6-9 framework anchors instead of ~3):
+
+| Trigger keywords | ComplianceTags (expanded) |
+|---|---|
+| MFA / Conditional Access | NIST 800-53 IA-2(1); NIST CSF PR.AA-3; ISO 27001 A.9.4.2; CIS 5.1; PCI DSS 8.4; HIPAA 164.312(a)(1); SOC 2 CC6.1; NIS2 Art.21(2)(d) |
+| CVE / vulnerability / patch | NIST 800-53 SI-2,RA-5; NIST CSF ID.RA-1,PR.IP-12; ISO 27001 A.12.6.1; CIS 7.1; PCI DSS 6.2; HIPAA 164.308(a)(1)(ii)(B); SOC 2 CC7.1; NIS2 Art.21(2)(e); DORA Art.10 |
+| Privileged role / permanent | NIST 800-53 AC-2,AC-5,AC-6; NIST CSF PR.AC-4; ISO 27001 A.9.2.3; CIS 5.4; SOC 2 CC6.2; NIS2 Art.21(2)(i); DORA Art.9 |
+| Public IP / open port / exposure | NIST 800-53 SC-7,CA-3; NIST CSF PR.AC-5; ISO 27001 A.13.1; CIS 12.1; PCI DSS 1.1; HIPAA 164.312(e)(1); SOC 2 CC6.6; NIS2 Art.21(2)(c) |
+| Data sensitivity / key vault | NIST 800-53 SC-12,SC-13,MP-2; NIST CSF PR.DS-1,PR.DS-5; ISO 27001 A.8.2,A.10.1; GDPR Art.32; PCI DSS 3; HIPAA 164.312(a)(2)(iv); SOC 2 CC6.7; DORA Art.9 |
+
+YAML-supplied tags still win; engine fills only when empty.
 
 ---
 

@@ -6993,6 +6993,15 @@ try {
     $domainRaw = @{ Endpoint = 0.0; Identity = 0.0; Azure = 0.0; PublicIP = 0.0 }
     $globalRaw = 0.0
     $sevCount  = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0 }
+    # Severity x Domain breakdown (each domain -> own sev tally) for the email
+    # mgmt summary table. Keep an Other bucket for rows whose SecurityDomain
+    # doesn't match the four canonical buckets so totals still reconcile.
+    $sevByDomain = @{
+        Endpoint = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
+        Identity = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
+        Azure    = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
+        PublicIP = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0; Total = 0 }
+    }
 
     foreach ($r in $rows) {
         $dom = ''
@@ -7009,13 +7018,18 @@ try {
 
         $sev = ''
         if ($r.PSObject.Properties['SecuritySeverity']) { $sev = [string]$r.SecuritySeverity }
-        switch -Regex ($sev) {
-            '^(?i)(critical|very high)$' { $sevCount['Critical']++; break }
-            '^(?i)high$'                 { $sevCount['High']++;     break }
-            '^(?i)medium-?high$'         { $sevCount['High']++;     break }
-            '^(?i)medium$'               { $sevCount['Medium']++;   break }
-            '^(?i)low$'                  { $sevCount['Low']++;      break }
-            default                      { $sevCount['Other']++ }
+        $sevBucket = switch -Regex ($sev) {
+            '^(?i)(critical|very high)$' { 'Critical'; break }
+            '^(?i)high$'                 { 'High';     break }
+            '^(?i)medium-?high$'         { 'High';     break }
+            '^(?i)medium$'               { 'Medium';   break }
+            '^(?i)low$'                  { 'Low';      break }
+            default                      { 'Other' }
+        }
+        $sevCount[$sevBucket]++
+        if ($sevByDomain.ContainsKey($dom)) {
+            $sevByDomain[$dom][$sevBucket]++
+            $sevByDomain[$dom]['Total']++
         }
     }
 
@@ -7044,6 +7058,7 @@ try {
         DomainScore  = $domainScore
         DomainRaw    = $domainRaw
         SevCount     = $sevCount
+        SevByDomain  = $sevByDomain
         TotalRows    = $rows.Count
     }
 
@@ -7197,8 +7212,24 @@ if ([bool]$global:Report_SendMail -eq $true) {
             GlobalScore = 0; RiskLevel = 'Unknown';
             DomainScore = @{ Endpoint=0; Identity=0; Azure=0; PublicIP=0 };
             SevCount    = @{ Critical=0; High=0; Medium=0; Low=0; Other=0 };
+            SevByDomain = @{
+                Endpoint = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+                Identity = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+                Azure    = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+                PublicIP = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+            }
             TotalRows   = (@($global:final).Count)
         }
+    }
+    if (-not $kpi.PSObject.Properties['SevByDomain']) {
+        # Older shape (pre-v2.2.93) -- back-fill empty so the email template
+        # doesn't NRE. Fresh runs always have SevByDomain populated.
+        $kpi | Add-Member -NotePropertyName SevByDomain -NotePropertyValue @{
+            Endpoint = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+            Identity = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+            Azure    = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+            PublicIP = @{ Critical=0; High=0; Medium=0; Low=0; Total=0 }
+        } -Force
     }
     $levelColor = switch ($kpi.RiskLevel) {
         'Critical' { '#7b1fa2' }
@@ -7242,6 +7273,37 @@ if ([bool]$global:Report_SendMail -eq $true) {
     $sev = $kpi.SevCount
     $rowsTotal = [int]$kpi.TotalRows
 
+    # ----- Severity x Domain breakdown table builder -----
+    # Row order: All (totals first as we read left-to-right), then per-domain.
+    # Columns: Domain | Total | Critical | High | Medium | Low
+    function _SevRow([string]$label, [hashtable]$d, [bool]$isTotalRow) {
+        $bg = if ($isTotalRow) { '#f3f5f8' } else { '#ffffff' }
+        $weight = if ($isTotalRow) { '600' } else { '500' }
+        return @"
+                <tr style="background:$bg;">
+                  <td style="padding:6px 10px;color:#1a3a5e;font-weight:$weight;border-top:1px solid #eef2f7;">$label</td>
+                  <td align="right" style="padding:6px 10px;color:#1a3a5e;font-weight:600;border-top:1px solid #eef2f7;">$($d['Total'])</td>
+                  <td align="right" style="padding:6px 10px;color:#c62828;font-weight:600;border-top:1px solid #eef2f7;">$($d['Critical'])</td>
+                  <td align="right" style="padding:6px 10px;color:#ef6c00;font-weight:600;border-top:1px solid #eef2f7;">$($d['High'])</td>
+                  <td align="right" style="padding:6px 10px;color:#f9a825;font-weight:600;border-top:1px solid #eef2f7;">$($d['Medium'])</td>
+                  <td align="right" style="padding:6px 10px;color:#2e7d32;font-weight:600;border-top:1px solid #eef2f7;">$($d['Low'])</td>
+                </tr>
+"@
+    }
+    $sbd = $kpi.SevByDomain
+    $allRow = @{
+        Total = $rowsTotal
+        Critical = [int]$sev['Critical']
+        High     = [int]$sev['High']
+        Medium   = [int]$sev['Medium']
+        Low      = [int]$sev['Low']
+    }
+    $sevTableRows = (_SevRow 'All' $allRow $true) +
+                    (_SevRow 'Endpoint'  $sbd['Endpoint'] $false) +
+                    (_SevRow 'Identity'  $sbd['Identity'] $false) +
+                    (_SevRow 'Azure'     $sbd['Azure']    $false) +
+                    (_SevRow 'Public IP' $sbd['PublicIP'] $false)
+
     $bodyHtml = @"
 <!DOCTYPE html>
 <html>
@@ -7268,18 +7330,26 @@ if ([bool]$global:Report_SendMail -eq $true) {
       <tr><td style="padding:24px 28px 8px 28px;">
         <table width="100%" cellpadding="0" cellspacing="0">
           <tr>
-            <td width="58%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;">
+            <td width="32%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;">
               <div style="font-size:12px;color:#5a6a7a;text-transform:uppercase;letter-spacing:.5px;">Global Risk Score</div>
               <div style="font-size:54px;font-weight:700;color:#1a3a5e;line-height:1;margin:6px 0 4px 0;">$($kpi.GlobalScore)<span style="font-size:22px;color:#8a99aa;font-weight:400;"> /100</span></div>
               <div style="display:inline-block;background:$levelColor;color:#ffffff;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600;letter-spacing:.5px;">$($kpi.RiskLevel.ToUpper())</div>
             </td>
-            <td width="42%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#333;">
-              <table cellpadding="3" cellspacing="0" style="font-size:13px;">
-                <tr><td style="color:#5a6a7a;">Total findings</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$rowsTotal</td></tr>
-                <tr><td style="color:#c62828;">Critical</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['Critical'])</td></tr>
-                <tr><td style="color:#ef6c00;">High</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['High'])</td></tr>
-                <tr><td style="color:#f9a825;">Medium</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['Medium'])</td></tr>
-                <tr><td style="color:#2e7d32;">Low</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['Low'])</td></tr>
+            <td width="68%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;font-size:12px;color:#333;padding-left:18px;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse;">
+                <thead>
+                  <tr style="background:#1a3a5e;color:#ffffff;">
+                    <th align="left"  style="padding:8px 10px;text-transform:uppercase;letter-spacing:.5px;font-size:11px;font-weight:600;">Domain</th>
+                    <th align="right" style="padding:8px 10px;text-transform:uppercase;letter-spacing:.5px;font-size:11px;font-weight:600;">Total</th>
+                    <th align="right" style="padding:8px 10px;text-transform:uppercase;letter-spacing:.5px;font-size:11px;font-weight:600;">Critical</th>
+                    <th align="right" style="padding:8px 10px;text-transform:uppercase;letter-spacing:.5px;font-size:11px;font-weight:600;">High</th>
+                    <th align="right" style="padding:8px 10px;text-transform:uppercase;letter-spacing:.5px;font-size:11px;font-weight:600;">Medium</th>
+                    <th align="right" style="padding:8px 10px;text-transform:uppercase;letter-spacing:.5px;font-size:11px;font-weight:600;">Low</th>
+                  </tr>
+                </thead>
+                <tbody>
+$sevTableRows
+                </tbody>
               </table>
             </td>
           </tr>

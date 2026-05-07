@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.100
+## v2.2.101
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.101 - README intro: hook-led + full provider list (ca2c2170)
 - release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
 - release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
 - release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.74 - internal-vm launchers honor SI_UseStorageOAuth (0e77ae7d)
 - release: SecurityInsight v2.2.73 - asset-tagging idempotent framework init (4ea70e43)
 - release: SecurityInsight v2.2.72 - asset-tagging rename + RA fixes (a2727e42)
-- release: SecurityInsight v2.2.71 - RA \$laDceRg resolution honors \$global:SI_DceResourceGroup (was hardcoded rg-dce-securityinsight fallback) (58d5e600)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.101 — README: hook-led intro + full provider list
+
+Replaced the headline paragraph with a hook-led version: leads with "Rethink Secure Score into a risk-based score", names the full telemetry stack (MDE+XDR / MDI / Exposure Graph / Entra / on-prem AD / Azure Resource Graph / Shodan), keeps the "fix what an attacker would reach for first" hook, and closes with the asset-profiling engine + ready-to-use reports + executive summary + zero-footprint promises. Free / MVP-built / community-driven trails the value statement instead of leading it.
 
 ---
 

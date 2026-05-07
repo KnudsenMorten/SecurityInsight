@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.82
+## v2.2.83
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
 - release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
 - release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
 - release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
 - release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
 - release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
-- release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.83 — RA: ComplianceTags inference (paired with v2.2.77 MITRE inference)
+
+`ComplianceTags` was always empty for the same reason `MITRE_Tactics`/`Techniques` were before v2.2.77 — YAML reports never hand-authored the values, and the engine forced `''` as the fallback at `Invoke-RiskAnalysis.ps1:3549`.
+
+Same approach as the MITRE inference: derive from `SecurityDomain + Subcategory + ConfigurationName` when YAML didn't pre-populate. Keyword-first (specific framework references), domain-fallback when no keyword hits.
+
+| Trigger keywords | ComplianceTags |
+|---|---|
+| MFA / Conditional Access | NIST 800-53 IA-2(1); ISO 27001 A.9.4.2; CIS 5.1; PCI DSS 8.4 |
+| Brute force / password spray | NIST 800-53 AC-7; ISO 27001 A.9.4.2; CIS 5.2 |
+| Privileged role / permanent | NIST 800-53 AC-2,AC-5,AC-6; ISO 27001 A.9.2.3; CIS 5.4 |
+| Stale account / departed / guest | NIST 800-53 AC-2(2),AC-2(3); ISO 27001 A.9.2.5; CIS 5.3 |
+| ServicePrincipal / app registration | NIST 800-53 IA-3; ISO 27001 A.9.4.5; CIS 5.5 |
+| CVE / vulnerability / patch | NIST 800-53 SI-2,RA-5; ISO 27001 A.12.6.1; CIS 7.1; PCI DSS 6.2 |
+| Public IP / open port / exposure | NIST 800-53 SC-7,CA-3; ISO 27001 A.13.1; CIS 12.1; PCI DSS 1.1 |
+| Lateral / logon-to / exploitable | NIST 800-53 SC-7(13),AC-4; ISO 27001 A.13.1.3; CIS 12.4 |
+| Data sensitivity / key vault | NIST 800-53 SC-12,SC-13,MP-2; ISO 27001 A.8.2,A.10.1; GDPR Art.32; PCI DSS 3 |
+| Firewall / Defender | NIST 800-53 SC-7,SI-3; ISO 27001 A.13.1.1; CIS 9.2 |
+| TLS / encryption | NIST 800-53 SC-8,SC-13; ISO 27001 A.10.1; PCI DSS 4 |
+
+Domain fallbacks (when no keyword hits) cover Identity / Endpoint / Azure / PublicIp / AttackPath. YAML-supplied tags still win — engine only fills when the column is empty.
+
+Customers wanting a different framework set (HIPAA, SOC 2, NIS2, DORA) can either author per-report `ComplianceTags` in custom YAML, or open an issue with the framework controls they want bolted on.
 
 ---
 

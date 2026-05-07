@@ -107,6 +107,35 @@ function Send-SIRunHealthRow {
             -AzLogDcrTableCreateFromAnyMachine          $true `
             -AzLogDcrTableCreateFromReferenceMachine    @() 4>$null
 
+        # Re-sync the DCE/DCR cache so a freshly-created DCR's immutableId is in
+        # $global:AzDcrDetails before Post-* runs its name-only lookup. Without
+        # this, AzLogDcrIngestPS falls back to the DCE's location field as a
+        # bogus immutableId -> 404 'westeurope' from the Log Ingestion API.
+        # Same pattern as Invoke-Output.ps1 (v2.2.65) and Invoke-RiskAnalysis.ps1.
+        try {
+            $ensureFn = Get-Command -Name 'Ensure-SecurityInsightAzDceDcrCache' -ErrorAction SilentlyContinue
+            if ($ensureFn) {
+                & $ensureFn `
+                    @authParams `
+                    -SubscriptionId   $global:SI_AzSubscriptionId `
+                    -DceResourceGroup $global:SI_DceResourceGroup `
+                    -DcrResourceGroup $global:SI_DcrResourceGroup `
+                    -Force 4>$null
+            }
+        } catch { }
+
+        # DCR collision guard: when one SPN sees DCRs of the same name in
+        # multiple subs/RGs, the module's name-only lookup picks one at random.
+        # Filter $global:AzDcrDetails down to the (sub + RG + name) match
+        # before Post-* runs its lookup.
+        if ($global:AzDcrDetails -and $dcrName -and $global:SI_AzSubscriptionId -and $global:SI_DcrResourceGroup) {
+            $_picked = @($global:AzDcrDetails | Where-Object {
+                $_.name -eq $dcrName -and
+                $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DcrResourceGroup)/*"
+            }) | Select-Object -First 1
+            if ($_picked) { $global:AzDcrDetails = @($_picked) }
+        }
+
         $data = @($row)
         $data = ValidateFix-AzLogAnalyticsTableSchemaColumnNames -Data $data 4>$null
         $data = Build-DataArrayToAlignWithSchema -Data $data 4>$null

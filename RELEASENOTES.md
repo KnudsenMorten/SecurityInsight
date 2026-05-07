@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.74
+## v2.2.75
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.75 - Send-SIRunHealthRow DCR collision guard (d67c9ceb)
 - release: SecurityInsight v2.2.74 - internal-vm launchers honor SI_UseStorageOAuth (0e77ae7d)
 - release: SecurityInsight v2.2.73 - asset-tagging idempotent framework init (4ea70e43)
 - release: SecurityInsight v2.2.72 - asset-tagging rename + RA fixes (a2727e42)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
 - release: SecurityInsight v2.2.47 - DCE picker correlates by sub + RG + name (not just name) (d491d8d0)
 - release: SecurityInsight v2.2.46 - fix v2.2.42 DCR diagnostic showing wrong DCE + new SI_SkipDcrAutoCreate opt-out (30bd8d85)
-- release: SecurityInsight v2.2.45 - skip kustoSets KQL for rules whose osPlatformScope can't match any loaded asset (134ce3ce)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.75 — Send-SIRunHealthRow: DCR collision guard + cache prefetch
+
+The `Send-SIRunHealthRow.ps1` heartbeat helper called `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` directly without:
+
+1. Re-syncing `$global:AzDcrDetails` after `CheckCreateUpdate-TableDcr-Structure` provisioned a fresh DCR (the new DCR's immutableId wasn't in the cache yet).
+2. The DCR collision guard (filter `$global:AzDcrDetails` to the strict `name + sub + RG` match) that the v2.2.65 fix added to `Invoke-Output.ps1` and `Invoke-RiskAnalysis.ps1`.
+
+Result: AzLogDcrIngestPS's name-only DCR lookup fell back to the DCE's `location` field as the immutableId, and the Log Ingestion API rejected the heartbeat with:
+
+```
+Log Ingestion API request failed. HTTP Status: 404 Response: {"error":{"code":"NotFound",
+"message":"Data collection rule with immutable Id 'westeurope' not found."}}
+```
+
+Fix: add the cache-prefetch (`Ensure-SecurityInsightAzDceDcrCache -Force`) and the DCR collision guard (filter to sub + RG) before `Post-*`. Same pattern Invoke-Output.ps1 has been running since v2.2.65. RunHealth telemetry was already best-effort (try/catch swallows + Write-Verbose), but the noisy 404 appearing as the FIRST line of every RA run was misleading.
 
 ---
 

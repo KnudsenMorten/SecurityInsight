@@ -6987,8 +6987,15 @@ Rules:
 $global:RA_KPI = $null
 try {
     $rows = if ($null -ne $global:final) { @($global:final) } else { @() }
-    $domainCeiling = if ($null -ne $global:SI_RiskReport_DomainCeiling -and [double]$global:SI_RiskReport_DomainCeiling -gt 0) { [double]$global:SI_RiskReport_DomainCeiling } else { 1000.0 }
-    $globalCeiling = if ($null -ne $global:SI_RiskReport_GlobalCeiling -and [double]$global:SI_RiskReport_GlobalCeiling -gt 0) { [double]$global:SI_RiskReport_GlobalCeiling } else { 500.0 }
+    # Defaults tuned 2026-05-07: prior values (1000 / 500) saturated at 100 with
+    # only ~200 findings on a small internal lab. New defaults (2500 / 1000)
+    # give a graduated curve: ~200 findings on Tier 0 lands around 50 (Elevated),
+    # ~1000 findings lands in High/Critical territory. Customers can still
+    # override via $global:SI_RiskReport_DomainCeiling / _GlobalCeiling for
+    # very large or very small environments. The [SCORE-RAW] log line below
+    # surfaces the raw sums so operators can pick informed ceilings.
+    $domainCeiling = if ($null -ne $global:SI_RiskReport_DomainCeiling -and [double]$global:SI_RiskReport_DomainCeiling -gt 0) { [double]$global:SI_RiskReport_DomainCeiling } else { 2500.0 }
+    $globalCeiling = if ($null -ne $global:SI_RiskReport_GlobalCeiling -and [double]$global:SI_RiskReport_GlobalCeiling -gt 0) { [double]$global:SI_RiskReport_GlobalCeiling } else { 1000.0 }
 
     $domainRaw = @{ Endpoint = 0.0; Identity = 0.0; Azure = 0.0; PublicIP = 0.0 }
     $globalRaw = 0.0
@@ -7065,6 +7072,14 @@ try {
     Write-Info ("[SCORE] Global={0} ({1}) Endpoint={2} Identity={3} Azure={4} PublicIP={5} | Sev: C={6} H={7} M={8} L={9} | Rows={10}" -f `
         $globalScore, $riskLevel, $domainScore['Endpoint'], $domainScore['Identity'], $domainScore['Azure'], $domainScore['PublicIP'], `
         $sevCount['Critical'], $sevCount['High'], $sevCount['Medium'], $sevCount['Low'], $rows.Count)
+    # Surface raw sums + ceilings used so operators can decide whether the score
+    # makes sense for their environment and tune ceilings accordingly. Score
+    # math: score_0_100 = min(100, round(raw / ceiling * 100)).
+    Write-Info ("[SCORE-RAW] GlobalRaw={0} / GlobalCeiling={1} | EndpointRaw={2} IdentityRaw={3} AzureRaw={4} PublicIPRaw={5} / DomainCeiling={6}" -f `
+        ([Math]::Round($globalRaw, 1)), $globalCeiling, `
+        ([Math]::Round($domainRaw['Endpoint'], 1)), ([Math]::Round($domainRaw['Identity'], 1)), `
+        ([Math]::Round($domainRaw['Azure'], 1)), ([Math]::Round($domainRaw['PublicIP'], 1)), `
+        $domainCeiling)
 } catch {
     Write-Warn2 ("KPI rollup failed: {0} (continuing -- mail will degrade gracefully)" -f $_.Exception.Message)
 }

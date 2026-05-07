@@ -90,6 +90,17 @@
            font-size: 14px; }
   .err { background: #fdecea; border: 1px solid var(--c-high); color: var(--c-high);
          padding: 12px; border-radius: 4px; font-size: 13px; }
+  .preset-btn { font: inherit; font-size: 11px; padding: 4px 8px;
+                border: 1px solid var(--c-border); border-radius: 3px;
+                background: #f8fafc; color: var(--c-primary); cursor: pointer; }
+  .preset-btn:hover { background: var(--c-primary-2); color: #fff; border-color: var(--c-primary-2); }
+  /* Stop ag-Grid headers from truncating: header text wraps to a second line */
+  .ag-header-cell-label .ag-header-cell-text {
+      white-space: normal !important;
+      overflow: visible !important;
+      text-overflow: clip !important;
+      line-height: 1.2;
+  }
 </style>
 </head>
 <body>
@@ -117,6 +128,20 @@
   <select id="sel-tier"><option value="">All</option></select>
 
   <input id="search" type="text" placeholder="Search every column..." style="margin-left:auto;">
+
+  <div style="position:relative;">
+    <button id="btn-cols" type="button" style="font:inherit;font-size:13px;padding:6px 12px;border:1px solid var(--c-border);border-radius:4px;background:#fff;color:var(--c-primary);cursor:pointer;">Columns &#9662;</button>
+    <div id="col-pop" style="display:none;position:absolute;top:36px;right:0;z-index:50;background:#fff;border:1px solid var(--c-border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.08);padding:10px 8px;min-width:280px;max-height:60vh;overflow:auto;">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;border-bottom:1px solid var(--c-border);padding-bottom:8px;">
+        <button data-preset="issue"   type="button" class="preset-btn">Issue focus</button>
+        <button data-preset="score"   type="button" class="preset-btn">Score focus</button>
+        <button data-preset="compact" type="button" class="preset-btn">Compact</button>
+        <button data-preset="all"     type="button" class="preset-btn">All</button>
+      </div>
+      <div id="col-list"></div>
+    </div>
+  </div>
+
   <span class="pill" id="pill-result">0 / 0</span>
 </div>
 
@@ -199,8 +224,10 @@ function computeKPI(rows) {
         if (dom in domainRaw) domainRaw[dom] += dKpi;
         globalRaw += gKpi;
     });
-    const domainCeiling = 1000;
-    const globalCeiling = 500;
+    // MUST match engine defaults in Invoke-RiskAnalysis.ps1 -- otherwise the
+    // viewer's KPI strip disagrees with the email + log [SCORE] line.
+    const domainCeiling = 2500;
+    const globalCeiling = 1000;
     const norm = (raw, ceil) => Math.min(100, Math.max(0, Math.round((raw / ceil) * 100)));
     const result = {
         global: norm(globalRaw, globalCeiling),
@@ -228,65 +255,149 @@ function renderKPI(rows) {
 }
 
 // ---------- column config ----------
+// Per-column overrides (label, width, filter type, default visibility).
+// Order in this list = column order in the grid.
+// 'show: false' = hidden by default; user can re-enable via the "Columns" menu.
+//
+// Priority: ISSUE + WHERE first (what's wrong, on which assets), then numeric
+// scoring, then references / metadata last. Operators triage faster when the
+// "what + where" reads first; the score columns answer "how bad" once they've
+// found the row of interest.
+const COLUMN_DEFS = [
+    // ----- Issue + Where (primary triage view) -----
+    { f: 'SecurityDomain',         h: 'Domain',         w: 100, type: 'text' },
+    { f: 'Category',               h: 'Category',       w: 130, type: 'text' },
+    { f: 'Subcategory',            h: 'Subcategory',    w: 140, type: 'text' },
+    { f: 'SecuritySeverity',       h: 'Severity',       w: 110, type: 'text' },
+    { f: 'CriticalityTier',        h: 'Tier',           w: 70,  type: 'num',  align: 'center' },
+    { f: 'ConfigurationName',      h: 'Configuration / Issue', w: 280, type: 'text' },
+    { f: 'ConfigId',               h: 'ConfigId',       w: 110, type: 'text' },
+    { f: 'AssetName',              h: 'Asset (primary)', w: 200, type: 'text' },
+    { f: 'AssetType',              h: 'Asset type',     w: 120, type: 'text' },
+    { f: 'ImpactedAssetsList',     h: 'Impacted assets', w: 320, type: 'text' },
+    { f: 'IssueList',              h: 'Issues',         w: 280, type: 'text', show: false },
+    { f: 'AssetCount',             h: 'Assets',         w: 80,  type: 'num',  align: 'right' },
+    { f: 'TotalIssuesImpactedAssets', h: 'Issues',      w: 80,  type: 'num',  align: 'right' },
+    // ----- Score (secondary) -----
+    { f: 'RiskScoreKPI',           h: 'KPI',            w: 75,  type: 'num',  align: 'right' },
+    { f: 'RiskScoreDomainKPI',     h: 'Domain KPI',     w: 95,  type: 'num',  align: 'right' },
+    { f: 'RiskScoreTotal',         h: 'RiskScore',      w: 95,  type: 'num',  align: 'right' },
+    { f: 'RiskScoreTotal_Weighted', h: 'Weighted',      w: 95,  type: 'num',  align: 'right', show: false },
+    { f: 'RiskFactor_Consequence', h: 'Consequence',    w: 110, type: 'num',  align: 'right', show: false },
+    { f: 'RiskFactor_Probability', h: 'Probability',    w: 110, type: 'num',  align: 'right', show: false },
+    { f: 'RiskScore_Weight_Factor', h: 'Weight',        w: 80,  type: 'num',  align: 'right', show: false },
+    // ----- References / metadata -----
+    { f: 'ComplianceTags',         h: 'Compliance',     w: 160, type: 'text', show: false },
+    { f: 'MITRE_Tactics',          h: 'MITRE tactics',  w: 140, type: 'text', show: false },
+    { f: 'MITRE_Techniques',       h: 'MITRE techniques', w: 160, type: 'text', show: false },
+    { f: 'Recommendation',         h: 'Recommendation', w: 280, type: 'text', show: false },
+    { f: 'MoreDetails',            h: 'Links',          w: 80,  type: 'text' },
+    { f: 'EvidenceURL',            h: 'Evidence',       w: 90,  type: 'text', show: false },
+    { f: 'CollectionTime',         h: 'Collected',      w: 150, type: 'date', show: false }
+];
+
+function fmtJsonDate(v) {
+    // Engine emits .NET JSON dates like "/Date(1714986423000)/" -- show as ISO-ish.
+    if (v == null || v === '') return '';
+    const m = /^\/Date\((-?\d+)\)\/?$/.exec(String(v));
+    if (m) {
+        try { return new Date(Number(m[1])).toLocaleString(); } catch { return v; }
+    }
+    return v;
+}
+
 function buildColumns(rows) {
     if (!rows.length) return [];
-    // Use union of keys of first ~50 rows so mixed schemas don't lose columns
-    const keys = new Set();
-    rows.slice(0, 50).forEach(r => Object.keys(r).forEach(k => keys.add(k)));
-    // Stable ordering -- prioritize the most useful columns first
-    const priority = [
-        'SecurityDomain','Category','Subcategory','SecuritySeverity','CriticalityTier',
-        'AssetName','AssetType','AssetCount','TotalIssuesImpactedAssets',
-        'RiskScoreKPI','RiskScoreDomainKPI','RiskScoreTotal','RiskScoreTotal_Weighted',
-        'ConfigurationName','Recommendation','MoreDetails','ComplianceTags','MitreTactics',
-        'CollectionTime'
-    ];
-    const ordered = [];
-    priority.forEach(p => { if (keys.has(p)) { ordered.push(p); keys.delete(p); } });
-    Array.from(keys).sort().forEach(k => ordered.push(k));
+    const presentKeys = new Set();
+    rows.slice(0, 200).forEach(r => Object.keys(r).forEach(k => presentKeys.add(k)));
 
-    return ordered.map(k => {
-        const isNum = ['RiskScoreKPI','RiskScoreDomainKPI','RiskScoreTotal','RiskScoreTotal_Weighted',
-                       'AssetCount','TotalIssuesImpactedAssets','CriticalityTier'].includes(k);
+    // 1. Walk COLUMN_DEFS in order, emit only the columns that actually appear in the data.
+    const cols = [];
+    const seen = new Set();
+    COLUMN_DEFS.forEach(def => {
+        if (!presentKeys.has(def.f)) return;
+        seen.add(def.f);
+        const isNum  = (def.type === 'num');
+        const isDate = (def.type === 'date');
         const col = {
-            field: k,
-            headerName: k,
+            field: def.f,
+            headerName: def.h,
+            headerTooltip: def.f,
             sortable: true,
-            filter: isNum ? 'agNumberColumnFilter' : 'agTextColumnFilter',
+            filter: isNum ? 'agNumberColumnFilter' : (isDate ? 'agDateColumnFilter' : 'agTextColumnFilter'),
             resizable: true,
             enableRowGroup: true,
-            valueFormatter: isNum ? null : null
+            width: def.w,
+            minWidth: 60,
+            hide: (def.show === false),
+            cellStyle: def.align ? { textAlign: def.align } : null
         };
-        if (k === 'SecuritySeverity') {
+        // Severity color encoding (works in both light + dark themes)
+        if (def.f === 'SecuritySeverity') {
             col.cellStyle = (p) => {
                 const v = String(p.value || '').toLowerCase();
-                if (v.includes('critical') || v.includes('very high')) return { color:'#fff', background:'var(--c-crit)', fontWeight:600 };
-                if (v.includes('high'))   return { color:'#fff', background:'var(--c-high)', fontWeight:600 };
-                if (v.includes('medium')) return { color:'#fff', background:'var(--c-mod)' };
-                if (v.includes('low'))    return { color:'#fff', background:'var(--c-low)' };
-                return null;
+                if (v.includes('critical') || v.includes('very high')) return { color:'#fff', background:'var(--c-crit)', fontWeight:600, textAlign:'center' };
+                if (v.includes('high'))   return { color:'#fff', background:'var(--c-high)', fontWeight:600, textAlign:'center' };
+                if (v.includes('medium')) return { color:'#fff', background:'var(--c-mod)',  textAlign:'center' };
+                if (v.includes('low'))    return { color:'#fff', background:'var(--c-low)',  textAlign:'center' };
+                return { textAlign: 'center' };
             };
         }
-        if (k === 'CriticalityTier') {
+        if (def.f === 'CriticalityTier') {
             col.cellStyle = (p) => {
                 const v = Number(p.value);
-                if (v === 0) return { background:'#fdecea', color:'var(--c-high)', fontWeight:600 };
-                if (v === 1) return { background:'#fff4e5' };
-                return null;
+                const base = { textAlign: 'center', fontWeight: 600 };
+                if (v === 0) return Object.assign({}, base, { background:'#fdecea', color:'var(--c-high)' });
+                if (v === 1) return Object.assign({}, base, { background:'#fff4e5', color:'var(--c-elev)' });
+                if (v === 2) return Object.assign({}, base, { background:'#fffde7', color:'#7a5d00' });
+                if (v === 3) return Object.assign({}, base, { background:'#e8f5e9', color:'var(--c-low)' });
+                return base;
             };
         }
-        if (k === 'MoreDetails' || k === 'EvidenceURL') {
+        if (def.f === 'CollectionTime') {
+            col.valueFormatter = (p) => fmtJsonDate(p.value);
+        }
+        if (def.f === 'MoreDetails') {
+            col.cellRenderer = (p) => {
+                const v = String(p.value || '').trim();
+                if (!v) return '';
+                const urls = v.split(/\r?\n/).filter(s => /^https?:\/\//i.test(s.trim()));
+                if (!urls.length) return v;
+                return urls.map((u, i) =>
+                    '<a href="' + u.replace(/"/g,'&quot;') + '" target="_blank" rel="noopener" title="' + u.replace(/"/g,'&quot;') + '">link ' + (i+1) + '</a>'
+                ).join(' &middot; ');
+            };
+            col.tooltipValueGetter = (p) => p.value;
+        }
+        if (def.f === 'EvidenceURL') {
             col.cellRenderer = (p) => {
                 const v = String(p.value || '').trim();
                 if (!v) return '';
                 if (/^https?:\/\//i.test(v)) {
-                    return '<a href="' + v.replace(/"/g,'&quot;') + '" target="_blank" rel="noopener">link</a>';
+                    return '<a href="' + v.replace(/"/g,'&quot;') + '" target="_blank" rel="noopener">open</a>';
                 }
                 return v;
             };
         }
-        return col;
+        // Long-text columns: show full content in tooltip on hover
+        if (['ImpactedAssetsList','IssueList','Recommendation','ConfigurationName'].includes(def.f)) {
+            col.tooltipField = def.f;
+            col.cellStyle = Object.assign({ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, col.cellStyle || {});
+        }
+        cols.push(col);
     });
+
+    // 2. Append any remaining keys not in COLUMN_DEFS so nothing is silently lost,
+    //    hidden by default to keep the grid uncluttered.
+    Array.from(presentKeys).filter(k => !seen.has(k)).sort().forEach(k => {
+        cols.push({
+            field: k, headerName: k, headerTooltip: k,
+            sortable: true, resizable: true, enableRowGroup: true,
+            filter: 'agTextColumnFilter', minWidth: 100, width: 140,
+            hide: true
+        });
+    });
+    return cols;
 }
 
 // ---------- grid ----------
@@ -296,8 +407,11 @@ function ensureGrid(rows) {
         columnDefs: cols,
         rowData:    rows,
         animateRows: false,
+        // No flex:1 -- explicit per-column widths (set in COLUMN_DEFS) so
+        // headers don't truncate and important columns don't get squashed
+        // by less-important neighbors. Horizontal scroll is acceptable.
         defaultColDef: { sortable: true, filter: true, resizable: true, floatingFilter: true,
-                         minWidth: 100, flex: 1 },
+                         minWidth: 70 },
         rowGroupPanelShow: 'always',
         groupDisplayType: 'groupRows',
         suppressAggFuncInHeader: true,
@@ -313,7 +427,77 @@ function ensureGrid(rows) {
     const gridDiv = $('grid');
     gridDiv.innerHTML = '';
     gridApi = agGrid.createGrid(gridDiv, opts);
+    renderColumnPicker();
 }
+
+// ---------- column visibility picker ----------
+// Preset = which fields are ON by default. Anything else hidden.
+const PRESETS = {
+    'issue':   { label: 'Issue focus',  fields: ['SecurityDomain','Category','Subcategory','SecuritySeverity','CriticalityTier','ConfigurationName','ConfigId','AssetName','ImpactedAssetsList','AssetCount','TotalIssuesImpactedAssets','MoreDetails'] },
+    'score':   { label: 'Score focus',  fields: ['SecurityDomain','Category','SecuritySeverity','CriticalityTier','AssetName','ConfigurationName','RiskScoreKPI','RiskScoreDomainKPI','RiskScoreTotal','RiskScoreTotal_Weighted','RiskFactor_Consequence','RiskFactor_Probability'] },
+    'compact': { label: 'Compact',      fields: ['SecurityDomain','SecuritySeverity','CriticalityTier','AssetName','ConfigurationName','RiskScoreKPI'] },
+    'all':     { label: 'All columns',  fields: null /* sentinel: show everything */ }
+};
+
+function renderColumnPicker() {
+    if (!gridApi) return;
+    const allCols = gridApi.getColumns() || [];
+    const list = $('col-list');
+    list.innerHTML = '';
+    allCols.forEach(c => {
+        const def = c.getColDef();
+        const id = def.field;
+        if (!id) return;
+        const lbl = document.createElement('label');
+        lbl.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 6px;font-size:12px;color:#333;cursor:pointer;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = c.isVisible();
+        cb.addEventListener('change', () => {
+            gridApi.setColumnsVisible([id], cb.checked);
+        });
+        lbl.appendChild(cb);
+        const span = document.createElement('span');
+        span.textContent = def.headerName + '  (' + id + ')';
+        lbl.appendChild(span);
+        list.appendChild(lbl);
+    });
+}
+
+function applyPreset(name) {
+    if (!gridApi) return;
+    const p = PRESETS[name];
+    if (!p) return;
+    const allCols = gridApi.getColumns() || [];
+    if (p.fields === null) {
+        // 'all' -- show everything that has data
+        const ids = allCols.map(c => c.getColDef().field).filter(Boolean);
+        gridApi.setColumnsVisible(ids, true);
+    } else {
+        const showSet = new Set(p.fields);
+        const showIds = [];
+        const hideIds = [];
+        allCols.forEach(c => {
+            const f = c.getColDef().field;
+            if (!f) return;
+            (showSet.has(f) ? showIds : hideIds).push(f);
+        });
+        gridApi.setColumnsVisible(hideIds, false);
+        gridApi.setColumnsVisible(showIds, true);
+    }
+    renderColumnPicker();
+}
+
+// Toggle popover
+function toggleColumnPopover() {
+    const pop = $('col-pop');
+    pop.style.display = (pop.style.display === 'block') ? 'none' : 'block';
+}
+document.addEventListener('click', (e) => {
+    const pop = $('col-pop');
+    if (!pop) return;
+    if (!pop.contains(e.target) && e.target.id !== 'btn-cols') pop.style.display = 'none';
+});
 
 // ---------- pivot ----------
 let pivotRendered = false;
@@ -446,6 +630,10 @@ let searchTimer = null;
 $('search').addEventListener('input', () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(applyFilters, 150);
+});
+$('btn-cols').addEventListener('click', (e) => { e.stopPropagation(); toggleColumnPopover(); });
+document.querySelectorAll('.preset-btn').forEach(b => {
+    b.addEventListener('click', () => applyPreset(b.getAttribute('data-preset')));
 });
 
 // ---------- boot ----------

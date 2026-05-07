@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.94
+## v2.2.95
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.95 - Risk Score re-tuned + viewer column UX (554afe84)
 - release: SecurityInsight v2.2.94 - email: dark-mode tolerance + total at the bottom (7e38cd7a)
 - release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
 - release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.68 - AssetTagging v2.2 launcher + Ensure-Module copy (engine no longer fails on direct invocation) (9d017b0d)
 - release: SecurityInsight v2.2.67 - prestage also creates 'securityinsight' container (RA xlsx/json export target) (b5e05b9a)
 - release: SecurityInsight v2.2.66 - writeback SI_StorageKey whenever file lacks it (drop too-narrow \$saCreated gate) (2ee6036a)
-- release: SecurityInsight v2.2.65 - DCR collision guard (mirrors DCE one) fixes 404 'westeurope' from indexed-return shift (523bb0a3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.95 — Risk Score: re-tuned ceilings + raw-numbers log + viewer column UX
+
+**Score model re-tuned.** The prior defaults (`DomainCeiling=1000`, `GlobalCeiling=500`) saturated to 100/Critical with only ~125 endpoint findings on a small internal lab — that's not "Critical" for any real CISO conversation. Defaults bumped to:
+
+- `$global:SI_RiskReport_DomainCeiling = 2500`  (was 1000)
+- `$global:SI_RiskReport_GlobalCeiling = 1000`  (was 500)
+
+Same 11 Critical / 55 High scenario now lands around **Endpoint 40 (Elevated)** and **Global 50 (Elevated)** — defensible to leadership and leaves headroom for a real "Critical" event. Customers still tune via the `$global:SI_RiskReport_*` overrides.
+
+**New `[SCORE-RAW]` log line.** The engine now emits both the normalized scores and the raw sums + ceilings used so operators can see the math and pick informed ceilings:
+
+```
+[SCORE]     Global=50 (Elevated) Endpoint=40 Identity=23 Azure=12 PublicIP=0 | Sev: C=24 H=75 M=69 L=29 | Rows=197
+[SCORE-RAW] GlobalRaw=504 / GlobalCeiling=1000 | EndpointRaw=988 IdentityRaw=570 AzureRaw=310 PublicIPRaw=0 / DomainCeiling=2500
+```
+
+**What's still NOT in the score** (transparency, not a regression): `AssetCount` per row (the "1 finding affects 1000 machines" gap), recency, and exploitability signals. AssetCount weighting with `sqrt(min(N, 100))` is the next step.
+
+**Viewer column UX.** Operator feedback: the grid was hard to read because every column had `flex:1`, so headers truncated and the most-useful columns (issue + where) got squashed by less-useful neighbors. Rebuilt:
+
+- Column order is now **issue + where first, score after**: `Domain → Category → Subcategory → Severity → Tier → Configuration → ConfigId → Asset → AssetType → ImpactedAssets → AssetCount → Issues → KPI → DomainKPI → RiskScoreTotal → Compliance → MITRE → Recommendation → Links → CollectionTime`.
+- Explicit per-column widths (no more `flex:1`) so headers don't truncate and important columns stay readable. Horizontal scroll is acceptable.
+- Header text wraps to a second line instead of clipping with "...".
+- New **Columns** dropdown in the toolbar with checkboxes for every column + four presets: **Issue focus / Score focus / Compact / All**.
+- `CollectionTime` now formats `/Date(1714986423000)/` JSON dates as locale strings.
+- `MoreDetails` cell renders multi-line URL bundles as separate `link 1 · link 2 · link 3` anchors.
+- Long text columns (ImpactedAssets / IssueList / Recommendation / ConfigurationName) ellipsis with hover tooltip showing full content.
+- Severity / Tier cells use saturated bg + fg color pairs so the encoding survives client auto-invert.
 
 ---
 

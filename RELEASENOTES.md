@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.102
+## v2.2.104
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
+- release: SecurityInsight v2.2.103 - Setup Wizard skeleton + 3-step quick-start (ab8f4fb8)
 - release: SecurityInsight v2.2.102 - README: same provider-list rewrite for the second blurb (c2afe084)
 - release: SecurityInsight v2.2.101 - README intro: hook-led + full provider list (ca2c2170)
 - release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
@@ -32,14 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
 - release: SecurityInsight v2.2.76 - RA visible-noise fixes (placeholder/URLs/CVEs) (279fcba7)
 - release: SecurityInsight v2.2.75 - Send-SIRunHealthRow DCR collision guard (d67c9ceb)
-- release: SecurityInsight v2.2.74 - internal-vm launchers honor SI_UseStorageOAuth (0e77ae7d)
-- release: SecurityInsight v2.2.73 - asset-tagging idempotent framework init (4ea70e43)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.104 — README: move Quick Start under "How to Implement", fix stale 3.X labels
+
+The Three-step Quick Start section landed under § 3 ("What's supported") in v2.2.103 — wrong place; it's an implementation walkthrough so it belongs under § 4 ("How to Implement"). Fixed.
+
+- Moved the Quick Start block under § 4 as the new **§ 4.1 Three-step quick start (recommended)**.
+- All existing § 4 subsections were stale-labeled `3.X` from a prior refactor — renumbered to match the TOC: `3.1 → 4.2`, `3.2 → 4.3`, `3.3 → 4.4`, `3.4 → 4.5`, `3.5 → 4.6`, `3.6 → 4.7`, `3.7 → 4.8`, `3.8 → 4.9`, `3.9 → 4.10`, `3.10 → 4.11`, `3.11 → 4.12`. Nested `3.5.1..3.5.5` → `4.4.1..4.4.5`.
+- TOC entries renumbered to match. New TOC entry `4.1 [Three-step quick start (recommended)]` added.
+- Anchor `#41-three-step-quick-start-recommended` added; legacy anchor `#35-ten-step-newbie-setup` preserved so old deep-links still resolve.
+
+---
+
+## v2.2.103 — Setup Wizard: launcher skeleton + 3-step quick-start docs
+
+First piece of the end-to-end Setup Wizard build. Future tags `v2.2.104..v2.2.109` add the provisioner cmdlets and the Apply page; this tag lays the foundation.
+
+**What ships:**
+
+- **`setup\ConfigWizard\Start-SetupWizard.ps1`** — PowerShell HttpListener that hosts the existing Config Wizard HTML on `http://localhost:8766`, opens the browser, and exposes `/api/state`, `/api/validate-name`, `/api/apply`, `/api/log-stream` as stubs. Same architecture as the SI viewer at `viewer/Start-SIViewer.ps1`. Runs on PS 5.1 + 7.x, Windows 10 / 11 / Server, on-prem and Azure-hosted.
+- **`setup\ConfigWizard\ROADMAP.md`** — locked spec + per-tag delivery plan (`v2.2.103..v2.2.109`) for the Apply page automation: SPN auto-creation, cred type radio (secret / self-signed cert), cred storage (KV / local cert store / inline / Managed Identity), LA + DCE + DCRs + Storage with **RBAC-only** (no `SI_StorageKey` written to `custom.ps1`), and the optional toggles (SMTP / Azure OpenAI / Shodan / CMDB CSV / per-engine JSON sink).
+- **README rewrite** of § 3.5 — replaces the 10-step ladder with a **three-step quick start**: clone → run wizard → run engines. Step 1 default points at the **stable** branch (`main`, not `preview`); zip URL too.
+- **Doc-fix bonus** — Step 1 git/zip command lines use quoted args + `2>&1` redirect (matches what operators paste from corporate change-control templates) and `C:\SecurityInsightTest` as the example install path.
+
+**What does NOT yet work:** the Apply page itself. POST to `/api/apply` returns `501 Not Implemented` until `v2.2.107` lands the orchestration. Until then, run the Wizard's HTML pages to generate config snippets and follow Steps 4–7 of the README (`Bootstrap-Auth.ps1` + `Bootstrap-Storage.ps1` + per-engine `LauncherConfig.custom.ps1` copy) — same actions, just one script per phase instead of one wizard click.
 
 ---
 

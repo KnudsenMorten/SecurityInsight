@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.101
+## v2.2.102
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.102 - README: same provider-list rewrite for the second blurb (c2afe084)
 - release: SecurityInsight v2.2.101 - README intro: hook-led + full provider list (ca2c2170)
 - release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
 - release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.75 - Send-SIRunHealthRow DCR collision guard (d67c9ceb)
 - release: SecurityInsight v2.2.74 - internal-vm launchers honor SI_UseStorageOAuth (0e77ae7d)
 - release: SecurityInsight v2.2.73 - asset-tagging idempotent framework init (4ea70e43)
-- release: SecurityInsight v2.2.72 - asset-tagging rename + RA fixes (a2727e42)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.102 — README: same provider-list rewrite for the second blurb
+
+The second copy of the headline blurb (further down the page) said "add-on to Microsoft Defender" — replaced with the same expanded provider list (Defender, Entra ID, AD, Azure, ExposureGraph) so both intro paragraphs match.
 
 ---
 

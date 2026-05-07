@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.99
+## v2.2.100
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
 - release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
 - release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
 - release: SecurityInsight v2.2.97 - README: KPI bullet to last + add 2 mail screenshots (f7648270)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.73 - asset-tagging idempotent framework init (4ea70e43)
 - release: SecurityInsight v2.2.72 - asset-tagging rename + RA fixes (a2727e42)
 - release: SecurityInsight v2.2.71 - RA \$laDceRg resolution honors \$global:SI_DceResourceGroup (was hardcoded rg-dce-securityinsight fallback) (58d5e600)
-- release: SecurityInsight v2.2.70 - PublicIP cast AssetTier to [int] (InvalidTransformOutput String vs Int) (98afd0b5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.100 — README: rewrite the headline blurb (broaden scope, attribution at the end)
+
+Updated the top-of-page introductory paragraph. Old copy framed SecurityInsight as a Defender-only add-on and led with the MVP attribution; new copy:
+
+- Names every data provider (Defender, Entra ID, AD, Azure, ExposureGraph) so readers see the true integration scope on first glance
+- Adds Public IPs to the scored-domain list (matches the four engines that actually run)
+- Moves the MVP attribution to a closing sentence that also surfaces "open for community contributions"
 
 ---
 

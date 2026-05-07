@@ -3546,7 +3546,6 @@ function Calculate-RiskScore {
             # output when YAML's OutputPropertyOrder doesn't list them explicitly.
             if (-not $tmp2.Contains('MoreDetails'))                     { $tmp2['MoreDetails']                     = '' }
             if (-not $tmp2.Contains('RiskFactor_Consequence_Detailed')) { $tmp2['RiskFactor_Consequence_Detailed'] = '' }
-            if (-not $tmp2.Contains('ComplianceTags'))                  { $tmp2['ComplianceTags']                  = '' }
 
             # MITRE inference: when YAML didn't pre-populate MITRE_Tactics / MITRE_Techniques,
             # derive a sensible default from SecurityDomain + Subcategory + ConfigurationName.
@@ -3593,6 +3592,49 @@ function Calculate-RiskScore {
             } else {
                 if (-not $tmp2.Contains('MITRE_Tactics'))    { $tmp2['MITRE_Tactics']    = '' }
                 if (-not $tmp2.Contains('MITRE_Techniques')) { $tmp2['MITRE_Techniques'] = '' }
+            }
+
+            # ComplianceTags inference: when YAML didn't pre-populate, derive a sensible
+            # default from the same SecurityDomain + Subcategory + ConfigurationName blob.
+            # Lists the most common control framework anchors per finding type so customers
+            # can map to their compliance evidence pack. YAML overrides win when set.
+            $compTags = if ($tmp2.Contains('ComplianceTags')) { [string]$tmp2['ComplianceTags'] } else { '' }
+            if ([string]::IsNullOrWhiteSpace($compTags)) {
+                $secDomain  = if ($tmp2.Contains('SecurityDomain'))   { [string]$tmp2['SecurityDomain']   } else { '' }
+                $subcat     = if ($tmp2.Contains('Subcategory'))      { [string]$tmp2['Subcategory']      } else { '' }
+                $cfgName    = if ($tmp2.Contains('ConfigurationName')){ [string]$tmp2['ConfigurationName']} else { '' }
+                $blob       = ($secDomain + ' ' + $subcat + ' ' + $cfgName).ToLowerInvariant()
+
+                $tags = $null
+                switch -Regex ($blob) {
+                    'mfa|conditional access|multi.factor'                 { $tags = 'NIST 800-53 IA-2(1);ISO 27001 A.9.4.2;CIS 5.1;PCI DSS 8.4'; break }
+                    'brute.?force|password spray'                         { $tags = 'NIST 800-53 AC-7;ISO 27001 A.9.4.2;CIS 5.2'; break }
+                    'impossible travel|nontrusted location|risky.sign'    { $tags = 'NIST 800-53 AC-17;ISO 27001 A.9.4.2;CIS 6.5'; break }
+                    'permanent.*role|privileged.*role|never.*expire'      { $tags = 'NIST 800-53 AC-2,AC-5,AC-6;ISO 27001 A.9.2.3;CIS 5.4'; break }
+                    'shadow admin|nested.*group|stale.*group'             { $tags = 'NIST 800-53 AC-2;ISO 27001 A.9.2.5;CIS 5.4'; break }
+                    'guest|external user|departed|stale.*user|stale.*account' { $tags = 'NIST 800-53 AC-2(2),AC-2(3);ISO 27001 A.9.2.5,A.9.2.6;CIS 5.3'; break }
+                    'spn|service principal|app registration|mailbox'      { $tags = 'NIST 800-53 IA-3;ISO 27001 A.9.4.5;CIS 5.5'; break }
+                    'cve|vulnerab|recommendation|patch'                   { $tags = 'NIST 800-53 SI-2,RA-5;ISO 27001 A.12.6.1;CIS 7.1;PCI DSS 6.2'; break }
+                    'public.*ip|exposed|open port|public.*facing'         { $tags = 'NIST 800-53 SC-7,CA-3;ISO 27001 A.13.1;CIS 12.1;PCI DSS 1.1'; break }
+                    'lateral|exploitable.*device|logon.*to'               { $tags = 'NIST 800-53 SC-7(13),AC-4;ISO 27001 A.13.1.3;CIS 12.4'; break }
+                    'attack path'                                          { $tags = 'NIST 800-53 RA-3,SC-7;ISO 27001 A.12.6.1'; break }
+                    'data sensitivity|sensitive data|key vault'            { $tags = 'NIST 800-53 SC-12,SC-13,MP-2;ISO 27001 A.8.2,A.10.1;GDPR Art.32;PCI DSS 3'; break }
+                    'firewall|defender'                                    { $tags = 'NIST 800-53 SC-7,SI-3;ISO 27001 A.13.1.1;CIS 9.2'; break }
+                    'tls|encryption|unencrypted'                           { $tags = 'NIST 800-53 SC-8,SC-13;ISO 27001 A.10.1;PCI DSS 4'; break }
+                }
+                if ($null -eq $tags) {
+                    switch ($secDomain) {
+                        'Identity'   { $tags = 'NIST 800-53 AC-2,IA-2;ISO 27001 A.9' }
+                        'Endpoint'   { $tags = 'NIST 800-53 SI-2,SI-3;ISO 27001 A.12.6' }
+                        'Azure'      { $tags = 'NIST 800-53 AC-3,AC-6;ISO 27001 A.9.4' }
+                        'PublicIp'   { $tags = 'NIST 800-53 SC-7;ISO 27001 A.13.1' }
+                        'AttackPath' { $tags = 'NIST 800-53 RA-3,SC-7;ISO 27001 A.12.6' }
+                        default      { $tags = '' }
+                    }
+                }
+                $tmp2['ComplianceTags'] = $tags
+            } else {
+                if (-not $tmp2.Contains('ComplianceTags')) { $tmp2['ComplianceTags'] = '' }
             }
 
             if ($OutputPropertyOrder -and $OutputPropertyOrder.Count -gt 0) {

@@ -6462,7 +6462,13 @@ if ([bool]$global:BuildSummaryByAI) {
             $confName    = Get-RowValue -Row $r -Names @("ConfigurationName", "RecommendationName", "FindingName", "Title", "Name")
             $confId      = Get-RowValue -Row $r -Names @("ConfigurationId", "RecommendationId", "FindingId", "Id")
             $devices     = Get-RowValue -Row $r -Names @("Devices", "DeviceCount", "ImpactedDevices")
-            $assetsText  = Get-RowValue -Row $r -Names @("ImpactedAssets", "Assets", "AffectedAssets", "Machines")
+            # 'ImpactedAssetsList' is the canonical column name since v2.2.72; legacy
+            # 'ImpactedAssets' is now removed from Summary rows by the engine post-process,
+            # so the AI rollup MUST look at the canonical name first or every Identity/Azure
+            # Summary row falls through with empty $assetsText -> Add-AssetAgg returns early ->
+            # AI summary collapses to whatever rows still happen to carry a per-row AssetName
+            # (typically just one Endpoint asset).
+            $assetsText  = Get-RowValue -Row $r -Names @("ImpactedAssetsList", "ImpactedAssets", "Assets", "AffectedAssets", "Machines")
             # CMDB context (engine stamps these from CMDB.csv via cmdbId lookup at Reconcile).
             $cmdbId       = Get-RowValue -Row $r -Names @("cmdbId", "CmdbId")
             $cmdbName     = Get-RowValue -Row $r -Names @("cmdbName", "CmdbName")

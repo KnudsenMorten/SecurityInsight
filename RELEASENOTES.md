@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.77
+## v2.2.78
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
 - release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
 - release: SecurityInsight v2.2.76 - RA visible-noise fixes (placeholder/URLs/CVEs) (279fcba7)
 - release: SecurityInsight v2.2.75 - Send-SIRunHealthRow DCR collision guard (d67c9ceb)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
 - release: SecurityInsight v2.2.50 - drop SCOPE-MISMATCH false positive when DCE lives in a different RG by design (5bbde635)
 - release: SecurityInsight v2.2.49 - delete 13 unscoped workstation/IoT rules + scope TestSandboxServer (0b6b96f4)
-- release: SecurityInsight v2.2.48 - rebuild AzDceDetails + AzDcrDetails fresh on every ingest (canonical AzLogDcrIngestPS pattern) (64034b0e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.78 — RA AI summary collapsed to one asset (lookup chain stale post-v2.2.72 column rename)
+
+The AI summary email and Excel Summary sheet only listed ONE asset (the first endpoint that happened to have a per-row `AssetName` populated), even when Detailed had hundreds of rows across endpoint + identity + azure domains.
+
+Root cause: v2.2.72 unified `ImpactedAssets` → `ImpactedAssetsList` as the canonical column on Summary rows, then dropped `ImpactedAssets` from `tmp2`. The AI rollup at `Invoke-RiskAnalysis.ps1:6465` still read the legacy name only:
+
+```powershell
+$assetsText = Get-RowValue -Row $r -Names @("ImpactedAssets", "Assets", "AffectedAssets", "Machines")
+```
+
+For every Summary row whose only asset list lived in `ImpactedAssetsList`, `$assetsText` came back empty. `Resolve-AssetNamesForRow` then fell through to per-row `AssetName` — which on Summary rows is the engine's aggregate reconstruction, often empty for Identity / Azure. `Add-AssetAgg` returned early on empty Asset, the row was dropped from the per-asset rollup, and the AI got a one-asset universe.
+
+Fix: prepend `ImpactedAssetsList` to the lookup chain. Legacy `ImpactedAssets` stays for back-compat with any old YAMLs that still emit the singular name.
+
+Result: AI summary should now see the full asset population — Top 25 will list the actual top-25 ranked by `MaxRiskScore × RiskScoreTotal × Findings` instead of collapsing to one.
 
 ---
 

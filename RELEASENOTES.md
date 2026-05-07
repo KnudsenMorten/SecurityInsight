@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.85
+## v2.2.86
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
 - release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
 - release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
 - release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
 - release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
 - release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
-- release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.86 — Refresh sample xlsx + README pointers
+
+Two housekeeping items every release should carry:
+
+1. **Sample xlsx refreshed** — `engine/risk-analysis/_samples/Sample - RiskAnalysis_Detailed.xlsx` and `_Summary.xlsx` regenerated from the latest internal-env run. Each row now carries the v2.2.85 enrichment: AssetType-aware portal URLs, CVE → NVD links, MITRE_Tactics + MITRE_Techniques, ComplianceTags anchored to NIST 800-53 / NIST CSF 2.0 / ISO 27001 Annex A / CIS Controls v8 / PCI DSS 4.0 / HIPAA Security Rule / SOC 2 Trust Services / NIS2 / DORA. Replaces the legacy `_Bucket`-suffix samples.
+
+2. **README pointers updated** — sample-link table now points at `engine/risk-analysis/_samples/Sample - RiskAnalysis_*.xlsx` (the canonical v2.2.79+ path), with a note about what each xlsx demonstrates. Output-folder bullet in the file-tree section now mentions `output/` and the `SI_RiskAnalysis_OutputDir` override.
+
+This is the first release where samples will be refreshed automatically on every tag from now on. Bootstrap pulls from `KnudsenMorten/SecurityInsight` so customers see the latest sample artifacts straight from the public mirror.
 
 ---
 

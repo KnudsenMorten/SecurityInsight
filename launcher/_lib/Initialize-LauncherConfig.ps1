@@ -451,7 +451,12 @@ function Initialize-LauncherConfig {
                 # Initialize-PlatformAutomationFramework RETURNS the Context object;
                 # caller must assign it to $global:Context. (It also sets $global:HighPriv_*
                 # internally as a side effect, but Context itself is returned, not globalised.)
-                $global:Context = Initialize-PlatformAutomationFramework -ErrorAction Stop
+                # -IgnoreMissingSecrets: legacy on-prem creds (Azure-VM-LocalAdmin-*,
+                # Legacy-* zone creds) are optional for v2 cloud-only engines, so missing
+                # KV secrets shouldn't fire WARNING noise on every launcher start. Customers
+                # who need legacy creds opt in by setting them in KV; the engine still
+                # surfaces the failure via Write-Verbose for diagnostic runs.
+                $global:Context = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets -ErrorAction Stop
                 if ($global:Context) {
                     _CfgOk ("Context populated (CorrelationId={0})" -f $global:Context.CorrelationId)
                 } else {

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.86
+## v2.2.87
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
 - release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
 - release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
 - release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
 - release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
 - release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
-- release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.87 — RA: separate transient-platform errors from row-overflow; add re-auth + same-bucket retry
+
+**Customer-side fail observed 2026-05-07** (kv-evida-automation-p / AUTOSENTINEL01): a single Attack_Paths_Summary report escalated `64 → 128 → 256 → 512` buckets because every bucket hit `A task was canceled`. With ~15s per bucket × 512 buckets, that's **~2 hours JUST for one report**, blocking every other report queued behind it. The xlsx never produced.
+
+**Root cause**: `Test-IsBucketOverflowError` matched `"a task was canceled"` / `"timeout"` / `"timed out"` and treated them as "row-overflow → escalate buckets". But Defender Graph Hunting API also throws `TaskCanceledException` when:
+- An access token expired mid-run (long RA jobs commonly outlive 1h tokens)
+- Defender Graph backend hiccups (502/503/504, gateway timeout)
+- The SPN gets throttled
+
+In all those cases, **escalating bucket count makes things worse** (more buckets = more API calls = more throttle = more cancels = more escalation = death spiral).
+
+**Fix**:
+
+1. Split classifiers — `Test-IsBucketOverflowError` now only matches TRUE overflow signals (`exceeded the allowed result size`, `too many`, `request entity too large`, `payload too large`, `result limit`). New `Test-IsTransientPlatformError` covers `task was canceled` / `timeout` / `429`/`503`/`502`/`504` / `service unavailable` / `bad gateway` / `gateway timeout` / `InvalidAuthenticationToken` / `401` / `unauthorized`.
+2. Outer bucket-loop catch handles each class differently:
+   - **TRUE overflow** → escalate bucket count (existing behavior, 1→2→4→8→16→…→`$global:AutoBucketMax`).
+   - **Transient platform** → sleep with exponential backoff (30s, 60s, 120s), **re-auth BOTH Graph (`Connect-GraphHighPriv`) AND Azure (`Connect-AzAccount`)**, retry SAME bucket. Default 3 outer retries; tunable via `$global:SI_BucketTransientRetries`.
+   - **Other** → log + skip the bucket (existing behavior, no escalation).
+
+The Az re-auth uses your existing `$global:SpnClientId` / `SpnClientSecret` / `SpnTenantId` (or `SpnCertificateThumbprint` if configured). If the reconnect itself fails, engine logs a non-fatal warning and the bucket continues with whatever Graph creds it has.
+
+**What you'll see in logs now** when a token expires mid-run or Defender hiccups:
+
+```
+[WARN] bucket 49/64: transient platform error (likely token expiry / 503 / throttle).
+       Re-auth + retry attempt 1/3 after 30s. Error: A task was canceled.
+... (re-auths Graph + Az) ...
+[INFO] bucket 49/64: running query (auto-routed: ...)
+[INFO] hunting query bucket 49/64 completed in 14,28s
+[INFO] bucket 49/64: 142 rows
+```
+
+…instead of escalating into 128/256/512 buckets and burning hours.
+
+Knobs (`SecurityInsight.custom.ps1`):
+- `$global:SI_BucketTransientRetries = 3` — how many re-auth+retry cycles before giving up the bucket
+- `$global:GraphReconnectMaxAgeMinutes = 45` (existing) — proactive Graph reconnect cadence
+- `$global:GraphQueryMaxRetries = 4` (existing) — inner per-call retries inside `Invoke-GraphHuntingQuery`
 
 ---
 

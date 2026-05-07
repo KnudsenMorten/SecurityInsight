@@ -59,7 +59,7 @@ if (-not (Test-Path -LiteralPath $indexHtml)) {
 }
 
 if (-not $OutputDir) {
-    # Walk up from the tools/viewer folder to find the SI solution root, then
+    # Walk up from the viewer folder to find the SI solution root, then
     # default to <solution>/output/.
     $candidate = $scriptDir
     while ($candidate -and -not (Test-Path -LiteralPath (Join-Path $candidate 'VERSION'))) {

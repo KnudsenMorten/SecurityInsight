@@ -3305,11 +3305,19 @@ function Calculate-RiskScore {
                 }
             }
         } else {
-            # Preserve YAML-populated MoreDetails verbatim as the first lines (split on
-            # the legacy "; " separator if it's there, so it stacks as line-per-URL too).
+            # Preserve YAML-populated MoreDetails as line-per-URL. Some vuln reports
+            # build entries like 'CVE-2026-33824 => https://nvd.nist.gov/vuln/detail/CVE-2026-33824'
+            # in KQL via strcat. Strip the 'CVE-XXX => ' / generic 'label => ' prefix so the
+            # cell is clickable URLs only, matching the harvested-side format. Each CVE
+            # becomes its own line (line-break separator added when joined later).
             foreach ($piece in ($existingMd -split '\s*;\s*')) {
                 $pTrim = $piece.Trim()
-                if (-not [string]::IsNullOrWhiteSpace($pTrim)) { [void]$mdLines.Add($pTrim) }
+                if ([string]::IsNullOrWhiteSpace($pTrim)) { continue }
+                # If the entry contains '=> https://...', keep only the URL portion.
+                if ($pTrim -match '^.*?=>\s*(https?://\S+)\s*$') {
+                    $pTrim = $matches[1].Trim()
+                }
+                [void]$mdLines.Add($pTrim)
             }
         }
 

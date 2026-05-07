@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.83
+## v2.2.84
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
 - release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
 - release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
 - release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.57 - writeback SI_StorageKey to custom.ps1 ONLY on first-create of storage account (b2f8c573)
 - release: SecurityInsight v2.2.56 - prestage persists auto-fetched SI_StorageKey back to custom.ps1 for cold-start runs (698555e6)
 - release: SecurityInsight v2.2.55 - prestage moved from Stage 8 to engine entry; fixes greenfield SI_StorageKey chicken-and-egg (5ce8b43f)
-- release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.84 — RA Summary MoreDetails: strip 'CVE-XXX => ' prefix on YAML-supplied URLs
+
+Several vulnerability YAMLs build MoreDetails entries in KQL with the format `CVE-2026-33824 => https://nvd.nist.gov/vuln/detail/CVE-2026-33824` (semicolon-separated when multiple CVEs roll up into one Summary row). The engine's YAML-passthrough path preserved the `CVE-XXX => ` label prefix verbatim, while the auto-harvested Detailed side emitted clean URLs only. Two different shapes for the same data.
+
+Fix: in the YAML-passthrough split (`Invoke-RiskAnalysis.ps1:3308`), if an entry matches `^.*?=> https?://...$`, keep only the URL portion. Each CVE keeps its own line (the existing `\r\n` join after dedup gives one URL per line in the Excel cell).
+
+Result: Summary MoreDetails now formats consistently with Detailed — clickable URLs only, one per line, no `CVE-XXX =>` prefix.
+
+YAMLs that already emit URL-only entries are unaffected (regex doesn't match if there's no `=>`).
 
 ---
 

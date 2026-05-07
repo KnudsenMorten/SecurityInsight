@@ -1,0 +1,134 @@
+name: Bug report
+description: Something in SecurityInsight isn't working as expected.
+title: "[Bug] "
+labels: ["type: bug", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug. Please fill out as much as you can — it helps a lot with triage.
+        For **security vulnerabilities** (credential exposure, exploitable bugs), do NOT open a public issue — use [Security Advisories](https://github.com/KnudsenMorten/SecurityInsight/security/advisories/new) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: SecurityInsight version
+      description: From the `VERSION` file or the email footer (`Build vX.X.XX`).
+      placeholder: e.g. "v2.2.96"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      description: Top-level area. The issue gets an `area:*` label automatically.
+      options:
+        - "area: asset-profiling"
+        - "area: risk-analysis"
+        - "area: email-summary"
+        - "area: viewer"
+        - "area: power-bi"
+        - "area: workbook"
+        - "area: setup"
+        - "area: launcher"
+        - "area: detection-rules"
+        - "area: asset-tagging"
+        - "area: docs"
+        - "area: other"
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: subcomponent
+    attributes:
+      label: Sub-component
+      description: Specific engine / domain (only relevant for asset-profiling and risk-analysis areas).
+      options:
+        - "n/a"
+        - "Endpoint"
+        - "Identity"
+        - "Azure"
+        - "PublicIP (Shodan)"
+        - "Cross-domain / multiple"
+      default: 0
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include error message text if any. Redact tenant IDs / asset names you don't want public.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Numbered list. What does someone need to do to see the same behavior?
+      placeholder: |
+        1. Run `.\launcher\risk-analysis\launcher.internal-vm.ps1`
+        2. Open the latest `RiskAnalysis_Detailed.xlsx` in `output/`
+        3. Observe `<column X>` is empty / wrong / missing
+    validations:
+      required: true
+
+  - type: input
+    id: report
+    attributes:
+      label: If a specific RA report is affected — its name
+      placeholder: e.g. "Identity_PrivilegedUser_NoMFA_Detailed"
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: PowerShell version, OS, host mode (VM / Container Apps), Defender / Entra licensing.
+      placeholder: |
+        PowerShell: 5.1
+        OS: Windows Server 2022
+        Host: VM (internal-vm launcher)
+        Defender: XDR + advanced hunting
+    validations:
+      required: false
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "P1 — engine fails / no output produced"
+        - "P2 — wrong/missing data in a specific report"
+        - "P3 — cosmetic / docs / minor"
+      default: 1
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines (optional)
+      description: Paste from `logs/risk-analysis_*.log` — last ~50 lines around the error. Redact secrets.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Hypotheses, related issues, screenshots.
+    validations:
+      required: false

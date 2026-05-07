@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.87
+## v2.2.88
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
 - release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
 - release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
 - release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.61 - cast DaysInactive to [int64] to match existing DCR Long stream type (0aa3ccf9)
 - release: SecurityInsight v2.2.60 - per-step [OK] infrastructure-check log + DCE collision guard added to PublicIP + RiskAnalysis engines (95ec67fc)
 - release: SecurityInsight v2.2.59 - DCE collision guard now strict (sub+RG only, no waterfall fallback) (51fc4bc1)
-- release: SecurityInsight v2.2.58 - restore DCE name-collision guard (regression from v2.2.51 simplification) (7898f49b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.88 — RA: defensive `column_ifexists` on `DisabledPrivilegedUser` + `RiskFactorCount` (real query bugs)
+
+Two report KQLs referenced columns directly that may not exist on the customer's `SI_Identity_Profile_CL`. Result: 400 BadRequest with `"'where' operator: Failed to resolve column or scalar expression named 'X'"` from LA — both Summary and Detailed variants of:
+
+- `Identity_DisabledPrivilegedUser_*` — referenced `DisabledPrivilegedUser` (boolean verdict the identity engine emits when an account is `accountEnabled=false` AND still has a privileged role assigned). Column is absent on profile rows where the verdict didn't fire.
+- `Identity_HighRiskFactorComposite4Plus_*` — referenced `RiskFactorCount` (aggregate count of risk-factor flags on the identity). Absent until the engine has aggregated.
+
+Fix: pre-extend each missing column with `column_ifexists('<col>', <default>)` before the `where` filter, so KQL evaluates the predicate against `false`/`0` instead of failing the query. Pattern matches the existing `__SI_CMDB_DEFENSIVE__` block above each report. Applied at 4 sites (each report's Detailed + Summary):
+
+```kql
+| extend DisabledPrivilegedUser = tobool(column_ifexists('DisabledPrivilegedUser', false))
+| where DisabledPrivilegedUser == true
+
+| extend RiskFactorCount = toint(column_ifexists('RiskFactorCount', 0))
+| where RiskFactorCount >= 4
+```
+
+Reports now return 0 rows on tenants where the column is missing (correct — there are no findings to report) instead of erroring out.
 
 ---
 

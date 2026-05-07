@@ -19,8 +19,6 @@
 
 ### 🎯 Think like the hacker. Act like the defender. Fix what matters — first.
 
-> See [§ 10 What's New](#whats-new) for the full capability deep-dive — read-only engine, layered config, AI signal-map, multi-source asset correlation, and 11 more. Detection-query + tagging-rule + AI-tier-catalog inventory tables live in [§ 7.8 Locked catalog](#locked-catalog).
-
 ### Why you need SecurityInsight
 
 - Thousands of observations — *"set & forget"* dashboards that never get acted on

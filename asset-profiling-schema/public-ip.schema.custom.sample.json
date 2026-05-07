@@ -35,6 +35,36 @@
         "cmdbName":            "TEST - Nmap scan target",
         "cmdbCriticality":     "Low",
         "cmdbDataSensitivity": "Public"
+      },
+      {
+        "_comment":            "TEST IP -- testphp.vulnweb.com (Acunetix's official vulnerable PHP demo). Reliably reports HTTP/HTTPS open ports and a long CVE list in Shodan -- ideal for proving the PublicIP_Vulnerabilities_Detailed pipeline end-to-end. Resolve with `nslookup testphp.vulnweb.com` if you want to refresh the IP.",
+        "ipAddress":           "44.228.249.3",
+        "assetName":           "TEST testphp.vulnweb.com",
+        "tier":                3,
+        "cmdbId":              "TEST-002",
+        "cmdbName":            "TEST - Acunetix vulnerable PHP demo",
+        "cmdbCriticality":     "Low",
+        "cmdbDataSensitivity": "Public"
+      },
+      {
+        "_comment":            "TEST IP -- demo.testfire.net (IBM AppScan / Altoro Mutual demo bank). Shodan returns HTTPS open + outdated TLS / web-server CVEs. Useful for proving high-severity categorization on a 'banking-style' asset.",
+        "ipAddress":           "65.61.137.117",
+        "assetName":           "TEST demo.testfire.net",
+        "tier":                3,
+        "cmdbId":              "TEST-003",
+        "cmdbName":            "TEST - IBM AppScan AltoroMutual demo",
+        "cmdbCriticality":     "Low",
+        "cmdbDataSensitivity": "Public"
+      },
+      {
+        "_comment":            "TEST IP -- Shodan's own demo MongoDB endpoint (telnet.shodan.io / mongodb.shodan.io family). Demonstrates the high-risk-port (27017) flagging path; flagged Very High when paired with a Tier-0 asset. Safe to remove once you've seen one Shodan record land in SI_VulnerabilityPIP_CL.",
+        "ipAddress":           "104.131.0.69",
+        "assetName":           "TEST shodan-demo-mongo",
+        "tier":                3,
+        "cmdbId":              "TEST-004",
+        "cmdbName":            "TEST - Shodan demo (MongoDB exposed)",
+        "cmdbCriticality":     "Low",
+        "cmdbDataSensitivity": "Public"
       }
     ]
   }

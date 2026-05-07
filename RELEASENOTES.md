@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.80
+## v2.2.81
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
 - release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
 - release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
 - release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.54 - prestage also creates storage account + sistaging container + grants Storage Data RBAC + backfills SI_StorageKey (ccea0f0e)
 - release: SecurityInsight v2.2.53 - idempotent infra pre-stage (workspace + DCE + DCR RGs + RBAC) before LA ingest (19689573)
 - release: SecurityInsight v2.2.52 - silently skip AssetTagging.custom.yaml foreign-schema files in rule loader (4b1dcc77)
-- release: SecurityInsight v2.2.51 - rewrite LA ingest with canonical AzLogDcrIngestPS pattern (51291487)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.81 — PublicIP sample: more public test IPs with known open ports + CVEs
+
+`public-ip.schema.custom.sample.json` shipped with one test IP (`scanme.nmap.org`). Customers verifying the PublicIP / Shodan pipeline end-to-end after first install often want to see the open-port and vulnerability detection paths actually fire — single Nmap target only proves the open-ports half.
+
+Added three more well-known public test endpoints, each with the safety / consent context spelled out in `_comment`:
+
+| IP | Hostname | What it demonstrates |
+|---|---|---|
+| 44.228.249.3 | testphp.vulnweb.com | Acunetix's official vulnerable PHP demo — reliably reports a long CVE list in Shodan, exercises `PublicIP_Vulnerabilities_Detailed`. |
+| 65.61.137.117 | demo.testfire.net | IBM AppScan / Altoro Mutual demo bank — outdated TLS / web-server CVEs, useful for high-severity categorization on a banking-style asset. |
+| 104.131.0.69 | shodan demo MongoDB | Exposed MongoDB on port 27017 — exercises the high-risk-port flagging path; flagged Very High when paired with a Tier-0 asset. |
+
+All four entries are tagged `tier: 3` / `cmdbCriticality: Low` so they don't pollute the Tier 0/1 risk reports. Customers should remove the test entries once SI_VulnerabilityPIP_CL contains real production data.
 
 ---
 

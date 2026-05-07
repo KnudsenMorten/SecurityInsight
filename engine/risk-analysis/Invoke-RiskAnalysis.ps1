@@ -3740,6 +3740,57 @@ function Calculate-RiskScore {
                 if (-not $tmp2.Contains('ComplianceTags')) { $tmp2['ComplianceTags'] = '' }
             }
 
+            # =====================================================================
+            # NEW (v2.2.89): RiskScoreDomainKPI + RiskScoreKPI
+            # =====================================================================
+            # Two new per-row columns that feed the management-facing reporting
+            # rollups (global Risk Score KPI + per-domain breakdown). The existing
+            # math model (RiskFactor_Consequence x RiskFactor_Probability x
+            # RiskScore_Weight_Factor = RiskScoreTotal[_Weighted]) is left
+            # untouched -- customer dashboards built on those columns keep
+            # working. These two NEW columns are designed to be easy to explain
+            # to management:
+            #
+            #   RiskScoreDomainKPI = SeverityWeight x AssetTierMultiplier
+            #   RiskScoreKPI       = RiskScoreDomainKPI x GlobalWeight[<domain>]
+            #
+            # Sum RiskScoreDomainKPI by SecurityDomain -> domain raw score.
+            # Sum RiskScoreKPI across all rows -> global raw score.
+            # Both normalized to 0-100 in the run-end aggregation block (~line 6045).
+            $sevName  = if ($tmp2.Contains('SecuritySeverity')) { [string]$tmp2['SecuritySeverity'] } else { '' }
+            $tierVal  = $null
+            if ($tmp2.Contains('CriticalityTier'))      { [void][int]::TryParse([string]$tmp2['CriticalityTier'], [ref]$tierVal) }
+            $domName  = if ($tmp2.Contains('SecurityDomain')) { [string]$tmp2['SecurityDomain'] } else { '' }
+
+            $sevWeight = switch -Regex ($sevName) {
+                '^(?i)(critical|very high)$' { if ($null -ne $global:SI_RiskReport_SeverityWeight_Critical) { [double]$global:SI_RiskReport_SeverityWeight_Critical } else { 10.0 }; break }
+                '^(?i)high$'                 { if ($null -ne $global:SI_RiskReport_SeverityWeight_High)     { [double]$global:SI_RiskReport_SeverityWeight_High }     else {  5.0 }; break }
+                '^(?i)medium-?high$'         { if ($null -ne $global:SI_RiskReport_SeverityWeight_High)     { [double]$global:SI_RiskReport_SeverityWeight_High }     else {  5.0 }; break }
+                '^(?i)medium$'               { if ($null -ne $global:SI_RiskReport_SeverityWeight_Medium)   { [double]$global:SI_RiskReport_SeverityWeight_Medium }   else {  2.0 }; break }
+                '^(?i)low$'                  { if ($null -ne $global:SI_RiskReport_SeverityWeight_Low)      { [double]$global:SI_RiskReport_SeverityWeight_Low }      else {  1.0 }; break }
+                default                      { 1.0 }
+            }
+            $tierMult = switch ($tierVal) {
+                0       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T0) { [double]$global:SI_RiskReport_TierMultiplier_T0 } else { 4.0 } }
+                1       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T1) { [double]$global:SI_RiskReport_TierMultiplier_T1 } else { 2.0 } }
+                2       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T2) { [double]$global:SI_RiskReport_TierMultiplier_T2 } else { 1.0 } }
+                3       { if ($null -ne $global:SI_RiskReport_TierMultiplier_T3) { [double]$global:SI_RiskReport_TierMultiplier_T3 } else { 0.5 } }
+                default { 1.0 }
+            }
+            $globalWeight = switch ($domName) {
+                'Endpoint'   { if ($null -ne $global:SI_RiskReport_GlobalWeight_Endpoint) { [double]$global:SI_RiskReport_GlobalWeight_Endpoint } else { 0.30 } }
+                'Identity'   { if ($null -ne $global:SI_RiskReport_GlobalWeight_Identity) { [double]$global:SI_RiskReport_GlobalWeight_Identity } else { 0.30 } }
+                'Azure'      { if ($null -ne $global:SI_RiskReport_GlobalWeight_Azure)    { [double]$global:SI_RiskReport_GlobalWeight_Azure }    else { 0.20 } }
+                'PublicIP'   { if ($null -ne $global:SI_RiskReport_GlobalWeight_PublicIP) { [double]$global:SI_RiskReport_GlobalWeight_PublicIP } else { 0.20 } }
+                'PublicIp'   { if ($null -ne $global:SI_RiskReport_GlobalWeight_PublicIP) { [double]$global:SI_RiskReport_GlobalWeight_PublicIP } else { 0.20 } }
+                'AttackPath' { 0.0 }   # attack-path rows already counted in their target domain
+                default      { 0.20 }
+            }
+            $domainKpi = [Math]::Round($sevWeight * $tierMult, 2)
+            $totalKpi  = [Math]::Round($domainKpi * $globalWeight, 2)
+            $tmp2['RiskScoreDomainKPI'] = $domainKpi
+            $tmp2['RiskScoreKPI']       = $totalKpi
+
             if ($OutputPropertyOrder -and $OutputPropertyOrder.Count -gt 0) {
                 # STRICT mode -- when OutputPropertyOrder is declared, emit ONLY those
                 # columns. The legacy engine-injected aggregates
@@ -5350,11 +5401,14 @@ try {
         $_cur = $_parent
     }
     foreach ($_r in $_candidateRoots) {
-        $_ver = Join-Path $_r 'VERSION.txt'
-        if (Test-Path -LiteralPath $_ver) {
-            $global:RA_SolutionVersion = (Get-Content -LiteralPath $_ver -Raw).Trim()
-            break
+        foreach ($_name in @('VERSION','VERSION.txt')) {
+            $_ver = Join-Path $_r $_name
+            if (Test-Path -LiteralPath $_ver) {
+                $global:RA_SolutionVersion = (Get-Content -LiteralPath $_ver -Raw).Trim()
+                break
+            }
         }
+        if ($global:RA_SolutionVersion -ne '(dev)') { break }
     }
 } catch { }
 
@@ -6941,6 +6995,86 @@ Rules:
 }
 
 #####################################################################################################
+# RISK SCORE KPI ROLLUP (v2.2.89)
+#####################################################################################################
+# Aggregate per-row RiskScoreDomainKPI / RiskScoreKPI into one global score
+# (0-100) and four per-domain scores (Endpoint / Identity / Azure / PublicIP).
+# The math is intentionally simple to explain to leadership:
+#   global score = min(sum(RiskScoreKPI)        / $GlobalCeiling x 100, 100)
+#   domain score = min(sum(RiskScoreDomainKPI[d]) / $DomainCeiling x 100, 100)
+# Ceilings tunable via $global:SI_RiskReport_GlobalCeiling / _DomainCeiling.
+#####################################################################################################
+$global:RA_KPI = $null
+try {
+    $rows = if ($null -ne $global:final) { @($global:final) } else { @() }
+    $domainCeiling = if ($null -ne $global:SI_RiskReport_DomainCeiling -and [double]$global:SI_RiskReport_DomainCeiling -gt 0) { [double]$global:SI_RiskReport_DomainCeiling } else { 1000.0 }
+    $globalCeiling = if ($null -ne $global:SI_RiskReport_GlobalCeiling -and [double]$global:SI_RiskReport_GlobalCeiling -gt 0) { [double]$global:SI_RiskReport_GlobalCeiling } else { 500.0 }
+
+    $domainRaw = @{ Endpoint = 0.0; Identity = 0.0; Azure = 0.0; PublicIP = 0.0 }
+    $globalRaw = 0.0
+    $sevCount  = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0 }
+
+    foreach ($r in $rows) {
+        $dom = ''
+        if ($r.PSObject.Properties['SecurityDomain']) { $dom = [string]$r.SecurityDomain }
+        if ($dom -eq 'PublicIp') { $dom = 'PublicIP' }
+
+        $dKpi = 0.0
+        if ($r.PSObject.Properties['RiskScoreDomainKPI']) { [void][double]::TryParse([string]$r.RiskScoreDomainKPI, [ref]$dKpi) }
+        if ($domainRaw.ContainsKey($dom)) { $domainRaw[$dom] += $dKpi }
+
+        $gKpi = 0.0
+        if ($r.PSObject.Properties['RiskScoreKPI']) { [void][double]::TryParse([string]$r.RiskScoreKPI, [ref]$gKpi) }
+        $globalRaw += $gKpi
+
+        $sev = ''
+        if ($r.PSObject.Properties['SecuritySeverity']) { $sev = [string]$r.SecuritySeverity }
+        switch -Regex ($sev) {
+            '^(?i)(critical|very high)$' { $sevCount['Critical']++; break }
+            '^(?i)high$'                 { $sevCount['High']++;     break }
+            '^(?i)medium-?high$'         { $sevCount['High']++;     break }
+            '^(?i)medium$'               { $sevCount['Medium']++;   break }
+            '^(?i)low$'                  { $sevCount['Low']++;      break }
+            default                      { $sevCount['Other']++ }
+        }
+    }
+
+    function _NormalizeScore([double]$raw, [double]$ceiling) {
+        if ($ceiling -le 0) { return 0 }
+        $v = [Math]::Round(($raw / $ceiling) * 100.0, 0)
+        if ($v -lt 0)   { return 0 }
+        if ($v -gt 100) { return 100 }
+        return [int]$v
+    }
+
+    $domainScore = @{}
+    foreach ($d in $domainRaw.Keys) { $domainScore[$d] = _NormalizeScore $domainRaw[$d] $domainCeiling }
+    $globalScore = _NormalizeScore $globalRaw $globalCeiling
+
+    $riskLevel = if     ($globalScore -ge 80) { 'Critical' }
+                 elseif ($globalScore -ge 60) { 'High' }
+                 elseif ($globalScore -ge 40) { 'Elevated' }
+                 elseif ($globalScore -ge 20) { 'Moderate' }
+                 else                          { 'Low' }
+
+    $global:RA_KPI = [pscustomobject]@{
+        GlobalScore  = $globalScore
+        GlobalRaw    = [Math]::Round($globalRaw, 2)
+        RiskLevel    = $riskLevel
+        DomainScore  = $domainScore
+        DomainRaw    = $domainRaw
+        SevCount     = $sevCount
+        TotalRows    = $rows.Count
+    }
+
+    Write-Info ("[SCORE] Global={0} ({1}) Endpoint={2} Identity={3} Azure={4} PublicIP={5} | Sev: C={6} H={7} M={8} L={9} | Rows={10}" -f `
+        $globalScore, $riskLevel, $domainScore['Endpoint'], $domainScore['Identity'], $domainScore['Azure'], $domainScore['PublicIP'], `
+        $sevCount['Critical'], $sevCount['High'], $sevCount['Medium'], $sevCount['Low'], $rows.Count)
+} catch {
+    Write-Warn2 ("KPI rollup failed: {0} (continuing -- mail will degrade gracefully)" -f $_.Exception.Message)
+}
+
+#####################################################################################################
 # SEND OUTPUT VIA MAIL
 #####################################################################################################
 
@@ -6999,47 +7133,160 @@ if ([bool]$global:Report_SendMail -eq $true) {
 
     $aiEnabled = [bool]$global:BuildSummaryByAI
 
+    # ----- AI summary block (if enabled) -----
+    $aiSection = ''
     if ($aiEnabled) {
-
-        $aiHtml = ""
+        $aiHtml = ''
         if (-not [string]::IsNullOrWhiteSpace($global:AI_SummaryText)) {
-          $aiHtml = ($global:AI_SummaryText.Trim() -replace "&","&amp;" -replace "<","&lt;" -replace ">","&gt;")
-          $aiHtml = $aiHtml -replace "`r`n","`n" -replace "`r","`n"
-          $aiHtml = $aiHtml -replace "`n","<br>"
+            $aiHtml = ($global:AI_SummaryText.Trim() -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;')
+            $aiHtml = $aiHtml -replace "`r`n","`n" -replace "`r","`n"
+            $aiHtml = $aiHtml -replace "`n",'<br>'
         } else {
-          $aiHtml = "AI summary was enabled, but no AI summary output was produced."
+            $aiHtml = 'AI summary was enabled, but no AI summary output was produced.'
         }
-
-        $bodyHtml = @"
-Risk Analysis<br>
-<br>
-Attached you will find prioritized security risks, ranked by RiskScore.<br>
-The Excel file contains full evidence, raw data, and detailed findings per asset (Details sheet).<br>
-<br>
-AI summary (also included in the Excel Summary sheet):<br>
-<br>
-$aiHtml
-<br>
-<br>
----## ---<br>
-Security Insight | Risk Analysis | support: Morten Knudsen | mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight.<br>
-This summary was generated using AI and may contain mistakes or incomplete conclusions. Please validate critical decisions using the detailed findings and raw data in the attached Excel report.
+        $aiSection = @"
+        <h2 style="margin:28px 0 8px 0;font-family:Segoe UI,Arial,sans-serif;font-size:18px;color:#1a3a5e;border-bottom:2px solid #e0e6ed;padding-bottom:6px;">AI-generated analysis</h2>
+        <div style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#333;line-height:1.55;">$aiHtml</div>
+        <p style="font-family:Segoe UI,Arial,sans-serif;font-size:11px;color:#888;margin-top:10px;font-style:italic;">This narrative was generated by AI and may contain mistakes. Validate critical decisions against the detailed Excel findings.</p>
 "@
-
     } else {
-
-        $bodyHtml = @"
-Risk Analysis<br>
-<br>
-Attached you will find prioritized security risks, ranked by RiskScore.<br>
-The Excel file contains full evidence, raw data, and detailed findings per asset (Details sheet).<br>
-<br>
-AI summary was not included for this run (BuildSummaryByAI was not enabled).<br>
-If you want an AI-based prioritization summary in both the email and the Excel (Summary sheet), set Global:BuildSummaryByAI = `$true in the launcher script and run again.<br>
-<br>
-Security Insight | Risk Analysis | support: Morten Knudsen | mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight.<br>
+        $aiSection = @"
+        <p style="font-family:Segoe UI,Arial,sans-serif;font-size:12px;color:#888;margin-top:18px;">AI narrative not included this run. Enable with <code>$global:BuildSummaryByAI=`$true</code> in the launcher.</p>
 "@
     }
+
+    # ----- KPI banner color per risk level -----
+    $kpi = $global:RA_KPI
+    if ($null -eq $kpi) {
+        $kpi = [pscustomobject]@{
+            GlobalScore = 0; RiskLevel = 'Unknown';
+            DomainScore = @{ Endpoint=0; Identity=0; Azure=0; PublicIP=0 };
+            SevCount    = @{ Critical=0; High=0; Medium=0; Low=0; Other=0 };
+            TotalRows   = (@($global:final).Count)
+        }
+    }
+    $levelColor = switch ($kpi.RiskLevel) {
+        'Critical' { '#7b1fa2' }
+        'High'     { '#c62828' }
+        'Elevated' { '#ef6c00' }
+        'Moderate' { '#f9a825' }
+        'Low'      { '#2e7d32' }
+        default    { '#546e7a' }
+    }
+
+    # ----- Domain tile builder -----
+    function _DomainTile([string]$name, [int]$score) {
+        $bg = if ($score -ge 60) { '#fdecea' } elseif ($score -ge 40) { '#fff4e5' } elseif ($score -ge 20) { '#fffbe6' } else { '#e8f5e9' }
+        $bar = if ($score -ge 60) { '#c62828' } elseif ($score -ge 40) { '#ef6c00' } elseif ($score -ge 20) { '#f9a825' } else { '#2e7d32' }
+        $w = [Math]::Max(2, [Math]::Min(100, $score))
+        return @"
+            <td width="25%" valign="top" style="padding:6px;">
+              <table width="100%" cellpadding="0" cellspacing="0" style="background:$bg;border:1px solid #e0e6ed;border-radius:6px;">
+                <tr><td style="padding:14px 14px 8px 14px;font-family:Segoe UI,Arial,sans-serif;font-size:12px;color:#5a6a7a;text-transform:uppercase;letter-spacing:.5px;">$name</td></tr>
+                <tr><td style="padding:0 14px;font-family:Segoe UI,Arial,sans-serif;font-size:30px;font-weight:600;color:#1a3a5e;">$score<span style="font-size:14px;color:#8a99aa;font-weight:400;"> /100</span></td></tr>
+                <tr><td style="padding:8px 14px 14px 14px;">
+                  <div style="background:#ffffff;height:6px;border-radius:3px;overflow:hidden;">
+                    <div style="background:$bar;width:$w%;height:6px;"></div>
+                  </div>
+                </td></tr>
+              </table>
+            </td>
+"@
+    }
+
+    $tileEndpoint = _DomainTile 'Endpoint' ([int]$kpi.DomainScore['Endpoint'])
+    $tileIdentity = _DomainTile 'Identity' ([int]$kpi.DomainScore['Identity'])
+    $tileAzure    = _DomainTile 'Azure'    ([int]$kpi.DomainScore['Azure'])
+    $tilePublicIP = _DomainTile 'Public IP' ([int]$kpi.DomainScore['PublicIP'])
+
+    $genTimestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm zzz')
+    $tenantLabel  = if ([string]::IsNullOrWhiteSpace($tenantTag)) { '&mdash;' } else { [System.Net.WebUtility]::HtmlEncode($tenantTag) }
+    $reportLabel  = [System.Net.WebUtility]::HtmlEncode([string]$global:ReportTemplate)
+    $solVer       = if ([string]::IsNullOrWhiteSpace([string]$global:RA_SolutionVersion)) { '(dev)' } else { [string]$global:RA_SolutionVersion }
+
+    $sev = $kpi.SevCount
+    $rowsTotal = [int]$kpi.TotalRows
+
+    $bodyHtml = @"
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f3f5f8;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5f8;padding:20px 0;">
+  <tr><td align="center">
+    <table width="720" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e0e6ed;border-radius:8px;max-width:720px;">
+
+      <!-- Banner -->
+      <tr><td style="background:linear-gradient(135deg,#1a3a5e 0%,#2c5a8e 100%);background-color:#1a3a5e;padding:22px 28px;border-radius:8px 8px 0 0;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td valign="middle" style="font-family:Segoe UI,Arial,sans-serif;color:#ffffff;font-size:22px;font-weight:600;">SecurityInsight &middot; Risk Analysis</td>
+            <td valign="middle" align="right" style="font-family:Segoe UI,Arial,sans-serif;color:#cfdce8;font-size:12px;">
+              $reportLabel<br>
+              <span style="color:#9bb4cd;">$tenantLabel &middot; $genTimestamp</span>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+
+      <!-- Executive summary hero -->
+      <tr><td style="padding:24px 28px 8px 28px;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td width="58%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;">
+              <div style="font-size:12px;color:#5a6a7a;text-transform:uppercase;letter-spacing:.5px;">Global Risk Score</div>
+              <div style="font-size:54px;font-weight:700;color:#1a3a5e;line-height:1;margin:6px 0 4px 0;">$($kpi.GlobalScore)<span style="font-size:22px;color:#8a99aa;font-weight:400;"> /100</span></div>
+              <div style="display:inline-block;background:$levelColor;color:#ffffff;padding:4px 12px;border-radius:14px;font-size:12px;font-weight:600;letter-spacing:.5px;">$($kpi.RiskLevel.ToUpper())</div>
+            </td>
+            <td width="42%" valign="middle" style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#333;">
+              <table cellpadding="3" cellspacing="0" style="font-size:13px;">
+                <tr><td style="color:#5a6a7a;">Total findings</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$rowsTotal</td></tr>
+                <tr><td style="color:#c62828;">Critical</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['Critical'])</td></tr>
+                <tr><td style="color:#ef6c00;">High</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['High'])</td></tr>
+                <tr><td style="color:#f9a825;">Medium</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['Medium'])</td></tr>
+                <tr><td style="color:#2e7d32;">Low</td><td style="color:#1a3a5e;font-weight:600;padding-left:14px;">$($sev['Low'])</td></tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </td></tr>
+
+      <!-- Domain KPI tiles -->
+      <tr><td style="padding:8px 22px 4px 22px;">
+        <h3 style="font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#5a6a7a;text-transform:uppercase;letter-spacing:.5px;margin:0 6px 4px 6px;">Risk by domain</h3>
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+$tileEndpoint
+$tileIdentity
+$tileAzure
+$tilePublicIP
+          </tr>
+        </table>
+      </td></tr>
+
+      <!-- Body copy -->
+      <tr><td style="padding:18px 28px 4px 28px;font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#333;line-height:1.55;">
+        <p style="margin:0 0 10px 0;">The attached Excel report contains the full prioritized list of findings ranked by RiskScore, with evidence and asset detail on the <em>Details</em> sheet.</p>
+        <p style="margin:0;color:#5a6a7a;font-size:12px;">Risk Score model: <strong>Severity &times; Asset Tier &times; Domain weight</strong>, normalized to 0&ndash;100. Trend data is persisted to <code>SI_RiskScore_CL</code> for 31-day reporting in Power BI / Workbook.</p>
+$aiSection
+      </td></tr>
+
+      <!-- Footer -->
+      <tr><td style="padding:18px 28px 22px 28px;border-top:1px solid #e0e6ed;font-family:Segoe UI,Arial,sans-serif;font-size:11px;color:#8a99aa;">
+        <table width="100%" cellpadding="0" cellspacing="0">
+          <tr>
+            <td>SecurityInsight &middot; Risk Analysis &middot; <a href="https://github.com/KnudsenMorten/SecurityInsight" style="color:#2c5a8e;text-decoration:none;">github.com/KnudsenMorten/SecurityInsight</a><br>
+                Support: Morten Knudsen &lt;mok@mortenknudsen.net&gt;</td>
+            <td align="right" style="white-space:nowrap;">Build <strong style="color:#1a3a5e;">v$solVer</strong></td>
+          </tr>
+        </table>
+      </td></tr>
+
+    </table>
+  </td></tr>
+</table>
+</body></html>
+"@
 
     # Auto-assemble the SMTP PSCredential if the customer only provided
     # username + password strings. This avoids Send-MailMessage prompting

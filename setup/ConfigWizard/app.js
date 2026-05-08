@@ -1123,7 +1123,7 @@ async function runApply() {
     }
 
     btn.disabled = true;
-    btn.textContent = 'Applying...';
+    btn.textContent = 'Setting up...';
     progress.style.display = 'block';
     result.innerHTML = '';
     setApplyPhase('spn', 'running');
@@ -1183,7 +1183,7 @@ async function runApply() {
                         '1. Send this URL to a <b>Global Administrator</b> (or anyone with the <b>Privileged Role Administrator</b> role on the app):<br>' +
                         '<a href="' + _esc(consentUrl) + '" target="_blank" rel="noopener" style="display:inline-block;margin:8px 0;padding:8px 14px;background:#1a3a5c;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">&#128279; Open admin-consent page</a><br>' +
                         '<code style="font-size:11px;word-break:break-all;color:#5a6a7a;">' + _esc(consentUrl) + '</code><br>' +
-                        '2. After they click <b>Accept</b>, re-click <b>Apply now</b> above. The wizard re-validates each permission and updates this panel (Apply is idempotent &mdash; nothing is re-created).' +
+                        '2. After they click <b>Accept</b>, re-click <b>Setup</b> above. The wizard re-validates each permission and updates this panel (Setup is idempotent &mdash; nothing is re-created).' +
                         '</div>';
             }
             html += renderApplyLogPanel(obj.log);
@@ -1208,7 +1208,7 @@ async function runApply() {
         result.innerHTML = '<div class="note warn"><b>&#10007; Apply failed (network)</b><br>' + _esc(e.message || e) + '</div>';
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '&#9658; Apply now';
+        btn.innerHTML = '&#9658; Setup';
     }
 }
 

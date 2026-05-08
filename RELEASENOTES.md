@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.125
+## v2.2.126
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
 - release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
 - release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
 - release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
 - release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
 - release: SecurityInsight v2.2.97 - README: KPI bullet to last + add 2 mail screenshots (f7648270)
-- release: SecurityInsight v2.2.96 - RiskScoreKPI: MS-inspired secure score (higher=better) (c45fd1c3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.126 — Setup Wizard: auto-register Azure resource providers + rename "Apply" button to "Setup"
+
+**1. Auto-register required Azure resource providers (the actual Phase-2 fix).** Live test on a brand-new sub failed Phase 2 with `[InvalidResource] : Invalid resource payload: 'properties' are missing` -- a misleading wrapper for "the resource provider this resource lives under isn't registered on the subscription." On the test sub, three RPs were `NotRegistered`:
+
+- `Microsoft.Monitor` -- newer namespace where Az.Monitor SDK now PUTs Data Collection Endpoints
+- `Microsoft.AlertsManagement` -- triggered by some Az.OperationalInsights workspace settings
+- `Microsoft.KeyVault` -- needed when cred storage = KV
+
+`Initialize-SIInfra.ps1` now runs an explicit pre-flight (new "step 1b") at the start of Phase 2:
+- Lists 7 required RPs (`Microsoft.Resources`, `Microsoft.OperationalInsights`, `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.Storage`, `Microsoft.Authorization`, `Microsoft.AlertsManagement`) plus `Microsoft.KeyVault` if `-CreateKeyVault` or `-KeyVaultName` is set.
+- Checks each one's `RegistrationState`. If any are not `Registered`, calls `Register-AzResourceProvider` for each and waits up to 4 minutes for them to flip (polling every 12 s).
+- Logs each step (`Register-AzResourceProvider X kicked off` / `still registering: ...` / `all providers Registered`).
+- Soft-failure if a provider doesn't finish within 4 min: emits a warning and continues -- already-Registered child types may still let creation succeed, and the actual resource creation will surface a clearer error if it really matters.
+
+This turns a confusing mid-Phase-2 rejection into a clean "wait while we light up the providers" step that just works the first time.
+
+**2. "Apply now" button renamed to "Setup".** Aligns with the operator's vocabulary -- this is a setup wizard, not an Azure ARM "apply". Renamed in three places: the page-lead paragraph ("Click **Setup** to provision everything..."), the button label (`▶ Setup`), and the consent-pending callout instruction ("re-click **Setup** above"). The `id="btn-apply"` is unchanged for state-bind compatibility, and the underlying `/api/apply` REST endpoint stays the same (it's the API surface, not user-facing copy). The intermediate button text while running changed from `Applying...` to `Setting up...`.
 
 ---
 

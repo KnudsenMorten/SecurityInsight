@@ -15,14 +15,14 @@ const PAGES = [
   { id: 'welcome',   label: 'Welcome',                active: true  },
   { id: 'tenant',    label: 'Tenant identity',        active: true  },
   { id: 'workspace', label: 'Workspace + ingestion',  active: true  },
-  { id: 'output',    label: 'Output sinks',           active: false },
-  { id: 'cmdb',      label: 'CMDB integration',       active: false },
-  { id: 'apptag',    label: 'App / service tagging',  active: false },
-  { id: 'raexcl',    label: 'RA exclusions',          active: false },
-  { id: 'assettag',  label: 'Asset exclusion tags',   active: false },
-  { id: 'shodan',    label: 'Shodan attack surface',  active: false },
-  { id: 'advanced',  label: 'Advanced overrides',     active: false },
-  { id: 'review',    label: 'Review & generate',      active: false },
+  { id: 'output',    label: 'Mail / SMTP',            active: true  },
+  { id: 'cmdb',      label: 'CMDB integration',       active: true  },
+  { id: 'apptag',    label: 'Azure OpenAI',           active: true  },
+  { id: 'raexcl',    label: 'RA exclusions',          active: false },  // power-user; v2.2.112+
+  { id: 'assettag',  label: 'Asset exclusion tags',   active: false },  // power-user; v2.2.112+
+  { id: 'shodan',    label: 'Shodan attack surface',  active: true  },
+  { id: 'advanced',  label: 'Output sinks + Defender', active: true  },
+  { id: 'review',    label: 'Apply',                  active: true  },
 ];
 // Note: registry holds 11 entries (Welcome + 10 numbered steps). The numbered
 // "Step N of 10" labels in the page bodies count from "Tenant identity" onward.
@@ -40,6 +40,14 @@ const state = {
     credType:    'kvSecret',      // 'kvSecret' (= secret) | 'certThumb' (= cert, recommended for production)
     credStorage: 'Inline',        // 'KeyVault' | 'LocalCertStore' | 'Inline' (auto-snapped to a valid combo for hostType + credType)
     hostType:    'win',           // 'win' | 'azureVMMI' | 'azureContainerMI' (drives valid auth options)
+    // Optional-feature master toggles (each defaults OFF -- explicit opt-in)
+    smtpMode:      'off',         // 'off' | 'anon' | 'auth'
+    cmdbMode:      'off',         // 'off' | 'csv'
+    openAiMode:    'off',         // 'off' | 'enabled'
+    openAiResMode: 'useExisting', // 'useExisting' | 'createNew' (createNew is v2.2.112+)
+    shodanMode:    'off',         // 'off' | 'enabled'
+    defenderMode:  'off',         // 'off' | 'linked'
+    enableJsonSink: false,        // bool -- adds 'JSON' to every SI_Sinks_<Engine>
   },
 };
 
@@ -57,6 +65,12 @@ function loadState() {
       if (!state.data.credType)    state.data.credType    = 'kvSecret';
       if (!state.data.credStorage) state.data.credStorage = 'Inline';
       if (!state.data.hostType)    state.data.hostType    = 'win';
+      if (!state.data.smtpMode)     state.data.smtpMode     = 'off';
+      if (!state.data.cmdbMode)     state.data.cmdbMode     = 'off';
+      if (!state.data.openAiMode)   state.data.openAiMode   = 'off';
+      if (!state.data.openAiResMode)state.data.openAiResMode= 'useExisting';
+      if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
+      if (!state.data.defenderMode) state.data.defenderMode = 'off';
     }
   } catch (e) {
     console.warn('Wizard: localStorage restore failed --', e);
@@ -253,9 +267,100 @@ function buildWorkspaceSnippet() {
   return lines.join('\n');
 }
 
+// ---------- Optional-section snippet builders (pages 3-7) -----------------
+
+function buildOutputSnippet() {
+  const d = state.data;
+  if (d.smtpMode === 'off' || !d.smtpMode) {
+    return '# Mail mode is OFF -- nothing written.\n# (Engines run silent; LA + Excel still produced.)';
+  }
+  const lines = [];
+  lines.push('# --- SMTP / mail (Layer 3) -----------------------------------------------');
+  lines.push(assignLine('SmtpServer', 'smtpServer', '<smtp-host>', 14));
+  lines.push(assignLine('SmtpPort',   'smtpPort',   '587',         14));
+  lines.push('$global:SMTP_UseSSL    = $' + ((d.smtpUseSsl !== false) ? 'true' : 'false'));
+  lines.push(assignLine('SMTPFrom',   'smtpFrom',   '<sender@example.com>', 14));
+  if (d.smtpMode === 'auth') {
+    lines.push(assignLine('SMTPUser',     'smtpUser',     '<smtp-login>', 14));
+    lines.push(assignLine('SMTPPassword', 'smtpPassword', '<smtp-pass>',  14));
+  } else {
+    lines.push('# Anonymous relay -- no SMTPUser / SMTPPassword needed.');
+  }
+  const recipients = (d.mailTo || '').split(/[,;\s]+/).filter(Boolean);
+  const recipPs = recipients.length ? '@(' + recipients.map(r => "'" + r.replace(/'/g, "''") + "'").join(', ') + ')' : "@('<your-inbox@example.com>')";
+  lines.push('$global:MailTo         = ' + recipPs);
+  return lines.join('\n');
+}
+
+function buildCmdbSnippet() {
+  const d = state.data;
+  if (d.cmdbMode !== 'csv') return '# CMDB mode is OFF -- nothing written.';
+  const lines = [];
+  lines.push('# --- CMDB CSV enrichment (Layer 3) ---------------------------------------');
+  lines.push('$global:SI_EnableCmdbProvider     = $true');
+  lines.push(assignLine('SI_CmdbCsvPath',             'cmdbCsvPath',     '<C:\\path\\to\\cmdb.csv>', 32));
+  lines.push(assignLine('SI_CmdbRefreshIntervalHours','cmdbRefreshHours','24',                       32));
+  return lines.join('\n');
+}
+
+function buildApptagSnippet() {
+  // The "apptag" page is now Azure OpenAI in v2.2.111 -- the section ID
+  // wasn't renamed to keep state-key compatibility.
+  const d = state.data;
+  if (d.openAiMode !== 'enabled') return '# OpenAI mode is OFF -- nothing written.';
+  if (d.openAiResMode === 'createNew') return '# OpenAI: "Create new resource" picked, but the wizard backend will provision\n# this on Apply (v2.2.112+). No config snippet needed yet.';
+  const lines = [];
+  lines.push('# --- Azure OpenAI -- AI summary on RiskAnalysis runs (Layer 3) ----------');
+  lines.push('$global:BuildSummaryByAI = $true');
+  lines.push(assignLine('OpenAI_endpoint',   'openAiEndpoint',   '<https://your-aoai.openai.azure.com/>', 22));
+  lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', 'gpt-4o-mini',                          22));
+  lines.push(assignLine('OpenAI_apiVersion', 'openAiApiVersion', '2024-08-01-preview',                   22));
+  lines.push(assignLine('OpenAI_apiKey',     'openAiApiKey',     '<your-aoai-key>',                      22));
+  if (d.openAiMaxSpend) lines.push(assignLine('MaxAiSpendPerRun', 'openAiMaxSpend', '0.50', 22));
+  return lines.join('\n');
+}
+
+function buildShodanSnippet() {
+  const d = state.data;
+  if (d.shodanMode !== 'enabled') return '# Shodan mode is OFF -- nothing written.';
+  const lines = [];
+  lines.push('# --- Shodan attack-surface enrichment (Layer 3) -------------------------');
+  lines.push(assignLine('SI_Shodan_ApiKey',     'shodanApiKey',     '<your-shodan-key>', 24));
+  lines.push(assignLine('SI_Shodan_LicenseTier','shodanLicenseTier','freelance',         24));
+  return lines.join('\n');
+}
+
+function buildAdvancedSnippet() {
+  const d = state.data;
+  const lines = [];
+  let any = false;
+  if (d.enableJsonSink) {
+    lines.push('# --- JSON output sink for every engine (Layer 3) ------------------------');
+    lines.push("$global:SI_Sinks_RiskAnalysis  = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_Endpoint      = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_Identity      = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_Azure         = @('LA','Excel','JSON')");
+    lines.push("$global:SI_Sinks_PublicIP      = @('LA','Excel','JSON')");
+    any = true;
+  }
+  if (d.defenderMode === 'linked') {
+    if (any) lines.push('');
+    lines.push('# --- Defender XDR workspace linkage (Layer 3) ---------------------------');
+    lines.push(assignLine('SI_DefenderXdrWorkspaceResourceId', 'defenderWorkspaceResourceId', '</subscriptions/.../workspaces/...>', 38));
+    any = true;
+  }
+  if (!any) return '# Output sinks: LA + Excel only. Defender XDR linkage: OFF.\n# (Defaults are fine for most customers.)';
+  return lines.join('\n');
+}
+
 const SNIPPET_BUILDERS = {
   tenant:    buildTenantSnippet,
   workspace: buildWorkspaceSnippet,
+  output:    buildOutputSnippet,
+  cmdb:      buildCmdbSnippet,
+  apptag:    buildApptagSnippet,
+  shodan:    buildShodanSnippet,
+  advanced:  buildAdvancedSnippet,
 };
 
 function renderPreviews() {
@@ -361,8 +466,25 @@ function showCurrentPageOnly() {
 // Hydrate every input on the current page from state.data, attach change
 // listeners, and run validators.
 function hydrateForms() {
-  // Text inputs
-  document.querySelectorAll('input[data-key]').forEach(input => {
+  // Checkbox inputs (handle BEFORE the generic text-input pass below so the
+  // text branch's input.value.trim() doesn't see them as text).
+  document.querySelectorAll('input[type="checkbox"][data-key]').forEach(cb => {
+    const key = cb.dataset.key;
+    if (state.data[key] != null) cb.checked = !!state.data[key];
+    if (!cb._wired) {
+      cb.addEventListener('change', () => {
+        state.data[key] = !!cb.checked;
+        saveState();
+        renderPreviews();
+        renderRail();
+        renderNavButtons();
+      });
+      cb._wired = true;
+    }
+  });
+
+  // Text + password inputs
+  document.querySelectorAll('input[data-key]:not([type="checkbox"])').forEach(input => {
     const key = input.dataset.key;
     // First-touch default seeding: if the field has a data-default and the
     // user has never written to it (state is null/undefined, NOT empty
@@ -453,6 +575,12 @@ const VIS_FILTERS = {
   credBlock:        'credType',
   credStorageBlock: 'credStorage',
   hostTypeBlock:    'hostType',
+  smtpModeBlock:      'smtpMode',     // off | anon | auth
+  cmdbModeBlock:      'cmdbMode',     // off | csv
+  openAiModeBlock:    'openAiMode',   // off | enabled
+  openAiResModeBlock: 'openAiResMode',// useExisting | createNew
+  shodanModeBlock:    'shodanMode',   // off | enabled
+  defenderModeBlock:  'defenderMode', // off | linked
 };
 
 // Valid storage options per (hostType, credType). Drives:
@@ -480,13 +608,19 @@ function snapCredStorage() {
 }
 
 function syncCredBlocks() {
-  // Defensive: ensure the four driver fields are populated. Old localStorage
+  // Defensive: ensure every driver field is populated. Old localStorage
   // from pre-v2.2.106 sessions may be missing them, which breaks the visibility
   // pass below (every conditional would compare to undefined and pass-through).
   if (!state.data.spnMode)     state.data.spnMode     = 'createNew';
   if (!state.data.credType)    state.data.credType    = 'kvSecret';
   if (!state.data.credStorage) state.data.credStorage = 'Inline';
   if (!state.data.hostType)    state.data.hostType    = 'win';
+  if (!state.data.smtpMode)     state.data.smtpMode     = 'off';
+  if (!state.data.cmdbMode)     state.data.cmdbMode     = 'off';
+  if (!state.data.openAiMode)   state.data.openAiMode   = 'off';
+  if (!state.data.openAiResMode)state.data.openAiResMode= 'useExisting';
+  if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
+  if (!state.data.defenderMode) state.data.defenderMode = 'off';
   // Auto-snap credStorage to a valid combo for the current hostType x credType
   // so a hidden radio is never the active selection.
   snapCredStorage();
@@ -654,32 +788,43 @@ function buildApplyState() {
         st.spn.keyVaultName = d.kvName;
         st.infra.keyVaultName = d.kvName;
     }
-    if (d.smtpServer || d.mailTo) {
+    if (d.smtpMode && d.smtpMode !== 'off') {
         st.smtp = {
+            Mode:     d.smtpMode,
             Server:   d.smtpServer || null,
             Port:     d.smtpPort   ? Number(d.smtpPort) : 587,
             UseSsl:   d.smtpUseSsl !== false,
-            User:     d.smtpUser     || null,
-            Password: d.smtpPassword || null,
-            From:     d.smtpFrom     || null,
+            From:     d.smtpFrom   || null,
             MailTo:   (d.mailTo || '').split(/[,;\s]+/).filter(Boolean)
         };
+        if (d.smtpMode === 'auth') {
+            st.smtp.User     = d.smtpUser     || null;
+            st.smtp.Password = d.smtpPassword || null;
+        }
     }
-    if (d.openAiEndpoint) {
+    if (d.openAiMode === 'enabled' && d.openAiEndpoint) {
         st.openAi = {
-            Endpoint:    d.openAiEndpoint,
-            Deployment:  d.openAiDeployment || null,
-            ApiKey:      d.openAiApiKey || null
+            Endpoint:        d.openAiEndpoint,
+            Deployment:      d.openAiDeployment || null,
+            ApiKey:          d.openAiApiKey     || null,
+            ApiVersion:      d.openAiApiVersion || '2024-08-01-preview',
+            MaxSpendPerRun:  d.openAiMaxSpend ? Number(d.openAiMaxSpend) : null
         };
     }
-    if (d.shodanApiKey) {
+    if (d.shodanMode === 'enabled' && d.shodanApiKey) {
         st.shodan = { ApiKey: d.shodanApiKey };
     }
-    if (d.cmdbEnabled) {
-        st.cmdb = { Enabled: true, RefreshHours: d.cmdbRefreshHours ? Number(d.cmdbRefreshHours) : 24, CsvPath: d.cmdbCsvPath || null };
+    if (d.cmdbMode === 'csv') {
+        st.cmdb = {
+            Enabled:      true,
+            RefreshHours: d.cmdbRefreshHours ? Number(d.cmdbRefreshHours) : 24,
+            CsvPath:      d.cmdbCsvPath || null
+        };
     }
     if (d.enableJsonSink) st.enableJsonSink = true;
-    if (d.defenderWorkspaceResourceId) st.defenderWorkspaceResourceId = d.defenderWorkspaceResourceId;
+    if (d.defenderMode === 'linked' && d.defenderWorkspaceResourceId) {
+        st.defenderWorkspaceResourceId = d.defenderWorkspaceResourceId;
+    }
     return st;
 }
 

@@ -47,7 +47,7 @@
     <section class="page" data-page="welcome" hidden>
       <div class="hero">
         <div class="page-eyebrow" style="color:#9fdde7;">SecurityInsight v2.2</div>
-        <h2>Configure your tenant in 10 short steps.</h2>
+        <h2>Configure your tenant in 8 short steps.</h2>
         <p>This wizard generates every <code>*.custom.*</code> override file the SecurityInsight engines need -- tenant identity, workspace, CMDB cache, asset tagging, risk-analysis exclusions, Shodan, and more. Answers persist in your browser so you can stop and resume anytime.</p>
         <div class="hero-actions">
           <button class="btn primary" id="btn-start">Start configuring &rarr;</button>
@@ -93,7 +93,7 @@
     <!-- ---------------- PAGE 2: TENANT IDENTITY --------------------- -->
     <section class="page" data-page="tenant" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 1 of 10 &middot; Tenant identity</div>
+        <div class="page-eyebrow">Step 1 of 8 &middot; Tenant identity</div>
         <h2 class="page-title">Who are we authenticating as?</h2>
         <p class="page-lead">SecurityInsight engines authenticate to Entra and Azure once per run as a service principal. Pick a credential type, fill in the details. The wizard will emit a Layer-1 platform-defaults snippet that every engine inherits.</p>
       </div>
@@ -254,7 +254,7 @@
     <!-- ---------------- PAGE 3: WORKSPACE + INGESTION --------------- -->
     <section class="page" data-page="workspace" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 2 of 10 &middot; Workspace + ingestion</div>
+        <div class="page-eyebrow">Step 2 of 8 &middot; Workspace + ingestion</div>
         <h2 class="page-title">Where do collected signals land?</h2>
         <p class="page-lead">Every engine writes its profile rows to a Log Analytics custom table (<code>SI_*_CL</code>) via a Data Collection Endpoint + Rule. The wizard will append the workspace + DCE settings to the same Layer-5 snippet.</p>
       </div>
@@ -326,101 +326,297 @@
       </div>
     </section>
 
-    <!-- ---------- PLACEHOLDER PAGES (3 -- 10) ----------------------- -->
+    <!-- ---------------- PAGE 4: MAIL / SMTP -------------------------- -->
     <section class="page" data-page="output" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 3 of 10</div>
-        <h2 class="page-title">Output sinks</h2>
-        <p class="page-lead">XLSX + JSON output destinations, mail routing, blob upload.</p>
+        <div class="page-eyebrow">Step 3 of 8 &middot; Mail / SMTP <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Send risk-analysis summaries by email?</h2>
+        <p class="page-lead">SecurityInsight can mail you a per-run summary (HTML) and attach the Excel report. Off by default &mdash; turn on only if you want the engine to send mail. <b>Anonymous SMTP relay</b> is fine for internal corporate mail relays; <b>authenticated</b> is needed for SendGrid / Brevo / Postmark / M365 SMTP AUTH.</p>
       </div>
-      <div class="placeholder-card">
-        <span class="soon-pill">Coming soon</span>
-        <h3 style="margin-top: 12px;">Output sinks page</h3>
-        <p>Will collect: report destination (UNC / Azure blob), per-mode mail routing, retention.</p>
+
+      <div class="card">
+        <h3>Mail mode</h3>
+        <p class="card-sub">Off &rarr; engine never tries to send mail. Anonymous &rarr; corporate relay (no login). Authenticated &rarr; user/password to a hosted relay.</p>
+        <div class="toggle-group" data-toggle-key="smtpMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="smtpMode" value="off" /> Off <span style="color:#888;">(no mail sent)</span></label>
+          <label data-val="anon"><input type="radio" name="smtpMode" value="anon" /> Anonymous relay <span style="color:#888;">(internal SMTP)</span></label>
+          <label data-val="auth"><input type="radio" name="smtpMode" value="auth" /> Authenticated <span style="color:#888;">(SendGrid / Brevo / M365)</span></label>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-smtp-mode-block="anon,auth" hidden>
+        <h3>SMTP relay</h3>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_smtpServer">Server hostname <span class="help" data-tip="The SMTP relay's DNS name. Internal corporate relay: ask your messaging team. SendGrid: smtp.sendgrid.net. Brevo: smtp-relay.brevo.com. M365: smtp.office365.com.">?</span></label>
+            <input type="text" id="f_smtpServer" data-key="smtpServer" autocomplete="off"
+                   placeholder="smtp.contoso.local" />
+            <span class="err" data-err="smtpServer">Required when mail is enabled.</span>
+          </div>
+          <div class="field required">
+            <label for="f_smtpPort">Port <span class="help" data-tip="587 = STARTTLS submission (default; works for most relays). 25 = legacy; only on-prem internal relays. 465 = implicit TLS (legacy SMTPS, rarely needed).">?</span></label>
+            <input type="text" id="f_smtpPort" data-key="smtpPort" autocomplete="off"
+                   placeholder="587" data-default="587" />
+          </div>
+          <div class="field">
+            <label><input type="checkbox" id="f_smtpUseSsl" data-key="smtpUseSsl" /> Use SSL / TLS <span class="help" data-tip="Encrypt the connection. Recommended ON for any external relay (SendGrid / Brevo / M365). Internal relays sometimes use plaintext on port 25; turn off only if your relay refuses TLS.">?</span></label>
+          </div>
+          <div class="field required">
+            <label for="f_smtpFrom">From address <span class="help" data-tip="The 'From:' header on outbound mail. Must be a verified sender on hosted relays (SendGrid / Brevo / M365 reject mail whose From isn't verified). Often DIFFERENT from the SMTP login user.">?</span></label>
+            <input type="text" id="f_smtpFrom" data-key="smtpFrom" autocomplete="off"
+                   placeholder="securityinsight@contoso.com" />
+          </div>
+          <div class="field required span-2">
+            <label for="f_mailTo">Mail recipients <span class="help" data-tip="Comma- or semicolon-separated list of inboxes that receive the per-run summary. Distribution lists OK. Per-template recipient overrides go in LauncherConfig.custom.ps1 later.">?</span></label>
+            <input type="text" id="f_mailTo" data-key="mailTo" autocomplete="off"
+                   placeholder="it-alerts@contoso.com, soc@contoso.com" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-smtp-mode-block="auth" hidden>
+        <h3>SMTP authentication</h3>
+        <p class="card-sub">Login the engine uses to authenticate to the relay. The KV-based storage path is preferred for production -- here you just type the credentials and they end up wherever your <code>config\SecurityInsight.custom.ps1</code> writes them.</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_smtpUser">SMTP username <span class="help" data-tip="The login the relay expects. SendGrid: literally the string 'apikey'. Brevo: your Brevo account email. M365: a licensed mailbox UPN with SMTP AUTH enabled.">?</span></label>
+            <input type="text" id="f_smtpUser" data-key="smtpUser" autocomplete="off" />
+          </div>
+          <div class="field required">
+            <label for="f_smtpPassword">SMTP password / API key <span class="help" data-tip="Stored as $global:SMTPPassword in the custom config (or pulled from KV at engine start, depending on your auth setup). Treat as a secret.">?</span></label>
+            <input type="password" id="f_smtpPassword" data-key="smtpPassword" autocomplete="off" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 3)</span>
+        </div>
+        <pre class="preview" id="preview-output"># Mail mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-output">Copy snippet</button>
+        </div>
       </div>
     </section>
 
+    <!-- ---------------- PAGE 5: CMDB --------------------------------- -->
     <section class="page" data-page="cmdb" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 4 of 10</div>
-        <h2 class="page-title">CMDB integration</h2>
-        <p class="page-lead">ServiceNow CMDB export feed for asset enrichment.</p>
+        <div class="page-eyebrow">Step 4 of 8 &middot; CMDB integration <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Enrich asset rows from your CMDB?</h2>
+        <p class="page-lead">If your CMDB exports a CSV with asset Owner / Department / CostCenter / BusinessApp columns, the engine joins it onto every <code>SI_*_Profile_CL</code> row. Useful for tier overrides, reporting, and the &quot;who owns this&quot; column in Risk Analysis. Off by default.</p>
       </div>
-      <div class="placeholder-card">
-        <span class="soon-pill">Coming soon</span>
-        <h3 style="margin-top: 12px;">CMDB page</h3>
-        <p>Will guide CMDB.csv format, refresh schedule, column mapping.</p>
+
+      <div class="card">
+        <h3>CMDB mode</h3>
+        <div class="toggle-group" data-toggle-key="cmdbMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="cmdbMode" value="off" /> Off <span style="color:#888;">(no CMDB enrichment)</span></label>
+          <label data-val="csv"><input type="radio" name="cmdbMode" value="csv" /> CSV file <span style="color:#888;">(local path or UNC)</span></label>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-cmdb-mode-block="csv" hidden>
+        <h3>CSV source</h3>
+        <div class="form-grid">
+          <div class="field required span-2">
+            <label for="f_cmdbCsvPath">CSV path <span class="help" data-tip="Absolute path on the engine host. Local: C:\SecurityInsight\cmdb\export.csv. UNC: \\fileserver\share\cmdb-export.csv. Required columns: AssetName, Tier (or BusinessCriticality), Owner. Optional: Department, CostCenter, BusinessApp -- engine joins on AssetName case-insensitive.">?</span></label>
+            <input type="text" id="f_cmdbCsvPath" data-key="cmdbCsvPath" autocomplete="off"
+                   placeholder="C:\SecurityInsight\cmdb\export.csv" />
+          </div>
+          <div class="field required">
+            <label for="f_cmdbRefreshHours">Refresh interval (hours) <span class="help" data-tip="How often to re-read the CSV. 24 = once per day (matches typical CMDB export schedules). 1 = hourly (only if your CMDB pushes updates that often). 168 = weekly. Cached file is reused between refreshes, so engine startup stays fast.">?</span></label>
+            <input type="text" id="f_cmdbRefreshHours" data-key="cmdbRefreshHours" autocomplete="off"
+                   placeholder="24" data-default="24" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 3)</span>
+        </div>
+        <pre class="preview" id="preview-cmdb"># CMDB mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-cmdb">Copy snippet</button>
+        </div>
       </div>
     </section>
 
+    <!-- ---------------- PAGE 6: AZURE OPENAI ------------------------- -->
     <section class="page" data-page="apptag" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 5 of 10</div>
-        <h2 class="page-title">App / service tagging</h2>
-        <p class="page-lead">Map application or service detection signals to asset tags.</p>
+        <div class="page-eyebrow">Step 5 of 8 &middot; Azure OpenAI <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Add an AI summary to risk-analysis runs?</h2>
+        <p class="page-lead">When enabled, RiskAnalysis sends the top findings to Azure OpenAI (your tenant, your key) and adds a Summary sheet to the Excel + a paragraph at the top of the email. Costs ~5-15 cents per run on GPT-4o-mini. Off by default; safe to enable later.</p>
       </div>
-      <div class="placeholder-card">
-        <span class="soon-pill">Coming soon</span>
-        <h3 style="margin-top: 12px;">App tagging page</h3>
-        <p>Will edit AssetProfileByApplicationServiceDetection/*.custom.yaml.</p>
+
+      <div class="card">
+        <h3>OpenAI mode</h3>
+        <div class="toggle-group" data-toggle-key="openAiMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="openAiMode" value="off" /> Off</label>
+          <label data-val="enabled"><input type="radio" name="openAiMode" value="enabled" /> Enabled <span style="color:#888;">(uses your Azure OpenAI deployment)</span></label>
+        </div>
+        <div class="note" style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
+          <b>Prerequisite:</b> you need an existing Azure OpenAI resource + a deployed model (GPT-4o-mini or GPT-4o is recommended). If you don't have one, run <code>setup\Validate-SIOpenAI.ps1</code> after the wizard finishes &mdash; it provisions a PAYG instance + deployment for you.
+        </div>
+      </div>
+
+      <div class="card sub-block" data-open-ai-mode-block="enabled" hidden>
+        <h3>OpenAI resource</h3>
+        <p class="card-sub">Re-use an existing Azure OpenAI deployment (paste the endpoint + deployment name + key) <i>or</i> have the wizard create a new resource for you on Apply (PAYG SKU + gpt-4o-mini deployment in the workspace's region).</p>
+        <div class="toggle-group" data-toggle-key="openAiResMode" style="margin-bottom: 14px;">
+          <label data-val="useExisting"><input type="radio" name="openAiResMode" value="useExisting" /> Use existing OpenAI resource <span style="color:#888;">(paste endpoint + deployment + key)</span></label>
+          <label data-val="createNew"><input type="radio" name="openAiResMode" value="createNew" /> Create new OpenAI resource <b style="color:#888;font-weight:400;">(coming v2.2.112+)</b></label>
+        </div>
+
+        <div class="form-grid" data-open-ai-res-mode-block="useExisting">
+          <div class="field required span-2">
+            <label for="f_openAiEndpoint">Endpoint URL <span class="help" data-tip="The Azure OpenAI resource endpoint, NOT the openai.com URL. Format: https://<your-resource-name>.openai.azure.com/. Find under your Azure OpenAI resource > Keys and Endpoint.">?</span></label>
+            <input type="text" id="f_openAiEndpoint" data-key="openAiEndpoint" autocomplete="off"
+                   placeholder="https://my-aoai-westeurope.openai.azure.com/" />
+          </div>
+          <div class="field required">
+            <label for="f_openAiDeployment">Deployment name <span class="help" data-tip="The name you gave your model deployment in Azure OpenAI Studio (NOT the model name). Recommended model: gpt-4o-mini (10x cheaper than gpt-4o for similar summary quality on the SI prompt).">?</span></label>
+            <input type="text" id="f_openAiDeployment" data-key="openAiDeployment" autocomplete="off"
+                   placeholder="gpt-4o-mini" data-default="gpt-4o-mini" />
+          </div>
+          <div class="field required">
+            <label for="f_openAiApiVersion">API version <span class="help" data-tip="The Azure OpenAI API version string. 2024-08-01-preview is current as of this wizard release; future versions are usually backward-compatible for chat/completions.">?</span></label>
+            <input type="text" id="f_openAiApiVersion" data-key="openAiApiVersion" autocomplete="off"
+                   placeholder="2024-08-01-preview" data-default="2024-08-01-preview" />
+          </div>
+          <div class="field required span-2">
+            <label for="f_openAiApiKey">API key <span class="help" data-tip="Found under your Azure OpenAI resource > Keys and Endpoint > KEY 1. Treat as a secret -- ends up in $global:OpenAI_apiKey in the custom config (or KV-pulled at engine start).">?</span></label>
+            <input type="password" id="f_openAiApiKey" data-key="openAiApiKey" autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="f_openAiMaxSpend">Max spend per run (USD) <span class="help" data-tip="Hard cap on tokens per run, converted to dollars at gpt-4o-mini pricing. Engine throws if estimated spend exceeds this. 0.50 USD is plenty for a 200-asset tenant; 5.00 is generous. Leave blank for no cap.">?</span></label>
+            <input type="text" id="f_openAiMaxSpend" data-key="openAiMaxSpend" autocomplete="off"
+                   placeholder="0.50" />
+          </div>
+        </div>
+
+        <div class="note" data-open-ai-res-mode-block="createNew" hidden style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
+          <b>Coming in v2.2.112.</b> The wizard will run <code>setup\Validate-SIOpenAI.ps1</code> on Apply to create a PAYG instance + gpt-4o-mini deployment in your workspace's region, then write the endpoint + key into the custom config automatically. For now, please run that script manually after the wizard finishes (or pick "Use existing" above).
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 3)</span>
+        </div>
+        <pre class="preview" id="preview-apptag"># OpenAI mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-apptag">Copy snippet</button>
+        </div>
       </div>
     </section>
 
-    <section class="page" data-page="raexcl" hidden>
-      <div class="page-header">
-        <div class="page-eyebrow">Step 6 of 10</div>
-        <h2 class="page-title">Risk Analysis exclusions</h2>
-        <p class="page-lead">Per-report CVE / config exclusions and global tag exclusions.</p>
-      </div>
-      <div class="placeholder-card">
-        <span class="soon-pill">Coming soon</span>
-        <h3 style="margin-top: 12px;">RA exclusions page</h3>
-        <p>Will edit RiskAnalysisGlobalExclusions.custom.json + per-report &lt;ReportName&gt;.exclude.custom.json.</p>
-      </div>
-    </section>
-
-    <section class="page" data-page="assettag" hidden>
-      <div class="page-header">
-        <div class="page-eyebrow">Step 7 of 10</div>
-        <h2 class="page-title">Asset exclusion / tier tags</h2>
-        <p class="page-lead">Manual tier overrides + asset-level exclusions.</p>
-      </div>
-      <div class="placeholder-card">
-        <span class="soon-pill">Coming soon</span>
-        <h3 style="margin-top: 12px;">Asset tagging page</h3>
-        <p>Will edit AssetTagging.custom.yaml.</p>
-      </div>
-    </section>
-
+    <!-- ---------------- PAGE 7: SHODAN ------------------------------- -->
     <section class="page" data-page="shodan" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 8 of 10</div>
-        <h2 class="page-title">Shodan attack surface</h2>
-        <p class="page-lead">Public IP enumeration via Shodan REST API.</p>
+        <div class="page-eyebrow">Step 6 of 8 &middot; Shodan attack surface <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Scan your public IPs via Shodan?</h2>
+        <p class="page-lead">When enabled, the PublicIP engine collects every Tier 0/1 asset's public IP, queries Shodan for open ports + CVE history, and lands the data in <code>SI_PublicIP_CL</code> for two new RA reports (open-port exposure, vulnerable-service exposure). Off by default; needs a Shodan account.</p>
       </div>
-      <div class="placeholder-card">
-        <span class="soon-pill">Coming soon</span>
-        <h3 style="margin-top: 12px;">Shodan page</h3>
-        <p>Will collect API key, target tier filter, scan cadence.</p>
+
+      <div class="card">
+        <h3>Shodan mode</h3>
+        <div class="toggle-group" data-toggle-key="shodanMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="shodanMode" value="off" /> Off</label>
+          <label data-val="enabled"><input type="radio" name="shodanMode" value="enabled" /> Enabled</label>
+        </div>
+        <div class="note" style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
+          <b>Prerequisite:</b> a Shodan API key. <b>Free tier</b> caps at ~100 lookups/month with no port-history; <b>Membership</b> ($49 one-time) lifts the cap to ~10,000/month and unlocks CVE history. SI's PublicIP engine batches lookups, so a 200-asset tenant costs ~50-100 lookups per run.
+        </div>
+      </div>
+
+      <div class="card sub-block" data-shodan-mode-block="enabled" hidden>
+        <h3>Shodan credentials</h3>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_shodanApiKey">API key <span class="help" data-tip="Found at account.shodan.io after sign-in. Treat as a secret -- ends up in $global:SI_Shodan_ApiKey in the custom config (or KV-pulled at engine start). Free-tier keys work; the engine surfaces 'rate-limit reached' clearly if you blow the quota.">?</span></label>
+            <input type="password" id="f_shodanApiKey" data-key="shodanApiKey" autocomplete="off" />
+          </div>
+          <div class="field required">
+            <label for="f_shodanLicenseTier">License tier <span class="help" data-tip="Drives the engine's per-run rate-limit budget so it backs off before Shodan starts rejecting calls. Free: ~100 lookups/month, no port-history. Membership ($49 one-time): ~10K/month + CVE history. Small Business / Enterprise: higher caps + Internet-search API.">?</span></label>
+            <select id="f_shodanLicenseTier" data-key="shodanLicenseTier" data-default="freelance">
+              <option value="freelance">Free / Freelancer</option>
+              <option value="membership">Membership ($49)</option>
+              <option value="smallbusiness">Small Business</option>
+              <option value="corporate">Corporate / Enterprise</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 3)</span>
+        </div>
+        <pre class="preview" id="preview-shodan"># Shodan mode is OFF -- nothing written.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-shodan">Copy snippet</button>
+        </div>
       </div>
     </section>
 
+    <!-- ---------------- PAGE 8: OUTPUT SINKS + DEFENDER -------------- -->
     <section class="page" data-page="advanced" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 9 of 10</div>
-        <h2 class="page-title">Advanced overrides</h2>
-        <p class="page-lead">Per-engine knobs most customers never touch.</p>
+        <div class="page-eyebrow">Step 7 of 8 &middot; Output sinks + Defender XDR <span style="color:#888;font-weight:400;">(optional)</span></div>
+        <h2 class="page-title">Where else should output go?</h2>
+        <p class="page-lead">By default every engine writes to Log Analytics + an Excel file. Optionally also write JSON for downstream pipelines, and link your Defender XDR workspace so RA can correlate with Defender Advanced Hunting tables.</p>
       </div>
-      <div class="placeholder-card">
-        <span class="soon-pill">Coming soon</span>
-        <h3 style="margin-top: 12px;">Advanced page</h3>
-        <p>Will expose AssetLimit, parallelism, transcript verbosity, etc.</p>
+
+      <div class="card">
+        <h3>JSON output sink</h3>
+        <p class="card-sub">When enabled, every engine appends <code>'JSON'</code> to its <code>SI_Sinks_&lt;Engine&gt;</code> array, writing newline-delimited JSON next to the Excel report. Useful for external SIEM ingest or custom analytics. Adds ~10% to runtime.</p>
+        <div class="toggle-group" style="margin-bottom: 4px;">
+          <label><input type="checkbox" id="f_enableJsonSink" data-key="enableJsonSink" /> Enable JSON output for every engine <span class="help" data-tip="Adds 'JSON' to SI_Sinks_RiskAnalysis, SI_Sinks_Endpoint, SI_Sinks_Identity, SI_Sinks_Azure, etc. Files land in DATA/OUTPUT/&lt;EngineName&gt;/&lt;timestamp&gt;.json.">?</span></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Defender XDR workspace linkage</h3>
+        <p class="card-sub">Optionally tell SI which Log Analytics workspace your Defender XDR data is streaming to. Several RA reports cross-correlate (e.g. join MDE recommendations with sign-in risk events). Off by default.</p>
+        <div class="toggle-group" data-toggle-key="defenderMode" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="defenderMode" value="off" /> Off <span style="color:#888;">(no Defender XDR correlation)</span></label>
+          <label data-val="linked"><input type="radio" name="defenderMode" value="linked" /> Linked <span style="color:#888;">(paste your XDR workspace ResourceId below)</span></label>
+        </div>
+      </div>
+
+      <div class="card sub-block" data-defender-mode-block="linked" hidden>
+        <h3>Defender workspace</h3>
+        <div class="form-grid">
+          <div class="field required span-2">
+            <label for="f_defenderWorkspaceResourceId">Workspace ResourceId <span class="help" data-tip="Full Azure ResourceId of the Defender XDR-ingesting Log Analytics workspace. Format: /subscriptions/&lt;sub-guid&gt;/resourceGroups/&lt;rg&gt;/providers/Microsoft.OperationalInsights/workspaces/&lt;ws-name&gt;. Find it in Defender XDR portal > Settings > Microsoft Sentinel.">?</span></label>
+            <input type="text" id="f_defenderWorkspaceResourceId" data-key="defenderWorkspaceResourceId" autocomplete="off"
+                   placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.OperationalInsights/workspaces/..." />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="preview-head">
+          <h4>Generated snippet</h4>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 3)</span>
+        </div>
+        <pre class="preview" id="preview-advanced"># Output sinks: LA + Excel only. Defender XDR linkage: OFF.</pre>
+        <div style="margin-top: 10px;">
+          <button class="btn primary" data-copy="preview-advanced">Copy snippet</button>
+        </div>
       </div>
     </section>
 
     <section class="page" data-page="review" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 10 of 10 &middot; Review &amp; Apply</div>
+        <div class="page-eyebrow">Step 8 of 8 &middot; Review &amp; Apply</div>
         <h2 class="page-title">Review your answers, then Apply</h2>
         <p class="page-lead">Click <b>Apply now</b> to provision everything: the wizard creates the SPN (or re-uses your existing one), grants the permissions, creates Log Analytics + Storage with RBAC-only access, and writes <code>config\SecurityInsight.custom.ps1</code>.</p>
       </div>

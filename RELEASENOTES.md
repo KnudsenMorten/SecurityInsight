@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.110
+## v2.2.111
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
 - release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
 - release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
 - release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
 - release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
 - release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
-- release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.111 — Setup Wizard: full optional-section pages live with mouseover help + requirements-aware sub-fields
+
+The wizard is no longer 3 functional pages plus 7 placeholders — it's now 8 functional pages end-to-end. Steps 3-7 (previously "Coming soon" cards) are activated and rewritten with master-toggle / sub-block UX so customers only see fields that apply to the choice they made.
+
+**New active pages (each opt-in: master toggle defaults OFF):**
+
+- **Step 3 — Mail / SMTP.** Off (no mail) / Anonymous relay / Authenticated. When *Anonymous*: Server, Port, UseSSL, From, MailTo. When *Authenticated*: adds User + Password fields below in a separate sub-card. *Off* hides everything below the toggle.
+- **Step 4 — CMDB integration.** Off / CSV file. CSV path + refresh-interval-hours when on.
+- **Step 5 — Azure OpenAI.** Off / Enabled. When *Enabled*: a sub-toggle picks **Use existing OpenAI resource** (paste endpoint + deployment + key + version + max-spend) or **Create new** (placeholder for v2.2.112+ — wizard will run `Validate-SIOpenAI.ps1` automatically on Apply). Defaults to existing-resource path.
+- **Step 6 — Shodan attack surface.** Off / Enabled. When *Enabled*: API key + a **license-tier dropdown** (Free / Membership / Small Business / Corporate) that drives the engine's per-run rate-limit budget so it backs off before Shodan starts rejecting calls.
+- **Step 7 — Output sinks + Defender XDR.** Two independent toggles: a checkbox for **JSON sink** (adds `'JSON'` to every `SI_Sinks_<Engine>`) and an Off/Linked toggle for **Defender XDR workspace ResourceId** (used by RA cross-correlation reports).
+
+**New tooltip system.** Every input that needs a "what does this mean / where do I find it" hint carries a `?` icon next to its label. Hovering or focusing the icon shows a 320px-wide dark popup with plain-English help — where in the Azure portal to find the value, what format it expects, what the recommended default is, and what happens if you skip it. Pure CSS (`.help::after { content: attr(data-tip) }`), no JavaScript hover handlers, no external library.
+
+**Master-toggle / sub-block visibility.** The existing `syncCredBlocks()` framework (compound visibility filters) was already designed for this — v2.2.111 just adds five new filter keys to the `VIS_FILTERS` map (`smtpModeBlock`, `cmdbModeBlock`, `openAiModeBlock`, `openAiResModeBlock`, `shodanModeBlock`, `defenderModeBlock`). Each sub-block carries `data-<x>-mode-block="anon,auth"` (multi-value supported since v2.2.110) and is hidden when the master toggle says "off".
+
+**`hydrateForms()` now handles `<input type="checkbox">` separately** from text inputs. The previous code path read `input.value.trim()` on checkboxes, which gave `'on'` or `''` instead of a boolean — fine for the Apply payload (`d.smtpUseSsl !== false` worked) but flat-out wrong for `enableJsonSink`. Checkboxes now bind to `state.data[key] = !!cb.checked`.
+
+**Snippet generators** added for all five new pages (`buildOutputSnippet`, `buildCmdbSnippet`, `buildApptagSnippet`, `buildShodanSnippet`, `buildAdvancedSnippet`). Each returns either an "OFF -- nothing written" placeholder when the master toggle is off, or the matching `$global:*` PowerShell block targeted at `config/SecurityInsight.custom.ps1` (Layer 3). Snippets re-render live as the operator types.
+
+**`buildApplyState()` rewired** to read the new master toggles instead of guessing from raw field presence:
+- `if (d.smtpMode && d.smtpMode !== 'off')` → `st.smtp = { Mode, Server, Port, UseSsl, From, MailTo }` plus `User`/`Password` only when `Mode === 'auth'`.
+- `if (d.openAiMode === 'enabled' && d.openAiEndpoint)` → `st.openAi = { Endpoint, Deployment, ApiKey, ApiVersion, MaxSpendPerRun }`.
+- `if (d.shodanMode === 'enabled' && d.shodanApiKey)` → `st.shodan = { ApiKey, LicenseTier }`.
+- `if (d.cmdbMode === 'csv')` → `st.cmdb = { Enabled, RefreshHours, CsvPath }`.
+- `if (d.defenderMode === 'linked' && d.defenderWorkspaceResourceId)` → `st.defenderWorkspaceResourceId`.
+
+**Step count updated to "8 of 8"** in every page eyebrow and the welcome hero. Two pages stay deactivated as power-user features for v2.2.112+: `raexcl` (per-report CVE/config exclusions) and `assettag` (manual tier overrides).
+
+**Coming next (v2.2.112+):**
+- Backend `Validate-SIOpenAI.ps1` integration so "Create new OpenAI resource" actually creates one on Apply.
+- "Use existing resource by ResourceId" pattern for KV / Storage / OpenAI / Log Analytics workspace (single-field paste vs name + RG + sub).
+- Activate `raexcl` + `assettag` power-user pages.
+- Backend `New-AzKeyVault` for the createNewKv path.
+
+For testers: clear localStorage (DevTools → Application → Local Storage → Clear) or open a private window to verify the new pages render from a clean slate.
 
 ---
 

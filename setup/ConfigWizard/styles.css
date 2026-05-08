@@ -274,6 +274,58 @@ body {
    (b.hidden = true) actually hides .form-grid blocks. */
 [hidden] { display: none !important; }
 
+/* Inline tooltip helper. Pattern:
+     <label>Field name <span class="help" data-tip="why this matters">?</span></label>
+   The `?` icon shows a popup on hover/focus. The popup text reads from
+   data-tip (so it can contain HTML-safe text without HTML escaping). */
+.help {
+  display: inline-block;
+  width: 16px; height: 16px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #5a6a7a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 16px;
+  cursor: help;
+  position: relative;
+  user-select: none;
+  vertical-align: middle;
+}
+.help:hover, .help:focus { background: #1a3a5c; outline: none; }
+.help::after {
+  content: attr(data-tip);
+  display: none;
+  position: absolute;
+  left: 22px; top: -6px;
+  width: 320px;
+  padding: 10px 12px;
+  background: #1a3a5c;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  text-align: left;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.25);
+  z-index: 100;
+  white-space: normal;
+}
+.help:hover::after, .help:focus::after { display: block; }
+@media (max-width: 700px) {
+  .help::after { left: auto; right: 22px; width: 240px; }
+}
+
+/* Conditional sub-block (used by feature-toggle cards). Adds a left rail
+   so it visually belongs to the toggle above it. */
+.sub-block {
+  border-left: 3px solid #d6e3ec;
+  padding: 0 0 0 14px;
+  margin: 14px 0 0 4px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -94,7 +94,7 @@
     <section class="page" data-page="tenant" hidden>
       <div class="page-header">
         <div class="page-eyebrow">Step 1 of 8 &middot; Tenant identity</div>
-        <h2 class="page-title">Who are we authenticating as?</h2>
+        <h2 class="page-title">How will the SecurityInsight engines authenticate?</h2>
         <p class="page-lead">SecurityInsight engines authenticate to Entra and Azure once per run as a service principal. Pick a credential type, fill in the details. The wizard will emit a Layer-1 platform-defaults snippet that every engine inherits.</p>
       </div>
 
@@ -260,14 +260,87 @@
       </div>
 
       <div class="card">
-        <h3>Subscription</h3>
-        <p class="card-sub">Subscription that hosts the Log Analytics workspace + DCE (cross-sub support comes later in the wizard).</p>
+        <h3>Subscription + region</h3>
+        <p class="card-sub">Azure subscription that hosts the Log Analytics workspace + DCE + storage account, and the region they all land in. The wizard creates every resource in this single (subscription, region) pair -- cross-sub / multi-region support comes in a later tag.</p>
         <div class="form-grid">
-          <div class="field required span-2">
-            <label for="f_sub">Subscription ID (GUID)</label>
+          <div class="field required">
+            <label for="f_sub">Subscription ID (GUID) <span class="help" data-tip="Find under Azure Portal &gt; Subscriptions &gt; the row you want &gt; Subscription ID column. Or in PowerShell: Get-AzSubscription | Format-Table Name, Id.">?</span></label>
             <input type="text" id="f_sub" data-key="subscriptionId" autocomplete="off"
                    placeholder="00000000-0000-0000-0000-000000000000" />
             <span class="err" data-err="subscriptionId">Must be a GUID.</span>
+          </div>
+          <div class="field required">
+            <label for="f_region">Azure region <span class="help" data-tip="Region for the workspace + DCE + storage. Pick the closest to your operator host (lowest egress + latency). Most customers pick West Europe / North Europe / East US / West US 2 / Australia East. The wizard does NOT validate per-subscription quota -- if a region returns a 'not enabled' / 'quota exhausted' error on Apply, switch here and re-apply.">?</span></label>
+            <select id="f_region" data-key="location" data-default="westeurope">
+              <optgroup label="Europe">
+                <option value="westeurope">West Europe (Netherlands)</option>
+                <option value="northeurope">North Europe (Ireland)</option>
+                <option value="uksouth">UK South (London)</option>
+                <option value="ukwest">UK West (Cardiff)</option>
+                <option value="francecentral">France Central (Paris)</option>
+                <option value="francesouth">France South (Marseille)</option>
+                <option value="germanywestcentral">Germany West Central (Frankfurt)</option>
+                <option value="germanynorth">Germany North (Berlin)</option>
+                <option value="switzerlandnorth">Switzerland North (Zurich)</option>
+                <option value="switzerlandwest">Switzerland West (Geneva)</option>
+                <option value="norwayeast">Norway East (Oslo)</option>
+                <option value="norwaywest">Norway West (Stavanger)</option>
+                <option value="swedencentral">Sweden Central (Gavle)</option>
+                <option value="swedensouth">Sweden South (Malmo)</option>
+                <option value="polandcentral">Poland Central (Warsaw)</option>
+                <option value="italynorth">Italy North (Milan)</option>
+                <option value="spaincentral">Spain Central (Madrid)</option>
+              </optgroup>
+              <optgroup label="North America">
+                <option value="eastus">East US (Virginia)</option>
+                <option value="eastus2">East US 2 (Virginia)</option>
+                <option value="westus">West US (California)</option>
+                <option value="westus2">West US 2 (Washington)</option>
+                <option value="westus3">West US 3 (Arizona)</option>
+                <option value="centralus">Central US (Iowa)</option>
+                <option value="northcentralus">North Central US (Illinois)</option>
+                <option value="southcentralus">South Central US (Texas)</option>
+                <option value="westcentralus">West Central US (Wyoming)</option>
+                <option value="canadacentral">Canada Central (Toronto)</option>
+                <option value="canadaeast">Canada East (Quebec)</option>
+                <option value="mexicocentral">Mexico Central (Queretaro)</option>
+              </optgroup>
+              <optgroup label="South America">
+                <option value="brazilsouth">Brazil South (Sao Paulo)</option>
+                <option value="brazilsoutheast">Brazil Southeast (Rio de Janeiro)</option>
+              </optgroup>
+              <optgroup label="Asia Pacific">
+                <option value="southeastasia">Southeast Asia (Singapore)</option>
+                <option value="eastasia">East Asia (Hong Kong)</option>
+                <option value="japaneast">Japan East (Tokyo)</option>
+                <option value="japanwest">Japan West (Osaka)</option>
+                <option value="koreacentral">Korea Central (Seoul)</option>
+                <option value="koreasouth">Korea South (Busan)</option>
+                <option value="centralindia">Central India (Pune)</option>
+                <option value="southindia">South India (Chennai)</option>
+                <option value="westindia">West India (Mumbai)</option>
+                <option value="jioindiacentral">Jio India Central (Nagpur)</option>
+                <option value="jioindiawest">Jio India West (Jamnagar)</option>
+              </optgroup>
+              <optgroup label="Australia + New Zealand">
+                <option value="australiaeast">Australia East (Sydney)</option>
+                <option value="australiasoutheast">Australia Southeast (Melbourne)</option>
+                <option value="australiacentral">Australia Central (Canberra)</option>
+                <option value="australiacentral2">Australia Central 2 (Canberra)</option>
+                <option value="newzealandnorth">New Zealand North (Auckland)</option>
+              </optgroup>
+              <optgroup label="Middle East">
+                <option value="uaenorth">UAE North (Dubai)</option>
+                <option value="uaecentral">UAE Central (Abu Dhabi)</option>
+                <option value="qatarcentral">Qatar Central (Doha)</option>
+                <option value="israelcentral">Israel Central (Tel Aviv)</option>
+              </optgroup>
+              <optgroup label="Africa">
+                <option value="southafricanorth">South Africa North (Johannesburg)</option>
+                <option value="southafricawest">South Africa West (Cape Town)</option>
+              </optgroup>
+            </select>
+            <span class="err" data-err="location">Required.</span>
           </div>
         </div>
       </div>
@@ -525,14 +598,81 @@
             <input type="password" id="f_openAiApiKey" data-key="openAiApiKey" autocomplete="off" />
           </div>
           <div class="field">
-            <label for="f_openAiMaxSpend">Max spend per run (USD) <span class="help" data-tip="Hard cap on tokens per run, converted to dollars at gpt-4o-mini pricing. Engine throws if estimated spend exceeds this. 0.50 USD is plenty for a 200-asset tenant; 5.00 is generous. Leave blank for no cap.">?</span></label>
+            <label for="f_openAiMaxSpend">Max spend per run (USD) <span class="help" data-tip="Hard cap on tokens per run, converted to dollars at gpt-4o-mini pricing. When the next call would push spend over this cap, the asset gets SI_Classify_Status='budget-capped' with a placeholder verdict and the run continues (engine does not throw). Default 3 USD covers ~200-500 assets comfortably; raise to 10 for very large tenants, lower to 0.50 for cost-paranoid lab use.">?</span></label>
             <input type="text" id="f_openAiMaxSpend" data-key="openAiMaxSpend" autocomplete="off"
-                   placeholder="0.50" />
+                   placeholder="3"
+                   data-default="3" />
           </div>
         </div>
 
-        <div class="note" data-open-ai-res-mode-block="createNew" hidden style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
-          <b>Coming in v2.2.112.</b> The wizard will run <code>setup\Validate-SIOpenAI.ps1</code> on Apply to create a PAYG instance + gpt-4o-mini deployment in your workspace's region, then write the endpoint + key into the custom config automatically. For now, please run that script manually after the wizard finishes (or pick "Use existing" above).
+        <div data-open-ai-res-mode-block="createNew" hidden>
+          <p class="card-sub" style="margin-top:14px;">Where the new Azure OpenAI resource + deployment land. The wizard's backend (v2.2.112+) will run <code>setup\Validate-SIOpenAI.ps1</code> on Apply to provision a PAYG instance with these names; until then, run that script manually with the same values, or create the resource in the Azure portal and paste it back into "Use existing" above.</p>
+          <div class="form-grid">
+            <div class="field required">
+              <label for="f_openAiResName">OpenAI resource name <span class="help" data-tip="DNS-globally-unique. Format: oai-&lt;org&gt;-securityinsight (or oai-&lt;org&gt;-si-&lt;env&gt; for prod / preview side-by-side). 2-64 chars, lowercase letters / digits / hyphens. The resource endpoint URL is auto-derived: https://&lt;name&gt;.openai.azure.com/.">?</span></label>
+              <input type="text" id="f_openAiResName" data-key="openAiResName" autocomplete="off"
+                     placeholder="oai-myorg-securityinsight"
+                     data-default="oai-myorg-securityinsight" />
+            </div>
+            <div class="field required">
+              <label for="f_openAiResRg">Resource group <span class="help" data-tip="RG that hosts the Azure OpenAI resource. Often kept separate from the SI workspace RG so cost-allocation tags and policies can differ. Defaults to rg-securityinsight-openai.">?</span></label>
+              <input type="text" id="f_openAiResRg" data-key="openAiResRg" autocomplete="off"
+                     placeholder="rg-securityinsight-openai"
+                     data-default="rg-securityinsight-openai" />
+            </div>
+            <div class="field required">
+              <label for="f_openAiSub">Subscription ID <span class="help" data-tip="Subscription to host the OpenAI resource. Often DIFFERENT from the SI workspace sub if the org keeps AI workloads in a dedicated cost-centre sub. Defaults to the same sub you set on Step 2.">?</span></label>
+              <input type="text" id="f_openAiSub" data-key="openAiSubscriptionId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="openAiSubscriptionId">Must be a GUID (or leave blank to use Step 2's sub).</span>
+            </div>
+            <div class="field required">
+              <label for="f_openAiResRegion">Azure region <span class="help" data-tip="Region for the new OpenAI resource. NOT every Azure region offers Azure OpenAI -- Sweden Central, East US, East US 2, France Central, North Central US, Switzerland North, UK South, West Europe are the most-stocked-with-models. gpt-4o-mini is widely available; gpt-4o has tighter region availability. Pick close to your workspace region for lowest latency.">?</span></label>
+              <select id="f_openAiResRegion" data-key="openAiLocation" data-default="swedencentral">
+                <optgroup label="Best gpt-4o-mini availability">
+                  <option value="swedencentral">Sweden Central (Gavle)</option>
+                  <option value="eastus">East US (Virginia)</option>
+                  <option value="eastus2">East US 2 (Virginia)</option>
+                  <option value="francecentral">France Central (Paris)</option>
+                  <option value="northcentralus">North Central US (Illinois)</option>
+                  <option value="switzerlandnorth">Switzerland North (Zurich)</option>
+                  <option value="uksouth">UK South (London)</option>
+                  <option value="westeurope">West Europe (Netherlands)</option>
+                </optgroup>
+                <optgroup label="Other AOAI-enabled regions">
+                  <option value="australiaeast">Australia East (Sydney)</option>
+                  <option value="brazilsouth">Brazil South (Sao Paulo)</option>
+                  <option value="canadaeast">Canada East (Quebec)</option>
+                  <option value="japaneast">Japan East (Tokyo)</option>
+                  <option value="koreacentral">Korea Central (Seoul)</option>
+                  <option value="norwayeast">Norway East (Oslo)</option>
+                  <option value="southafricanorth">South Africa North (Johannesburg)</option>
+                  <option value="southindia">South India (Chennai)</option>
+                  <option value="southcentralus">South Central US (Texas)</option>
+                  <option value="westus">West US (California)</option>
+                  <option value="westus3">West US 3 (Arizona)</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="field required">
+              <label for="f_openAiNewDeployment">Deployment name <span class="help" data-tip="Name you give the model deployment (used to address it in API calls -- it's NOT the model itself). Convention: same as the model SKU lower-cased + dashed (gpt-4o-mini, gpt-4o-2024-08-06). The wizard creates this deployment after the resource on Apply.">?</span></label>
+              <input type="text" id="f_openAiNewDeployment" data-key="openAiNewDeployment" autocomplete="off"
+                     placeholder="gpt-4o-mini"
+                     data-default="gpt-4o-mini" />
+            </div>
+            <div class="field required">
+              <label for="f_openAiModel">Model SKU <span class="help" data-tip="The actual Azure OpenAI model. gpt-4o-mini is the SI default (10x cheaper than gpt-4o for similar summary quality). gpt-4o for higher fidelity. gpt-4-turbo for legacy compat. Check region availability before picking a model not in the default list.">?</span></label>
+              <select id="f_openAiModel" data-key="openAiModel" data-default="gpt-4o-mini">
+                <option value="gpt-4o-mini">gpt-4o-mini (recommended -- cheap + fast)</option>
+                <option value="gpt-4o">gpt-4o (highest quality)</option>
+                <option value="gpt-4-turbo">gpt-4-turbo (legacy)</option>
+                <option value="gpt-35-turbo">gpt-35-turbo (cheapest)</option>
+              </select>
+            </div>
+          </div>
+          <p style="font-size:13px;color:#5a6a7a;background:#fff8e1;border-left:3px solid #f57c00;padding:10px 12px;border-radius:4px;margin-top:14px;">
+            <b>v2.2.112+ note:</b> the wizard backend will run <code>setup\Validate-SIOpenAI.ps1</code> on Apply with these values to provision the resource + deployment + key, then write the endpoint + key into your custom config automatically. The snippet preview below shows exactly what the engine will read.
+          </p>
         </div>
       </div>
 

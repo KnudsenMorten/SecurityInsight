@@ -102,7 +102,8 @@ param(
     [Parameter()]          [int]$SecretValidityYears = 2,
     [Parameter()]          [string]$ManagedIdentityClientId,   # required when CredKind=ManagedIdentity
     [Parameter()]          [string[]]$GraphPermissions,
-    [Parameter()]          [switch]$SkipAdminConsent
+    [Parameter()]          [switch]$SkipAdminConsent,
+    [Parameter()]          [switch]$SkipTenantRbac
 )
 
 $ErrorActionPreference = 'Stop'
@@ -174,16 +175,35 @@ Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
 Import-Module Microsoft.Graph.Applications  -ErrorAction Stop
 $mgScopes = @(
     'Application.ReadWrite.All',          # create app + sp + secret
-    'AppRoleAssignment.ReadWrite.All',    # grant Graph permissions
-    'DelegatedPermissionGrant.ReadWrite.All',
-    'Directory.ReadWrite.All'
+    'AppRoleAssignment.ReadWrite.All',    # grant Microsoft Graph application permissions (admin consent)
+    'Directory.ReadWrite.All'             # read SP object IDs for RBAC + member lookup
+    # NOTE: DelegatedPermissionGrant.ReadWrite.All intentionally NOT requested.
+    # That scope is for delegated (user-impersonation) consent grants. The wizard
+    # only does application-only role assignments via AppRoleAssignment.ReadWrite.All.
+    # Older docs listed it as required -- it's not, and asking for it triggers
+    # AADSTS650053 in some tenants when the Graph SDK truncates the scope on
+    # Connect-MgGraph (observed 2026-05-08 against the Graph Command Line Tools
+    # public client app).
 )
+# Graph context MUST be loaded before this cmdlet runs (Start-SetupWizard
+# pre-flight requires it; standalone usage = operator runs Connect-MgGraph
+# in their shell first). NEVER call Connect-MgGraph here -- in a non-
+# interactive listener process the auth dialog is invisible and the cmdlet
+# hangs forever, AND device-code auth is blocked by Conditional Access in
+# many tenants (security risk). The operator authenticates how their CA
+# policy allows in their own shell, then we inherit.
 $ctx = Get-MgContext -ErrorAction SilentlyContinue
-if (-not $ctx -or $ctx.TenantId -ne $TenantId -or -not ($mgScopes | ForEach-Object { $ctx.Scopes -contains $_ } | Where-Object { -not $_ } | Select-Object -First 1)) {
-    Connect-MgGraph -TenantId $TenantId -Scopes $mgScopes -NoWelcome | Out-Null
+if (-not $ctx) {
+    throw ("No Microsoft Graph context. Run this in the shell that launches the wizard, then re-try:`n  Connect-MgGraph -TenantId {0} -Scopes {1}" -f $TenantId, ($mgScopes -join ','))
 }
-$ctx = Get-MgContext
-_Ok ("Graph connected as {0} ({1})" -f $ctx.Account, $ctx.AppName)
+if ($ctx.TenantId -ne $TenantId) {
+    throw ("Graph context tenant mismatch: connected to {0}, wizard wants {1}. Reconnect with 'Connect-MgGraph -TenantId {1} -Scopes {2}'." -f $ctx.TenantId, $TenantId, ($mgScopes -join ','))
+}
+$missingScopes = @($mgScopes | Where-Object { $ctx.Scopes -notcontains $_ })
+if ($missingScopes.Count -gt 0) {
+    throw ("Graph context is missing required scopes: {0}. Reconnect with 'Connect-MgGraph -TenantId {1} -Scopes {2}'." -f ($missingScopes -join ','), $TenantId, ($mgScopes -join ','))
+}
+_Ok ("Graph context: {0} ({1})" -f $ctx.Account, $ctx.AppName)
 
 # ----- 2. Find or create the application -----
 _Step "look up application by display name"
@@ -264,57 +284,120 @@ elseif ($CredKind -eq 'ManagedIdentity') {
     _Ok ("re-targeting subsequent permissions onto MSI SP {0}" -f $sp.Id)
 }
 
-# ----- 5. Add Graph application permissions -----
+# ----- 5. Add Graph application permissions (per-permission status tracking) -----
+# Each permission is one of:
+#   granted       - app-role-assignment now in place (operator had Privileged Role Admin)
+#   already       - app-role-assignment was already in place (idempotent re-run)
+#   pending       - grant attempt failed with Authorization_RequestDenied or similar
+#                   (operator lacks PRA / Global Admin); needs another admin to consent
+#   not-found     - permission name not on Microsoft Graph's AppRoles (typo / wrong perm)
+#   skipped       - SkipAdminConsent switch -- the consent step was deliberately skipped
+#                   so the perm is "requested on the app reg" but not yet active
 _Step "grant Microsoft Graph application permissions"
 $graphAppId  = '00000003-0000-0000-c000-000000000000'   # Microsoft Graph
 $graphSp     = Get-MgServicePrincipal -Filter "appId eq '$graphAppId'" -ErrorAction Stop
-$missing = @()
+$permResults = @()                # @{Name; Status; Error}
 foreach ($permName in $GraphPermissions) {
     $role = $graphSp.AppRoles | Where-Object { $_.Value -eq $permName -and $_.AllowedMemberTypes -contains 'Application' }
     if (-not $role) {
         _Warn "Graph role not found: $permName -- skipped"
+        $permResults += @{ Name = $permName; Status = 'not-found'; Error = 'Permission name not on Microsoft Graph AppRoles' }
         continue
     }
     $existing = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -ErrorAction SilentlyContinue |
         Where-Object { $_.AppRoleId -eq $role.Id -and $_.ResourceId -eq $graphSp.Id }
-    if ($existing) { continue }   # already granted
+    if ($existing) {
+        $permResults += @{ Name = $permName; Status = 'already'; Error = $null }
+        continue
+    }
+    if ($SkipAdminConsent) {
+        $permResults += @{ Name = $permName; Status = 'skipped'; Error = 'SkipAdminConsent set -- a Global Admin must click the consent URL' }
+        continue
+    }
     try {
         $null = New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id `
             -PrincipalId $sp.Id -ResourceId $graphSp.Id -AppRoleId $role.Id -ErrorAction Stop
-        $missing += $permName
+        $permResults += @{ Name = $permName; Status = 'granted'; Error = $null }
     } catch {
-        _Warn ("could not grant {0}: {1}" -f $permName, $_.Exception.Message)
+        # Authorization_RequestDenied = operator lacks PRA / Global Admin. Don't kill
+        # the run -- mark the perm pending so the wizard can surface the consent URL
+        # and the operator can hand it to a Global Admin (then re-run /api/apply).
+        $errMsg = $_.Exception.Message
+        _Warn ("could not grant {0}: {1}" -f $permName, $errMsg)
+        $permResults += @{ Name = $permName; Status = 'pending'; Error = $errMsg }
     }
 }
-_Ok ("Graph permissions granted: {0} new ({1} total requested)" -f $missing.Count, $GraphPermissions.Count)
-if (-not $SkipAdminConsent) {
-    _Info 'admin consent requested via app-role-assignment (silent for Global Admins)'
+$grantedCount = ($permResults | Where-Object { $_.Status -in @('granted','already') }).Count
+$pendingCount = ($permResults | Where-Object { $_.Status -in @('pending','skipped') }).Count
+_Ok ("Graph permissions: {0}/{1} active ({2} pending admin consent)" -f $grantedCount, $GraphPermissions.Count, $pendingCount)
+
+# Compute an admin-consent URL the wizard UI can surface to the operator. A
+# Global Admin (or anyone with Privileged Role Administrator on the app) clicks
+# this URL once and consents to all the requested permissions in a single
+# Entra portal flow -- works regardless of whether the wizard's operator had
+# the rights to do it themselves.
+$consentUrl = "https://login.microsoftonline.com/$TenantId/adminconsent?client_id=$($app.AppId)"
+$consentStatus = if ($pendingCount -eq 0) { 'granted' }
+                 elseif ($grantedCount -eq 0) { 'pending' }
+                 else { 'partial' }
+_Info "consent status: $consentStatus"
+if ($consentStatus -ne 'granted') {
+    _Info "admin consent URL (hand to a Global Admin, then re-run /api/apply):"
+    _Info "  $consentUrl"
 }
 
 # ----- 6. Azure RBAC -----
-_Step "connect Az PowerShell"
+# Az context MUST be loaded before this cmdlet runs (Start-SetupWizard's
+# pre-flight requires both Az + Graph contexts; running standalone, the
+# operator does Connect-AzAccount in their shell before invoking us). NEVER
+# call Connect-AzAccount here -- in a non-interactive listener process the
+# auth dialog is invisible and the cmdlet hangs forever (root cause of the
+# v2.2.105-v2.2.112 listener stall in Phase 1).
+_Step "verify Az PowerShell context"
 Import-Module Az.Accounts -ErrorAction Stop
 Import-Module Az.Resources -ErrorAction Stop
 $azCtx = Get-AzContext -ErrorAction SilentlyContinue
-if (-not $azCtx -or $azCtx.Tenant.Id -ne $TenantId -or $azCtx.Subscription.Id -ne $SubscriptionId) {
-    Connect-AzAccount -Tenant $TenantId -Subscription $SubscriptionId -ErrorAction Stop | Out-Null
+if (-not $azCtx) {
+    throw "No Az PowerShell context. Run 'Connect-AzAccount -Tenant $TenantId' in the shell that launches the wizard, then re-try."
 }
-_Ok 'Az connected'
+if ($azCtx.Tenant.Id -ne $TenantId) {
+    throw ("Az context tenant mismatch: connected to {0}, wizard wants {1}. Reconnect with 'Connect-AzAccount -Tenant {1}'." -f $azCtx.Tenant.Id, $TenantId)
+}
+if ($azCtx.Subscription.Id -ne $SubscriptionId) {
+    Set-AzContext -SubscriptionId $SubscriptionId -ErrorAction Stop | Out-Null
+    $azCtx = Get-AzContext
+}
+_Ok ("Az context: {0} (sub: {1} / {2})" -f $azCtx.Account.Id, $azCtx.Subscription.Name, $azCtx.Subscription.Id)
 
-$rbacScopes = @()
+$rbacScopes  = @()
+$rbacResults = @()                # @{Name; Scope; Status; Error}
 $rootMgScope = "/providers/Microsoft.Management/managementGroups/$RootMgId"
 $readerRoleId       = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'   # Reader
 $tagContributorId   = '4a9ae827-6dc8-4573-8ac7-8239d42aa03f'   # Tag Contributor
 
-foreach ($pair in @(@{Name='Reader'; Id=$readerRoleId}, @{Name='Tag Contributor'; Id=$tagContributorId})) {
-    $existing = Get-AzRoleAssignment -ObjectId $sp.Id -Scope $rootMgScope -RoleDefinitionId $pair.Id -ErrorAction SilentlyContinue
-    if ($existing) { _Info ("RBAC {0} already in place at root MG" -f $pair.Name); continue }
-    try {
-        $null = New-AzRoleAssignment -ObjectId $sp.Id -RoleDefinitionId $pair.Id -Scope $rootMgScope -ErrorAction Stop
-        _Ok ("RBAC {0} granted at root MG" -f $pair.Name)
-        $rbacScopes += "$rootMgScope|$($pair.Name)"
-    } catch {
-        _Warn ("RBAC {0} grant failed: {1}" -f $pair.Name, $_.Exception.Message)
+if ($SkipTenantRbac) {
+    _Info 'SkipTenantRbac set -- skipping Reader + Tag Contributor at tenant-root MG'
+    foreach ($pair in @(@{Name='Reader'; Id=$readerRoleId}, @{Name='Tag Contributor'; Id=$tagContributorId})) {
+        $rbacResults += @{ Name = $pair.Name; Scope = $rootMgScope; Status = 'skipped'; Error = 'SkipTenantRbac set' }
+    }
+} else {
+    foreach ($pair in @(@{Name='Reader'; Id=$readerRoleId}, @{Name='Tag Contributor'; Id=$tagContributorId})) {
+        $existing = Get-AzRoleAssignment -ObjectId $sp.Id -Scope $rootMgScope -RoleDefinitionId $pair.Id -ErrorAction SilentlyContinue
+        if ($existing) {
+            _Info ("RBAC {0} already in place at root MG" -f $pair.Name)
+            $rbacResults += @{ Name = $pair.Name; Scope = $rootMgScope; Status = 'already'; Error = $null }
+            continue
+        }
+        try {
+            $null = New-AzRoleAssignment -ObjectId $sp.Id -RoleDefinitionId $pair.Id -Scope $rootMgScope -ErrorAction Stop
+            _Ok ("RBAC {0} granted at root MG" -f $pair.Name)
+            $rbacScopes += "$rootMgScope|$($pair.Name)"
+            $rbacResults += @{ Name = $pair.Name; Scope = $rootMgScope; Status = 'granted'; Error = $null }
+        } catch {
+            $errMsg = $_.Exception.Message
+            _Warn ("RBAC {0} grant failed: {1}" -f $pair.Name, $errMsg)
+            $rbacResults += @{ Name = $pair.Name; Scope = $rootMgScope; Status = 'pending'; Error = $errMsg }
+        }
     }
 }
 
@@ -386,5 +469,10 @@ Write-Host ""
     ManagedIdentityId = if ($CredKind -eq 'ManagedIdentity') { $ManagedIdentityClientId } else { $null }
     ExpiresUtc        = $expiresOut
     GraphPermissions  = $GraphPermissions
-    AzureRbacScopes   = $rbacScopes
+    GraphPermissionResults = $permResults    # @[{Name; Status; Error}, ...]
+    PendingPermissions     = ($permResults | Where-Object { $_.Status -in @('pending','skipped') } | ForEach-Object { $_.Name })
+    ConsentStatus          = $consentStatus  # granted | partial | pending
+    ConsentUrl             = $consentUrl     # hand to a Global Admin
+    AzureRbacScopes        = $rbacScopes
+    AzureRbacResults       = $rbacResults    # @[{Name; Scope; Status; Error}, ...]
 }

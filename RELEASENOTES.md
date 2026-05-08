@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.142
+## v2.2.143
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
 - release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
 - release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
 - release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
 - release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
 - release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
-- release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.143 — `/api/apply` Phase 0 pre-flight: fail before Phase 1 if az CLI / az login missing
+
+User report from live test: clicked Setup Infrastructure with `azureContainerMI` host selected, watched Phases 1–4 succeed (SPN created, workspace + DCE + storage created, custom config written, Entra Diag Setting created), then **Phase 5 failed at the `az account show` check** with `ERROR: Please run 'az login' to setup account`. The 4 prior phases left orphan resources in the tenant — the operator now has a half-deployed SI install they have to either complete by running `az login` + re-clicking Setup, or roll back manually.
+
+**New Phase 0 pre-flight in `/api/apply`.** Runs **before** Phase 1 (SPN creation). Today's checks fire only when `hostType === 'azureContainerMI'` (since VM-host runs don't need az CLI):
+
+1. **`az` CLI installed.** `az version` must return a parseable JSON with `azure-cli` field. If not: clear remediation message naming the install URL, the exact `az login --tenant <id>` to run, and the alternative ("change Step 1's engine host to a VM option to skip Phase 5 entirely").
+2. **`az` CLI logged in.** `az account show` must return a JSON with `id`. If `LASTEXITCODE != 0` or the JSON parse fails: clear remediation message naming the exact `az login --tenant <id>` to run.
+3. **`az` CLI sub matches the wizard's target sub.** When the operator's `az` context is on a different subscription than what they typed in Step 2, `az account set --subscription <id>` is invoked. If that fails (sub not visible to the account): clear remediation message naming both the manual `az account set` and the `az login` fallback.
+
+If any check fails, `/api/apply` returns `{ok:false, phase:'preflight', error:…}` immediately — **no SPN, no workspace, no storage, no Diag Setting created**. The operator fixes the gap and re-clicks Setup; idempotent re-run works because nothing was provisioned.
+
+VM-host operators (the 95% case) see no behaviour change — Phase 0 short-circuits the moment it sees `hostType !== 'azureContainerMI'`.
+
+This complements the existing wizard-launch pre-flight checks for Az PowerShell context + Microsoft Graph context + Az binary-compat smoke test. All four pre-checks now share the same "fail fast with clear remediation, never leave half-deployed resources" contract.
 
 ---
 

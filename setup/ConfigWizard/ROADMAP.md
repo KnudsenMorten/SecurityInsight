@@ -84,15 +84,15 @@ For **Azure-hosted runners with a Managed Identity**, the wizard offers a "Use M
 
 ## Delivery plan (incremental on `main`)
 
-| Tag | Scope |
-|---|---|
-| `v2.2.103` | Doc fix (Step 1 → stable, 3-step rewrite) + this ROADMAP + `Start-SetupWizard.ps1` HttpListener skeleton serving the existing HTML with stub `/api/*` endpoints |
-| `v2.2.104` | `New-SISpn` provisioner — secret path (KV + inline storage) |
-| `v2.2.105` | `New-SISpn` cert path (KV + local cert store) + Managed Identity branch |
-| `v2.2.106` | `Initialize-SIInfra` — LA workspace + DCE + DCRs + Storage with RBAC-only |
-| `v2.2.107` | `Write-SICustomConfig` + `/api/apply` orchestration (single-button end to end) |
-| `v2.2.108` | HTML wizard updates: new Tenant identity step (SPN name + cred radios), new Apply page (progress UI + log streaming), drop Power BI + Workbook tabs |
-| `v2.2.109` | Smoke-test on lab tenant + 2 customer tenants, polish, README rewrite of Step 2 to reflect "fully working" status |
+| Tag | Status | Scope |
+|---|---|---|
+| `v2.2.103` | ✅ shipped | `Start-SetupWizard.ps1` HttpListener skeleton + this ROADMAP + 3-step Quick Start docs |
+| `v2.2.104` | ✅ shipped | README cleanup: Quick Start moved under § 4, stale `3.X` labels renumbered to match TOC |
+| `v2.2.105` | ✅ shipped | **Backend cmdlets + `/api/apply` orchestration LIVE** — `New-SISpn` (Secret + Cert + MSI; KV / Local / Inline storage), `Initialize-SIInfra` (LA + DCE + Storage with **RBAC-only**, no `SI_StorageKey`), `Write-SICustomConfig` (renders `custom.ps1` from collected state with optional sections). API callable directly via `Invoke-RestMethod` against `http://localhost:8766/api/apply`. |
+| `v2.2.106` | ⏳ planned | HTML wizard's Tenant Identity step — SPN-name field + cred-type radios + cred-storage radios |
+| `v2.2.107` | ⏳ planned | HTML wizard's new Apply page — collects state → POSTs to `/api/apply` → renders progress UI |
+| `v2.2.108` | ⏳ planned | Live log SSE streaming on `/api/log-stream`; drop Power BI + Workbook tabs from HTML |
+| `v2.2.109` | ⏳ planned | Smoke-test on lab + 2 customer tenants, polish, README Step 2 rewrite to "fully working" |
 
 ---
 

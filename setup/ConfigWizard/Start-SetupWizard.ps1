@@ -73,16 +73,20 @@ function ConvertTo-HashtableFromPso {
     return $InputObject
 }
 
+# Read SI VERSION so we display + serve the actual shipping number, not a
+# hardcoded string drift between releases.
+$siVersionFile = Join-Path (Split-Path -Parent (Split-Path -Parent $scriptDir)) 'VERSION'
+$siVersion = if (Test-Path -LiteralPath $siVersionFile) { (Get-Content -Raw -LiteralPath $siVersionFile).Trim() } else { 'dev' }
+
 Write-Host ""
 Write-Host "===================================================================" -ForegroundColor Cyan
-Write-Host " SecurityInsight Setup Wizard (localhost, no auth)"                  -ForegroundColor Cyan
+Write-Host " SecurityInsight Setup Wizard"                                       -ForegroundColor Cyan
+Write-Host (" v{0}" -f $siVersion)                                               -ForegroundColor DarkCyan
 Write-Host "===================================================================" -ForegroundColor Cyan
-_Info "wizard html : $indexHtml"
-_Info "port        : $Port"
-_Info ""
-_Ok   "v2.2.105: backend cmdlets + /api/apply orchestration LIVE"
-_Info "Apply page calls New-SISpn -> Initialize-SIInfra -> Write-SICustomConfig"
-_Info "HTML 'Apply' button hookup lands in v2.2.108 (until then the API is callable directly)"
+Write-Host " Built by Morten Knudsen, Microsoft MVP"                             -ForegroundColor Gray
+Write-Host " Web    : https://mortenknudsen.net"                                 -ForegroundColor Gray
+Write-Host " GitHub : https://github.com/KnudsenMorten/SecurityInsight"          -ForegroundColor Gray
+Write-Host "===================================================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Path to the backend cmdlets (relative to this script).
@@ -93,7 +97,9 @@ $cmdletWriteConfig   = Join-Path $backendDir 'Write-SICustomConfig.ps1'
 foreach ($c in $cmdletNewSISpn, $cmdletInitInfra, $cmdletWriteConfig) {
     if (-not (Test-Path -LiteralPath $c)) { throw "backend cmdlet missing: $c" }
 }
-_Info "backend cmdlets : New-SISpn / Initialize-SIInfra / Write-SICustomConfig"
+_Info ("port        : {0}" -f $Port)
+_Info ("wizard html : {0}" -f $indexHtml)
+_Info  "backend     : New-SISpn / Initialize-SIInfra / Write-SICustomConfig"
 Write-Host ""
 
 # ----- Pre-flight: require Az + Microsoft Graph contexts -----
@@ -252,6 +258,33 @@ if (-not $NoBrowser) {
     catch { _Warn "could not auto-launch browser: $($_.Exception.Message)" }
 }
 
+# ----- Graceful Ctrl+C handling -----
+# HttpListener.GetContext() is a synchronous blocking call -- Ctrl+C in pwsh
+# can NOT interrupt it because the wait happens in the kernel HTTP.sys driver.
+# The operator was forced to close the pwsh window (or kill the PID from
+# another shell) to stop the listener, which left orphaned URL prefixes in
+# HTTP.sys until the kernel released them.
+#
+# Fix: register a Console.CancelKeyPress handler that flips a flag + calls
+# $listener.Stop(). The Stop() unblocks any pending GetContext() with an
+# HttpListenerException, our outer try/catch sees the flag, and the loop
+# exits cleanly. URL prefix gets released immediately.
+$script:_stopRequested = $false
+try {
+    [Console]::TreatControlCAsInput = $false
+    $cancelHandler = [System.ConsoleCancelEventHandler] {
+        param($sender, $e)
+        $e.Cancel = $true   # don't terminate the process; let our loop unwind cleanly
+        $script:_stopRequested = $true
+        Write-Host ""
+        Write-Host "  Ctrl+C received -- stopping listener gracefully..." -ForegroundColor Yellow
+        try { $listener.Stop() } catch {}
+    }
+    [Console]::add_CancelKeyPress($cancelHandler)
+} catch {
+    _Warn "Could not register Ctrl+C handler -- you'll have to kill the process to stop. ($($_.Exception.Message))"
+}
+
 Write-Host ""
 Write-Host "  >>> press Ctrl+C to stop <<<" -ForegroundColor Magenta
 Write-Host ""
@@ -287,9 +320,14 @@ function Send-Json {
 }
 
 try {
-    while ($listener.IsListening) {
+    while ($listener.IsListening -and -not $script:_stopRequested) {
         $ctx = $null
-        try { $ctx = $listener.GetContext() } catch { break }
+        try { $ctx = $listener.GetContext() } catch {
+            # GetContext throws HttpListenerException when Stop() is called from
+            # the Ctrl+C handler -- expected, exit cleanly.
+            break
+        }
+        if ($script:_stopRequested) { break }
 
         $req = $ctx.Request
         $res = $ctx.Response
@@ -313,7 +351,7 @@ try {
                     $azCtx = Get-AzContext -ErrorAction SilentlyContinue
                     $mgCtx = Get-MgContext -ErrorAction SilentlyContinue
                     Send-Json -Response $res -Object @{
-                        wizardVersion  = '2.2.114'
+                        wizardVersion  = $siVersion
                         applyAvailable = $true
                         cmdlets        = @{
                             NewSISpn          = (Test-Path -LiteralPath $cmdletNewSISpn)
@@ -531,8 +569,14 @@ try {
     }
 }
 finally {
+    # De-register the Ctrl+C handler so subsequent commands in the same shell
+    # respond to Ctrl+C normally (default = terminate).
+    if ($cancelHandler) {
+        try { [Console]::remove_CancelKeyPress($cancelHandler) } catch { }
+    }
     try { $listener.Stop();  } catch { }
     try { $listener.Close(); } catch { }
     Write-Host ""
-    _Ok "wizard stopped"
+    _Ok ("wizard stopped -- port {0} released" -f $Port)
+    Write-Host ""
 }

@@ -218,27 +218,66 @@ function Test-PreflightPermissions {
     return @{ Blockers = $blockers; Warnings = $warnings; Roles = $roles }
 }
 $pre = Test-PreflightAuth
-if (-not $pre.Az -or -not $pre.Mg) {
+
+# Probe Azure CLI alongside Az PS + Mg so a single error block lists all
+# three required commands when any prerequisite is missing.
+$azFound = $false
+$azVer = $null
+try {
+    $azVerJson = & az version --output json 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -and $azVerJson -match '"azure-cli"') {
+        $azFound = $true
+        $azVer = ($azVerJson | ConvertFrom-Json).'azure-cli'
+    }
+} catch { }
+$azLoggedIn = $false
+$azAcct = $null
+if ($azFound) {
+    try {
+        $azAcctJson = & az account show --output json 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $azAcctJson -match '"id"') {
+            $azLoggedIn = $true
+            $azAcct = $azAcctJson | ConvertFrom-Json
+        }
+    } catch { }
+}
+
+if (-not $pre.Az -or -not $pre.Mg -or -not $azFound -or -not $azLoggedIn) {
+    $tenantHint = if ($pre.Mg) { $pre.Mg.TenantId } elseif ($pre.Az) { $pre.Az.Tenant.Id } else { '<tenant-id>' }
     Write-Host ""
-    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " /api/apply needs both Az PowerShell and Microsoft Graph contexts."
+    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " /api/apply needs Az PowerShell + Microsoft Graph + Azure CLI contexts."
     Write-Host ""
-    if (-not $pre.Az) { Write-Host "    Az PowerShell : NOT CONNECTED" -ForegroundColor Yellow }
-    else              { Write-Host ("    Az PowerShell : {0} (sub: {1})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name) -ForegroundColor Green }
-    if (-not $pre.Mg) { Write-Host "    Microsoft Graph: NOT CONNECTED" -ForegroundColor Yellow }
-    else              { Write-Host ("    Microsoft Graph: {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId) -ForegroundColor Green }
+    if (-not $pre.Az)   { Write-Host "    Az PowerShell  : NOT CONNECTED" -ForegroundColor Yellow }
+    else                { Write-Host ("    Az PowerShell  : {0} (sub: {1})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name) -ForegroundColor Green }
+    if (-not $pre.Mg)   { Write-Host "    Microsoft Graph: NOT CONNECTED" -ForegroundColor Yellow }
+    else                { Write-Host ("    Microsoft Graph: {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId) -ForegroundColor Green }
+    if (-not $azFound)      { Write-Host "    Azure CLI      : NOT INSTALLED" -ForegroundColor Yellow }
+    elseif (-not $azLoggedIn) { Write-Host ("    Azure CLI      : {0} installed but NOT LOGGED IN" -f $azVer) -ForegroundColor Yellow }
+    else                { Write-Host ("    Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id) -ForegroundColor Green }
     Write-Host ""
     Write-Host "  Run these in THIS shell, then re-launch the wizard:" -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "    Connect-AzAccount -Tenant <tenant-id>" -ForegroundColor White
-    Write-Host "    Connect-MgGraph -TenantId <tenant-id> -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome" -ForegroundColor White
+    if (-not $pre.Az) {
+        Write-Host ("    Connect-AzAccount -Tenant {0}" -f $tenantHint) -ForegroundColor White
+    }
+    if (-not $pre.Mg) {
+        Write-Host ("    Connect-MgGraph -TenantId {0} -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome" -f $tenantHint) -ForegroundColor White
+    }
+    if (-not $azFound) {
+        Write-Host "    # Install Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli-windows" -ForegroundColor White
+        Write-Host ("    az login --tenant {0}" -f $tenantHint) -ForegroundColor White
+    } elseif (-not $azLoggedIn) {
+        Write-Host ("    az login --tenant {0}" -f $tenantHint) -ForegroundColor White
+    }
     Write-Host "    .\Start-SetupWizard.ps1" -ForegroundColor White
     Write-Host ""
-    Write-Host "  (The wizard process inherits both contexts -- no popups, no device codes, no per-call re-auth.)" -ForegroundColor Gray
+    Write-Host "  (The wizard process inherits all three contexts -- no popups, no device codes, no per-call re-auth.)" -ForegroundColor Gray
     Write-Host ""
-    throw "Setup Wizard pre-flight failed: missing Az and/or Microsoft Graph context. See instructions above."
+    throw "Setup Wizard pre-flight failed: missing Az PowerShell / Microsoft Graph / Azure CLI context. See instructions above."
 }
 _Ok ("Az context     : {0} (sub: {1} / {2})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name, $pre.Az.Subscription.Id)
 _Ok ("Graph context  : {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId)
+_Ok ("Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id)
 Write-Host ""
 
 # ----- Pre-flight: Az/Azure.Identity binary-compat smoke test -----
@@ -286,56 +325,6 @@ try {
         throw "Setup Wizard pre-flight failed: Az token check threw. See instructions above."
     }
 }
-Write-Host ""
-
-# ----- Pre-flight: Azure CLI installed + logged in (HARD BLOCK) -----
-# Phase 5 (container infra) shells out to `az acr build` for server-side
-# image builds. The launch pre-flight refuses to start if `az` is missing
-# or not logged in -- same fail-fast contract as Az PS / Mg / binary-compat.
-# This way the operator never reaches Step 1 with a half-broken environment.
-$azFound = $false
-$azVer = $null
-try {
-    $azVerJson = & az version --output json 2>&1 | Out-String
-    if ($LASTEXITCODE -eq 0 -and $azVerJson -match '"azure-cli"') {
-        $azFound = $true
-        $azVer = ($azVerJson | ConvertFrom-Json).'azure-cli'
-    }
-} catch { }
-if (-not $azFound) {
-    Write-Host ""
-    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " Azure CLI (`az`) is not installed or not on PATH."
-    Write-Host ""
-    Write-Host "  The wizard's Phase 5 (container infra) shells out to 'az acr build' for server-side image" -ForegroundColor Cyan
-    Write-Host "  builds. Install + sign in BEFORE re-launching the wizard:" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "    https://learn.microsoft.com/cli/azure/install-azure-cli-windows" -ForegroundColor White
-    Write-Host ("    az login --tenant {0}" -f $pre.Mg.TenantId) -ForegroundColor White
-    Write-Host "    .\Start-SetupWizard.ps1" -ForegroundColor White
-    Write-Host ""
-    throw "Setup Wizard pre-flight failed: Azure CLI not installed. See instructions above."
-}
-$azLoggedIn = $false
-$azAcct = $null
-try {
-    $azAcctJson = & az account show --output json 2>&1 | Out-String
-    if ($LASTEXITCODE -eq 0 -and $azAcctJson -match '"id"') {
-        $azLoggedIn = $true
-        $azAcct = $azAcctJson | ConvertFrom-Json
-    }
-} catch { }
-if (-not $azLoggedIn) {
-    Write-Host ""
-    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host (" Azure CLI {0} is installed but NOT LOGGED IN." -f $azVer)
-    Write-Host ""
-    Write-Host "  Run in THIS shell, then re-launch the wizard:" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host ("    az login --tenant {0}" -f $pre.Mg.TenantId) -ForegroundColor White
-    Write-Host "    .\Start-SetupWizard.ps1" -ForegroundColor White
-    Write-Host ""
-    throw "Setup Wizard pre-flight failed: Azure CLI not logged in. See instructions above."
-}
-_Ok ("Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id)
 Write-Host ""
 
 # ----- Build listener -----

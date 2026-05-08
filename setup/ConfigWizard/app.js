@@ -380,16 +380,16 @@ function buildApptagSnippet() {
     lines.push('#   Resource RG : ' + (d.openAiResRg || 'rg-securityinsight-openai'));
     lines.push('#   Subscription: ' + (d.openAiSubscriptionId || '<inherits Step 2 sub>'));
     lines.push('#   Region      : ' + (d.openAiLocation || 'swedencentral'));
-    lines.push('#   Model SKU   : ' + (d.openAiModel    || 'gpt-4o-mini'));
-    lines.push('#   Deployment  : ' + (d.openAiNewDeployment || 'gpt-4o-mini'));
+    lines.push('#   Model SKU   : ' + (d.openAiModel    || 'gpt-4.1-mini'));
+    lines.push('#   Deployment  : ' + (d.openAiNewDeployment || 'gpt-4.1-mini'));
     lines.push('# Endpoint + key written to the lines below by the Apply backend:');
     lines.push("$global:OpenAI_endpoint   = 'https://" + resName + ".openai.azure.com/'");
-    lines.push(assignLine('OpenAI_deployment', 'openAiNewDeployment', 'gpt-4o-mini',          22));
+    lines.push(assignLine('OpenAI_deployment', 'openAiNewDeployment', 'gpt-4.1-mini',          22));
     lines.push("$global:OpenAI_apiVersion = '2025-01-01-preview'");
     lines.push("$global:OpenAI_apiKey     = '<written-by-apply-backend>'   # default");
   } else {
     lines.push(assignLine('OpenAI_endpoint',   'openAiEndpoint',   '<https://your-aoai.openai.azure.com/>', 22));
-    lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', 'gpt-4o-mini',                          22));
+    lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', 'gpt-4.1-mini',                          22));
     lines.push(assignLine('OpenAI_apiVersion', 'openAiApiVersion', '2025-01-01-preview',                   22));
     lines.push(assignLine('OpenAI_apiKey',     'openAiApiKey',     '<your-aoai-key>',                      22));
   }

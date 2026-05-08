@@ -604,7 +604,7 @@
 
       <div class="card sub-block" data-open-ai-mode-block="enabled" hidden>
         <h3>OpenAI resource</h3>
-        <p class="card-sub">Re-use an existing Azure OpenAI deployment (paste the endpoint + deployment name + key) <i>or</i> have the wizard create a new resource for you on Apply (PAYG SKU + gpt-4o-mini deployment in the workspace's region).</p>
+        <p class="card-sub">Re-use an existing Azure OpenAI deployment (paste the endpoint + deployment name + key) <i>or</i> have the wizard create a new resource for you on Apply (PAYG SKU + gpt-4.1-mini deployment in the workspace's region).</p>
         <div class="toggle-group" data-toggle-key="openAiResMode" style="margin-bottom: 14px;">
           <label data-val="useExisting"><input type="radio" name="openAiResMode" value="useExisting" /> Use existing OpenAI resource <span style="color:#888;">(paste endpoint + deployment + key)</span></label>
           <label data-val="createNew"><input type="radio" name="openAiResMode" value="createNew" /> Create new OpenAI resource <b style="color:#888;font-weight:400;">(coming v2.2.112+)</b></label>
@@ -617,9 +617,9 @@
                    placeholder="https://my-aoai-westeurope.openai.azure.com/" />
           </div>
           <div class="field required">
-            <label for="f_openAiDeployment">Deployment name <span class="help" data-tip="The name you gave your model deployment in Azure OpenAI Studio (NOT the model name). Recommended model: gpt-4o-mini (10x cheaper than gpt-4o for similar summary quality on the SI prompt).">?</span></label>
+            <label for="f_openAiDeployment">Deployment name <span class="help" data-tip="The name you gave your model deployment in Azure OpenAI Studio (NOT the model name). Recommended model: gpt-4.1-mini (replaces the deprecated gpt-4o-mini; ~10x cheaper than gpt-4.1 for similar summary quality on the SI prompt).">?</span></label>
             <input type="text" id="f_openAiDeployment" data-key="openAiDeployment" autocomplete="off"
-                   placeholder="gpt-4o-mini" data-default="gpt-4o-mini" />
+                   placeholder="gpt-4.1-mini" data-default="gpt-4.1-mini" />
           </div>
           <div class="field required">
             <label for="f_openAiApiVersion">API version <span class="help" data-tip="The Azure OpenAI API version string. 2024-08-01-preview is current as of this wizard release; future versions are usually backward-compatible for chat/completions.">?</span></label>
@@ -631,7 +631,7 @@
             <input type="password" id="f_openAiApiKey" data-key="openAiApiKey" autocomplete="off" />
           </div>
           <div class="field">
-            <label for="f_openAiMaxSpend">Max spend per run (USD) <span class="help" data-tip="Hard cap on tokens per run, converted to dollars at gpt-4o-mini pricing. When the next call would push spend over this cap, the asset gets SI_Classify_Status='budget-capped' with a placeholder verdict and the run continues (engine does not throw). Default 3 USD covers ~200-500 assets comfortably; raise to 10 for very large tenants, lower to 0.50 for cost-paranoid lab use.">?</span></label>
+            <label for="f_openAiMaxSpend">Max spend per run (USD) <span class="help" data-tip="Hard cap on tokens per run, converted to dollars at gpt-4.1-mini pricing. When the next call would push spend over this cap, the asset gets SI_Classify_Status='budget-capped' with a placeholder verdict and the run continues (engine does not throw). Default 3 USD covers ~200-500 assets comfortably; raise to 10 for very large tenants, lower to 0.50 for cost-paranoid lab use.">?</span></label>
             <input type="text" id="f_openAiMaxSpend" data-key="openAiMaxSpend" autocomplete="off"
                    placeholder="3"
                    data-default="3" />
@@ -660,9 +660,9 @@
               <span class="err" data-err="openAiSubscriptionId">Must be a GUID (or leave blank to use Step 2's sub).</span>
             </div>
             <div class="field required">
-              <label for="f_openAiResRegion">Azure region <span class="help" data-tip="Region for the new OpenAI resource. NOT every Azure region offers Azure OpenAI -- Sweden Central, East US, East US 2, France Central, North Central US, Switzerland North, UK South, West Europe are the most-stocked-with-models. gpt-4o-mini is widely available; gpt-4o has tighter region availability. Pick close to your workspace region for lowest latency.">?</span></label>
+              <label for="f_openAiResRegion">Azure region <span class="help" data-tip="Region for the new OpenAI resource. NOT every Azure region offers Azure OpenAI -- Sweden Central, East US, East US 2, France Central, North Central US, Switzerland North, UK South, West Europe are the most-stocked-with-models. gpt-4.1-mini is widely available; gpt-4o has tighter region availability. Pick close to your workspace region for lowest latency.">?</span></label>
               <select id="f_openAiResRegion" data-key="openAiLocation" data-default="swedencentral">
-                <optgroup label="Best gpt-4o-mini availability">
+                <optgroup label="Best gpt-4.1-mini availability">
                   <option value="swedencentral">Sweden Central (Gavle)</option>
                   <option value="eastus">East US (Virginia)</option>
                   <option value="eastus2">East US 2 (Virginia)</option>
@@ -688,18 +688,27 @@
               </select>
             </div>
             <div class="field required">
-              <label for="f_openAiNewDeployment">Deployment name <span class="help" data-tip="Name you give the model deployment (used to address it in API calls -- it's NOT the model itself). Convention: same as the model SKU lower-cased + dashed (gpt-4o-mini, gpt-4o-2024-08-06). The wizard creates this deployment after the resource on Apply.">?</span></label>
+              <label for="f_openAiNewDeployment">Deployment name <span class="help" data-tip="Name you give the model deployment (used to address it in API calls -- it's NOT the model itself). Convention: same as the model SKU lower-cased + dashed (gpt-4.1-mini, gpt-4o-2024-08-06). The wizard creates this deployment after the resource on Apply.">?</span></label>
               <input type="text" id="f_openAiNewDeployment" data-key="openAiNewDeployment" autocomplete="off"
-                     placeholder="gpt-4o-mini"
-                     data-default="gpt-4o-mini" />
+                     placeholder="gpt-4.1-mini"
+                     data-default="gpt-4.1-mini" />
             </div>
             <div class="field required">
-              <label for="f_openAiModel">Model SKU <span class="help" data-tip="The actual Azure OpenAI model. gpt-4o-mini is the SI default (10x cheaper than gpt-4o for similar summary quality). gpt-4o for higher fidelity. gpt-4-turbo for legacy compat. Check region availability before picking a model not in the default list.">?</span></label>
-              <select id="f_openAiModel" data-key="openAiModel" data-default="gpt-4o-mini">
-                <option value="gpt-4o-mini">gpt-4o-mini (recommended -- cheap + fast)</option>
-                <option value="gpt-4o">gpt-4o (highest quality)</option>
-                <option value="gpt-4-turbo">gpt-4-turbo (legacy)</option>
-                <option value="gpt-35-turbo">gpt-35-turbo (cheapest)</option>
+              <label for="f_openAiModel">Model SKU <span class="help" data-tip="The actual Azure OpenAI model. gpt-4.1-mini is the SI default -- replaces gpt-4o-mini (deprecated 2025). For higher fidelity pick gpt-4.1; for fastest-cheapest pick gpt-4.1-nano. Reasoning models (o3-mini / o4-mini) work but are overkill for summarisation. Check region availability before picking.">?</span></label>
+              <select id="f_openAiModel" data-key="openAiModel" data-default="gpt-4.1-mini">
+                <optgroup label="GPT-4.1 family (current generation)">
+                  <option value="gpt-4.1-mini">gpt-4.1-mini (recommended -- cheap + fast, replaces gpt-4o-mini)</option>
+                  <option value="gpt-4.1">gpt-4.1 (highest summary quality)</option>
+                  <option value="gpt-4.1-nano">gpt-4.1-nano (fastest + cheapest)</option>
+                </optgroup>
+                <optgroup label="Reasoning models (overkill for summarisation)">
+                  <option value="o4-mini">o4-mini (reasoning, cheap)</option>
+                  <option value="o3-mini">o3-mini (reasoning, mid)</option>
+                </optgroup>
+                <optgroup label="Legacy (gpt-4o family scheduled for deprecation)">
+                  <option value="gpt-4o">gpt-4o (legacy)</option>
+                  <option value="gpt-4o-mini">gpt-4o-mini (deprecated 2025 -- migrate to gpt-4.1-mini)</option>
+                </optgroup>
               </select>
             </div>
           </div>

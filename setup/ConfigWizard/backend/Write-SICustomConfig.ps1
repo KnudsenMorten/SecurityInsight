@@ -187,7 +187,10 @@ $null = $sb.AppendLine()
 $sectionsWritten += 'Sinks'
 
 # ---- 5. SMTP (optional) ----
-if ($Smtp) {
+# Only emit the SMTP block when there's actually a server to send through. A
+# hashtable with all-null fields can leak through when the wizard state still
+# carries a stale smtp object the operator selected then turned off.
+if ($Smtp -and $Smtp.Server) {
     $null = $sb.AppendLine("# ============================================================================")
     $null = $sb.AppendLine("# 5. SMTP  --  email dispatch")
     $null = $sb.AppendLine("# ============================================================================")
@@ -244,7 +247,8 @@ $null = $sb.AppendLine()
 $sectionsWritten += 'RA'
 
 # ---- 8. Azure OpenAI (optional) ----
-if ($OpenAi) {
+# Endpoint is required for any AI call; without it the section is meaningless.
+if ($OpenAi -and $OpenAi.Endpoint) {
     $null = $sb.AppendLine("# ============================================================================")
     $null = $sb.AppendLine("# 8. AZURE OPENAI  --  Build_Tier + RA -BuildSummaryByAI")
     $null = $sb.AppendLine("# ============================================================================")

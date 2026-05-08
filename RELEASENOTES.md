@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.132
+## v2.2.133
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
 - release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
 - release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
 - release: SecurityInsight v2.2.130 - README cleanup + Az binary-compat smoke test in wizard pre-flight (2e51f0f5)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
 - release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
 - release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
-- release: SecurityInsight v2.2.103 - Setup Wizard skeleton + 3-step quick-start (ab8f4fb8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.133 — Wizard config render: don't leak SMTP/OpenAI sections when the operator turned them off
+
+`Write-SICustomConfig.ps1` was emitting the full SMTP block — `$global:SendMail = $true` plus the default port and TLS settings — even when the operator had set SMTP mode to **Off** in the wizard. Same hazard for the Azure OpenAI section. The Shodan and CMDB sections already gated on meaningful content (`$Shodan.ApiKey`, `$Cmdb.Enabled`), so they were unaffected.
+
+**What was happening:** the wizard's persisted state could carry a stale `smtp` object from a prior session where the operator briefly toggled SMTP on. Even after toggling back to Off, the object remained in state with all fields null. `ConvertTo-HashtableFromPso` (now correctly returning a non-null hashtable for empty inputs after the v2.2.132 `[AllowNull()]` fix) handed a defaulted-but-empty hashtable to `Write-SICustomConfig`. The `if ($Smtp)` check passed on hashtable presence alone and the SMTP scaffolding rendered with `$global:SendMail = $true` — silently turning mail back on for that customer.
+
+**Fix:** matched the Shodan/CMDB pattern. SMTP now requires `$Smtp.Server`; OpenAI now requires `$OpenAi.Endpoint`. Without those, the section is meaningless and is skipped entirely.
+
+If you've already run the wizard with v2.2.131 or v2.2.132 and SMTP turned off, re-render the config (or delete the stray SMTP block from `config\SecurityInsight.custom.ps1`) — otherwise `$global:SendMail = $true` is set in your file and the engine will try to send mail with no server configured.
 
 ---
 

@@ -635,17 +635,19 @@ The wizard runs cross-platform on **Windows 11** + **Windows Server**, both on-p
 
 #### Wizard tour — screenshot walkthrough
 
-| Step | What you do | Screenshot |
-|------|-------------|------------|
-| **0 — Welcome** | Read the prereq cards (grouped by *Always required* / *Use existing* / *Optional features*); click **Start configuring**. | ![Welcome](docs/screenshots/wizard/00-welcome.png) |
-| **1 — Tenant identity** | Pick engine host + bootstrap auth (dropdown). Pick SPN mode (**Create new** / Use existing). Tenant ID is **auto-pre-filled** from your Az login. Pick credential type + storage; the wizard hides combinations that can't bootstrap on your host. | ![Step 1](docs/screenshots/wizard/01-tenant-identity.png) |
-| **2 — Workspace + ingestion** | Subscription ID auto-pre-filled. Pick Azure region from the 53-region dropdown. Workspace name + RG, DCE name + RG, storage account name + RG + container — all defaults pre-filled with the v2.2 standard layout. Optional **naming suffix** (e.g. `prod`) auto-appends to all resource names. | ![Step 2](docs/screenshots/wizard/02-workspace-ingestion.png) |
-| **3 — Mail / SMTP** *(optional)* | Off / Anonymous relay / Authenticated. Sub-fields appear based on the mode. SendGrid / Brevo / M365 SMTP AUTH all work. | ![Step 3](docs/screenshots/wizard/03-smtp.png) |
-| **4 — CMDB integration** *(optional)* | Off / CSV file. Type the path to your CMDB asset export; SI joins it onto every `SI_*_Profile_CL` row for owner/department/business-app enrichment. | ![Step 4](docs/screenshots/wizard/04-cmdb.png) |
-| **5 — Azure OpenAI** *(optional)* | Off / Enabled. Use existing OpenAI resource (paste endpoint + deployment + key) OR create new (resource name + RG + region + deployment + model SKU). Default model: `gpt-4.1-mini` (replaces the deprecated `gpt-4o-mini`). | ![Step 5](docs/screenshots/wizard/05-openai.png) |
-| **6 — Shodan attack surface** *(optional)* | Off / Enabled. API key + license-tier dropdown (Free / Membership / Small Business / Corporate) so the engine backs off before hitting rate limits. | ![Step 6](docs/screenshots/wizard/06-shodan.png) |
-| **7 — Output sinks + Defender XDR** *(optional)* | JSON sink toggle (adds `'JSON'` to every `SI_Sinks_<Engine>`). Defender XDR / Sentinel workspace linkage. **If no Sentinel:** auto-stream Entra sign-in + audit logs (8 categories) into the SI workspace via a new Diagnostic Setting. | ![Step 7](docs/screenshots/wizard/07-output-defender.png) |
-| **8 — Setup** | Review summary (3 phase cards). Click **▶ Setup**. Watch SPN → Infrastructure → Config phases turn green. Per-step log panel below shows every action (resource provider registrations, app reg + SP creation, per-permission Graph status, RBAC grants, ResourceIds, config file path + sections written). If admin consent is pending, the panel surfaces the consent URL — hand it to a Global Admin, then re-click **Setup** (idempotent). | ![Step 8 before](docs/screenshots/wizard/08-setup-before.png) ![Step 8 success](docs/screenshots/wizard/08-setup-success.png) |
+| Step | What you do |
+|------|-------------|
+| **0 — Welcome** | Read the prereq cards (grouped by *Always required* / *Use existing* / *Optional features*); click **Start configuring**. |
+| **1 — Tenant identity** | Pick engine host + bootstrap auth (dropdown). Pick SPN mode (**Create new** / Use existing). Tenant ID is **auto-pre-filled** from your Az login. Pick credential type + storage; the wizard hides combinations that can't bootstrap on your host. |
+| **2 — Workspace + ingestion** | Subscription ID auto-pre-filled. Pick Azure region from the 53-region dropdown. Workspace name + RG, DCE name + RG, storage account name + RG + container — all defaults pre-filled with the v2.2 standard layout. Optional **naming suffix** (e.g. `prod`) auto-appends to all resource names. |
+| **3 — Mail / SMTP** *(optional)* | Off / Anonymous relay / Authenticated. Sub-fields appear based on the mode. SendGrid / Brevo / M365 SMTP AUTH all work. |
+| **4 — CMDB integration** *(optional)* | Off / CSV file. Type the path to your CMDB asset export; SI joins it onto every `SI_*_Profile_CL` row for owner/department/business-app enrichment. |
+| **5 — Azure OpenAI** *(optional)* | Off / Enabled. Use existing OpenAI resource (paste endpoint + deployment + key) OR create new (resource name + RG + region + deployment + model SKU). Default model: `gpt-4.1-mini` (replaces the deprecated `gpt-4o-mini`). |
+| **6 — Shodan attack surface** *(optional)* | Off / Enabled. API key + license-tier dropdown (Free / Membership / Small Business / Corporate) so the engine backs off before hitting rate limits. |
+| **7 — Output sinks + Defender XDR** *(optional)* | JSON sink toggle (adds `'JSON'` to every `SI_Sinks_<Engine>`). Defender XDR / Sentinel workspace linkage. **If no Sentinel:** auto-stream Entra sign-in + audit logs (8 categories) into the SI workspace via a new Diagnostic Setting. |
+| **8 — Setup** | Review summary (3 phase cards). Click **▶ Setup**. Watch SPN → Infrastructure → Config phases turn green. Per-step log panel below shows every action (resource provider registrations, app reg + SP creation, per-permission Graph status, RBAC grants, ResourceIds, config file path + sections written). If admin consent is pending, the panel surfaces the consent URL — hand it to a Global Admin, then re-click **Setup** (idempotent). |
+
+> 📷 **Screenshots will land in [`docs/screenshots/wizard/`](docs/screenshots/wizard/) in a follow-up** — the capture-list is in [that folder's README](docs/screenshots/wizard/README.md).
 
 Stop the listener with **Ctrl+C** in the pwsh window — the v2.2.119 graceful-stop handler releases port 8766 immediately so re-launching always works.
 
@@ -653,53 +655,55 @@ Stop the listener with **Ctrl+C** in the pwsh window — the v2.2.119 graceful-s
 
 Full disclosure of every permission / role assignment the wizard creates on **Setup**. Nothing is granted that isn't listed here.
 
-##### Microsoft Graph application permissions (granted to the SI Service Principal)
+#### 1. Microsoft Graph application permissions
 
-The 13 minimum permissions every SI engine reads. All are **application-only** (no delegated user-impersonation) and all require admin consent:
+Granted to the **SI Service Principal**. All are **application-only** (no delegated user-impersonation) and all require admin consent. The 13 minimum permissions every SI engine reads:
 
-| Permission | Why SI needs it |
-|------------|-----------------|
-| `ThreatHunting.Read.All` | Defender XDR Advanced Hunting (KQL queries against `DeviceInfo`, `IdentityInfo`, etc. — the bulk of the asset-profiling data). |
-| `Device.Read.All` | MDE devices, vulnerabilities, secure-config baselines. |
-| `User.Read.All` | Entra users (UPNs, sign-in metadata, account enabled/disabled). |
-| `Application.Read.All` | App registrations + service principals (for the Identity engine's SPN-tier classification). |
-| `Group.Read.All` | Entra group membership (drives tier-via-membership classification). |
-| `Policy.Read.All` | Conditional Access + auth policies (for the Identity Risk Analysis reports). |
-| `AuditLog.Read.All` | `AuditLogs` table — directory writes, role assignments, app reg changes. |
-| `IdentityRiskEvent.Read.All` | Identity Protection risk events per user. |
-| `IdentityRiskyUser.Read.All` | Risky user state (current risk level, history). |
-| `Reports.Read.All` | Bulk MFA registration via `userRegistrationDetails` (200x faster than per-user lookup). |
-| `DirectoryRecommendations.Read.All` | Entra directory health + posture recommendations. |
-| `SecurityEvents.Read.All` | Security-alert pipeline. |
-| `CrossTenantInformation.ReadBasic.All` | Cross-tenant guest metadata for B2B asset attribution. |
+- **ThreatHunting.Read.All** — Defender XDR Advanced Hunting (KQL queries against `DeviceInfo`, `IdentityInfo` etc. — the bulk of asset-profiling data).
+- **Device.Read.All** — MDE devices, vulnerabilities, secure-config baselines.
+- **User.Read.All** — Entra users (UPNs, sign-in metadata, account enabled/disabled).
+- **Application.Read.All** — app registrations + service principals (for the Identity engine's SPN-tier classification).
+- **Group.Read.All** — Entra group membership (drives tier-via-membership classification).
+- **Policy.Read.All** — Conditional Access + auth policies (for the Identity Risk Analysis reports).
+- **AuditLog.Read.All** — `AuditLogs` table (directory writes, role assignments, app-reg changes).
+- **IdentityRiskEvent.Read.All** — Identity Protection risk events per user.
+- **IdentityRiskyUser.Read.All** — risky user state (current risk level, history).
+- **Reports.Read.All** — bulk MFA registration via `userRegistrationDetails` (200× faster than per-user lookup).
+- **DirectoryRecommendations.Read.All** — Entra directory health + posture recommendations.
+- **SecurityEvents.Read.All** — security-alert pipeline.
+- **CrossTenantInformation.ReadBasic.All** — cross-tenant guest metadata for B2B asset attribution.
 
-##### Azure RBAC role assignments (granted to the SI Service Principal)
+#### 2. Azure RBAC role assignments
 
-Wizard grants the minimum scope-appropriate roles. **All grants are visible in the Setup page's per-step log + the Apply payload** — no hidden grants elsewhere.
+Granted to the **SI Service Principal**. All grants are visible in the Setup page's per-step log + the Apply payload — no hidden grants.
 
-| Role | Scope | Why | Skip-able? |
-|------|-------|-----|------------|
-| `Reader` | **Tenant-root MG** (`/providers/Microsoft.Management/managementGroups/<tenantId>`) | Subscription discovery for the Azure asset-profiling engine + cross-sub LA queries. | Yes — wizard `-SkipTenantRbac` switch (or hide via the "Use existing SPN" path and grant manually). |
-| `Tag Contributor` *(opt-in only)* | **Tenant-root MG** | Required **only by the asset-exclusion-tagging engine** (writes Custom Security Attributes to flagged assets). **Not granted by default** — enable explicitly via `-IncludeTagContributor` on `New-SISpn` (or the wizard's asset-tagging toggle when that page activates). Most customers don't need it. | N/A — opt-in only; nothing to skip. |
-| `Log Analytics Contributor` | **Workspace** (`/subscriptions/.../workspaces/<ws>`) | Workspace creation + DCR table schema management at first ingest. | No — required for ingestion. |
-| `Monitoring Metrics Publisher` | **DCR resource group** (`/subscriptions/.../resourceGroups/<dcr-rg>`) | DCR-based ingest pipeline (the SPN signs the DCR PUT requests). | No — required for ingestion. |
-| `Storage Blob Data Contributor` | **Storage account** (`/subscriptions/.../storageAccounts/<sa>`) | Fingerprint cache + Excel report staging via OAuth (no shared key). | No — required (or grant `Storage Account Contributor` higher-up if you prefer). |
-| `Storage Table Data Contributor` | **Storage account** | Table-based dedupe state. | No — same as above. |
-| `Storage Queue Data Contributor` | **Storage account** | KEDA queue depth (when running on Container Apps Job — see § 4.12). | No — same as above. |
-| `Key Vault Secrets User` *(if KV cred storage)* | **Key Vault** (`/subscriptions/.../vaults/<kv>`) | The SPN reads its own bootstrap secret from KV at engine startup. | N/A — only granted when cred storage = KV. |
-| `Key Vault Certificate User` *(if KV cert)* | **Key Vault** | The SPN reads its own bootstrap cert from KV. | N/A — only granted when cred kind = Cert + storage = KV. |
+- **Reader** at **tenant-root MG** — subscription discovery for the Azure asset-profiling engine + cross-sub LA queries. *Skip-able via `-SkipTenantRbac` (or hide via the "Use existing SPN" path and grant manually).*
 
-##### Managed Identity (Azure VM / Container Apps Job hosts)
+- **Tag Contributor** at **tenant-root MG** — *opt-in only.* Required **only by the asset-exclusion-tagging engine** (writes Custom Security Attributes to flagged assets). **Not granted by default**; enable explicitly via `-IncludeTagContributor` on `New-SISpn` (or the wizard's asset-tagging toggle when that page activates). Most customers don't need it.
+
+- **Log Analytics Contributor** at **the workspace** — workspace creation + DCR table schema management at first ingest. *Required for ingestion.*
+
+- **Monitoring Metrics Publisher** at **the DCR resource group** — DCR-based ingest pipeline (the SPN signs DCR PUT requests). *Required for ingestion.*
+
+- **Storage Blob Data Contributor** at **the storage account** — fingerprint cache + Excel report staging via OAuth (no shared key). *Required.*
+
+- **Storage Table Data Contributor** at **the storage account** — table-based dedupe state. *Required.*
+
+- **Storage Queue Data Contributor** at **the storage account** — KEDA queue depth (when running on Container Apps Job — see § 4.12). *Required.*
+
+- **Key Vault Secrets User** at **the Key Vault** — *only when cred storage = KV*. The SPN reads its own bootstrap secret from KV at engine startup.
+
+- **Key Vault Certificate User** at **the Key Vault** — *only when cred kind = Cert + storage = KV*. The SPN reads its own bootstrap cert from KV.
+
+#### 3. Managed Identity (Azure VM / Container Apps Job hosts)
 
 If the wizard's "Engine host + bootstrap auth" dropdown is set to **Azure VM with MI** or **Azure Container Apps Job with MI**, the SPN itself isn't the bootstrap identity — the **host's system-assigned Managed Identity** is. The MI needs:
 
-| Role | Scope | Why |
-|------|-------|-----|
-| `Key Vault Secrets User` | **Key Vault** holding the SI SPN's secret/cert | MI reads the SPN credential at engine startup using its own Azure identity (no bootstrap-cred-needed-to-read-the-cred chicken-and-egg). |
+- **Key Vault Secrets User** at **the Key Vault holding the SI SPN's secret/cert** — MI reads the SPN credential at engine startup using its own Azure identity (no bootstrap-cred-needed-to-read-the-cred chicken-and-egg).
 
-The wizard does **NOT** create the MI itself (you assign system-managed identity to your VM / Container Apps Job manually before running the wizard). The wizard's `Setup` only grants the MI the KV role — it never modifies the MI's other role assignments.
+The wizard does **NOT** create the MI itself — you assign system-managed identity to your VM / Container Apps Job manually before running the wizard. The wizard's Setup only grants the MI the KV role; it never modifies the MI's other role assignments.
 
-##### Entra ID Diagnostic Setting (when "no Sentinel" path picked)
+#### 4. Entra ID Diagnostic Setting (when "no Sentinel" path picked)
 
 If you don't have a Sentinel workspace and turn on Step 7's *"auto-stream Entra sign-in logs to SI workspace"* toggle, the wizard creates **one tenant-level Diagnostic Setting** named `SI-EntraDiag` targeting your SI workspace. Categories enabled:
 

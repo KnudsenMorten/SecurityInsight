@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.129
+## v2.2.130
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.130 - README cleanup + Az binary-compat smoke test in wizard pre-flight (2e51f0f5)
 - release: SecurityInsight v2.2.129 - README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table (bfaf8fe2)
 - release: SecurityInsight v2.2.128 - handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT (057e97f0)
 - release: SecurityInsight v2.2.127 - README §4 refresh + DCE-via-REST fix + Tag Contributor opt-in (9671dea1)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.103 - Setup Wizard skeleton + 3-step quick-start (ab8f4fb8)
 - release: SecurityInsight v2.2.102 - README: same provider-list rewrite for the second blurb (c2afe084)
 - release: SecurityInsight v2.2.101 - README intro: hook-led + full provider list (ca2c2170)
-- release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.130 — README: strip broken wizard screenshots + reformat permissions tables as lists + Az.Identity.Broker workaround note
+
+Three doc fixes:
+
+**1. Wizard tour table — broken `![](png-path)` markdown stripped.** The 9-row screenshot walkthrough table referenced PNG files that don't exist yet on the public repo (only the capture-list does). GitHub rendered the missing images as broken-link icons. Stripped the third "Screenshot" column entirely; replaced with a callout pointing to `docs/screenshots/wizard/README.md` for the planned filenames. When PNGs land in a follow-up tag the image refs go back in.
+
+**2. Permissions section — 3 wide tables converted to lists.** The Microsoft Graph permissions table (13 rows × 2 cols) was readable but the Azure RBAC table (9 rows × 4 cols of long content) and the Managed Identity table both overflowed reasonable viewports. Backtick'd role names ("`Storage Blob Data Contributor`") wrapping in narrow cells produced a visual mess (each backtick'd word stacked on its own line). Converted all three tables to bulleted lists — same content, no clipping, no awkward stacking. Also promoted the 5 sub-section headers from `#####` (h5, renders too subtly on GitHub) to `####` (h4) so they read as proper section dividers.
+
+**3. New troubleshooting note for `Az.Identity.Broker` SharedTokenCache exception** that surfaces during Setup on some pwsh shells:
+
+> `Method not found: 'Void Azure.Identity.Broker.SharedTokenCacheCredentialBrokerOptions..ctor(Azure.Identity.TokenCachePersistenceOptions)'.`
+>
+> This is a side-loaded-assembly version mismatch between Az.Accounts and the Azure.Identity.Broker extension in the listener's pwsh process. The wizard's `Register-AzResourceProvider` calls (and Connect-AzAccount internally) bubble it up as "Your Azure credentials have not been set up". **Fix in your interactive shell:**
+> ```powershell
+> Update-Module Az -Force        # bring all Az.* sub-modules to consistent versions
+> # Close the pwsh window entirely (the broken assembly state lives in-process)
+> # Open a fresh pwsh, re-do Connect-AzAccount + Connect-MgGraph, re-launch the wizard
+> ```
+
+**4. Wizard pre-flight now smoke-tests Az binary-compat upfront.** The Az.Identity.Broker mismatch above used to surface mid-Phase-2 (Setup phase 1 SPN succeeded since it only uses Microsoft.Graph; Phase 2 infra failed on the first Az PS call). `Start-SetupWizard.ps1` now runs `Get-AzAccessToken -ResourceUrl 'https://management.azure.com/'` as a smoke test during pre-flight, right after the Az + Graph context checks. If the call throws with any of the known mismatch markers (`Method not found`, `Azure.Identity`, `SharedTokenCache`, `credentials have not been set up`), the wizard refuses to start with a clear remediation message:
+
+```
+[BLOCKED] Az PowerShell assemblies in this pwsh process are binary-incompatible.
+
+   Symptom : <the actual exception message>
+
+  This is a known side-loaded-assembly version mismatch between Az.Accounts
+  and the Azure.Identity.Broker extension. The wizard's /api/apply would fail
+  mid-Phase-2 on the first Az PowerShell call. Fix in your interactive shell:
+
+    Update-Module Az -Force
+    # Then close THIS pwsh window entirely (the broken assemblies live in-process)
+    # Open a fresh pwsh, re-run Connect-AzAccount + Connect-MgGraph, re-launch the wizard.
+```
+
+Operators no longer waste 5+ minutes clicking through the wizard, watching Phase 1 succeed, then hitting the same error in Phase 2.
 
 ---
 

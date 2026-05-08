@@ -555,59 +555,215 @@ For a fresh install, you'll copy these sample files to their `.custom.` siblings
 
 ### 4.1 Three-step quick start (recommended)
 
-Never seen SecurityInsight before? It's three steps: clone the repo, run the Setup Wizard, run the engines. Estimated time first run: **30–45 min** — most of it is Azure provisioning during Step 2.
+Never seen SecurityInsight before? It's three steps: **clone the repo → run the Setup Wizard → run the engines.** Estimated time first run: **30–45 min** — most of it is Azure provisioning during the wizard's Setup phase.
 
-If you'd rather drive each phase by hand (one script per provisioning task), Steps 4–7 below are the manual equivalent of what the wizard does for you in Step 2 — exactly the same actions, just without the GUI.
+If you'd rather drive each provisioning task by hand (one script per phase), Steps 4–7 further below are the manual equivalent of what the wizard automates — exactly the same actions, no GUI.
 
-> ✅ **Before you start**
-> - Windows machine with **PowerShell 7+** (`pwsh`) installed
-> - **Az CLI** (`az --version` works) and **Azure PowerShell** (`Install-Module Az`)
-> - **Global Administrator** OR **Privileged Role Administrator** in the target Entra tenant (one-time, for the bootstrap)
-> - **Owner** at the tenant-root management group (one-time, for the bootstrap RBAC)
-> - An **Azure subscription** to host the Storage Account + Container Apps Job + Log Analytics workspace
+#### ✅ Prerequisites
+
+- **PowerShell 7+** (`pwsh`) installed.
+- **Az PowerShell** modules: `Install-Module Az -Scope CurrentUser` (Az.Accounts, Az.Resources, Az.OperationalInsights, Az.Monitor, Az.Storage, Az.KeyVault).
+- **Microsoft Graph PowerShell**: `Install-Module Microsoft.Graph -Scope CurrentUser`.
+- An **Azure subscription** to host the workspace + DCE + storage account.
+- The operator running the wizard needs (at least one of):
+  - **Owner** OR **Contributor** + **User Access Administrator** at the target subscription (for resource creation + SPN role assignments).
+  - For Microsoft Graph permission grants: **Application Administrator**, **Cloud Application Administrator**, **Privileged Role Administrator**, OR **Global Administrator**. *If you don't have any of these, the wizard still creates the SPN but surfaces an admin-consent URL you hand to a Global Admin — re-clicking Setup after they consent finishes the run.*
 
 #### Step 1 — Get the code
 
 ```powershell
-# Pick ONE:
+# Option A (recommended): clone the latest stable release (tag-tracking)
+git clone "https://github.com/KnudsenMorten/SecurityInsight.git" "C:\SecurityInsight"
 
-# Option A: clone the latest stable release (default branch, tagged builds)
-git clone "https://github.com/KnudsenMorten/SecurityInsight.git" "C:\SecurityInsightTest" 2>&1
+# Option B: download the zip
+Invoke-WebRequest 'https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip' -OutFile $env:TEMP\si.zip
+Expand-Archive $env:TEMP\si.zip -DestinationPath C:\SecurityInsight -Force
 
-# Option B: download the zip of the latest stable
-Invoke-WebRequest -Uri 'https://github.com/KnudsenMorten/SecurityInsight/archive/refs/heads/main.zip' -OutFile $env:TEMP\si.zip
-Expand-Archive $env:TEMP\si.zip -DestinationPath C:\SecurityInsightTest -Force
+cd C:\SecurityInsight
 
-cd C:\SecurityInsightTest
-
-# Bleeding-edge alternative -- only if you want the next release's HEAD (see § 3.2):
-#   git clone -b preview "https://github.com/KnudsenMorten/SecurityInsight.git" "C:\SecurityInsightTest" 2>&1
+# Bleeding-edge alternative -- only if you want the preview branch (see § 4.3):
+#   git clone -b preview "https://github.com/KnudsenMorten/SecurityInsight.git" "C:\SecurityInsight"
 ```
 
-#### Step 2 — Run the Setup Wizard (one-shot, end to end)
+#### Step 2 — Authenticate, then launch the Setup Wizard
+
+The wizard inherits the **Az PowerShell + Microsoft Graph** contexts from the shell that launches it — there are no popups, device codes, or per-call re-auths inside the wizard process. Run the two `Connect-*` commands in your interactive `pwsh` shell first, then start the wizard from the same shell:
 
 ```powershell
+# In the SAME pwsh shell where you'll launch the wizard:
+Connect-AzAccount -Tenant <your-tenant-id>
+Set-AzContext -SubscriptionId <your-subscription-id> | Out-Null
+Connect-MgGraph -TenantId <your-tenant-id> -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome
+
+# Now launch the wizard. It opens http://localhost:8766 in your default browser.
 .\setup\ConfigWizard\Start-SetupWizard.ps1
 ```
 
-The wizard opens in your browser at `http://localhost:8766` and walks you through 10 short pages. On the final **Apply** page it does **everything for you, automatically**:
+The wizard refuses to start if either context is missing and prints the exact `Connect-*` command you need to run. No interactive auth dialogs ever appear inside the wizard process — that's a deliberate Conditional-Access-friendly design (device-code auth is blocked by many tenants' CA policies and is a known security-risk pattern).
 
-- **Creates the SPN + cred** — type a name, pick *Client secret* or *Self-signed certificate*; pick where the cred lives (Azure Key Vault preferred, local cert store for cert, inline for secret). Wizard creates the Entra app reg + SPN, generates the cred, applies Microsoft Graph + Azure permissions, requests admin consent, assigns RBAC at tenant-root MG.
-- **Creates Log Analytics + DCE + DCRs + Storage** — Workspace, DCE, per-engine DCRs, and the Storage Account. RBAC granted to the SPN automatically (`Storage Blob/Table/Queue Data Contributor`) so the engine reaches storage via OAuth — **no shared key written to your config**. Same generated config works for VM-pinned runs and Azure Container Apps Job runs.
-- **Writes `config\SecurityInsight.custom.ps1`** — fully populated with every required value (SPN, tenant, workspace, DCE/DCR names, storage). Optional sections (SMTP / Azure OpenAI / Shodan / CMDB CSV / per-engine JSON sink) are added only when you toggle them on.
+#### What the wizard does
 
-Cross-platform: runs on **Windows 11** + **Windows Server**, both **on-prem** and **Azure-hosted**. On Azure-hosted runners with a Managed Identity, the wizard offers an MSI alternative for storage RBAC instead of an SPN cred.
+The wizard walks you through **8 short pages** in your browser, then on the **Setup** page it provisions everything end-to-end:
 
-> ✅ **Apply page is LIVE** as of `v2.2.107`. The wizard now drives the entire onboarding from the browser — SPN creation, Log Analytics + DCE + Storage provisioning, and the `config\SecurityInsight.custom.ps1` write all happen on **Apply now**. Per-tag scope: [`setup/ConfigWizard/ROADMAP.md`](./setup/ConfigWizard/ROADMAP.md). Steps 4–7 below remain available as the manual-equivalent path for power users who want to drive each phase by hand.
+| Phase | What happens on Setup | What lands in your tenant |
+|-------|----------------------|---------------------------|
+| **1. SPN** | Creates an Entra app registration + service principal + cred (client secret or self-signed cert), grants 13 Microsoft Graph application permissions with admin consent, assigns Azure RBAC at tenant-root MG (Reader + Tag Contributor — skip-able). | A `sp-securityinsight` (or whatever name you typed) Entra app reg + SP. Cred stored where you picked: KV / local cert store / inline in custom config. |
+| **2. Infrastructure** | **Auto-registers required Azure resource providers** (`Microsoft.OperationalInsights`, `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.Storage`, `Microsoft.AlertsManagement`, `Microsoft.KeyVault` if KV-cred). Creates RG + Log Analytics workspace + Data Collection Endpoint + Storage account. Grants the SPN `Log Analytics Contributor` on workspace, `Monitoring Metrics Publisher` on the DCR RG, `Storage Blob/Table/Queue Data Contributor` on the storage account. | Workspace, DCE, storage account in your sub. Per-engine DCRs auto-created at first ingest by AzLogDcrIngestPS. RBAC-only — **no `SI_StorageKey` written to your config** (engine reaches storage via OAuth, same custom file works for VM + Container Apps Job). |
+| **3. Config file** | Renders `config\SecurityInsight.custom.ps1` with every required `$global:SI_*` value. Optional sections (SMTP, Azure OpenAI, Shodan, CMDB CSV, per-engine JSON sink, Defender XDR / Sentinel linkage, Entra ID Diagnostic Setting auto-create when no Sentinel) added only when you toggled them on. Backs up any existing custom file to `*.bak.<timestamp>` before overwriting. | A populated `config\SecurityInsight.custom.ps1` ready for the engines to read. |
 
-**Wizard tour (screenshots):**
+The wizard runs cross-platform on **Windows 11** + **Windows Server**, both on-prem and Azure-hosted. The first card on Step 1 (Engine host + bootstrap auth) gates which credential storage options are valid for your scenario:
 
-| Step | Screenshot |
-|------|------------|
-| 1 — Tenant identity (SPN mode toggle + display name) | ![Wizard Step 1 — Tenant identity](docs/screenshots/wizard/01-tenant-identity.png) |
-| 2 — Workspace + ingestion (defaults pre-filled) | ![Wizard Step 2 — Workspace + ingestion](docs/screenshots/wizard/02-workspace-ingestion.png) |
-| 10 — Apply page (3-phase progress) | ![Wizard Step 10 — Apply page](docs/screenshots/wizard/10-apply-page.png) |
-| 10 — Apply page after success | ![Wizard Step 10 — Apply succeeded](docs/screenshots/wizard/10-apply-success.png) |
+- **Win11 / Win Server (no MI)** — Self-signed cert + Local cert store *(production)* OR Client secret + Inline *(testing only)*. Key Vault storage is hidden because there's nothing to bootstrap KV access from.
+- **Azure VM with system-assigned MI** — All 4 storage options valid; KV preferred (centralised secret rotation, no plaintext on the VM).
+- **Azure Container Apps Job with MI** — KV (cert or secret) or Inline; local cert store doesn't apply (ephemeral container).
+
+#### Wizard tour — screenshot walkthrough
+
+| Step | What you do | Screenshot |
+|------|-------------|------------|
+| **0 — Welcome** | Read the prereq cards (grouped by *Always required* / *Use existing* / *Optional features*); click **Start configuring**. | ![Welcome](docs/screenshots/wizard/00-welcome.png) |
+| **1 — Tenant identity** | Pick engine host + bootstrap auth (dropdown). Pick SPN mode (**Create new** / Use existing). Tenant ID is **auto-pre-filled** from your Az login. Pick credential type + storage; the wizard hides combinations that can't bootstrap on your host. | ![Step 1](docs/screenshots/wizard/01-tenant-identity.png) |
+| **2 — Workspace + ingestion** | Subscription ID auto-pre-filled. Pick Azure region from the 53-region dropdown. Workspace name + RG, DCE name + RG, storage account name + RG + container — all defaults pre-filled with the v2.2 standard layout. Optional **naming suffix** (e.g. `prod`) auto-appends to all resource names. | ![Step 2](docs/screenshots/wizard/02-workspace-ingestion.png) |
+| **3 — Mail / SMTP** *(optional)* | Off / Anonymous relay / Authenticated. Sub-fields appear based on the mode. SendGrid / Brevo / M365 SMTP AUTH all work. | ![Step 3](docs/screenshots/wizard/03-smtp.png) |
+| **4 — CMDB integration** *(optional)* | Off / CSV file. Type the path to your CMDB asset export; SI joins it onto every `SI_*_Profile_CL` row for owner/department/business-app enrichment. | ![Step 4](docs/screenshots/wizard/04-cmdb.png) |
+| **5 — Azure OpenAI** *(optional)* | Off / Enabled. Use existing OpenAI resource (paste endpoint + deployment + key) OR create new (resource name + RG + region + deployment + model SKU). Default model: `gpt-4.1-mini` (replaces the deprecated `gpt-4o-mini`). | ![Step 5](docs/screenshots/wizard/05-openai.png) |
+| **6 — Shodan attack surface** *(optional)* | Off / Enabled. API key + license-tier dropdown (Free / Membership / Small Business / Corporate) so the engine backs off before hitting rate limits. | ![Step 6](docs/screenshots/wizard/06-shodan.png) |
+| **7 — Output sinks + Defender XDR** *(optional)* | JSON sink toggle (adds `'JSON'` to every `SI_Sinks_<Engine>`). Defender XDR / Sentinel workspace linkage. **If no Sentinel:** auto-stream Entra sign-in + audit logs (8 categories) into the SI workspace via a new Diagnostic Setting. | ![Step 7](docs/screenshots/wizard/07-output-defender.png) |
+| **8 — Setup** | Review summary (3 phase cards). Click **▶ Setup**. Watch SPN → Infrastructure → Config phases turn green. Per-step log panel below shows every action (resource provider registrations, app reg + SP creation, per-permission Graph status, RBAC grants, ResourceIds, config file path + sections written). If admin consent is pending, the panel surfaces the consent URL — hand it to a Global Admin, then re-click **Setup** (idempotent). | ![Step 8 before](docs/screenshots/wizard/08-setup-before.png) ![Step 8 success](docs/screenshots/wizard/08-setup-success.png) |
+
+Stop the listener with **Ctrl+C** in the pwsh window — the v2.2.119 graceful-stop handler releases port 8766 immediately so re-launching always works.
+
+#### Permissions granted by the wizard — what, to whom, and where
+
+Full disclosure of every permission / role assignment the wizard creates on **Setup**. Nothing is granted that isn't listed here.
+
+##### Microsoft Graph application permissions (granted to the SI Service Principal)
+
+The 13 minimum permissions every SI engine reads. All are **application-only** (no delegated user-impersonation) and all require admin consent:
+
+| Permission | Why SI needs it |
+|------------|-----------------|
+| `ThreatHunting.Read.All` | Defender XDR Advanced Hunting (KQL queries against `DeviceInfo`, `IdentityInfo`, etc. — the bulk of the asset-profiling data). |
+| `Device.Read.All` | MDE devices, vulnerabilities, secure-config baselines. |
+| `User.Read.All` | Entra users (UPNs, sign-in metadata, account enabled/disabled). |
+| `Application.Read.All` | App registrations + service principals (for the Identity engine's SPN-tier classification). |
+| `Group.Read.All` | Entra group membership (drives tier-via-membership classification). |
+| `Policy.Read.All` | Conditional Access + auth policies (for the Identity Risk Analysis reports). |
+| `AuditLog.Read.All` | `AuditLogs` table — directory writes, role assignments, app reg changes. |
+| `IdentityRiskEvent.Read.All` | Identity Protection risk events per user. |
+| `IdentityRiskyUser.Read.All` | Risky user state (current risk level, history). |
+| `Reports.Read.All` | Bulk MFA registration via `userRegistrationDetails` (200x faster than per-user lookup). |
+| `DirectoryRecommendations.Read.All` | Entra directory health + posture recommendations. |
+| `SecurityEvents.Read.All` | Security-alert pipeline. |
+| `CrossTenantInformation.ReadBasic.All` | Cross-tenant guest metadata for B2B asset attribution. |
+
+##### Azure RBAC role assignments (granted to the SI Service Principal)
+
+Wizard grants the minimum scope-appropriate roles. **All grants are visible in the Setup page's per-step log + the Apply payload** — no hidden grants elsewhere.
+
+| Role | Scope | Why | Skip-able? |
+|------|-------|-----|------------|
+| `Reader` | **Tenant-root MG** (`/providers/Microsoft.Management/managementGroups/<tenantId>`) | Subscription discovery for the Azure asset-profiling engine + cross-sub LA queries. | Yes — wizard `-SkipTenantRbac` switch (or hide via the "Use existing SPN" path and grant manually). |
+| `Tag Contributor` *(opt-in only)* | **Tenant-root MG** | Required **only by the asset-exclusion-tagging engine** (writes Custom Security Attributes to flagged assets). **Not granted by default** — enable explicitly via `-IncludeTagContributor` on `New-SISpn` (or the wizard's asset-tagging toggle when that page activates). Most customers don't need it. | N/A — opt-in only; nothing to skip. |
+| `Log Analytics Contributor` | **Workspace** (`/subscriptions/.../workspaces/<ws>`) | Workspace creation + DCR table schema management at first ingest. | No — required for ingestion. |
+| `Monitoring Metrics Publisher` | **DCR resource group** (`/subscriptions/.../resourceGroups/<dcr-rg>`) | DCR-based ingest pipeline (the SPN signs the DCR PUT requests). | No — required for ingestion. |
+| `Storage Blob Data Contributor` | **Storage account** (`/subscriptions/.../storageAccounts/<sa>`) | Fingerprint cache + Excel report staging via OAuth (no shared key). | No — required (or grant `Storage Account Contributor` higher-up if you prefer). |
+| `Storage Table Data Contributor` | **Storage account** | Table-based dedupe state. | No — same as above. |
+| `Storage Queue Data Contributor` | **Storage account** | KEDA queue depth (when running on Container Apps Job — see § 4.12). | No — same as above. |
+| `Key Vault Secrets User` *(if KV cred storage)* | **Key Vault** (`/subscriptions/.../vaults/<kv>`) | The SPN reads its own bootstrap secret from KV at engine startup. | N/A — only granted when cred storage = KV. |
+| `Key Vault Certificate User` *(if KV cert)* | **Key Vault** | The SPN reads its own bootstrap cert from KV. | N/A — only granted when cred kind = Cert + storage = KV. |
+
+##### Managed Identity (Azure VM / Container Apps Job hosts)
+
+If the wizard's "Engine host + bootstrap auth" dropdown is set to **Azure VM with MI** or **Azure Container Apps Job with MI**, the SPN itself isn't the bootstrap identity — the **host's system-assigned Managed Identity** is. The MI needs:
+
+| Role | Scope | Why |
+|------|-------|-----|
+| `Key Vault Secrets User` | **Key Vault** holding the SI SPN's secret/cert | MI reads the SPN credential at engine startup using its own Azure identity (no bootstrap-cred-needed-to-read-the-cred chicken-and-egg). |
+
+The wizard does **NOT** create the MI itself (you assign system-managed identity to your VM / Container Apps Job manually before running the wizard). The wizard's `Setup` only grants the MI the KV role — it never modifies the MI's other role assignments.
+
+##### Entra ID Diagnostic Setting (when "no Sentinel" path picked)
+
+If you don't have a Sentinel workspace and turn on Step 7's *"auto-stream Entra sign-in logs to SI workspace"* toggle, the wizard creates **one tenant-level Diagnostic Setting** named `SI-EntraDiag` targeting your SI workspace. Categories enabled:
+
+`SignInLogs`, `AuditLogs`, `NonInteractiveUserSignInLogs`, `ServicePrincipalSignInLogs`, `ManagedIdentitySignInLogs`, `UserRiskEvents`, `ProvisioningLogs`, `MicrosoftGraphActivityLogs`.
+
+This list is **derived from grep'ing the engine's RA queries** for table references — only the categories SI's queries actually need. Existing Sentinel-side Diagnostic Settings stay untouched. Required operator role: **Security Administrator** or **Global Administrator** (tenant-level Diagnostic Settings need this).
+
+##### Azure resource provider registrations (per subscription)
+
+Auto-registered by Phase 2 of Setup if not already `Registered` on the target sub:
+
+`Microsoft.Resources`, `Microsoft.OperationalInsights`, `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.Storage`, `Microsoft.Authorization`, `Microsoft.AlertsManagement` — plus `Microsoft.KeyVault` if KV cred storage is picked.
+
+#### Step 3 — Run the engines
+
+After the wizard finishes, your `config\SecurityInsight.custom.ps1` is populated and the SPN + workspace + storage are live. Now run the asset-profiling collectors first (they populate `SI_*_Profile_CL` tables that Risk Analysis joins against):
+
+```powershell
+.\launcher\identity\launcher.community-vm.ps1   # Identity (most important -- drives every Identity report)
+.\launcher\endpoint\launcher.community-vm.ps1   # Endpoint (drives every Endpoint report)
+.\launcher\azure\launcher.community-vm.ps1      # Azure   (drives every Azure report)
+.\launcher\publicip\launcher.community-vm.ps1   # PublicIP / Shodan (only if you enabled Shodan in the wizard)
+```
+
+Each takes 5–15 min depending on tenant size. Verify in Azure Portal → your Log Analytics workspace → Logs:
+
+```kql
+SI_Identity_Profile_CL | summarize count()
+```
+
+Then run Risk Analysis (the headline output):
+
+```powershell
+.\launcher\risk-analysis\launcher.community-vm.ps1 -Summary    # aggregated rows, exec view
+.\launcher\risk-analysis\launcher.community-vm.ps1 -Detailed   # per-asset rows, ops triage
+```
+
+Each takes 15–30 min. Outputs:
+- `risk-analysis-detection\OUTPUT\RiskAnalysis_Summary.xlsx` + `.json` (and `_Detailed.xlsx` + `.json`)
+- LA tables `SI_RiskAnalysis_Summary_CL` + `SI_RiskAnalysis_Detailed_CL`
+- *(If mail enabled)* email to your `MailTo` recipients with the xlsx attached + AI exec summary at the top.
+
+> ⚡ **One-shot alternative — fire every engine in parallel windows:** `.\tools\Run-AllEngines.ps1` opens 6 windows (Endpoint, Azure, Identity, PublicIP, RA Detailed, RA Summary) so you can watch them run side by side. Add `-PrivilegeTierClassifier` only when you want to regenerate the AI-classified tier catalog (Azure OpenAI required).
+
+#### 4.1.1 Updating to the latest version
+
+SecurityInsight ships frequent improvements. To pull the latest stable release into your existing install:
+
+```powershell
+cd C:\SecurityInsight
+
+# Stash any local changes you've made (e.g. testing tweaks); skip if you have none
+git stash push -m 'pre-update local tweaks' 2>&1
+
+# Pull the latest stable -- main branch tracks the most recent SI-2.2.x tag
+git pull --ff-only origin main
+
+# (If you stashed) bring your local changes back
+git stash pop 2>&1
+```
+
+**What gets updated:** every engine, launcher template, asset-profiling YAML, RA query, sample config, the Setup Wizard, all docs.
+
+**What is preserved (gitignored):**
+- `config\SecurityInsight.custom.ps1` — your customer config with secrets / tenant IDs.
+- `launcher\<engine>\LauncherConfig.custom.ps1` — your per-engine overrides.
+- `DATA\OUTPUT\` — generated xlsx + json reports.
+- `logs\` — engine transcript logs.
+- `*.bak.<timestamp>` — wizard-created backups of your custom file.
+
+**After pulling:** if you've updated across a major release boundary (e.g. v2.2.50 → v2.2.130), check `RELEASENOTES.md` for any breaking changes and re-run the Setup Wizard if it added new required fields. The wizard is idempotent — re-running it re-uses the existing SPN + workspace + storage and just refreshes any new config sections.
+
+**To verify what version you're on after pulling:**
+
+```powershell
+Get-Content .\VERSION
+git log -1 --pretty=format:'%h  %ad  %s' --date=short
+```
+
+**Rollback** (in the rare case a new release breaks something for you): `git checkout SI-2.2.<n>` to pin to a specific tag, then file a GitHub issue with the symptom + your VERSION + the relevant `logs\<engine>_*.log` snippet.
 
 #### Step 3 — Create your customer config (the ONLY file you must edit)
 

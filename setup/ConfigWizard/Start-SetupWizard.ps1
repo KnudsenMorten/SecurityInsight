@@ -455,6 +455,7 @@ try {
                         if ($st.spn.msiClientId)    { $spnArgs.ManagedIdentityClientId = $st.spn.msiClientId }
                         if ($st.spn.skipTenantRbac) { $spnArgs.SkipTenantRbac  = $true }
                         if ($st.spn.skipAdminConsent) { $spnArgs.SkipAdminConsent = $true }
+                        if ($st.spn.includeTagContributor) { $spnArgs.IncludeTagContributor = $true }
                         $spnOut = & $cmdletNewSISpn @spnArgs
                         # Soft-failure on consent: SPN was created and the perms requested,
                         # but a Global Admin still has to click the consent URL. Don't fail

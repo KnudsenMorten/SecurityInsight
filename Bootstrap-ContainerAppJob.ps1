@@ -89,9 +89,20 @@ $ErrorActionPreference = 'Stop'
 $cliBound = @{}
 foreach ($k in $PSBoundParameters.Keys) { $cliBound[$k] = $true }
 
-# Load customer config -- bootstrap pulls secrets from here to wire into the Job
-$customFile = 'C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1'
-if (-not (Test-Path $customFile)) { throw "$customFile not found -- run Bootstrap-Auth.ps1 first" }
+# Load customer config -- bootstrap pulls secrets from here to wire into the Job.
+# Resolved relative to this script's location so it works wherever the repo is
+# checked out (C:\SecurityInsight for end users, C:\SCRIPTS\AutomateIT\... for
+# the upstream dev tree). Falls back to CWD\config\SecurityInsight.custom.ps1
+# for invocations from other directories.
+$customFile = Join-Path $PSScriptRoot 'config\SecurityInsight.custom.ps1'
+if (-not (Test-Path $customFile)) {
+    $cwdFallback = Join-Path (Get-Location) 'config\SecurityInsight.custom.ps1'
+    if (Test-Path $cwdFallback) {
+        $customFile = $cwdFallback
+    } else {
+        throw "$customFile not found -- run the Setup Wizard's Phase 3 (or Bootstrap-Auth.ps1) first to generate config\SecurityInsight.custom.ps1"
+    }
+}
 . $customFile
 
 # layered-config resolver. CLI explicit > $global:SI_Bootstrap_*

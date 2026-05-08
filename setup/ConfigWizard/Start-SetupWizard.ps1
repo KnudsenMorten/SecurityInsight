@@ -288,13 +288,11 @@ try {
 }
 Write-Host ""
 
-# ----- Pre-flight: Azure CLI status (soft warning, not a block) -----
+# ----- Pre-flight: Azure CLI installed + logged in (HARD BLOCK) -----
 # Phase 5 (container infra) shells out to `az acr build` for server-side
-# image builds, so we need the `az` CLI installed and logged in IF the
-# operator picks 'Azure Container Apps Job with MI' on Step 1. We don't
-# know that choice yet at launch time, so we surface the az state as
-# INFO/WARN here -- no block. /api/apply's Phase 0 enforces the hard
-# requirement only when hostType=azureContainerMI.
+# image builds. The launch pre-flight refuses to start if `az` is missing
+# or not logged in -- same fail-fast contract as Az PS / Mg / binary-compat.
+# This way the operator never reaches Step 1 with a half-broken environment.
 $azFound = $false
 $azVer = $null
 try {
@@ -305,26 +303,39 @@ try {
     }
 } catch { }
 if (-not $azFound) {
-    _Warn "Azure CLI: NOT INSTALLED. (Only required if Step 1 = 'Azure Container Apps Job with MI'.)"
-    _Warn "          Install: https://learn.microsoft.com/cli/azure/install-azure-cli-windows"
-    _Warn ("          Then: az login --tenant {0}" -f $pre.Mg.TenantId)
-} else {
-    $azLoggedIn = $false
-    $azAcct = $null
-    try {
-        $azAcctJson = & az account show --output json 2>&1 | Out-String
-        if ($LASTEXITCODE -eq 0 -and $azAcctJson -match '"id"') {
-            $azLoggedIn = $true
-            $azAcct = $azAcctJson | ConvertFrom-Json
-        }
-    } catch { }
-    if ($azLoggedIn) {
-        _Ok ("Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id)
-    } else {
-        _Warn ("Azure CLI: {0} installed but NOT LOGGED IN. (Only required if Step 1 = 'Azure Container Apps Job with MI'.)" -f $azVer)
-        _Warn ("          Run: az login --tenant {0}" -f $pre.Mg.TenantId)
-    }
+    Write-Host ""
+    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " Azure CLI (`az`) is not installed or not on PATH."
+    Write-Host ""
+    Write-Host "  The wizard's Phase 5 (container infra) shells out to 'az acr build' for server-side image" -ForegroundColor Cyan
+    Write-Host "  builds. Install + sign in BEFORE re-launching the wizard:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "    https://learn.microsoft.com/cli/azure/install-azure-cli-windows" -ForegroundColor White
+    Write-Host ("    az login --tenant {0}" -f $pre.Mg.TenantId) -ForegroundColor White
+    Write-Host "    .\Start-SetupWizard.ps1" -ForegroundColor White
+    Write-Host ""
+    throw "Setup Wizard pre-flight failed: Azure CLI not installed. See instructions above."
 }
+$azLoggedIn = $false
+$azAcct = $null
+try {
+    $azAcctJson = & az account show --output json 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -and $azAcctJson -match '"id"') {
+        $azLoggedIn = $true
+        $azAcct = $azAcctJson | ConvertFrom-Json
+    }
+} catch { }
+if (-not $azLoggedIn) {
+    Write-Host ""
+    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host (" Azure CLI {0} is installed but NOT LOGGED IN." -f $azVer)
+    Write-Host ""
+    Write-Host "  Run in THIS shell, then re-launch the wizard:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host ("    az login --tenant {0}" -f $pre.Mg.TenantId) -ForegroundColor White
+    Write-Host "    .\Start-SetupWizard.ps1" -ForegroundColor White
+    Write-Host ""
+    throw "Setup Wizard pre-flight failed: Azure CLI not logged in. See instructions above."
+}
+_Ok ("Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id)
 Write-Host ""
 
 # ----- Build listener -----

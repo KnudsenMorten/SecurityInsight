@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.144
+## v2.2.145
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.145 - launch pre-flight: az CLI is a HARD block (d7ced97a)
 - release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
 - release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
 - release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
 - release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
 - release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
-- release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.145 — Wizard launch pre-flight: Azure CLI is now a HARD block
+
+`v2.2.144` made the `az` CLI check a soft warning so VM-only operators wouldn't be blocked. User feedback during live test: *"no difference. make it hard"*. The hard block is the right call — every SI deployment that touches Container Apps needs `az` CLI, and even VM-only deployments benefit from having it ready (the operator probably has it installed already if they're doing Azure work; the friction of installing `az` once is much lower than the friction of re-launching the wizard mid-flow).
+
+The `az` CLI section in `Start-SetupWizard.ps1` pre-flight now matches the Az PowerShell / Microsoft Graph / binary-compat checks: same `[BLOCKED]` red banner, same "fix and re-launch" remediation block, same `throw` to abort startup. The HttpListener never binds, the browser never opens, until `az version` returns a parseable version AND `az account show` returns a logged-in account.
+
+Two distinct error variants:
+
+- **Not installed:** `[BLOCKED] Azure CLI (az) is not installed or not on PATH.` + install URL + `az login --tenant <id>` + `.\Start-SetupWizard.ps1`.
+- **Installed but not logged in:** `[BLOCKED] Azure CLI <ver> is installed but NOT LOGGED IN.` + `az login --tenant <id>` + `.\Start-SetupWizard.ps1`.
+
+The `/api/apply` Phase 0 check (v2.2.143) remains as defence-in-depth — if anything changes between launch and clicking Setup (e.g. operator runs `az logout` in another terminal), the apply still refuses to run and no half-deployed Azure resources are left behind.
 
 ---
 

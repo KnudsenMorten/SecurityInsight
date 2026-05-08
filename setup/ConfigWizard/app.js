@@ -103,6 +103,12 @@ const validators = {
   storageAccountName:   v => !!v && /^[a-z0-9]{3,24}$/.test(v),  // Azure storage account name rules
   storageResourceGroup: v => !!v && v.length > 0,
   storageContainer:     v => !!v && /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(v),
+  location:             v => !!v && /^[a-z0-9]+[0-9]?$/.test(v),  // Azure region short-name (lowercase, no spaces)
+  openAiResName:        v => !!v && /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/.test(v),
+  openAiResRg:          v => !!v && v.length > 0,
+  openAiSubscriptionId: v => !v || GUID_RE.test(v),  // optional -- empty = inherit Step 2's sub
+  openAiLocation:       v => !!v && /^[a-z0-9]+[0-9]?$/.test(v),
+  openAiNewDeployment:  v => !!v && v.length > 0,
 };
 
 function isFieldValid(key) {
@@ -117,7 +123,7 @@ function isFieldValid(key) {
 const PAGE_REQS = {
   welcome:   [],
   tenant:    ['tenantId', 'appId'].concat(/* credType-dependent, added dynamically */),
-  workspace: ['subscriptionId', 'workspaceName', 'workspaceRg', 'dceName', 'dceRg', 'storageAccountName', 'storageResourceGroup', 'storageContainer'],
+  workspace: ['subscriptionId', 'location', 'workspaceName', 'workspaceRg', 'dceName', 'dceRg', 'storageAccountName', 'storageResourceGroup', 'storageContainer'],
 };
 
 function tenantRequiredKeys() {
@@ -322,15 +328,33 @@ function buildApptagSnippet() {
   // wasn't renamed to keep state-key compatibility.
   const d = state.data;
   if (d.openAiMode !== 'enabled') return '# OpenAI mode is OFF -- nothing written.';
-  if (d.openAiResMode === 'createNew') return '# OpenAI: "Create new resource" picked, but the wizard backend will provision\n# this on Apply (v2.2.112+). No config snippet needed yet.';
   const lines = [];
   lines.push('# --- Azure OpenAI -- AI summary on RiskAnalysis runs (Layer 3) ----------');
   lines.push('$global:BuildSummaryByAI = $true');
-  lines.push(assignLine('OpenAI_endpoint',   'openAiEndpoint',   '<https://your-aoai.openai.azure.com/>', 22));
-  lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', 'gpt-4o-mini',                          22));
-  lines.push(assignLine('OpenAI_apiVersion', 'openAiApiVersion', '2024-08-01-preview',                   22));
-  lines.push(assignLine('OpenAI_apiKey',     'openAiApiKey',     '<your-aoai-key>',                      22));
-  if (d.openAiMaxSpend) lines.push(assignLine('MaxAiSpendPerRun', 'openAiMaxSpend', '0.50', 22));
+  if (d.openAiResMode === 'createNew') {
+    // Wizard backend (v2.2.112+) provisions the resource on Apply and writes
+    // the endpoint + key directly. The custom config still needs the consumer
+    // globals set so engines pick up the new deployment without a re-edit.
+    const resName = d.openAiResName || 'oai-myorg-securityinsight';
+    lines.push('# Resource will be CREATED on Apply by setup\\Validate-SIOpenAI.ps1:');
+    lines.push('#   Resource    : ' + resName);
+    lines.push('#   Resource RG : ' + (d.openAiResRg || 'rg-securityinsight-openai'));
+    lines.push('#   Subscription: ' + (d.openAiSubscriptionId || '<inherits Step 2 sub>'));
+    lines.push('#   Region      : ' + (d.openAiLocation || 'swedencentral'));
+    lines.push('#   Model SKU   : ' + (d.openAiModel    || 'gpt-4o-mini'));
+    lines.push('#   Deployment  : ' + (d.openAiNewDeployment || 'gpt-4o-mini'));
+    lines.push('# Endpoint + key written to the lines below by the Apply backend:');
+    lines.push("$global:OpenAI_endpoint   = 'https://" + resName + ".openai.azure.com/'");
+    lines.push(assignLine('OpenAI_deployment', 'openAiNewDeployment', 'gpt-4o-mini',          22));
+    lines.push("$global:OpenAI_apiVersion = '2025-01-01-preview'");
+    lines.push("$global:OpenAI_apiKey     = '<written-by-apply-backend>'   # default");
+  } else {
+    lines.push(assignLine('OpenAI_endpoint',   'openAiEndpoint',   '<https://your-aoai.openai.azure.com/>', 22));
+    lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', 'gpt-4o-mini',                          22));
+    lines.push(assignLine('OpenAI_apiVersion', 'openAiApiVersion', '2025-01-01-preview',                   22));
+    lines.push(assignLine('OpenAI_apiKey',     'openAiApiKey',     '<your-aoai-key>',                      22));
+  }
+  lines.push(assignLine('MaxAiSpendPerRun', 'openAiMaxSpend', '3', 22));
   return lines.join('\n');
 }
 
@@ -900,6 +924,7 @@ function setApplyPhase(phase, status) {
         ic.innerHTML = status === 'ok' ? '&#10003;'
                        : status === 'failed' ? '&#10007;'
                        : status === 'running' ? '&#9696;'
+                       : status === 'consent-pending' ? '&#9888;'   // amber warning triangle
                        : '&#9711;';
     }
     if (stEl) stEl.textContent = status;
@@ -943,22 +968,49 @@ async function runApply() {
         try { obj = JSON.parse(respText); } catch (e) { /* keep raw */ }
 
         if (resp.ok && obj && obj.ok) {
-            setApplyPhase('spn', 'ok');
+            // SPN phase may report 'consent-pending' even when overall apply
+            // succeeded -- the SPN was created and the perms requested, but a
+            // Global Admin still has to click the consent URL. Reflect that
+            // distinction in the per-phase pills + the result panel.
+            var spnPhase = (obj.phaseStatus && obj.phaseStatus.spn) || 'ok';
+            setApplyPhase('spn', spnPhase === 'consent-pending' ? 'consent-pending' : 'ok');
             setApplyPhase('infra', 'ok');
             setApplyPhase('config', 'ok');
-            setApplyStatePill('DONE', '#e8f5e9');
+            var consentStatus = (obj.spn && obj.spn.ConsentStatus) || 'granted';
+            var pendingPerms  = (obj.spn && obj.spn.PendingPermissions) || [];
+            var consentUrl    = (obj.spn && obj.spn.ConsentUrl) || '';
+            if (consentStatus === 'granted') {
+                setApplyStatePill('DONE', '#e8f5e9');
+            } else {
+                setApplyStatePill('CONSENT PENDING', '#fff8e1');
+            }
             var appId = (obj.spn && obj.spn.AppId) || '?';
             var wsId  = (obj.infra && obj.infra.WorkspaceResourceId) || '?';
             var cfgPath = (obj.configFile && obj.configFile.Path) || '?';
             var cfgBytes = (obj.configFile && obj.configFile.Bytes) || 0;
             var cfgSecs = (obj.configFile && obj.configFile.Sections) || [];
-            result.innerHTML =
-                '<div class="note" style="background:#e8f5e9;border-left-color:#2e7d32;">' +
-                '<b>&#10003; Apply succeeded.</b><br>' +
-                'SPN AppId: <code>' + _esc(appId) + '</code><br>' +
-                'Workspace: <code>' + _esc(wsId) + '</code><br>' +
-                'Config file: <code>' + _esc(cfgPath) + '</code> (' + cfgBytes + ' bytes)<br>' +
-                'Sections written: ' + _esc(cfgSecs.join(', ') || '(none)') + '</div>';
+            var html = '<div class="note" style="background:' + (consentStatus === 'granted' ? '#e8f5e9' : '#fff8e1') +
+                       ';border-left-color:' + (consentStatus === 'granted' ? '#2e7d32' : '#f57c00') + ';">' +
+                       '<b>' + (consentStatus === 'granted' ? '&#10003; Apply succeeded.' : '&#9888; Apply succeeded -- ADMIN CONSENT PENDING.') + '</b><br>' +
+                       'SPN AppId: <code>' + _esc(appId) + '</code><br>' +
+                       'Workspace: <code>' + _esc(wsId) + '</code><br>' +
+                       'Config file: <code>' + _esc(cfgPath) + '</code> (' + cfgBytes + ' bytes)<br>' +
+                       'Sections written: ' + _esc(cfgSecs.join(', ') || '(none)') + '</div>';
+            // Surface the admin-consent URL prominently when not all perms were granted.
+            // The operator hands this URL to a Global Admin who clicks it once; afterward
+            // re-clicking 'Apply now' validates that consent landed (Apply is idempotent).
+            if (consentStatus !== 'granted' && consentUrl) {
+                html += '<div class="note warn" style="background:#fff8e1;border-left-color:#f57c00;margin-top:12px;">' +
+                        '<b>Admin consent required for ' + pendingPerms.length + ' permission(s):</b><br>' +
+                        '<code style="font-size:11px;display:block;margin:6px 0;">' + _esc(pendingPerms.join(', ')) + '</code>' +
+                        '<b>How to resolve:</b><br>' +
+                        '1. Send this URL to a <b>Global Administrator</b> (or anyone with the <b>Privileged Role Administrator</b> role on the app):<br>' +
+                        '<a href="' + _esc(consentUrl) + '" target="_blank" rel="noopener" style="display:inline-block;margin:8px 0;padding:8px 14px;background:#1a3a5c;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;">&#128279; Open admin-consent page</a><br>' +
+                        '<code style="font-size:11px;word-break:break-all;color:#5a6a7a;">' + _esc(consentUrl) + '</code><br>' +
+                        '2. After they click <b>Accept</b>, re-click <b>Apply now</b> above. The wizard re-validates each permission and updates this panel (Apply is idempotent &mdash; nothing is re-created).' +
+                        '</div>';
+            }
+            result.innerHTML = html;
         } else {
             var phase = (obj && obj.phase) || 'unknown';
             var err   = (obj && obj.error) || respText || ('HTTP ' + resp.status);

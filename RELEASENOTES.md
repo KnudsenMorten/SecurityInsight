@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.112
+## v2.2.113
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
 - release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
 - release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
 - release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
@@ -33,13 +34,101 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
 - release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
 - release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
-- release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.113 — Setup Wizard: graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields
+
+This is the last big "make the wizard production-ready" tag before live-customer testing. Six related changes:
+
+### 1. Graceful admin-consent flow (no more silent failures)
+
+The #1 customer-onboarding stall is **admin consent on Microsoft Graph permissions**. The operator running the wizard often doesn't have **Privileged Role Administrator** or **Global Administrator** -- they're a tenant user with rights to *create* the SPN but not to consent to its app-only Graph permissions. The previous backend swallowed those grant failures into log warnings, returned a `success` result, and the operator had no idea downstream engines would fail with `Insufficient privileges` because half the perms were never consented.
+
+**`New-SISpn.ps1`:**
+- **Per-permission status tracking.** Each Graph permission carries one of `granted` / `already` / `pending` / `not-found` / `skipped`. Returned in result as `GraphPermissionResults` (array of `{Name, Status, Error}`).
+- **Aggregate `ConsentStatus`**: `granted` (all OK), `partial` (some failed), `pending` (none granted), `failed`.
+- **`PendingPermissions`** result field for easy display.
+- **`ConsentUrl`** computed and returned: `https://login.microsoftonline.com/{TenantId}/adminconsent?client_id={AppId}` -- a Global Admin clicks once, all pending perms get consented in a single Entra portal flow.
+- **Same per-result tracking for Azure RBAC grants** (`AzureRbacResults` array with `{Name, Scope, Status, Error}`).
+- **New `-SkipTenantRbac` switch.** Skips the Reader + Tag Contributor grants at tenant-root MG. Useful for sandbox tests + orgs that won't authorize tenant-root assignments.
+
+**`/api/apply` orchestration (`Start-SetupWizard.ps1`):**
+- New SPN-phase status: **`consent-pending`** in `phaseStatus.spn` when SPN created but consent partial.
+- Apply does **NOT fail** on consent-pending -- continues with infra + config phases. Custom config gets written so engines run as soon as a Global Admin consents (no re-apply needed).
+- New optional state fields: `st.spn.skipTenantRbac` and `st.spn.skipAdminConsent`.
+
+**Wizard Apply page UI (`app.js`):**
+- New phase-pill status `consent-pending` (amber warning triangle ⚠).
+- Top-of-page state pill flips from `DONE` to **`CONSENT PENDING`** with amber background.
+- Result panel surfaces a yellow callout listing pending permission names + a big **"Open admin-consent page"** button linking the consent URL + two-step instruction (hand URL to Global Admin, then re-click Apply to verify -- Apply is idempotent).
+
+### 2. Fail-fast on missing Az + Microsoft Graph contexts
+
+Previous behaviour: `New-SISpn.ps1` and `Initialize-SIInfra.ps1` had internal `Connect-AzAccount` and `Connect-MgGraph` fallback calls. In the listener (which runs in a hidden background process), these triggered interactive auth dialogs that were invisible -- the cmdlet hung forever and the operator saw "no resources in RG" with no error to debug.
+
+Plus device-code auth is **blocked by Conditional Access in many tenants** (and is itself a CA security-risk pattern -- not acceptable as a fallback).
+
+**Fix:**
+- `Start-SetupWizard.ps1` startup runs `Test-PreflightAuth` -- requires both `Get-AzContext` and `Get-MgContext` to be loaded **before** the listener starts. If either is missing, the wizard refuses to start with a clear error showing exactly what `Connect-*` commands the operator needs to run in the launching shell.
+- `New-SISpn.ps1` similarly checks both contexts at function entry; if missing, throws with the same instruction. **No internal `Connect-*` calls anywhere in the wizard backend.**
+- The operator authenticates how their CA policy allows (browser-redirect, cert-based SPN, whatever), in their own shell. The wizard process inherits both contexts -- one auth, no popups, no per-call re-auth.
+
+### 3. Pre-flight permission probe + new `/api/preflight` endpoint
+
+Authentication-presence isn't enough -- the operator might be authed but lack the *roles* to actually do things. New `Test-PreflightPermissions` function checks:
+- **Microsoft Graph scopes**: required `Application.ReadWrite.All`, `AppRoleAssignment.ReadWrite.All`, `Directory.ReadWrite.All` are present on the active Mg context.
+- **Entra directory roles** (best-effort, when operator is a user not an SPN): looks up the operator's directory role memberships and warns if no admin-consent role (`Global Administrator`, `Privileged Role Administrator`, `Cloud Application Administrator`, `Application Administrator`) is held -- "expect Graph grants to land 'pending'; need a separate admin to click consent URL".
+- **Azure RBAC at the target subscription**: blocker if no `Owner` / `Contributor` / `User Access Administrator`; warning if Contributor only (some RBAC grants in Initialize-SIInfra need Owner/UAA).
+
+Exposed via `POST /api/preflight` with `{tenantId, subscriptionId}` body -- returns `{blockers, warnings, roles, ready}`. The wizard JS Apply page (and any external automation) can call this **before** clicking the real Apply, so the operator sees missing roles BEFORE any provisioning starts.
+
+Handles SPN-vs-user auth correctly: detects GUID-shaped Account.Id and uses `Get-AzADServicePrincipal` + `-ObjectId` instead of `-SignInName` (which only works for user UPNs).
+
+### 4. Microsoft Graph scope list trimmed (AADSTS650053 fix)
+
+Removed `DelegatedPermissionGrant.ReadWrite.All` from the wizard's required Graph scopes. That scope is for *delegated* (user-impersonation) permission grants -- the wizard only does *application-only* grants which `AppRoleAssignment.ReadWrite.All` covers. Asking for it triggered `AADSTS650053: scope ... doesn't exist on the resource` in some tenants when the Graph SDK truncated the scope on `Connect-MgGraph`. Both `New-SISpn.ps1` and the wizard pre-flight now request 3 scopes instead of 4.
+
+### 5. Step 2 — full Azure region dropdown (no silent fallback)
+
+Step 2 (Workspace + ingestion) didn't collect `location` -- `buildApplyState()` hardcoded `'westeurope'` as a fallback. Customers in other regions had to manually edit the generated config or pre-set state via `localStorage`.
+
+**Fix:** new **Azure region** dropdown next to Subscription ID with **53 regions** organised into 7 geographic optgroups (Europe, North America, South America, Asia Pacific, Australia + NZ, Middle East, Africa). Each region shows the city name in parentheses. Default = West Europe; required field; Step 2 done-badge + Next button gate on it.
+
+`buildWorkspaceSnippet()` and `buildApplyState()` now read `state.data.location` -- no more silent fallback.
+
+### 6. Step 5 — OpenAI "Create new resource" sub-form
+
+The Create-new branch on Step 5 (Azure OpenAI) was a placeholder note. It now collects everything needed to provision the resource on Apply (when the v2.2.114+ backend creates it via `setup\Validate-SIOpenAI.ps1`):
+- **OpenAI resource name** (default `oai-myorg-securityinsight`)
+- **Resource group** (default `rg-securityinsight-openai` -- separate from the SI workspace RG so cost tags / policies can differ)
+- **Subscription** (optional -- inherits Step 2 sub if blank)
+- **Azure region** dropdown with **two optgroups**: "Best gpt-4o-mini availability" (8 regions) + "Other AOAI-enabled regions" (11 more) -- AOAI region availability is more constrained than general Azure
+- **Deployment name** (default `gpt-4o-mini`)
+- **Model SKU** dropdown: `gpt-4o-mini` (recommended) / `gpt-4o` (highest quality) / `gpt-4-turbo` (legacy) / `gpt-35-turbo` (cheapest)
+
+**Snippet upgrade:** `buildApptagSnippet()` now writes the AI consumer globals (`$global:BuildSummaryByAI = $true`, `OpenAI_endpoint`, `OpenAI_deployment`, `OpenAI_apiVersion`, `OpenAI_apiKey`) for **both** modes. Create-new path computes the endpoint URL from the resource name (`https://{name}.openai.azure.com/`) and marks the API key as `<written-by-apply-backend>` so the operator knows the backend will fill it on Apply -- no manual config edit needed.
+
+**Bonus on the same step:** `MaxAiSpendPerRun` now defaults to **3 USD** (pre-filled, not just placeholder) matching the real customer config pattern. Tooltip rewritten to clarify the engine *continues* on budget cap (sets `SI_Classify_Status='budget-capped'` per asset, doesn't throw).
+
+### Other polish
+
+- Step 1 title rewritten from "Who are we authenticating as?" → "**How will the SecurityInsight engines authenticate?**" (more professional / matches the wizard's other titles).
+- Validators added for the 5 new openAI createNew fields + the new `location` field.
+- Listener startup now prints which contexts are inherited (green `[OK]` lines for Az + Graph) so the operator confirms before clicking Apply.
+
+### What's NOT yet done
+
+- **Backend create-AOAI** (`Validate-SIOpenAI.ps1` integration on Apply) -- v2.2.114.
+- **Backend create-KV** (createNewKv flag from v2.2.110 honored by `Initialize-SIInfra.ps1`) -- v2.2.114.
+- **Use existing resource by ResourceId** pattern (single-field paste vs name + RG + sub) -- v2.2.115.
+- **Live tenant validation** of the full Apply flow -- the only uncovered piece. The auth pre-flight, consent-grace, and per-phase logging are all on disk + parse-clean; full E2E test pending operator with both contexts loaded.
 
 ---
 

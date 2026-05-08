@@ -96,6 +96,138 @@ foreach ($c in $cmdletNewSISpn, $cmdletInitInfra, $cmdletWriteConfig) {
 _Info "backend cmdlets : New-SISpn / Initialize-SIInfra / Write-SICustomConfig"
 Write-Host ""
 
+# ----- Pre-flight: require Az + Microsoft Graph contexts -----
+# /api/apply needs both. Fail fast (don't accept POSTs against an unauthed
+# listener) -- the operator has to run Connect-AzAccount + Connect-MgGraph
+# in THIS shell before launching the wizard, so the contexts are inherited
+# by this process and reused for every apply call.
+function Test-PreflightAuth {
+    $azCtx = $null; $mgCtx = $null
+    try { $azCtx = Get-AzContext -ErrorAction Stop } catch { }
+    try { $mgCtx = Get-MgContext -ErrorAction Stop } catch { }
+    return @{ Az = $azCtx; Mg = $mgCtx }
+}
+
+# Permission probe -- distinguishes "authenticated" from "actually able to do
+# the work". Returns @{ Blockers; Warnings; Roles } so the wizard can surface
+# WHICH role is missing (not just "auth failed mid-phase"). Called at startup
+# (whatever default sub we have) and on demand via /api/preflight.
+function Test-PreflightPermissions {
+    param(
+        [Parameter()] [string]$TenantId,
+        [Parameter()] [string]$SubscriptionId
+    )
+    $blockers = @(); $warnings = @(); $roles = @{ Graph = @(); AzureRbac = @(); Directory = @() }
+    $azCtx = Get-AzContext -ErrorAction SilentlyContinue
+    $mgCtx = Get-MgContext -ErrorAction SilentlyContinue
+
+    # 1. Microsoft Graph: required scopes present?
+    # NOTE: DelegatedPermissionGrant.ReadWrite.All is NOT in this list. The
+    # wizard only does application-only role assignments which need
+    # AppRoleAssignment.ReadWrite.All; older docs listed the delegated scope
+    # but it's unnecessary and triggers AADSTS650053 in some tenants.
+    if ($mgCtx) {
+        $reqScopes = @('Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All')
+        $roles.Graph = @($mgCtx.Scopes | Where-Object { $reqScopes -contains $_ })
+        $missing = @($reqScopes | Where-Object { $mgCtx.Scopes -notcontains $_ })
+        if ($missing.Count -gt 0) {
+            $blockers += ("Graph context is missing scopes: {0}. Reconnect with: Connect-MgGraph -TenantId {1} -Scopes {2}" -f ($missing -join ','), $TenantId, ($reqScopes -join ','))
+        }
+    }
+
+    # 2. Entra directory roles -- best-effort (only meaningful when operator is
+    # a user, not a SPN). Surface as a WARNING (not blocker) since admin consent
+    # can be handed off to another admin via the consent URL.
+    if ($mgCtx -and $mgCtx.Account -and $mgCtx.Account -notmatch '^[0-9a-f-]{36}$') {
+        try {
+            $me = Get-MgUser -Filter ("userPrincipalName eq '{0}'" -f $mgCtx.Account) -ErrorAction Stop
+            if ($me) {
+                $myRoles = @(Get-MgUserMemberOf -UserId $me.Id -All -ErrorAction Stop |
+                    Where-Object { $_.AdditionalProperties['@odata.type'] -eq '#microsoft.graph.directoryRole' })
+                $roleNames = @($myRoles | ForEach-Object { $_.AdditionalProperties['displayName'] })
+                $roles.Directory = $roleNames
+                $consentRoles = @('Global Administrator','Privileged Role Administrator','Cloud Application Administrator','Application Administrator')
+                $hasConsent = @($roleNames | Where-Object { $consentRoles -contains $_ }).Count -gt 0
+                if (-not $hasConsent) {
+                    $warnings += ("Operator '{0}' has no admin consent role ({1}). Graph permission grants will be marked 'pending' and a separate admin must click the consent URL." -f $mgCtx.Account, ($consentRoles -join ' / '))
+                }
+            }
+        } catch {
+            $warnings += ("Could not enumerate operator's directory roles: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    # 3. Azure RBAC at the target subscription -- need Contributor/Owner/UAA to
+    # provision resources + grant SPN role assignments. Without it Phase 2 (infra)
+    # will fail with 403 on the first New-AzResourceGroup. BLOCKER.
+    if ($azCtx -and $SubscriptionId) {
+        try {
+            if ($azCtx.Subscription.Id -ne $SubscriptionId) {
+                Set-AzContext -SubscriptionId $SubscriptionId -ErrorAction Stop | Out-Null
+            }
+            $signIn   = $azCtx.Account.Id
+            $subScope = "/subscriptions/$SubscriptionId"
+            # SPN auth -> Account.Id is the AppId GUID; user auth -> UPN. Look up
+            # role assignments by the appropriate property.
+            $isSpn = ($signIn -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+            if ($isSpn) {
+                # ApplicationId param requires the SPN's ObjectId (the SP, not the app reg).
+                $sp = Get-AzADServicePrincipal -ApplicationId $signIn -ErrorAction SilentlyContinue
+                if ($sp) {
+                    $azRoles = @(Get-AzRoleAssignment -ObjectId $sp.Id -Scope $subScope -ErrorAction SilentlyContinue)
+                    if (-not $azRoles -or $azRoles.Count -eq 0) {
+                        $azRoles = @(Get-AzRoleAssignment -ObjectId $sp.Id -ErrorAction SilentlyContinue |
+                                     Where-Object { $subScope -like "$($_.Scope)*" -or $_.Scope -eq '/' -or $_.Scope -like '/providers/Microsoft.Management/managementGroups/*' })
+                    }
+                } else { $azRoles = @() }
+            } else {
+                $azRoles = @(Get-AzRoleAssignment -SignInName $signIn -Scope $subScope -ErrorAction SilentlyContinue)
+                if (-not $azRoles -or $azRoles.Count -eq 0) {
+                    $azRoles = @(Get-AzRoleAssignment -SignInName $signIn -ErrorAction SilentlyContinue |
+                                 Where-Object { $subScope -like "$($_.Scope)*" -or $_.Scope -eq '/' -or $_.Scope -like '/providers/Microsoft.Management/managementGroups/*' })
+                }
+            }
+            $writeRoleNames = @('Owner','Contributor','User Access Administrator')
+            $writeRoles = @($azRoles | Where-Object { $writeRoleNames -contains $_.RoleDefinitionName })
+            $roles.AzureRbac = @($azRoles | ForEach-Object { ('{0} @ {1}' -f $_.RoleDefinitionName, $_.Scope) })
+            if ($writeRoles.Count -eq 0) {
+                $blockers += ("Operator '{0}' has no Owner/Contributor/User Access Administrator role at sub {1}. Phase 2 (infra prestage) will fail with 403 on the first resource creation." -f $signIn, $SubscriptionId)
+            }
+            $uaaRoles = @($azRoles | Where-Object { $_.RoleDefinitionName -in @('Owner','User Access Administrator') })
+            if ($uaaRoles.Count -eq 0 -and $writeRoles.Count -gt 0) {
+                $warnings += ("Operator has Contributor but NOT Owner/User Access Administrator. SPN role assignments at sub scope (Storage Blob/Table/Queue Data Contributor) will FAIL -- you need Owner or UAA to grant RBAC. Have a sub Owner re-run, or pre-grant the SPN those roles manually.")
+            }
+        } catch {
+            $warnings += ("Could not enumerate Azure RBAC at sub: {0}" -f $_.Exception.Message)
+        }
+    }
+
+    return @{ Blockers = $blockers; Warnings = $warnings; Roles = $roles }
+}
+$pre = Test-PreflightAuth
+if (-not $pre.Az -or -not $pre.Mg) {
+    Write-Host ""
+    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " /api/apply needs both Az PowerShell and Microsoft Graph contexts."
+    Write-Host ""
+    if (-not $pre.Az) { Write-Host "    Az PowerShell : NOT CONNECTED" -ForegroundColor Yellow }
+    else              { Write-Host ("    Az PowerShell : {0} (sub: {1})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name) -ForegroundColor Green }
+    if (-not $pre.Mg) { Write-Host "    Microsoft Graph: NOT CONNECTED" -ForegroundColor Yellow }
+    else              { Write-Host ("    Microsoft Graph: {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId) -ForegroundColor Green }
+    Write-Host ""
+    Write-Host "  Run these in THIS shell, then re-launch the wizard:" -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "    Connect-AzAccount -Tenant <tenant-id>" -ForegroundColor White
+    Write-Host "    Connect-MgGraph -TenantId <tenant-id> -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome" -ForegroundColor White
+    Write-Host "    .\Start-SetupWizard.ps1" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  (The wizard process inherits both contexts -- no popups, no device codes, no per-call re-auth.)" -ForegroundColor Gray
+    Write-Host ""
+    throw "Setup Wizard pre-flight failed: missing Az and/or Microsoft Graph context. See instructions above."
+}
+_Ok ("Az context     : {0} (sub: {1} / {2})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name, $pre.Az.Subscription.Id)
+_Ok ("Graph context  : {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId)
+Write-Host ""
+
 # ----- Build listener -----
 $listener = New-Object System.Net.HttpListener
 $prefix   = "http://localhost:$Port/"
@@ -193,6 +325,38 @@ try {
                     }
                     break
                 }
+                '^/api/preflight$' {
+                    # Permission probe: distinguishes "authenticated" from "actually
+                    # able to do the work". Pass {tenantId, subscriptionId} to scope
+                    # the Azure RBAC check; returns { blockers, warnings, roles, ready }.
+                    # Wizard JS Apply page can call this before clicking the real Apply
+                    # so the operator sees missing roles BEFORE any provisioning starts.
+                    $tid = $null; $sid = $null
+                    if ($req.HttpMethod -eq 'POST') {
+                        try {
+                            $bodyReader = New-Object System.IO.StreamReader($req.InputStream, $req.ContentEncoding)
+                            $bodyText = $bodyReader.ReadToEnd()
+                            $bodyReader.Dispose()
+                            if ($bodyText) {
+                                $body = $bodyText | ConvertFrom-Json
+                                $tid = $body.tenantId
+                                $sid = $body.subscriptionId
+                            }
+                        } catch { }
+                    } else {
+                        $tid = $req.QueryString['tenantId']
+                        $sid = $req.QueryString['subscriptionId']
+                    }
+                    $report = Test-PreflightPermissions -TenantId $tid -SubscriptionId $sid
+                    Send-Json -Response $res -Object @{
+                        ok       = $true
+                        blockers = $report.Blockers
+                        warnings = $report.Warnings
+                        roles    = $report.Roles
+                        ready    = ($report.Blockers.Count -eq 0)
+                    }
+                    break
+                }
                 '^/api/apply$' {
                     if ($req.HttpMethod -ne 'POST') {
                         Send-Json -Response $res -Object @{ error = 'apply requires POST' } -Status 405
@@ -235,9 +399,21 @@ try {
                         if ($st.spn.kvCertName)     { $spnArgs.KvCertName      = $st.spn.kvCertName }
                         if ($st.spn.rootMgId)       { $spnArgs.RootMgId        = $st.spn.rootMgId }
                         if ($st.spn.msiClientId)    { $spnArgs.ManagedIdentityClientId = $st.spn.msiClientId }
+                        if ($st.spn.skipTenantRbac) { $spnArgs.SkipTenantRbac  = $true }
+                        if ($st.spn.skipAdminConsent) { $spnArgs.SkipAdminConsent = $true }
                         $spnOut = & $cmdletNewSISpn @spnArgs
-                        $phaseStatus.spn = 'ok'
-                        $applyLog.Add('phase=spn ok appId=' + $spnOut.AppId)
+                        # Soft-failure on consent: SPN was created and the perms requested,
+                        # but a Global Admin still has to click the consent URL. Don't fail
+                        # the whole apply -- continue with infra + config so the operator
+                        # can run the engines as soon as consent is granted (no re-apply
+                        # needed). Phase status reflects the partial state.
+                        if ($spnOut.ConsentStatus -ne 'granted') {
+                            $phaseStatus.spn = 'consent-pending'
+                            $applyLog.Add(('phase=spn consent-pending appId={0} pendingPerms={1} consentUrl={2}' -f $spnOut.AppId, ($spnOut.PendingPermissions -join ','), $spnOut.ConsentUrl))
+                        } else {
+                            $phaseStatus.spn = 'ok'
+                            $applyLog.Add('phase=spn ok appId=' + $spnOut.AppId)
+                        }
                     } catch {
                         $phaseStatus.spn = 'failed'
                         $applyLog.Add('phase=spn FAILED: ' + $_.Exception.Message)

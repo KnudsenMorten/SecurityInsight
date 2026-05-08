@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.139
+## v2.2.140
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
 - release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
 - release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
 - release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
 - release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
 - release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
-- release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.140 — Chapter 3 Inputs / Enrichment / Outputs diagram redesigned for readability
+
+The mermaid flowchart at the top of § 3 grouped 7 inputs + 4 enrichment items + 7 outputs into 3 nested subgraphs, each with one node per item — 18 individual nodes converging on a single tiny `CORE` node, edges from every subgraph member to `CORE`. On GitHub's renderer this came out cramped: text inside small boxes, edges overlapping, the engine box illegible.
+
+Redesigned to **4 large boxes** in a single horizontal row: `INPUTS` → `ENGINES` ← `ENRICHMENT`, `ENGINES` → `OUTPUTS`. Each input/enrichment/output is now a line of text inside the box (instead of its own node), so the diagram fits on one screen, every label is readable at default zoom, and the visual hierarchy maps to the section headers (`§ 3.1 Inputs`, `§ 3.2 Enrichment`, `§ 3.3 Outputs`) below. Engine box rendered as a circle to differentiate from the rectangular IO boxes, with thicker stroke. Solid `==>` arrows for required dataflow, dotted `-.->` for optional enrichment.
+
+Docs only — no code changes.
 
 ---
 

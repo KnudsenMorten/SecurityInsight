@@ -439,36 +439,21 @@ Before you set up, here's the data SecurityInsight reads (Inputs), what it joins
 
 ```mermaid
 flowchart LR
-    subgraph IN ["🔵 Inputs (read-only API)"]
-        I1[Defender for Endpoint]
-        I2[Defender Exposure Graph]
-        I3[Entra ID + Graph]
-        I4[Azure Resource Graph]
-        I5[Sentinel SigninLogs<br/>+ AADNonInteractive]
-        I6[Defender Vulnerabilities KB]
-    end
-    subgraph ENRICH ["🟡 Enrichment (optional)"]
-        E1[ServiceNow CMDB CSV]
-        E2["Azure OpenAI<br/>(role/permission tiering)"]
-        E3["Customer .custom.yaml<br/>(per-rule overrides + adds)"]
-        E4["Shodan<br/>(public-IP exposure)"]
-    end
-    subgraph OUT ["🟢 Outputs (sinks — pick any combo)"]
-        O1[Excel + email]
-        O2[Log Analytics tables]
-        O3[JSON sibling]
-        O4[Azure blob upload]
-        O5[UNC share upload]
-        O6[Power BI dataset refresh]
-        O7[Azure Workbook]
-    end
-    IN --> CORE[SecurityInsight engines]
-    ENRICH --> CORE
-    CORE --> OUT
-    style IN fill:#e8f4fd,stroke:#2a6592
-    style ENRICH fill:#fff4e6,stroke:#a86a00
-    style CORE fill:#ffe6f0,stroke:#a8005c
-    style OUT fill:#e8ffe8,stroke:#1a7a1a
+    IN["🔵 <b>INPUTS</b><br/>(read-only API)<br/><br/>Defender for Endpoint<br/>Defender Exposure Graph<br/>Entra ID + Microsoft Graph<br/>Azure Resource Graph<br/>Sentinel SigninLogs<br/>Defender Vulnerabilities KB"]
+    ENRICH["🟡 <b>ENRICHMENT</b><br/>(optional)<br/><br/>ServiceNow CMDB CSV<br/>Azure OpenAI tiering<br/>Customer .custom.yaml<br/>Shodan public-IP scan"]
+    CORE(("⚙️<br/><b>SecurityInsight</b><br/><b>engines</b>"))
+    OUT["🟢 <b>OUTPUTS</b><br/>(pick any combo)<br/><br/>Excel + email<br/>Log Analytics tables<br/>JSON sibling files<br/>Azure blob upload<br/>UNC share upload<br/>Power BI dataset<br/>Azure Workbook"]
+    IN ==> CORE
+    ENRICH -.-> CORE
+    CORE ==> OUT
+    classDef input    fill:#e8f4fd,stroke:#2a6592,stroke-width:2px,color:#0d2a4a
+    classDef enrich   fill:#fff4e6,stroke:#a86a00,stroke-width:2px,color:#5a3500
+    classDef output   fill:#e8ffe8,stroke:#1a7a1a,stroke-width:2px,color:#0e3d0e
+    classDef engine   fill:#ffe6f0,stroke:#a8005c,stroke-width:3px,color:#5a002e
+    class IN input
+    class ENRICH enrich
+    class OUT output
+    class CORE engine
 ```
 
 <a id="31-inputs"></a>

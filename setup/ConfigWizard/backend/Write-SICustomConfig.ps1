@@ -169,7 +169,11 @@ $null = $sb.AppendLine("# 3. STORAGE  --  RBAC-only mode (no shared key written 
 $null = $sb.AppendLine("# ============================================================================")
 $null = $sb.AppendLine("`$global:SI_StorageAccount             = '$($Infra.StorageAccountName)'")
 $null = $sb.AppendLine("`$global:SI_StorageResourceGroup       = '$($Infra.StorageResourceGroupName)'")
-$null = $sb.AppendLine("# (NO `$global:SI_StorageKey -- engine v2.2.79+ uses OAuth via SPN/MSI when the key is absent)")
+$null = $sb.AppendLine("# (NO `$global:SI_StorageKey -- engine uses OAuth via SPN/MSI when the key is absent)")
+$null = $sb.AppendLine("# Force OAuth-only auth: SPN has Storage Blob/Table/Queue Data Contributor but")
+$null = $sb.AppendLine("# NOT 'listKeys' permission. Without this flag the engine probes Get-AzStorageAccountKey")
+$null = $sb.AppendLine("# first and warns 'Forbidden' before falling back; setting this skips the probe.")
+$null = $sb.AppendLine("`$global:SI_UseStorageOAuth            = `$true")
 $null = $sb.AppendLine()
 $sectionsWritten += 'Storage'
 

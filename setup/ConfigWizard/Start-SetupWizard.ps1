@@ -244,7 +244,7 @@ Write-Host ""
 # this smoke test the operator clicks Setup, watches Phase 1 (which only
 # uses Microsoft.Graph) succeed, then Phase 2 fails on the FIRST Az PS call.
 # Fail fast here with a clear remediation BEFORE accepting Setup clicks.
-_Step "verify Az PowerShell binary-compat (Get-AzAccessToken smoke test)"
+_Info "verify Az PowerShell binary-compat (Get-AzAccessToken smoke test)"
 try {
     $null = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/' -ErrorAction Stop
     _Ok "Az PowerShell smoke test passed -- assemblies are binary-compatible"

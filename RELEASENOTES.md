@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.121
+## v2.2.122
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
 - release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
 - release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
 - release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.95 - Risk Score re-tuned + viewer column UX (554afe84)
 - release: SecurityInsight v2.2.94 - email: dark-mode tolerance + total at the bottom (7e38cd7a)
 - release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
-- release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.122 — Setup Wizard: auto-migrate stale gpt-4o-mini state to gpt-4.1-mini
+
+v2.2.117 changed the wizard's default OpenAI model SKU + deployment name to `gpt-4.1-mini` (the gpt-4o-mini predecessor was deprecated by OpenAI in 2025). But existing testers' `localStorage` still carried the old `gpt-4o-mini` value -- the data-default seeding only fills when state is null/undefined, so a stale saved value sticks. The dropdown showed the deprecated SKU pre-selected with the "deprecated 2025 -- migrate to gpt-4.1-mini" label.
+
+**Fix:** `loadState()` now auto-snaps three fields whose value `== 'gpt-4o-mini'` to `'gpt-4.1-mini'` on every wizard launch:
+
+- `state.data.openAiModel` (createNew model SKU dropdown)
+- `state.data.openAiDeployment` (use-existing deployment name)
+- `state.data.openAiNewDeployment` (createNew deployment name)
+
+If the operator deliberately picked `gpt-4o-mini` (e.g. matching an existing deployment with that exact name), the migration overrides their pick on next launch -- by design. If they really need the legacy SKU they can re-pick it from the dropdown's "Legacy (gpt-4o family scheduled for deprecation)" optgroup, and the new value sticks.
 
 ---
 

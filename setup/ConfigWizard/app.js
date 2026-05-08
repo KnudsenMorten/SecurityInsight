@@ -73,6 +73,13 @@ function loadState() {
       if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
       if (!state.data.defenderMode) state.data.defenderMode = 'off';
       if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'off';
+      // Migration: gpt-4o-mini was the wizard's default model in v2.2.111-
+      // v2.2.116. v2.2.117 switched to gpt-4.1-mini after OpenAI deprecated
+      // the old SKU. Auto-snap any saved state still carrying the old value
+      // so existing testers don't see the deprecated SKU pre-selected.
+      if (state.data.openAiModel        === 'gpt-4o-mini') state.data.openAiModel        = 'gpt-4.1-mini';
+      if (state.data.openAiDeployment   === 'gpt-4o-mini') state.data.openAiDeployment   = 'gpt-4.1-mini';
+      if (state.data.openAiNewDeployment === 'gpt-4o-mini') state.data.openAiNewDeployment = 'gpt-4.1-mini';
     }
   } catch (e) {
     console.warn('Wizard: localStorage restore failed --', e);

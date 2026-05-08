@@ -607,7 +607,7 @@
         <p class="card-sub">Re-use an existing Azure OpenAI deployment (paste the endpoint + deployment name + key) <i>or</i> have the wizard create a new resource for you on Apply (PAYG SKU + gpt-4.1-mini deployment in the workspace's region).</p>
         <div class="toggle-group" data-toggle-key="openAiResMode" style="margin-bottom: 14px;">
           <label data-val="useExisting"><input type="radio" name="openAiResMode" value="useExisting" /> Use existing OpenAI resource <span style="color:#888;">(paste endpoint + deployment + key)</span></label>
-          <label data-val="createNew"><input type="radio" name="openAiResMode" value="createNew" /> Create new OpenAI resource <b style="color:#888;font-weight:400;">(coming v2.2.112+)</b></label>
+          <label data-val="createNew"><input type="radio" name="openAiResMode" value="createNew" /> Create new OpenAI resource</label>
         </div>
 
         <div class="form-grid" data-open-ai-res-mode-block="useExisting">
@@ -639,7 +639,7 @@
         </div>
 
         <div data-open-ai-res-mode-block="createNew" hidden>
-          <p class="card-sub" style="margin-top:14px;">Where the new Azure OpenAI resource + deployment land. The wizard's backend (v2.2.112+) will run <code>setup\Validate-SIOpenAI.ps1</code> on Apply to provision a PAYG instance with these names; until then, run that script manually with the same values, or create the resource in the Azure portal and paste it back into "Use existing" above.</p>
+          <p class="card-sub" style="margin-top:14px;">Where the new Azure OpenAI resource + deployment land. The wizard provisions a PAYG instance with these names on Apply.</p>
           <div class="form-grid">
             <div class="field required">
               <label for="f_openAiResName">OpenAI resource name <span class="help" data-tip="DNS-globally-unique. Format: oai-&lt;org&gt;-securityinsight (or oai-&lt;org&gt;-si-&lt;env&gt; for prod / preview side-by-side). 2-64 chars, lowercase letters / digits / hyphens. The resource endpoint URL is auto-derived: https://&lt;name&gt;.openai.azure.com/.">?</span></label>
@@ -712,8 +712,8 @@
               </select>
             </div>
           </div>
-          <p style="font-size:13px;color:#5a6a7a;background:#fff8e1;border-left:3px solid #f57c00;padding:10px 12px;border-radius:4px;margin-top:14px;">
-            <b>v2.2.112+ note:</b> the wizard backend will run <code>setup\Validate-SIOpenAI.ps1</code> on Apply with these values to provision the resource + deployment + key, then write the endpoint + key into your custom config automatically. The snippet preview below shows exactly what the engine will read.
+          <p style="font-size:13px;color:#5a6a7a;background:#f0f7ff;border-left:3px solid #2a8b9b;padding:10px 12px;border-radius:4px;margin-top:14px;">
+            On Apply the wizard provisions the OpenAI resource + deployment + key, then writes the endpoint + key into your custom config automatically. The snippet preview below shows exactly what the engine will read.
           </p>
         </div>
       </div>

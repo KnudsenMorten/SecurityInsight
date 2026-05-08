@@ -371,22 +371,22 @@ function buildApptagSnippet() {
   lines.push('# --- Azure OpenAI -- AI summary on RiskAnalysis runs (Layer 3) ----------');
   lines.push('$global:BuildSummaryByAI = $true');
   if (d.openAiResMode === 'createNew') {
-    // Wizard backend (v2.2.112+) provisions the resource on Apply and writes
-    // the endpoint + key directly. The custom config still needs the consumer
-    // globals set so engines pick up the new deployment without a re-edit.
+    // Wizard provisions the resource on Apply and writes the endpoint + key
+    // directly. The custom config still needs the consumer globals set so
+    // engines pick up the new deployment without a re-edit.
     const resName = d.openAiResName || 'oai-myorg-securityinsight';
-    lines.push('# Resource will be CREATED on Apply by setup\\Validate-SIOpenAI.ps1:');
+    lines.push('# Azure OpenAI resource will be CREATED on Apply with these settings:');
     lines.push('#   Resource    : ' + resName);
     lines.push('#   Resource RG : ' + (d.openAiResRg || 'rg-securityinsight-openai'));
-    lines.push('#   Subscription: ' + (d.openAiSubscriptionId || '<inherits Step 2 sub>'));
+    lines.push('#   Subscription: ' + (d.openAiSubscriptionId || '(inherits Step 2 subscription)'));
     lines.push('#   Region      : ' + (d.openAiLocation || 'swedencentral'));
     lines.push('#   Model SKU   : ' + (d.openAiModel    || 'gpt-4.1-mini'));
     lines.push('#   Deployment  : ' + (d.openAiNewDeployment || 'gpt-4.1-mini'));
-    lines.push('# Endpoint + key written to the lines below by the Apply backend:');
+    lines.push('# Endpoint + API key are filled in by the wizard on Apply:');
     lines.push("$global:OpenAI_endpoint   = 'https://" + resName + ".openai.azure.com/'");
     lines.push(assignLine('OpenAI_deployment', 'openAiNewDeployment', 'gpt-4.1-mini',          22));
     lines.push("$global:OpenAI_apiVersion = '2025-01-01-preview'");
-    lines.push("$global:OpenAI_apiKey     = '<written-by-apply-backend>'   # default");
+    lines.push("$global:OpenAI_apiKey     = '(filled in by wizard on Apply)'");
   } else {
     lines.push(assignLine('OpenAI_endpoint',   'openAiEndpoint',   '<https://your-aoai.openai.azure.com/>', 22));
     lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', 'gpt-4.1-mini',                          22));

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.117
+## v2.2.118
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
 - release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
 - release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
 - release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
 - release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
 - release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
-- release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.118 — Setup Wizard: strip developer version-tag notes from the customer-facing GUI
+
+The Welcome page and Step 5 (Azure OpenAI) had several internal version-roadmap notes leaking into the customer-facing UI -- text like "(coming v2.2.112+)", "v2.2.112+ note: the wizard backend will run setup\Validate-SIOpenAI.ps1...", and a "Coming in v2.2.112" amber callout. These are **release-notes content** -- they have no business in the GUI a customer sees on Day 1 of onboarding.
+
+**Cleanup in `Setup-SecurityInsight.html`:**
+
+- "Create new OpenAI resource **(coming v2.2.112+)**" radio label → "Create new OpenAI resource".
+- Step 5 createNew sub-form `card-sub` paragraph rewritten: dropped the "v2.2.112+ will run setup\Validate-SIOpenAI.ps1; until then run that script manually" disclaimer. Now reads simply: "Where the new Azure OpenAI resource + deployment land. The wizard provisions a PAYG instance with these names on Apply."
+- Step 5 createNew amber-warning callout rewritten + recoloured to teal (`#2a8b9b`): dropped the "v2.2.112+ note" prefix and the script-name reference. Now reads: "On Apply the wizard provisions the OpenAI resource + deployment + key, then writes the endpoint + key into your custom config automatically."
+
+**Cleanup in `app.js` snippet generator:**
+
+- `buildApptagSnippet()` createNew branch: changed `# Resource will be CREATED on Apply by setup\Validate-SIOpenAI.ps1:` → `# Azure OpenAI resource will be CREATED on Apply with these settings:` (script name was an internal implementation detail).
+- Subscription fallback `<inherits Step 2 sub>` (which shows up as bracketed text in the snippet) → `(inherits Step 2 subscription)` (parens, full word, less placeholder-looking).
+- API key placeholder `'<written-by-apply-backend>'` → `'(filled in by wizard on Apply)'` (clearer + no `<>` placeholder pattern that looks like an unfilled field).
+- Endpoint comment `# Endpoint + key written to the lines below by the Apply backend:` → `# Endpoint + API key are filled in by the wizard on Apply:`.
+
+Internal code comments (the `//` lines in `app.js` referencing v2.2.106 / v2.2.111 / v2.2.112 for code-history breadcrumbs) are kept -- those never appear in the GUI and are useful for future maintenance. Same for `app.js` lines 21-22 / 47 / 689 / 889 (PAGES table comments + state defaults + apply page header).
+
+Effect: the wizard now reads as a finished product everywhere the customer looks. Versioning lives in RELEASENOTES.md and git tags, not the GUI.
 
 ---
 

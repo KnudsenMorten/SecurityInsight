@@ -234,6 +234,53 @@ _Ok ("Az context     : {0} (sub: {1} / {2})" -f $pre.Az.Account.Id, $pre.Az.Subs
 _Ok ("Graph context  : {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId)
 Write-Host ""
 
+# ----- Pre-flight: Az/Azure.Identity binary-compat smoke test -----
+# Some pwsh shells end up with side-loaded mismatched versions of Az.Accounts
+# vs the Azure.Identity / Azure.Identity.Broker assemblies it depends on. The
+# symptom is a "Method not found: 'Void Azure.Identity.Broker.SharedToken
+# CacheCredentialBrokerOptions..ctor(...)'" exception that BEGINS with the
+# misleading message "Your Azure credentials have not been set up or have
+# expired" -- even though Get-AzContext returns a valid context. Without
+# this smoke test the operator clicks Setup, watches Phase 1 (which only
+# uses Microsoft.Graph) succeed, then Phase 2 fails on the FIRST Az PS call.
+# Fail fast here with a clear remediation BEFORE accepting Setup clicks.
+_Step "verify Az PowerShell binary-compat (Get-AzAccessToken smoke test)"
+try {
+    $null = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/' -ErrorAction Stop
+    _Ok "Az PowerShell smoke test passed -- assemblies are binary-compatible"
+} catch {
+    $msg = $_.Exception.Message
+    $isAssemblyMismatch = (
+        $msg -match 'Method not found' -or
+        $msg -match 'Azure\.Identity' -or
+        $msg -match 'SharedTokenCache' -or
+        $msg -match 'credentials have not been set up'
+    )
+    Write-Host ""
+    if ($isAssemblyMismatch) {
+        Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " Az PowerShell assemblies in this pwsh process are binary-incompatible."
+        Write-Host ""
+        Write-Host "    Symptom : $msg" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  This is a known side-loaded-assembly version mismatch between Az.Accounts and the" -ForegroundColor Cyan
+        Write-Host "  Azure.Identity.Broker extension. The wizard's /api/apply would fail mid-Phase-2"  -ForegroundColor Cyan
+        Write-Host "  on the first Az PowerShell call. Fix in your interactive shell (NOT this one):" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "    Update-Module Az -Force" -ForegroundColor White
+        Write-Host "    # Then close THIS pwsh window entirely (the broken assemblies live in-process)" -ForegroundColor Gray
+        Write-Host "    # Open a fresh pwsh, re-run Connect-AzAccount + Connect-MgGraph, re-launch the wizard." -ForegroundColor Gray
+        Write-Host ""
+        throw "Setup Wizard pre-flight failed: Az PowerShell binary-compat issue. See instructions above."
+    } else {
+        Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " Get-AzAccessToken failed: $msg"
+        Write-Host ""
+        Write-Host "  Re-run Connect-AzAccount in your interactive shell and re-launch the wizard." -ForegroundColor Cyan
+        Write-Host ""
+        throw "Setup Wizard pre-flight failed: Az token check threw. See instructions above."
+    }
+}
+Write-Host ""
+
 # ----- Build listener -----
 $listener = New-Object System.Net.HttpListener
 $prefix   = "http://localhost:$Port/"

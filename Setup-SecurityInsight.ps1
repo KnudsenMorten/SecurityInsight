@@ -220,9 +220,9 @@ function Invoke-Phase-Config {
     Write-Phase 'Config' 'Generate config/SecurityInsight.custom.ps1 + per-engine LauncherConfig.custom.ps1'
 
     $solnRoot     = Split-Path -Parent $script:_v22Root
-    $customDataDir = Join-Path $solnRoot 'config'
-    $masterCustom  = Join-Path $customDataDir 'SecurityInsight.custom.ps1'
-    if (-not (Test-Path $customDataDir)) { New-Item $customDataDir -ItemType Directory -Force | Out-Null }
+    $configDir    = Join-Path $solnRoot 'config'
+    $masterCustom = Join-Path $configDir 'SecurityInsight.custom.ps1'
+    if (-not (Test-Path $configDir)) { New-Item $configDir -ItemType Directory -Force | Out-Null }
 
     if ((Test-Path $masterCustom) -and -not $Force) {
         Write-Info "$masterCustom already exists -- skipping (use -Force to regenerate)."

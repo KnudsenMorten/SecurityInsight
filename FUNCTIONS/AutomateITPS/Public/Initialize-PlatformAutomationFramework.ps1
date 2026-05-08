@@ -308,12 +308,13 @@ function Initialize-PlatformAutomationFramework {
     }
 
     # ---- 6b. Load Layer-1 platform-wide defaults -----------------------
-    # Dot-sources SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1
+    # Dot-sources SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1
     # (customer-owned, gitignored) so every engine that called this bootstrap
     # automatically has the shared $global:Mail_*, $global:*LogAnalytics*,
     # $global:AD_*, $global:AzMGPolicy_*, ... available. Missing file is not
     # an error -- an engine that needs those values will fail later with a
-    # clearer message.
+    # clearer message. Legacy CUSTOMDATA\ path is still read as a fallback
+    # for customers who haven't migrated yet (see Initialize-PlatformDefaults).
     try {
         Initialize-PlatformDefaults -ErrorAction SilentlyContinue | Out-Null
     } catch {

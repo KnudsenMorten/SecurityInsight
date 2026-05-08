@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.107
+## v2.2.108
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
 - release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
 - release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
 - release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
 - release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
 - release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
-- release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.108 — Drop CUSTOMDATA from new SI deployments (everything lives under config\)
+
+The legacy `CUSTOMDATA\` folder name is gone from every code path the SecurityInsight bootstrap touches. Files that used to live in `SOLUTIONS\PlatformConfiguration\CUSTOMDATA\` now live in `SOLUTIONS\PlatformConfiguration\config\` (same gitignore rules apply: `.sample.*` files are tracked, real `*.ps1` instances are customer-owned and gitignored). New deployments will no longer scaffold a `CUSTOMDATA\` folder anywhere under the install root.
+
+**What changed:**
+
+- `FUNCTIONS\AutomateITPS\Public\Initialize-PlatformDefaults.ps1` — Layer-1 platform-defaults loader now resolves `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1` first. If the new path isn't populated yet but a legacy `CUSTOMDATA\platform-defaults.ps1` is present (existing customer machines that haven't migrated), the function transparently reads the legacy file and emits a verbose hint to move it. Zero forced-migration friction — old hosts keep working, new hosts get the new layout.
+- `FUNCTIONS\AutomateITPS\Public\Initialize-PlatformAutomationFramework.ps1` — step 6b's docstring updated to reflect the new path; back-compat note added.
+- `SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.sample.ps1` → `SOLUTIONS\PlatformConfiguration\config\platform-defaults.sample.ps1` (file moved; the in-file `TO UPDATE: notepad ...\CUSTOMDATA\...` hint repointed to `...\config\...`).
+- `SOLUTIONS\SecurityInsight\Setup-SecurityInsight.ps1` — `$customDataDir` / `$customDataPath` PowerShell variables renamed to `$configDir` / `$configPath`. The actual paths were already `config\` — only the misleading variable names were leftover from an earlier rename pass.
+- `SOLUTIONS\SecurityInsight\tests\Test-Smoke.ps1` — same rename of the `$customDataPath` local variable.
+- `SOLUTIONS\SecurityInsight\demo\community\config\SecurityInsight.custom.ps1` — docstring comment updated from `.gitignore:66 -- SOLUTIONS/*/CUSTOMDATA/*` to point at the current `config/` rule.
+
+**What didn't change:**
+
+- The `.gitignore` keeps both `SOLUTIONS/**/config/*` and `SOLUTIONS/**/CUSTOMDATA/*` rules (belt + suspenders for the 8 other solutions in the AutomateIT monorepo that still have `CUSTOMDATA\` folders with real customer data — those solutions migrate on their own cadence).
+- The publish workflow's `CUSTOMSCRIPTS|CUSTOMDATA` regex guards stay in place — they protect against accidentally shipping customer files to public repos and that protection is independent of the rename.
+- v2.1 historical notes in this file (the 2.2.0 cleanup that originally removed the SI-side `CUSTOMDATA/`) are preserved verbatim.
+
+**For customers running an older install:** you don't need to do anything. Engines keep finding `platform-defaults.ps1` in either location. When you have time, move:
+
+```powershell
+Move-Item C:\AutomateIT\SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1 `
+          C:\AutomateIT\SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1
+Remove-Item C:\AutomateIT\SOLUTIONS\PlatformConfiguration\CUSTOMDATA -Force -ErrorAction SilentlyContinue
+```
 
 ---
 

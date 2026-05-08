@@ -304,15 +304,31 @@ try {
                     break
                 }
                 '^/api/state$' {
+                    # Surface the operator's connected Az + Graph contexts so the
+                    # wizard JS can auto-prefill blank tenantId / subscriptionId
+                    # fields. Avoids "I just authenticated -- why am I retyping
+                    # what I authenticated WITH?" friction. Pre-flight has already
+                    # required both contexts to be loaded, so they're guaranteed
+                    # present here.
+                    $azCtx = Get-AzContext -ErrorAction SilentlyContinue
+                    $mgCtx = Get-MgContext -ErrorAction SilentlyContinue
                     Send-Json -Response $res -Object @{
-                        wizardVersion  = '2.2.105'
+                        wizardVersion  = '2.2.114'
                         applyAvailable = $true
                         cmdlets        = @{
                             NewSISpn          = (Test-Path -LiteralPath $cmdletNewSISpn)
                             InitializeSIInfra = (Test-Path -LiteralPath $cmdletInitInfra)
                             WriteSICustomCfg  = (Test-Path -LiteralPath $cmdletWriteConfig)
                         }
-                        notes          = 'Apply orchestration LIVE. HTML Apply button hookup ships in v2.2.108.'
+                        operatorContext = @{
+                            tenantId       = if ($azCtx) { $azCtx.Tenant.Id } else { $null }
+                            subscriptionId = if ($azCtx) { $azCtx.Subscription.Id } else { $null }
+                            subscriptionName = if ($azCtx) { $azCtx.Subscription.Name } else { $null }
+                            azAccount      = if ($azCtx) { $azCtx.Account.Id } else { $null }
+                            mgAccount      = if ($mgCtx) { $mgCtx.Account } else { $null }
+                            mgScopes       = if ($mgCtx) { @($mgCtx.Scopes) } else { @() }
+                        }
+                        notes          = 'Apply orchestration LIVE. operatorContext auto-prefills tenant + subscription in the wizard.'
                     }
                     break
                 }

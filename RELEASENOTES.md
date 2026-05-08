@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.114
+## v2.2.115
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
 - release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
 - release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
 - release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
 - release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
 - release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
-- release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.115 — Setup Wizard: auto-prefill tenantId + subscriptionId from operator's connected context
+
+The wizard required the operator to manually type tenant ID + subscription ID even though they had **just authenticated** to those exact values via `Connect-AzAccount` + `Connect-MgGraph` in the launching shell. Pure friction -- and if they typed wrong, the snippet showed `$global:SpnTenantId = '<tenant-guid>'` (placeholder) until the field was filled, which was confusing.
+
+**Fix:**
+
+- `Start-SetupWizard.ps1` -- `/api/state` response now carries an `operatorContext` object: `{ tenantId, subscriptionId, subscriptionName, azAccount, mgAccount, mgScopes }`. Pre-flight already required both contexts to be loaded, so these are guaranteed present. SubscriptionName is included so the wizard UI can render `"Acme PAYG (85846a15-...)"` instead of just the GUID.
+- `app.js` -- new `autoFillFromOperatorContext()` async function called on init. Fetches `/api/state`, and if `state.data.tenantId` / `state.data.subscriptionId` are blank, fills them from `operatorContext` and saves to localStorage. Best-effort: if the wizard is opened from `file://` (no listener), the fetch fails silently and the operator types as before.
+- Only fills **blank** state -- never overrides what the operator typed. Re-opening the wizard after typing a different tenant ID won't snap back.
+
+**Result:** open the wizard → Step 1 + Step 2 already have your tenant + sub pre-filled → snippet preview shows the real GUIDs from the start, no `<tenant-guid>` placeholder anywhere.
 
 ---
 

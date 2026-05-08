@@ -14,14 +14,14 @@ function Initialize-PlatformDefaults {
       Layer 4  Shipped solution defaults        SOLUTIONS/<X>/DATA/*
 
     Layer 1 lives under:
-      <repo-root>\SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1
+      <repo-root>\SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1
 
     That path is per-host (customer owns it, gitignored, never overwritten by
     Update-Platform). A committed .sample.ps1 sibling documents the schema and
     lists every expected $global:* name; customers copy sample -> real and
     fill in their tenant values. First-time setup:
 
-      cd C:\AutomateIT\SOLUTIONS\PlatformConfiguration\CUSTOMDATA
+      cd C:\AutomateIT\SOLUTIONS\PlatformConfiguration\config
       Copy-Item platform-defaults.sample.ps1 platform-defaults.ps1
       notepad platform-defaults.ps1
 
@@ -81,7 +81,18 @@ function Initialize-PlatformDefaults {
             Write-Verbose "Initialize-PlatformDefaults: repo root not found; no defaults loaded."
             return 0
         }
-        $Path = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1'
+        $Path = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1'
+        # Back-compat: if the new config\ home isn't populated yet but the
+        # legacy CUSTOMDATA\ copy is, transparently read it. This lets old
+        # customer machines keep working through the rename window without
+        # a forced migration step.
+        if (-not (Test-Path -LiteralPath $Path)) {
+            $legacy = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\CUSTOMDATA\platform-defaults.ps1'
+            if (Test-Path -LiteralPath $legacy) {
+                Write-Verbose "Initialize-PlatformDefaults: falling back to legacy CUSTOMDATA path; please move to SOLUTIONS\PlatformConfiguration\config\."
+                $Path = $legacy
+            }
+        }
     }
 
     if (-not (Test-Path -LiteralPath $Path)) {

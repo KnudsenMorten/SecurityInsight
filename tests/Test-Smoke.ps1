@@ -285,11 +285,11 @@ if ('GLOBALS-CONTRACT' -in $Skip) { _SKIP 'GLOBALS-CONTRACT' } else {
     # naming. The previous Test-Smoke missed this because KQL-PARSE bypasses the
     # engine and goes straight to the LA REST API -- the routing/contract layer
     # never executes during the test.
-    $customDataPath = Join-Path (Split-Path -Parent (Split-Path -Parent $siRoot)) 'config\SecurityInsight.custom.ps1'
-    if (-not (Test-Path -LiteralPath $customDataPath)) {
-        _WARN 'GLOBALS-CONTRACT' "config file not found: $customDataPath"
+    $configPath = Join-Path (Split-Path -Parent (Split-Path -Parent $siRoot)) 'config\SecurityInsight.custom.ps1'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        _WARN 'GLOBALS-CONTRACT' "config file not found: $configPath"
     } else {
-        $customSrc = Get-Content -LiteralPath $customDataPath -Raw
+        $customSrc = Get-Content -LiteralPath $configPath -Raw
         $customNames = [System.Collections.Generic.HashSet[string]]::new(([regex]::Matches($customSrc, '\$global:([A-Za-z_][A-Za-z0-9_]*)') | ForEach-Object { $_.Groups[1].Value }))
         # Names the engine reads that are required for RA / profilers to run.
         # If none of the listed alternates is in config, the engine will throw

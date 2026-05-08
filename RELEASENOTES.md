@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.113
+## v2.2.114
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
 - release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
 - release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
 - release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
 - release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
 - release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
-- release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.114 — Setup Wizard: namingSuffix wired through snippet + Apply payload
+
+The `namingSuffix` field on Step 2 (added in v2.2.112) was state-bound to `localStorage` but **not actually applied** to the snippet preview or the `/api/apply` payload. So picking suffix "1" had no visible effect — operators got the bare default names in both the preview and the provisioned resources.
+
+**Fix.** Two new helpers:
+
+- `nameWithSuffix(key, opts)` — reads `state.data[key]` (falls back to the input's `data-default` if empty), appends `state.data.namingSuffix` with the right separator. `opts.storage = true` for storage account names: strips non-alphanumerics from the suffix (storage account names can't have hyphens), lowercases, and truncates to Azure's 24-char limit.
+- `suffixedAssignLine(varName, key, fallback, pad, opts)` — same shape as `assignLine` but uses `nameWithSuffix`. Adds a `# default+suffix` tag in the snippet when a suffix is in effect (vs `# default` for plain defaults).
+
+**`buildWorkspaceSnippet`** now suffixes the seven Step-2 resources whenever a suffix is set: `SI_WorkspaceName`, `SI_WorkspaceResourceGroup`, `SI_DceName`, `SI_DceResourceGroup`, `SI_DcrResourceGroup`, `SI_StorageAccount` (with `{storage:true}`), `SI_StorageResourceGroup`, `SI_ExportContainer`. A header comment at the top of the block flags the suffix in effect: `# Naming suffix in effect: "-1" (applied to all default names below)`.
+
+**`buildApplyState`** uses the same `nameWithSuffix()` for `infra.resourceGroupName / workspaceName / dceName / dceResourceGroup / storageAccountName / storageResourceGroup / storageContainer` so the names sent to `/api/apply` match what the operator sees in the snippet preview. Also passes `namingSuffix` through as a top-level field (for backend logging and audit).
+
+**Examples** with suffix `1`:
+- `log-platform-management-securityinsight` → `log-platform-management-securityinsight-1`
+- `rg-securityinsight` → `rg-securityinsight-1`
+- `dce-securityinsight` → `dce-securityinsight-1`
+- `stmyorgsi` → `stmyorgsi1` *(storage account: hyphen stripped, no separator)*
+- `securityinsight` *(container)* → `securityinsight-1`
+
+**Examples** with suffix `-preview`:
+- `log-platform-management-securityinsight` → `log-platform-management-securityinsight--preview` *(double-hyphen — leading hyphen in the suffix is intentional from the operator)*
+
+If the suffix is left blank, behaviour is identical to v2.2.113 (no suffixing).
+
+User-overridden names are still suffixed -- if you typed `my-special-workspace` and set suffix `1`, the snippet shows `my-special-workspace-1`. If that's not desired, leave the suffix blank and add it manually to your custom names.
 
 ---
 

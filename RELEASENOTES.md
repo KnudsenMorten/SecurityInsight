@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.116
+## v2.2.117
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
 - release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
 - release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
 - release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
 - release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
 - release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
-- release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.117 — Setup Wizard: refresh OpenAI model SKU dropdown to GPT-4.1 family (gpt-4o-mini deprecated)
+
+The wizard recommended `gpt-4o-mini` as the default OpenAI model SKU + deployment name. That model was deprecated by OpenAI in 2025 in favour of `gpt-4.1-mini` (same price tier, slightly better quality on summarisation). Azure OpenAI customers picking the deprecated SKU on a fresh deployment can still get it for now but will have to migrate within the deprecation window — pointing newcomers at the deprecated SKU is wrong on day one.
+
+**Changes:**
+
+- All `gpt-4o-mini` references in HTML + JS replaced with `gpt-4.1-mini` (deployment name placeholder + data-default; helper text; createNew snippet comment line; copy-snippet output).
+- **Model SKU dropdown** on Step 5's createNew sub-form regrouped into 3 optgroups:
+  - **GPT-4.1 family (current generation)**: `gpt-4.1-mini` *(recommended)*, `gpt-4.1` *(highest quality)*, `gpt-4.1-nano` *(fastest+cheapest)*.
+  - **Reasoning models (overkill for summarisation)**: `o4-mini`, `o3-mini` — listed for operators who already standardise on them.
+  - **Legacy (gpt-4o family scheduled for deprecation)**: `gpt-4o`, `gpt-4o-mini` — kept selectable but labelled as deprecated so operators migrating an existing deployment can match what they have.
+- Tooltip text: replaced "10x cheaper than gpt-4o" with "10x cheaper than gpt-4.1" (correct family); model SKU tooltip now explicitly mentions "replaces gpt-4o-mini (deprecated 2025)" so operators know why the default changed.
+- Region tooltip: updated "gpt-4o-mini is widely available; gpt-4o has tighter region availability" → "gpt-4.1-mini is widely available; gpt-4.1 has tighter region availability".
+
+No behaviour change for existing customers who already typed `gpt-4o-mini` in their custom config — the engine's `OpenAI_deployment` still accepts whatever string Azure returns. This is purely a wizard-default refresh + clearer model picker.
 
 ---
 

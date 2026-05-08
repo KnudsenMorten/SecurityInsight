@@ -619,13 +619,39 @@ The wizard refuses to start if either context is missing and prints the exact `C
 
 #### What the wizard does
 
-The wizard walks you through **8 short pages** in your browser, then on the **Setup** page it provisions everything end-to-end:
+The wizard walks you through **8 short pages** in your browser, then on the **Setup** page it provisions everything end-to-end across **4 phases**:
 
-| Phase | What happens on Setup | What lands in your tenant |
-|-------|----------------------|---------------------------|
-| **1. SPN** | Creates an Entra app registration + service principal + cred (client secret or self-signed cert), grants 13 Microsoft Graph application permissions with admin consent, assigns Azure RBAC at tenant-root MG (Reader + Tag Contributor — skip-able). | A `sp-securityinsight` (or whatever name you typed) Entra app reg + SP. Cred stored where you picked: KV / local cert store / inline in custom config. |
-| **2. Infrastructure** | **Auto-registers required Azure resource providers** (`Microsoft.OperationalInsights`, `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.Storage`, `Microsoft.AlertsManagement`, `Microsoft.KeyVault` if KV-cred). Creates RG + Log Analytics workspace + Data Collection Endpoint + Storage account. Grants the SPN `Log Analytics Contributor` on workspace, `Monitoring Metrics Publisher` on the DCR RG, `Storage Blob/Table/Queue Data Contributor` on the storage account. | Workspace, DCE, storage account in your sub. Per-engine DCRs auto-created at first ingest by AzLogDcrIngestPS. RBAC-only — **no `SI_StorageKey` written to your config** (engine reaches storage via OAuth, same custom file works for VM + Container Apps Job). |
-| **3. Config file** | Renders `config\SecurityInsight.custom.ps1` with every required `$global:SI_*` value. Optional sections (SMTP, Azure OpenAI, Shodan, CMDB CSV, per-engine JSON sink, Defender XDR / Sentinel linkage, Entra ID Diagnostic Setting auto-create when no Sentinel) added only when you toggled them on. Backs up any existing custom file to `*.bak.<timestamp>` before overwriting. | A populated `config\SecurityInsight.custom.ps1` ready for the engines to read. |
+##### Phase 1 — Service principal
+
+Creates an Entra app registration + service principal + credential (client secret or self-signed cert), grants 13 Microsoft Graph application permissions with admin consent, assigns Azure RBAC at tenant-root MG (`Reader` + `Tag Contributor` — skip-able).
+
+**Lands in your tenant:** a `sp-securityinsight` (or whatever name you typed) Entra app reg + SP. Cred stored where you picked: KV / local cert store / inline in custom config.
+
+##### Phase 2 — Infrastructure (LA + DCE + Storage + RBAC)
+
+**Auto-registers required Azure resource providers** (`Microsoft.OperationalInsights`, `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.Storage`, `Microsoft.AlertsManagement`, and `Microsoft.KeyVault` if KV-cred). Creates the RG + Log Analytics workspace + Data Collection Endpoint + Storage account. Grants the SPN:
+
+- `Contributor` + `Log Analytics Contributor` on the **LA workspace**
+- `Contributor` + `Monitoring Metrics Publisher` on the **DCR resource group**
+- `Storage Blob`/`Table`/`Queue Data Contributor` on the **storage account**
+
+**Lands in your tenant:** workspace, DCE, storage account in your sub. Per-engine DCRs are auto-created at first ingest by AzLogDcrIngestPS. RBAC-only — **no `SI_StorageKey` written to your config**; the wizard sets `$global:SI_UseStorageOAuth = $true` so the engine goes straight to AAD-based blob ops (same custom file works for VM + Container Apps Job).
+
+##### Phase 3 — Config file
+
+Renders `config\SecurityInsight.custom.ps1` with every required `$global:SI_*` value. Optional sections (SMTP, Azure OpenAI, Shodan, CMDB CSV, per-engine JSON sink, Defender XDR / Sentinel linkage) are added only when you toggled them on. Backs up any existing custom file to `*.bak.<timestamp>` before overwriting.
+
+**Lands in your tenant:** a populated `config\SecurityInsight.custom.ps1` ready for the engines to read.
+
+##### Phase 4 — Entra ID Diagnostic Setting
+
+*Default ON; auto-skipped when you linked an existing Defender / Sentinel workspace on Step 7 (their existing Diagnostic Setting already streams the same categories).*
+
+Creates a tenant-level Diagnostic Setting `SI-EntraDiag` via `PUT providers/microsoft.aadiam/diagnosticSettings/SI-EntraDiag` targeting the SI workspace, with the **8 categories SI's queries actually reference**: `SignInLogs`, `AuditLogs`, `NonInteractiveUserSignInLogs`, `ServicePrincipalSignInLogs`, `ManagedIdentitySignInLogs`, `UserRiskEvents`, `ProvisioningLogs`, `MicrosoftGraphActivityLogs`. PUT semantics replace the named setting; any existing Sentinel-side Diagnostic Settings stay untouched.
+
+> **Operator role required:** Entra **Security Administrator** OR **Global Administrator** at tenant scope. Subscription-level Owner is **not** sufficient — `aadiam` diagnosticSettings are tenant-scoped, not ARM-scoped. The wizard surfaces a clear `AuthorizationFailed` error with remediation instructions if the role is missing.
+
+**Lands in your tenant:** sign-in + audit logs streaming into the SI workspace, ready for RA queries that correlate sign-in risk against Tier-0 assets.
 
 The wizard runs cross-platform on **Windows 11** + **Windows Server**, both on-prem and Azure-hosted. The first card on Step 1 (Engine host + bootstrap auth) gates which credential storage options are valid for your scenario:
 
@@ -645,7 +671,7 @@ The wizard runs cross-platform on **Windows 11** + **Windows Server**, both on-p
 | **5 — Azure OpenAI** *(optional)* | Off / Enabled. Use existing OpenAI resource (paste endpoint + deployment + key) OR create new (resource name + RG + region + deployment + model SKU). Default model: `gpt-4.1-mini` (replaces the deprecated `gpt-4o-mini`). |
 | **6 — Shodan attack surface** *(optional)* | Off / Enabled. API key + license-tier dropdown (Free / Membership / Small Business / Corporate) so the engine backs off before hitting rate limits. |
 | **7 — Output sinks + Defender XDR** *(optional)* | JSON sink toggle (adds `'JSON'` to every `SI_Sinks_<Engine>`). Defender XDR / Sentinel workspace linkage. **If no Sentinel:** auto-stream Entra sign-in + audit logs (8 categories) into the SI workspace via a new Diagnostic Setting. |
-| **8 — Setup** | Review summary (3 phase cards). Click **▶ Setup**. Watch SPN → Infrastructure → Config phases turn green. Per-step log panel below shows every action (resource provider registrations, app reg + SP creation, per-permission Graph status, RBAC grants, ResourceIds, config file path + sections written). If admin consent is pending, the panel surfaces the consent URL — hand it to a Global Admin, then re-click **Setup** (idempotent). |
+| **8 — Setup** | Review summary (4 phase cards). Click **▶ Setup**. Watch SPN → Infrastructure → Config → Entra Diagnostic Setting phases turn green. Per-step log panel below shows every action (resource provider registrations, app reg + SP creation, per-permission Graph status, RBAC grants, ResourceIds, config file path + sections written, Diagnostic Setting PUT result). If admin consent is pending, the panel surfaces the consent URL — hand it to a Global Admin, then re-click **Setup** (idempotent). |
 
 > 📷 **Screenshots will land in [`docs/screenshots/wizard/`](docs/screenshots/wizard/) in a follow-up** — the capture-list is in [that folder's README](docs/screenshots/wizard/README.md).
 
@@ -681,7 +707,11 @@ Granted to the **SI Service Principal**. All grants are visible in the Setup pag
 
 - **Tag Contributor** at **tenant-root MG** — *opt-in only.* Required **only by the asset-exclusion-tagging engine** (writes Custom Security Attributes to flagged assets). **Not granted by default**; enable explicitly via `-IncludeTagContributor` on `New-SISpn` (or the wizard's asset-tagging toggle when that page activates). Most customers don't need it.
 
-- **Log Analytics Contributor** at **the workspace** — workspace creation + DCR table schema management at first ingest. *Required for ingestion.*
+- **Contributor** at **the workspace** — broad workspace management (settings, retention, soft-delete, integrations). *Required.* Granted **in addition to** `Log Analytics Contributor` because the engine probes for both at runtime.
+
+- **Log Analytics Contributor** at **the workspace** — DCR table schema management at first ingest. *Required for ingestion.*
+
+- **Contributor** at **the DCR resource group** — DCR resource creation + management. *Required.* Granted **in addition to** `Monitoring Metrics Publisher`.
 
 - **Monitoring Metrics Publisher** at **the DCR resource group** — DCR-based ingest pipeline (the SPN signs DCR PUT requests). *Required for ingestion.*
 

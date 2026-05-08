@@ -99,6 +99,35 @@
       </div>
 
       <div class="card">
+        <h3>Engine host + bootstrap auth</h3>
+        <p class="card-sub">Where will the SecurityInsight engines run, and how will they prove who they are when they start? This drives which credential storage options are valid below &mdash; the SI credential has to be readable by <i>something</i> that&apos;s already authenticated, otherwise it&apos;s a chicken-and-egg.</p>
+
+        <div class="form-grid">
+          <div class="field required span-2">
+            <label for="f_hostType">Engine host</label>
+            <select id="f_hostType" data-key="hostType" data-default="win">
+              <option value="win">Windows 11 / Windows Server (on-prem, or Azure VM <i>without</i> Managed Identity)</option>
+              <option value="azureVMMI">Azure VM <i>with</i> system-assigned Managed Identity</option>
+              <option value="azureContainerMI">Azure Container Apps Job <i>with</i> system-assigned Managed Identity</option>
+            </select>
+          </div>
+        </div>
+
+        <p class="note" data-host-type-block="win" style="margin-top: 14px; background:#fff8e1; border-left:3px solid #f57c00;">
+          <b>Bootstrap chain on Windows / Server:</b> No Managed Identity is available, so the SI credential must be readable <i>without</i> first authenticating to Azure. Two valid storage options below:<br>
+          &bull; <b>Self-signed cert + Local cert store</b> &mdash; the cert <i>is</i> the auth (the SPN&apos;s certificate thumbprint identifies it to Entra). Zero KV dependency. <i>Recommended.</i><br>
+          &bull; <b>Client secret + Inline in custom.ps1</b> &mdash; the secret lives in your <code>config\SecurityInsight.custom.ps1</code> directly. Simpler, but plaintext-on-disk (gitignored, never leaves the host).<br>
+          Key Vault storage is hidden &mdash; on a Win11 / Server host with no MI, KV would itself need a separate bootstrap cert, defeating the purpose.
+        </p>
+        <p class="note" data-host-type-block="azureVMMI" hidden style="margin-top: 14px; background:#e8f5e9; border-left:3px solid #2e7d32;">
+          <b>Bootstrap chain on Azure VM with Managed Identity:</b> The system-assigned MI on the VM reads the SI credential from Key Vault at engine startup using its own access. Recommended: <b>Self-signed cert + Azure Key Vault</b> (centralised secret rotation, audit log, no plaintext on the VM). Local cert store + Inline secret also work.
+        </p>
+        <p class="note" data-host-type-block="azureContainerMI" hidden style="margin-top: 14px; background:#e8f5e9; border-left:3px solid #2e7d32;">
+          <b>Bootstrap chain on Azure Container Apps Job:</b> The system-assigned MI on the job reads the SI credential from Key Vault at container startup. <b>Local cert store</b> doesn&apos;t apply (ephemeral container with no traditional Windows cert store). Recommended: <b>Cert or Secret in Key Vault</b>.
+        </p>
+      </div>
+
+      <div class="card">
         <h3>SPN mode</h3>
         <p class="card-sub">First time setting up SecurityInsight? Pick <b>Create new SPN</b> &mdash; the wizard creates an Entra app registration, generates the credential, applies all the Microsoft Graph + Azure permissions, and grants the right RBAC for you. Already have an SPN? Pick <b>Use existing</b> and paste its details.</p>
 
@@ -165,9 +194,9 @@
         <div data-spn-mode-block="createNew" style="margin-bottom: 16px;">
           <p class="card-sub" style="margin-top:0;">Where the credential lives once generated:</p>
           <div class="toggle-group" data-toggle-key="credStorage">
-            <label data-val="KeyVault"><input type="radio" name="credStorage" value="KeyVault" /> Azure Key Vault <b style="color:#5a6a7a;">(preferred)</b></label>
-            <label data-val="LocalCertStore" data-cred-block="certThumb"><input type="radio" name="credStorage" value="LocalCertStore" /> Local cert store <span style="color:#888;">(cert only)</span></label>
-            <label data-val="Inline" data-cred-block="kvSecret"><input type="radio" name="credStorage" value="Inline" /> Inline in custom.ps1 <span style="color:#888;">(secret only)</span></label>
+            <label data-val="KeyVault" data-host-type-block="azureVMMI,azureContainerMI"><input type="radio" name="credStorage" value="KeyVault" /> Azure Key Vault <b style="color:#5a6a7a;">(preferred)</b></label>
+            <label data-val="LocalCertStore" data-cred-block="certThumb" data-host-type-block="win,azureVMMI"><input type="radio" name="credStorage" value="LocalCertStore" /> Local cert store <span style="color:#888;">(cert only)</span></label>
+            <label data-val="Inline" data-cred-block="kvSecret"><input type="radio" name="credStorage" value="Inline" /> Inline in custom.ps1 <span style="color:#888;">(secret only)</span> <b style="color:#c62828;">(testing only)</b></label>
           </div>
         </div>
 

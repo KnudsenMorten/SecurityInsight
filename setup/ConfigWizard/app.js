@@ -209,6 +209,12 @@ function nameWithSuffix(key, opts) {
     const el = document.querySelector('input[data-key="' + key + '"], select[data-key="' + key + '"]');
     base = el ? (el.getAttribute('data-default') || '') : '';
   }
+  // CRITICAL: if the operator never typed a value AND there's no data-default
+  // for this field, return empty string -- never fabricate a name out of just
+  // the suffix. Otherwise a blank storageAccountName + suffix '1' produces
+  // '1', which Azure rejects with the misleading "Invalid resource payload:
+  // 'properties' are missing" error mid-Phase 2.
+  if (!base) return '';
   const sfx = (state.data.namingSuffix || '').trim();
   if (!sfx) return base;
   if (opts.storage) {
@@ -1062,11 +1068,60 @@ function _esc(s) {
     return String(s).replace(/[<&>]/g, function(c) { return c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;'; });
 }
 
+// Render the per-step apply log as a monospace panel. Each entry in `log`
+// is one line emitted by Start-SetupWizard's apply orchestration -- the
+// caller can scan it to see exactly which step landed / failed.
+function renderApplyLogPanel(log) {
+    if (!log || !log.length) return '';
+    var rows = log.map(function(line) {
+        // Colour-code by prefix so the operator can scan green-good vs red-fail
+        var colour = '#5a6a7a';                                  // default grey
+        if (/\bok\b|=ok\b|succeeded|granted|created/i.test(line)) colour = '#2e7d32';
+        if (/\bfailed\b|FAIL|ERROR|throw/i.test(line))            colour = '#c62828';
+        if (/consent-pending|pending/i.test(line))                 colour = '#f57c00';
+        return '<div style="color:' + colour + ';">' + _esc(line) + '</div>';
+    }).join('');
+    return '<div class="note" style="background:#f5f7fa;border-left-color:#5a6a7a;font-family:Consolas,Menlo,monospace;font-size:12px;line-height:1.55;margin-top:12px;max-height:380px;overflow:auto;">' +
+           '<b style="font-family:-apple-system,Segoe UI,sans-serif;">Per-step log (' + log.length + ' entries)</b>' +
+           '<div style="margin-top:8px;">' + rows + '</div>' +
+           '</div>';
+}
+
+// Pre-Apply field validation. Returns array of human-readable problems;
+// empty array = ready to apply. Catches blank required fields BEFORE we POST
+// so Azure doesn't reject mid-Phase 2 with cryptic InvalidResource errors.
+function validateApplyPayload(st) {
+    var problems = [];
+    if (!st.tenantId)                       problems.push('Step 1: Tenant ID is required (auto-prefilled from Connect-AzAccount; check operator context).');
+    if (!st.subscriptionId)                 problems.push('Step 2: Subscription ID is required.');
+    if (!st.infra || !st.infra.location)    problems.push('Step 2: Azure region is required.');
+    if (!st.infra || !st.infra.workspaceName)        problems.push('Step 2: Workspace name is required.');
+    if (!st.infra || !st.infra.resourceGroupName)    problems.push('Step 2: Workspace resource group is required.');
+    if (!st.infra || !st.infra.dceName)              problems.push('Step 2: Data Collection Endpoint name is required.');
+    if (!st.infra || !st.infra.storageAccountName)   problems.push('Step 2: Storage account name is required (3-24 chars, lowercase letters + digits, globally unique). The default placeholder "stmyorgsi" is just a hint -- you must type your actual account name.');
+    if (!st.infra || !st.infra.storageContainer)     problems.push('Step 2: Storage container name is required.');
+    if (st.spn && st.spn.credKind === 'Secret' && st.spn.credStorage === 'KeyVault' && !st.spn.keyVaultName) {
+        problems.push('Step 1: Key Vault name is required when secret + KeyVault storage is selected.');
+    }
+    return problems;
+}
+
 async function runApply() {
     var btn = document.getElementById('btn-apply');
     var progress = document.getElementById('apply-progress');
     var result = document.getElementById('apply-result');
     if (!btn || !progress || !result) return;
+
+    // Pre-flight client-side validation
+    var st = buildApplyState();
+    var problems = validateApplyPayload(st);
+    if (problems.length > 0) {
+        result.innerHTML = '<div class="note warn"><b>&#10007; Cannot apply -- missing required fields:</b><ul style="margin:8px 0 0 18px;">' +
+            problems.map(function(p) { return '<li>' + _esc(p) + '</li>'; }).join('') +
+            '</ul></div>';
+        return;
+    }
+
     btn.disabled = true;
     btn.textContent = 'Applying...';
     progress.style.display = 'block';
@@ -1076,7 +1131,7 @@ async function runApply() {
     setApplyPhase('config', 'pending');
     setApplyStatePill('RUNNING', '#fff4e5');
 
-    var payload = JSON.stringify(buildApplyState());
+    var payload = JSON.stringify(st);
     var respText = '';
     try {
         var resp = await fetch('/api/apply', {
@@ -1131,6 +1186,7 @@ async function runApply() {
                         '2. After they click <b>Accept</b>, re-click <b>Apply now</b> above. The wizard re-validates each permission and updates this panel (Apply is idempotent &mdash; nothing is re-created).' +
                         '</div>';
             }
+            html += renderApplyLogPanel(obj.log);
             result.innerHTML = html;
         } else {
             var phase = (obj && obj.phase) || 'unknown';
@@ -1143,7 +1199,8 @@ async function runApply() {
             setApplyStatePill('FAILED', '#fdecea');
             result.innerHTML =
                 '<div class="note warn"><b>&#10007; Apply failed at phase: ' + _esc(phase) + '</b><br>' +
-                '<pre style="white-space:pre-wrap;font-size:12px;margin:8px 0;">' + _esc(err) + '</pre></div>';
+                '<pre style="white-space:pre-wrap;font-size:12px;margin:8px 0;">' + _esc(err) + '</pre></div>' +
+                renderApplyLogPanel(obj && obj.log);
         }
     } catch (e) {
         setApplyPhase('spn', 'failed');

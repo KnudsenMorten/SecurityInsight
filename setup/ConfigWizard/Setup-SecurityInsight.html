@@ -113,8 +113,8 @@
           <div class="prereq-body">From account.shodan.io. Free tier (~100 lookups/month) works for &lt;200 assets; Membership ($49) needed for larger tenants + CVE history.</div>
         </div>
         <div class="prereq">
-          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>Defender XDR workspace ResourceId <span style="font-size:11px;color:#888;font-weight:400;">(Step 7 -- Defender linkage enabled)</span></div>
-          <div class="prereq-body">Full ARM ResourceId of the Log Analytics workspace ingesting Defender XDR data. Find in Defender XDR portal &gt; Settings &gt; Microsoft Sentinel.</div>
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>Defender XDR / Sentinel workspace ResourceId <span style="font-size:11px;color:#888;font-weight:400;">(Step 7 -- Defender linkage enabled)</span></div>
+          <div class="prereq-body">Full ARM ResourceId of the Log Analytics workspace ingesting Defender XDR data &mdash; in most tenants this is your <b>Microsoft Sentinel workspace</b>. Find it in Defender XDR portal &gt; Settings &gt; Microsoft Sentinel, or Azure portal &gt; your Sentinel workspace &gt; Properties &gt; ResourceId.</div>
         </div>
       </div>
 
@@ -798,7 +798,7 @@
 
       <div class="card">
         <h3>Defender XDR workspace linkage</h3>
-        <p class="card-sub">Optionally tell SI which Log Analytics workspace your Defender XDR data is streaming to. Several RA reports cross-correlate (e.g. join MDE recommendations with sign-in risk events). Off by default.</p>
+        <p class="card-sub">Optionally tell SI which Log Analytics workspace your Defender XDR data is streaming to &mdash; in most tenants this is your <b>Microsoft Sentinel workspace</b> (if you have Sentinel deployed). Several RA reports cross-correlate (e.g. join MDE recommendations with sign-in risk events from Sentinel-ingested AAD logs). Off by default; only pick "Linked" if you have a Sentinel / Defender-XDR-streaming workspace.</p>
         <div class="toggle-group" data-toggle-key="defenderMode" style="margin-bottom: 4px;">
           <label data-val="off"><input type="radio" name="defenderMode" value="off" /> Off <span style="color:#888;">(no Defender XDR correlation)</span></label>
           <label data-val="linked"><input type="radio" name="defenderMode" value="linked" /> Linked <span style="color:#888;">(paste your XDR workspace ResourceId below)</span></label>
@@ -809,7 +809,7 @@
         <h3>Defender workspace</h3>
         <div class="form-grid">
           <div class="field required span-2">
-            <label for="f_defenderWorkspaceResourceId">Workspace ResourceId <span class="help" data-tip="Full Azure ResourceId of the Defender XDR-ingesting Log Analytics workspace. Format: /subscriptions/&lt;sub-guid&gt;/resourceGroups/&lt;rg&gt;/providers/Microsoft.OperationalInsights/workspaces/&lt;ws-name&gt;. Find it in Defender XDR portal > Settings > Microsoft Sentinel.">?</span></label>
+            <label for="f_defenderWorkspaceResourceId">Workspace ResourceId <span class="help" data-tip="Full Azure ResourceId of the Defender XDR-ingesting Log Analytics workspace -- in most tenants this IS your Microsoft Sentinel workspace. Format: /subscriptions/&lt;sub-guid&gt;/resourceGroups/&lt;rg&gt;/providers/Microsoft.OperationalInsights/workspaces/&lt;ws-name&gt;. Find it in Defender XDR portal > Settings > Microsoft Sentinel, OR in Azure portal > your Sentinel workspace > Properties > ResourceId. Leave blank if you don't have Sentinel deployed.">?</span></label>
             <input type="text" id="f_defenderWorkspaceResourceId" data-key="defenderWorkspaceResourceId" autocomplete="off"
                    placeholder="/subscriptions/.../resourceGroups/.../providers/Microsoft.OperationalInsights/workspaces/..." />
           </div>

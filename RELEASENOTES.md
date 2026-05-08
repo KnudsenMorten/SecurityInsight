@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.119
+## v2.2.120
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
 - release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
 - release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
 - release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
 - release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
 - release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
-- release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.120 — Setup Wizard: clarify Defender XDR workspace = Sentinel workspace
+
+The Step 7 "Defender XDR workspace linkage" card and the matching Welcome prereq + tooltip described the workspace abstractly ("the Log Analytics workspace your Defender XDR data is streaming to") -- accurate but unhelpful for operators who think of it as their **Sentinel workspace**. In practice these are the same workspace in 95%+ of tenants (Defender XDR streams into Sentinel via the built-in connector).
+
+**Updated copy in three places:**
+
+- Step 7 card-sub paragraph: "...in most tenants this is your **Microsoft Sentinel workspace** (if you have Sentinel deployed). [...] Off by default; only pick "Linked" if you have a Sentinel / Defender-XDR-streaming workspace."
+- Welcome prereq card title: "Defender XDR workspace ResourceId" → "Defender XDR / Sentinel workspace ResourceId". Body now says "in most tenants this is your **Microsoft Sentinel workspace**" + adds the alternative lookup path "Azure portal > your Sentinel workspace > Properties > ResourceId".
+- Tooltip on the ResourceId input: same Sentinel-context note + explicit "Leave blank if you don't have Sentinel deployed" guidance for tenants without Sentinel.
+
+No code/state changes -- pure copy clarification so operators recognise the field instantly.
 
 ---
 

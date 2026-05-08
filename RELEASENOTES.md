@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.138
+## v2.2.139
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
 - release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
 - release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
 - release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
@@ -33,13 +34,56 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
 - release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
 - release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
-- release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.139 — README §4 restructured: numbered Get/Auth/Run sub-sections, screenshots, scheduling guide
+
+Major README pass. Aggregates several user requests:
+
+**Numbered sub-section headers** for the quick-start steps so each is scannable + linkable on its own:
+
+- **§ 4.2 Get the code** (was *Step 1*) — `git clone … 2>$null` + `cd C:\SecurityInsight` (suppresses non-fatal stderr on re-run, lands you in the tree). Brief "Update to latest version" sub-block: just `cd` + `git pull`.
+- **§ 4.3 Authenticate, then launch the Setup Wizard** (was *Step 2*).
+- **§ 4.4 Run the engines** (was *Step 3*) + 3 new sub-sections (4.4.1–4.4.3) on scheduling.
+
+**Embedded wizard screenshots.** The previous "wizard tour" table is now a per-step walkthrough with **14 screenshots** under `docs/screenshots/wizard/`: launch + welcome + connect-error, the 8 wizard pages (1 Connect, 2 Workspace, 3 Mail, 4 CMDB, 5 OpenAI, 6 Shodan, 7 Diagnostic logs + Defender JSON, 8 Setup), each with a paragraph of what to do on the page.
+
+**§ 4.4.1 Schedule the engines on a VM (Windows Task Scheduler).** Daily cadence table with the production timing:
+
+- 15:00 — `git pull` (Update SecurityInsight)
+- 18:00 — Privilege Tier Classifier *(only if Azure OpenAI is enabled)*
+- 21:00 — 4 asset profilers in parallel (Identity / Endpoint / Azure / Public IP) — separate scheduled tasks, same start time, no cross-locking
+- 01:00 — Risk Analysis Summary
+- 03:00 — Risk Analysis Detailed
+
+Plus the launcher-flavour reference (`internal-vm` for production, `community-vm` for community / public, planned `community-azure`) and a `schtasks /Create` example with the `SecurityInsight\<n>. <task name> (<HH:MM>)` naming convention.
+
+**§ 4.4.2 Schedule the engines on Azure Container Apps Job (KEDA auto-scaling).** Producer-worker shard pattern, 1 replica per ~50 queue messages, 6 jobs (4 profilers + tier classifier + 2 RA), each with its own cron schedule on the Container Apps Job resource itself (no external Task Scheduler).
+
+**§ 4.4.3 VM vs Container Apps Job — recommendation.** Default to VM; move profiling-only to KEDA when any of (single-engine wall-clock > 2h, no long-running VM, want scale-to-zero) hits. Hybrid mode (profiling on KEDA, RA + Tier Classifier on VM) for medium-large estates. Explicit *don't run everything on containers just because you can* — RA + Tier Classifier are aggregations, not parallelizable scans.
+
+**§ 4 chapter restructure + legacy cleanup.** The old §§ 4.2–4.12 (High-level overview, preview, pre-req config, Connectivity, Identity infrastructure, Azure OpenAI, LauncherConfig, Run RA, Distribution, engine catalog, Container & KEDA host-mode) restructured to §§ 4.5–4.11 *minus* 4 wizard-superseded sections that were removed entirely:
+
+- **4.5 High-level overview** — legacy mermaid showing pre-wizard `Bootstrap-Auth.ps1` → `Bootstrap-Storage.ps1` → `Bootstrap-ContainerAppJob.ps1` flow. The Setup Wizard now does all of this in one click.
+- **4.7.2 Setup Configurator** — legacy offline HTML form that pre-dated the new Setup Wizard. Wizard fully replaces it.
+- **4.7.3 Solution component overview** — legacy v2.1 component naming (`Validate-SIPermissions_OnboardValidate-SecurityInsight-Permissions`, `IdentityAssetsCollectDefineTierIngestLog`, `CriticalAssetTagging`) that doesn't match v2.2's actual layout. Auth-method priority chain referenced old globals (`$global:UseManagedIdentity`, `$global:SpnClientId`) instead of the v2.2 `$global:SI_SPN_*` names.
+- **4.8 Connectivity — SPN or Managed Identity** — pre-wizard manual auth setup. Wizard's Phase 1 handles all of this.
+- **4.9 Identity infrastructure — Workspace + DCE + DCR** — pre-wizard manual infra setup. Wizard's Phase 2 handles all of this.
+- **4.12 Run the Risk Analysis** — duplicated content already covered in § 4.4.
+- The legacy "Step 3 — Step 10" walkthrough (manual config copy → Bootstrap-Auth → Bootstrap-Storage → optional Bootstrap-ContainerAppJob → LauncherConfig copy → run profilers → run RA → verify) was the entire pre-wizard onboarding flow. Replaced by the **§ 4.4.4 Fine-tuning via sample files** sub-section (small reference table pointing to the 3 sample files for advanced edits) + **§ 4.4.5 Verify outputs** + **§ 4.4.6 When something doesn't work**.
+
+TOC updated to match. In-body refs to `§ 4.3` (preview), `§ 4.12` (KEDA), `§ 4.15` (KEDA), `§§ 4.3 – 4.5` (asset classification — actually chapter 5) all corrected.
+
+**§ 4.1.1 Updating to the latest version** simplified to the 2-line `cd` + `git pull` form per user feedback.
+
+Docs only — no code changes.
 
 ---
 

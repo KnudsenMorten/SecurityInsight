@@ -857,39 +857,18 @@
 
     <section class="page" data-page="review" hidden>
       <div class="page-header">
-        <div class="page-eyebrow">Step 8 of 8 &middot; Review &amp; Apply</div>
-        <h2 class="page-title">Review your answers, then Apply</h2>
-        <p class="page-lead">Click <b>Setup</b> to provision everything: the wizard creates the SPN (or re-uses your existing one), grants the permissions, creates Log Analytics + Storage with RBAC-only access, and writes <code>config\SecurityInsight.custom.ps1</code>.</p>
+        <div class="page-eyebrow">Step 8 of 8 &middot; Review &amp; Setup</div>
+        <h2 class="page-title">Review your answers, then Setup Infrastructure</h2>
+        <p class="page-lead">Click <b>Setup Infrastructure</b> to provision everything: the wizard creates the SPN (or re-uses your existing one), grants the permissions, creates Log Analytics + Storage with RBAC-only access, and writes <code>config\SecurityInsight.custom.ps1</code>.</p>
       </div>
 
       <div class="card">
-        <h3>What will happen</h3>
-        <div class="form-grid" style="font-size:13px;color:#333;">
-          <div class="field span-2"><label>Phase 1 &mdash; Service principal</label>
-            <div id="apply-summary-spn" class="apply-summary">(fill in earlier pages first)</div>
-          </div>
-          <div class="field span-2"><label>Phase 2 &mdash; Log Analytics + DCE + Storage (RBAC-only, no shared key)</label>
-            <div id="apply-summary-infra" class="apply-summary">(fill in earlier pages first)</div>
-          </div>
-          <div class="field span-2"><label>Phase 3 &mdash; Write <code>config\SecurityInsight.custom.ps1</code></label>
-            <div id="apply-summary-config" class="apply-summary">(includes SMTP / OpenAI / Shodan / CMDB only when toggled on the relevant pages)</div>
-          </div>
-          <div class="field span-2"><label>Phase 4 &mdash; Entra ID Diagnostic Setting (sign-in + audit log streaming)</label>
-            <div id="apply-summary-entradiag" class="apply-summary">(creates tenant-level Diagnostic Setting <code>SI-EntraDiag</code> targeting the SI workspace; skipped when Defender / Sentinel workspace is linked or toggle is off)</div>
-          </div>
-          <div class="field span-2"><label>Phase 5 &mdash; Container Apps Job runtime (ACR + CAE + KEDA-scaled Jobs)</label>
-            <div id="apply-summary-container" class="apply-summary">(creates Azure Container Registry, builds the orchestrator image, provisions Container Apps Environment + per-engine Jobs with KEDA queue scalers; only runs when engine host = <i>Azure Container Apps Job</i> on Step 1; skipped for VM hosts)</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card">
-        <h3>Apply</h3>
-        <p class="card-sub">Make sure you're signed in to Az PowerShell with a Global Admin (or Privileged Role Administrator) account in the target tenant before clicking Apply. The wizard pops up a sign-in window if needed.</p>
+        <h3>Setup Infrastructure</h3>
+        <p class="card-sub">Make sure you're signed in to Az PowerShell with a Global Admin (or Privileged Role Administrator) account in the target tenant before clicking the button. The wizard pops up a sign-in window if needed.</p>
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
-          <button class="btn primary" id="btn-apply" style="font-size:14px;padding:10px 22px;">&#9658; Setup</button>
+          <button class="btn primary" id="btn-apply" style="font-size:14px;padding:10px 22px;">&#9658; Setup Infrastructure</button>
           <span class="pill" id="apply-state-pill" style="font-size:11px;">Idle</span>
-          <span style="color:#888;font-size:12px;">Apply takes ~3-8 min depending on Azure response time.</span>
+          <span style="color:#888;font-size:12px;">Setup takes ~3-8 min depending on Azure response time.</span>
         </div>
 
         <div id="apply-progress" style="margin-top:18px;display:none;">
@@ -921,6 +900,27 @@
         </div>
 
         <div id="apply-result" style="margin-top:14px;"></div>
+      </div>
+
+      <div class="card">
+        <h3>What will happen</h3>
+        <div class="form-grid" style="font-size:13px;color:#333;">
+          <div class="field span-2"><label>Phase 1 &mdash; Service principal</label>
+            <div id="apply-summary-spn" class="apply-summary">(fill in earlier pages first)</div>
+          </div>
+          <div class="field span-2"><label>Phase 2 &mdash; Log Analytics + DCE + Storage (RBAC-only, no shared key)</label>
+            <div id="apply-summary-infra" class="apply-summary">(fill in earlier pages first)</div>
+          </div>
+          <div class="field span-2"><label>Phase 3 &mdash; Write <code>config\SecurityInsight.custom.ps1</code></label>
+            <div id="apply-summary-config" class="apply-summary">(includes SMTP / OpenAI / Shodan / CMDB only when toggled on the relevant pages)</div>
+          </div>
+          <div class="field span-2"><label>Phase 4 &mdash; Entra ID Diagnostic Setting (sign-in + audit log streaming)</label>
+            <div id="apply-summary-entradiag" class="apply-summary">(creates tenant-level Diagnostic Setting <code>SI-EntraDiag</code> targeting the SI workspace; skipped when Defender / Sentinel workspace is linked or toggle is off)</div>
+          </div>
+          <div class="field span-2"><label>Phase 5 &mdash; Container Apps Job runtime (ACR + CAE + KEDA-scaled Jobs)</label>
+            <div id="apply-summary-container" class="apply-summary">(creates Azure Container Registry, builds the orchestrator image, provisions Container Apps Environment + per-engine Jobs with KEDA queue scalers; only runs when engine host = <i>Azure Container Apps Job</i> on Step 1; skipped for VM hosts)</div>
+          </div>
+        </div>
       </div>
 
       <div class="card">

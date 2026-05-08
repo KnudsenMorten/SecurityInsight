@@ -219,8 +219,27 @@ function Test-PreflightPermissions {
 }
 $pre = Test-PreflightAuth
 
-# Probe Azure CLI alongside Az PS + Mg so a single error block lists all
-# three required commands when any prerequisite is missing.
+# ----- Probe PS module presence (-Scope AllUsers preferred for unattended use) -----
+# Engines run under SYSTEM / service accounts that can't see CurrentUser-scoped
+# modules. AllUsers means $env:ProgramFiles\(Windows)PowerShell\Modules -- visible
+# to every account. CurrentUser means $HOME\Documents\... which only the
+# installing user sees. Scope is determined from the module's install path.
+function _DetectModuleScope {
+    param([string]$ModuleName)
+    # Returns @{ Installed=bool; Version=string; Scope='AllUsers'|'CurrentUser'|'Unknown'|$null }
+    $m = Get-Module -ListAvailable -Name $ModuleName -ErrorAction SilentlyContinue |
+         Sort-Object Version -Descending | Select-Object -First 1
+    if (-not $m) { return @{ Installed=$false; Version=$null; Scope=$null } }
+    $path = [string]$m.ModuleBase
+    $scope = if ($path -like "$env:ProgramFiles*")     { 'AllUsers' }
+             elseif ($path -like "$env:HOME*" -or $path -like "$env:USERPROFILE*") { 'CurrentUser' }
+             else                                       { 'Unknown' }
+    return @{ Installed=$true; Version=$m.Version.ToString(); Scope=$scope }
+}
+$azMod = _DetectModuleScope -ModuleName 'Az.Accounts'
+$mgMod = _DetectModuleScope -ModuleName 'Microsoft.Graph.Authentication'
+
+# ----- Probe Azure CLI -----
 $azFound = $false
 $azVer = $null
 try {
@@ -242,39 +261,60 @@ if ($azFound) {
     } catch { }
 }
 
-if (-not $pre.Az -or -not $pre.Mg -or -not $azFound -or -not $azLoggedIn) {
+# ----- Unified pre-flight gate (modules + connections + az CLI) -----
+$needsModuleInstall = (-not $azMod.Installed) -or (-not $mgMod.Installed)
+if ($needsModuleInstall -or -not $pre.Az -or -not $pre.Mg -or -not $azFound -or -not $azLoggedIn) {
     $tenantHint = if ($pre.Mg) { $pre.Mg.TenantId } elseif ($pre.Az) { $pre.Az.Tenant.Id } else { '<tenant-id>' }
     Write-Host ""
-    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " /api/apply needs Az PowerShell + Microsoft Graph + Azure CLI contexts."
+    Write-Host "  [BLOCKED]" -ForegroundColor Red -NoNewline; Write-Host " /api/apply needs Az PowerShell + Microsoft Graph + Azure CLI."
     Write-Host ""
-    if (-not $pre.Az)   { Write-Host "    Az PowerShell  : NOT CONNECTED" -ForegroundColor Yellow }
-    else                { Write-Host ("    Az PowerShell  : {0} (sub: {1})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name) -ForegroundColor Green }
-    if (-not $pre.Mg)   { Write-Host "    Microsoft Graph: NOT CONNECTED" -ForegroundColor Yellow }
-    else                { Write-Host ("    Microsoft Graph: {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId) -ForegroundColor Green }
-    if (-not $azFound)      { Write-Host "    Azure CLI      : NOT INSTALLED" -ForegroundColor Yellow }
-    elseif (-not $azLoggedIn) { Write-Host ("    Azure CLI      : {0} installed but NOT LOGGED IN" -f $azVer) -ForegroundColor Yellow }
-    else                { Write-Host ("    Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id) -ForegroundColor Green }
+    # ----- Module presence (line per module) -----
+    if (-not $azMod.Installed)              { Write-Host "    Az PowerShell module    : NOT INSTALLED" -ForegroundColor Yellow }
+    elseif ($azMod.Scope -eq 'CurrentUser') { Write-Host ("    Az PowerShell module    : {0} (Scope=CurrentUser -- engines run as SYSTEM and CANNOT see CurrentUser modules)" -f $azMod.Version) -ForegroundColor Yellow }
+    else                                    { Write-Host ("    Az PowerShell module    : {0} (Scope={1})" -f $azMod.Version, $azMod.Scope) -ForegroundColor Green }
+    if (-not $mgMod.Installed)              { Write-Host "    Microsoft.Graph module  : NOT INSTALLED" -ForegroundColor Yellow }
+    elseif ($mgMod.Scope -eq 'CurrentUser') { Write-Host ("    Microsoft.Graph module  : {0} (Scope=CurrentUser -- engines run as SYSTEM and CANNOT see CurrentUser modules)" -f $mgMod.Version) -ForegroundColor Yellow }
+    else                                    { Write-Host ("    Microsoft.Graph module  : {0} (Scope={1})" -f $mgMod.Version, $mgMod.Scope) -ForegroundColor Green }
+    # ----- Connections (line per service) -----
+    if (-not $pre.Az)   { Write-Host "    Az PowerShell context   : NOT CONNECTED" -ForegroundColor Yellow }
+    else                { Write-Host ("    Az PowerShell context   : {0} (sub: {1})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name) -ForegroundColor Green }
+    if (-not $pre.Mg)   { Write-Host "    Microsoft Graph context : NOT CONNECTED" -ForegroundColor Yellow }
+    else                { Write-Host ("    Microsoft Graph context : {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId) -ForegroundColor Green }
+    # ----- az CLI (one line: not installed / installed-not-logged-in / logged-in) -----
+    if (-not $azFound)        { Write-Host "    Azure CLI               : NOT INSTALLED" -ForegroundColor Yellow }
+    elseif (-not $azLoggedIn) { Write-Host ("    Azure CLI               : {0} installed but NOT LOGGED IN" -f $azVer) -ForegroundColor Yellow }
+    else                      { Write-Host ("    Azure CLI               : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id) -ForegroundColor Green }
     Write-Host ""
-    Write-Host "  Run these in THIS shell, then re-launch the wizard:" -ForegroundColor Cyan
+    Write-Host "  Run these in an ELEVATED PowerShell window (Run as Administrator), then re-launch the wizard:" -ForegroundColor Cyan
+    Write-Host "  ('-Scope AllUsers' is required because SI engines run unattended under SYSTEM /" -ForegroundColor Gray
+    Write-Host "  service-account / Container Apps Job MIs that can't see CurrentUser-scoped modules.)" -ForegroundColor Gray
     Write-Host ""
+    if (-not $azMod.Installed -or $azMod.Scope -eq 'CurrentUser') {
+        Write-Host "    Install-Module Az -Scope AllUsers -Force" -ForegroundColor White
+    }
+    if (-not $mgMod.Installed -or $mgMod.Scope -eq 'CurrentUser') {
+        Write-Host "    Install-Module Microsoft.Graph -Scope AllUsers -Force" -ForegroundColor White
+    }
+    if (-not $azFound) {
+        Write-Host "    # Install Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli-windows" -ForegroundColor White
+    }
     if (-not $pre.Az) {
         Write-Host ("    Connect-AzAccount -Tenant {0}" -f $tenantHint) -ForegroundColor White
     }
     if (-not $pre.Mg) {
         Write-Host ("    Connect-MgGraph -TenantId {0} -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome" -f $tenantHint) -ForegroundColor White
     }
-    if (-not $azFound) {
-        Write-Host "    # Install Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli-windows" -ForegroundColor White
-        Write-Host ("    az login --tenant {0}" -f $tenantHint) -ForegroundColor White
-    } elseif (-not $azLoggedIn) {
+    if (-not $azLoggedIn) {
         Write-Host ("    az login --tenant {0}" -f $tenantHint) -ForegroundColor White
     }
     Write-Host "    .\Start-SetupWizard.ps1" -ForegroundColor White
     Write-Host ""
     Write-Host "  (The wizard process inherits all three contexts -- no popups, no device codes, no per-call re-auth.)" -ForegroundColor Gray
     Write-Host ""
-    throw "Setup Wizard pre-flight failed: missing Az PowerShell / Microsoft Graph / Azure CLI context. See instructions above."
+    throw "Setup Wizard pre-flight failed: missing modules / contexts / Azure CLI. See instructions above."
 }
+_Ok ("Az PS module   : {0} (Scope={1})" -f $azMod.Version, $azMod.Scope)
+_Ok ("MgGraph module : {0} (Scope={1})" -f $mgMod.Version, $mgMod.Scope)
 _Ok ("Az context     : {0} (sub: {1} / {2})" -f $pre.Az.Account.Id, $pre.Az.Subscription.Name, $pre.Az.Subscription.Id)
 _Ok ("Graph context  : {0} (tenant: {1})" -f $pre.Mg.Account, $pre.Mg.TenantId)
 _Ok ("Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id)

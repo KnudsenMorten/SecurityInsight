@@ -211,7 +211,18 @@ if ($dceCmd) {
 }
 if (-not $dce) {
     _Step "create Data Collection Endpoint (via REST)"
-    $token = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com/').Token
+    # Az.Accounts >= 5.0 returns the token as SecureString by default; older
+    # versions return a plain string. Handle both: if SecureString, marshal
+    # to BSTR then to managed string (mirror of what -AsPlainText used to do).
+    # Without this, "Bearer $token" interpolates to the SecureString TYPE
+    # name instead of the token value -> InvalidAuthenticationToken from ARM.
+    $tokenObj = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/' -ErrorAction Stop
+    $token = $tokenObj.Token
+    if ($token -is [System.Security.SecureString]) {
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($token)
+        try { $token = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
     $dceUri = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Insights/dataCollectionEndpoints/$($DceName)?api-version=2023-03-11"
     $body = @{
         location   = $Location

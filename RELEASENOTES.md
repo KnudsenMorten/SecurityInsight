@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.127
+## v2.2.128
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.128 - handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT (057e97f0)
 - release: SecurityInsight v2.2.127 - README §4 refresh + DCE-via-REST fix + Tag Contributor opt-in (9671dea1)
 - release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
 - release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.101 - README intro: hook-led + full provider list (ca2c2170)
 - release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
 - release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
-- release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.128 — Setup Wizard: handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT
+
+Live test on the v2.2.127 DCE REST fallback got further but failed with:
+
+```
+DCE REST PUT failed for dce-securityinsight-4 :
+{"error":{"code":"InvalidAuthenticationToken","message":"The access token is invalid."}}
+```
+
+**Root cause:** Az.Accounts 5.0+ changed `Get-AzAccessToken` to return the bearer token as a `System.Security.SecureString` instead of a plain string. PowerShell's `"Bearer $token"` interpolation on a `SecureString` produces the literal string `"Bearer System.Security.SecureString"` — ARM rejects it with `InvalidAuthenticationToken`.
+
+**Fix:** `Initialize-SIInfra.ps1`'s DCE REST PUT now type-checks the returned token and marshals via BSTR when it's a SecureString:
+
+```powershell
+$tokenObj = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/' -ErrorAction Stop
+$token = $tokenObj.Token
+if ($token -is [System.Security.SecureString]) {
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($token)
+    try { $token = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+```
+
+Backwards-compatible: older Az.Accounts versions returning a plain string flow straight through. The BSTR is zero-freed in `finally` so the plain-text token doesn't linger in memory longer than necessary.
+
+This is the fix for any future REST call we add to the wizard backend (Diagnostic Setting creation, KV creation when Initialize-SIInfra learns to make KVs, etc.) — same pattern applies anywhere we call `Get-AzAccessToken`.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.131
+## v2.2.132
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
 - release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
 - release: SecurityInsight v2.2.130 - README cleanup + Az binary-compat smoke test in wizard pre-flight (2e51f0f5)
 - release: SecurityInsight v2.2.129 - README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table (bfaf8fe2)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
 - release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
 - release: SecurityInsight v2.2.103 - Setup Wizard skeleton + 3-step quick-start (ab8f4fb8)
-- release: SecurityInsight v2.2.102 - README: same provider-list rewrite for the second blurb (c2afe084)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.132 — Wizard Phase 3 fix: `ConvertTo-HashtableFromPso` rejects null sub-properties
+
+The Setup Wizard's `/api/apply` Phase 3 (config render) was failing with:
+
+```
+✗ Apply failed at phase: config
+Cannot bind argument to parameter 'InputObject' because it is null.
+```
+
+even when the SPN and Infrastructure phases had completed successfully. SPN + Infra succeeded because they consume their hashtable args directly, but Phase 3 first runs the wizard's own `ConvertTo-HashtableFromPso` over the optional state pages (SMTP, Azure OpenAI, Shodan, CMDB) to convert the JSON-deserialized `PSCustomObject` tree to splattable hashtables. The conversion crashed before `Write-SICustomConfig` ever ran.
+
+**Root cause:** `ConvertTo-HashtableFromPso` declared its parameter as `[Parameter(Mandatory)] $InputObject` without `[AllowNull()]`. PowerShell's parameter binder rejects `$null` at *binding time* — before the function body runs — so the line-61 null guard (`if ($null -eq $InputObject) { return $null }`) was unreachable for explicit-call cases. When the recursion at `$h[$p.Name] = ConvertTo-HashtableFromPso $p.Value` hit a property whose value was `$null` — for example an unfilled optional SMTP `User` field, an OpenAI `MaxTokens` left blank, or a CMDB `RefreshHours` not set — the recursive call threw the `Cannot bind argument…` error.
+
+**Fix:** added `[AllowNull()]` to the parameter declaration so the function's existing null guard can do its job. Behavior unchanged for non-null inputs; null inputs now correctly return `$null` instead of crashing the entire `/api/apply` call.
+
+This blocked any operator who didn't fill every single optional field on every wizard page. Now SMTP-only, OpenAI-only, or CMDB-disabled deployments render their config cleanly.
 
 ---
 

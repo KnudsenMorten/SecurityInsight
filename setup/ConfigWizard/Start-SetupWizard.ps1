@@ -57,7 +57,12 @@ function _Err  ([string]$msg) { Write-Host "  [ERR]  $msg" -ForegroundColor Red 
 # Recursively convert ConvertFrom-Json's PSCustomObject tree to Hashtables so
 # our backend cmdlets (which take [hashtable]) can splat properties cleanly.
 function ConvertTo-HashtableFromPso {
-    param([Parameter(Mandatory)] $InputObject)
+    # AllowNull: optional sub-properties (e.g. smtp.User, cmdb.RefreshHours) can
+    # arrive as $null; without it the recursion at $h[$p.Name] = ... throws
+    # "Cannot bind argument to parameter 'InputObject' because it is null"
+    # because [Parameter(Mandatory)] rejects $null at binding time, before the
+    # function body's null guard runs.
+    param([Parameter(Mandatory)][AllowNull()] $InputObject)
     if ($null -eq $InputObject) { return $null }
     if ($InputObject -is [hashtable]) { return $InputObject }
     if ($InputObject -is [System.Collections.IEnumerable] -and -not ($InputObject -is [string])) {

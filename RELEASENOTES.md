@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.134
+## v2.2.135
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
 - release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
 - release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
 - release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
 - release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
 - release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
-- release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.135 — `_GrantRbac` existence check now filters out inherited assignments
+
+`v2.2.134` added the workspace + DCR-RG `Contributor` grants but the `_GrantRbac` function's existence check was matching inherited assignments, so the explicit child-scope grant was being skipped on every re-run.
+
+`Get-AzRoleAssignment -ObjectId X -Scope <child>` returns assignments AT or ABOVE the child scope — meaning a Contributor inherited from a parent (e.g. an existing RG-level grant from a previous run) showed up when probing the workspace scope, the function logged `RBAC 'Contributor' already in place at /…/resourceGroups/<rg>` and returned early. The workspace itself never received an explicit Contributor assignment, so the engine's own role-existence probe (which is stricter — it filters on `.Scope -eq` the target) kept warning `could not grant 'Contributor' on workspace`.
+
+**Fix:** post-filter the `Get-AzRoleAssignment` result with `Where-Object { $_.Scope -ieq $Scope }`. Now only direct assignments at exactly the target scope count as "already in place"; inherited assignments are ignored and the function creates the explicit child-scope assignment the engine wants.
+
+After upgrading, re-run the wizard's `/api/apply` once. You'll see two new `[OK] RBAC 'Contributor' granted at …workspaces/<ws>` and `…resourceGroups/<rg>` lines, and the engine's warnings will go away.
 
 ---
 

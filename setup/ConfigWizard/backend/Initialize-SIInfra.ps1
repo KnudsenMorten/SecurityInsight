@@ -270,7 +270,13 @@ Import-Module Az.Resources -ErrorAction Stop
 $rbacScopes = @()
 function _GrantRbac {
     param([string]$RoleId, [string]$RoleName, [string]$Scope)
-    $existing = Get-AzRoleAssignment -ObjectId $SpnObjectId -Scope $Scope -RoleDefinitionId $RoleId -ErrorAction SilentlyContinue
+    # Get-AzRoleAssignment -Scope X returns assignments AT or ABOVE X (it
+    # includes inherited ones), so a Contributor inherited from a parent
+    # scope would false-positive the existence check and we'd skip granting
+    # the EXPLICIT assignment the engine actually needs at this scope.
+    # Filter on .Scope -ieq $Scope to require a direct assignment.
+    $existing = Get-AzRoleAssignment -ObjectId $SpnObjectId -Scope $Scope -RoleDefinitionId $RoleId -ErrorAction SilentlyContinue |
+        Where-Object { $_.Scope -ieq $Scope }
     if ($existing) { _Info ("RBAC '{0}' already in place at {1}" -f $RoleName, $Scope); return }
     try {
         $null = New-AzRoleAssignment -ObjectId $SpnObjectId -RoleDefinitionId $RoleId -Scope $Scope -ErrorAction Stop

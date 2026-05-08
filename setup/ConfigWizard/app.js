@@ -179,6 +179,43 @@ function psQuote(v) {
   return "'" + String(v).replace(/'/g, "''") + "'";
 }
 
+// Compute the effective name for a Step-2 resource key, applying the optional
+// state.data.namingSuffix. Used by the snippet builder + buildApplyState so
+// the SAME name lands in both places.
+//   key           -- state key (e.g. 'workspaceName')
+//   opts.storage  -- true for storage account names: hyphens stripped, lowercased,
+//                    truncated to 24 chars (Azure storage rules).
+// Returns the suffixed name, or the bare base name if no suffix is set.
+function nameWithSuffix(key, opts) {
+  opts = opts || {};
+  let base = state.data[key];
+  if (base == null || base === '') {
+    const el = document.querySelector('input[data-key="' + key + '"], select[data-key="' + key + '"]');
+    base = el ? (el.getAttribute('data-default') || '') : '';
+  }
+  const sfx = (state.data.namingSuffix || '').trim();
+  if (!sfx) return base;
+  if (opts.storage) {
+    const safe = sfx.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    return (base + safe).substring(0, 24);
+  }
+  return base + '-' + sfx;
+}
+
+// Like assignLine, but applies state.data.namingSuffix to the value.
+function suffixedAssignLine(varName, key, fallback, pad, opts) {
+  opts = opts || {};
+  let val = nameWithSuffix(key, opts);
+  if (!val) val = fallback;
+  const head = '$global:' + varName + ' '.repeat(Math.max(1, (pad || 0) - varName.length)) + '= ' + psQuote(val);
+  const def  = (document.querySelector('input[data-key="' + key + '"], select[data-key="' + key + '"]') || {}).getAttribute && document.querySelector('input[data-key="' + key + '"], select[data-key="' + key + '"]').getAttribute('data-default');
+  const sfx  = (state.data.namingSuffix || '').trim();
+  let tag = '';
+  if (sfx) tag = '   # default+suffix';
+  else if (def && state.data[key] === def) tag = '   # default';
+  return head + tag;
+}
+
 // Resolve the value for a state key, preferring (in order):
 //   1. user-typed value in state.data
 //   2. the input's data-default attribute (real wizard default)
@@ -266,23 +303,25 @@ function buildWorkspaceSnippet() {
   lines.push(buildTenantSnippet());
   lines.push('');
   lines.push('# --- Subscription + Log Analytics workspace + ingestion ----------------');
+  const sfx = (d.namingSuffix || '').trim();
+  if (sfx) lines.push('# Naming suffix in effect: "-' + sfx + '" (applied to all default names below)');
   lines.push('$global:SI_PrestageInfra        = $true');
   lines.push(assignLine('SI_AzSubscriptionId',     'subscriptionId', '<sub-guid>',       30));
   lines.push(assignLine('SI_Location',             'location',       'westeurope',       30));
-  lines.push(assignLine('SI_WorkspaceName',        'workspaceName',  '<workspace-name>', 30));
-  lines.push(assignLine('SI_WorkspaceResourceGroup','workspaceRg',   '<workspace-rg>',   30));
+  lines.push(suffixedAssignLine('SI_WorkspaceName',         'workspaceName',  '<workspace-name>', 30));
+  lines.push(suffixedAssignLine('SI_WorkspaceResourceGroup','workspaceRg',    '<workspace-rg>',   30));
   lines.push('# SI_WorkspaceResourceId is composed at config-load time from the parts above.');
   lines.push('$global:SI_WorkspaceResourceId  = "/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_WorkspaceResourceGroup)/providers/Microsoft.OperationalInsights/workspaces/$($global:SI_WorkspaceName)"');
   lines.push('');
   lines.push('# --- Data Collection Endpoint ------------------------------------------');
-  lines.push(assignLine('SI_DceName',          'dceName', '<dce-name>', 25));
-  lines.push(assignLine('SI_DceResourceGroup', 'dceRg',   '<dce-rg>',   25));
-  lines.push(assignLine('SI_DcrResourceGroup', 'dceRg',   '<dce-rg>',   25));
+  lines.push(suffixedAssignLine('SI_DceName',          'dceName', '<dce-name>', 25));
+  lines.push(suffixedAssignLine('SI_DceResourceGroup', 'dceRg',   '<dce-rg>',   25));
+  lines.push(suffixedAssignLine('SI_DcrResourceGroup', 'dceRg',   '<dce-rg>',   25));
   lines.push('');
   lines.push('# --- Storage account (RBAC-only, no SI_StorageKey written) -------------');
-  lines.push(assignLine('SI_StorageAccount',       'storageAccountName',   '<storage-acct>', 25));
-  lines.push(assignLine('SI_StorageResourceGroup', 'storageResourceGroup', '<storage-rg>',   25));
-  lines.push(assignLine('SI_ExportContainer',      'storageContainer',     'securityinsight',25));
+  lines.push(suffixedAssignLine('SI_StorageAccount',       'storageAccountName',   '<storage-acct>',  25, { storage: true }));
+  lines.push(suffixedAssignLine('SI_StorageResourceGroup', 'storageResourceGroup', '<storage-rg>',    25));
+  lines.push(suffixedAssignLine('SI_ExportContainer',      'storageContainer',     'securityinsight', 25));
   lines.push('$global:ExportDestination       = "https://$($global:SI_StorageAccount).blob.core.windows.net/$($global:SI_ExportContainer)/"');
   return lines.join('\n');
 }
@@ -816,14 +855,15 @@ function buildApplyState() {
         },
         infra: {
             location:             d.location             || 'westeurope',
-            resourceGroupName:    d.workspaceRg          || 'rg-securityinsight',
-            workspaceName:        d.workspaceName        || 'log-platform-management-securityinsight',
-            dceName:              d.dceName              || 'dce-securityinsight',
-            dceResourceGroup:     d.dceRg                || (d.workspaceRg || 'rg-securityinsight'),
-            storageAccountName:   d.storageAccountName   || '',
-            storageResourceGroup: d.storageResourceGroup || (d.workspaceRg || 'rg-securityinsight'),
-            storageContainer:     d.storageContainer     || 'securityinsight'
-        }
+            resourceGroupName:    nameWithSuffix('workspaceRg')          || 'rg-securityinsight',
+            workspaceName:        nameWithSuffix('workspaceName')        || 'log-platform-management-securityinsight',
+            dceName:              nameWithSuffix('dceName')              || 'dce-securityinsight',
+            dceResourceGroup:     nameWithSuffix('dceRg')                || nameWithSuffix('workspaceRg') || 'rg-securityinsight',
+            storageAccountName:   nameWithSuffix('storageAccountName', { storage: true }) || '',
+            storageResourceGroup: nameWithSuffix('storageResourceGroup') || nameWithSuffix('workspaceRg') || 'rg-securityinsight',
+            storageContainer:     nameWithSuffix('storageContainer')     || 'securityinsight'
+        },
+        namingSuffix: d.namingSuffix || null
     };
     if (d.kvName) {
         st.spn.keyVaultName = d.kvName;

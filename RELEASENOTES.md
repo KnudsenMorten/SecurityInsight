@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.141
+## v2.2.142
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
 - release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
 - release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
 - release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
@@ -33,13 +34,23 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
 - release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
 - release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
-- release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.142 — Step 8 layout: Setup button moved to top, "Apply" → "Setup Infrastructure"
+
+UI feedback from live test on the Apply page:
+
+- **Setup button moved above the "What will happen" summary card.** Operators reviewing the per-phase summary previously had to scroll past 5 phase cards before reaching the action button. Now the button is the first thing in the page body — review summary is below for reference.
+- **"Apply" → "Setup Infrastructure"** everywhere on Step 8: card heading, button label, page title, eyebrow ("Step 8 of 8 · Review & Setup"), page lead. The new label more accurately describes what the button does (provisions Azure infrastructure) and avoids the ambiguous verb "Apply".
+
+Docs only — no backend changes.
 
 ---
 

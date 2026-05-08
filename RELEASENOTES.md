@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.143
+## v2.2.144
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
 - release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
 - release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
 - release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
 - release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
 - release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
-- release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.144 — Wizard launch pre-flight now also surfaces `az` CLI status (soft warning)
+
+User feedback on v2.2.143: the `az` CLI / `az login` check fired only at `/api/apply` time, after the operator had already filled in 8 wizard pages. By then it was too late to fix the gap without a full re-run. The launch pre-flight already validated Az PowerShell + Microsoft Graph + Az binary-compat — it should also surface the `az` CLI state up-front so the operator can fix it before clicking Next.
+
+Added an `az` CLI section to `Start-SetupWizard.ps1` pre-flight, immediately after the Az binary-compat smoke test. Outputs:
+
+- **Az CLI installed + logged in:** `[OK] Azure CLI : 2.76.0 (signed in as mok@…, sub …)`
+- **Az CLI installed but not logged in:** `[WARN] Azure CLI: 2.76.0 installed but NOT LOGGED IN. (Only required if Step 1 = 'Azure Container Apps Job with MI'.)` + `[WARN] Run: az login --tenant <id>`
+- **Az CLI not installed:** `[WARN] Azure CLI: NOT INSTALLED.` + install URL + `az login` command
+
+**Soft warning, not a block.** At launch time the wizard doesn't yet know which engine host the operator will pick on Step 1. VM-host operators (the 95% case) don't need `az` CLI at all, so blocking the launch on missing `az` would be over-restrictive. The hard requirement is still enforced at `/api/apply` Phase 0 (v2.2.143) — but by the time the operator gets there, they've seen the warning and either installed `az login` or knowingly chosen a host that doesn't need it.
+
+This complements the existing pre-flight chain: Az PowerShell context → Microsoft Graph context → Az binary-compat smoke test → **Az CLI status** → listener up.
 
 ---
 

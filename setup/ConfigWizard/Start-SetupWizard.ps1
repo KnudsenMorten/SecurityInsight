@@ -288,6 +288,45 @@ try {
 }
 Write-Host ""
 
+# ----- Pre-flight: Azure CLI status (soft warning, not a block) -----
+# Phase 5 (container infra) shells out to `az acr build` for server-side
+# image builds, so we need the `az` CLI installed and logged in IF the
+# operator picks 'Azure Container Apps Job with MI' on Step 1. We don't
+# know that choice yet at launch time, so we surface the az state as
+# INFO/WARN here -- no block. /api/apply's Phase 0 enforces the hard
+# requirement only when hostType=azureContainerMI.
+$azFound = $false
+$azVer = $null
+try {
+    $azVerJson = & az version --output json 2>&1 | Out-String
+    if ($LASTEXITCODE -eq 0 -and $azVerJson -match '"azure-cli"') {
+        $azFound = $true
+        $azVer = ($azVerJson | ConvertFrom-Json).'azure-cli'
+    }
+} catch { }
+if (-not $azFound) {
+    _Warn "Azure CLI: NOT INSTALLED. (Only required if Step 1 = 'Azure Container Apps Job with MI'.)"
+    _Warn "          Install: https://learn.microsoft.com/cli/azure/install-azure-cli-windows"
+    _Warn ("          Then: az login --tenant {0}" -f $pre.Mg.TenantId)
+} else {
+    $azLoggedIn = $false
+    $azAcct = $null
+    try {
+        $azAcctJson = & az account show --output json 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -and $azAcctJson -match '"id"') {
+            $azLoggedIn = $true
+            $azAcct = $azAcctJson | ConvertFrom-Json
+        }
+    } catch { }
+    if ($azLoggedIn) {
+        _Ok ("Azure CLI      : {0} (signed in as {1}, sub {2})" -f $azVer, $azAcct.user.name, $azAcct.id)
+    } else {
+        _Warn ("Azure CLI: {0} installed but NOT LOGGED IN. (Only required if Step 1 = 'Azure Container Apps Job with MI'.)" -f $azVer)
+        _Warn ("          Run: az login --tenant {0}" -f $pre.Mg.TenantId)
+    }
+}
+Write-Host ""
+
 # ----- Build listener -----
 $listener = New-Object System.Net.HttpListener
 $prefix   = "http://localhost:$Port/"

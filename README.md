@@ -876,14 +876,14 @@ The engines are stateless PowerShell scripts — point Windows Task Scheduler at
 
 | When | Task | Launcher | Notes |
 |------|------|----------|-------|
-| **15:00** | Update SecurityInsight | `git -C C:\SecurityInsight pull` | Pull the latest stable release before the night's runs. |
-| **18:00** | Privilege Tier Classifier | `.\launcher\privilege-tier-classifier\launcher.internal-vm.ps1` | Refreshes the AI-classified tier catalog *(only if Azure OpenAI is enabled — otherwise skip; the locked catalog covers most cases)*. |
-| **21:00** | Asset Profiling — Identity | `.\launcher\identity\launcher.internal-vm.ps1` | Runs **in parallel** with the next 3 (separate scheduled tasks, same start time). Each engine writes its own `SI_*_Profile_CL` table — no cross-locking. |
-| **21:00** | Asset Profiling — Endpoint | `.\launcher\endpoint\launcher.internal-vm.ps1` | |
-| **21:00** | Asset Profiling — Azure | `.\launcher\azure\launcher.internal-vm.ps1` | |
-| **21:00** | Asset Profiling — Public IP | `.\launcher\publicip\launcher.internal-vm.ps1` | Only when Shodan was enabled in the wizard. |
-| **01:00** | Risk Analysis — Summary | `.\launcher\risk-analysis\launcher.internal-vm.ps1 -Summary` | Runs after profiling completes. Aggregated rows + exec summary email. |
-| **03:00** | Risk Analysis — Detailed | `.\launcher\risk-analysis\launcher.internal-vm.ps1 -Detailed` | Per-asset rows for ops triage. |
+| **3:00 PM** | Update SecurityInsight | `git -C C:\SecurityInsight pull` | Pull the latest stable release before the night's runs. |
+| **6:00 PM** | Privilege Tier Classifier | `.\launcher\privilege-tier-classifier\launcher.internal-vm.ps1` | Refreshes the AI-classified tier catalog *(only if Azure OpenAI is enabled — otherwise skip; the locked catalog covers most cases)*. |
+| **9:00 PM** | Asset Profiling — Identity | `.\launcher\identity\launcher.internal-vm.ps1` | Runs **in parallel** with the next 3 (separate scheduled tasks, same start time). Each engine writes its own `SI_*_Profile_CL` table — no cross-locking. |
+| **9:00 PM** | Asset Profiling — Endpoint | `.\launcher\endpoint\launcher.internal-vm.ps1` | |
+| **9:00 PM** | Asset Profiling — Azure | `.\launcher\azure\launcher.internal-vm.ps1` | |
+| **9:00 PM** | Asset Profiling — Public IP | `.\launcher\publicip\launcher.internal-vm.ps1` | Only when Shodan was enabled in the wizard. |
+| **1:00 AM** | Risk Analysis — Summary | `.\launcher\risk-analysis\launcher.internal-vm.ps1 -Summary` | Runs after profiling completes. Aggregated rows + exec summary email. |
+| **3:00 AM** | Risk Analysis — Detailed | `.\launcher\risk-analysis\launcher.internal-vm.ps1 -Detailed` | Per-asset rows for ops triage. |
 
 **Launcher flavours.** Every engine ships three launcher variants — pick the one that matches your environment:
 
@@ -893,7 +893,7 @@ The engines are stateless PowerShell scripts — point Windows Task Scheduler at
 | `launcher.community-vm.ps1` | community-friendly minimal-dependency launcher | Public demos / customers without the internal `2LINKIT-Functions.psm1` helpers |
 | `launcher.community-azure.ps1` *(planned)* | Azure Function / Logic App host | Cloud-only deployments without a VM |
 
-**Creating the scheduled tasks.** Run as `NT AUTHORITY\SYSTEM` (or a dedicated service account that's a member of the local *Administrators* group on the VM) so the modules installed `-Scope AllUsers` are visible. Concrete `schtasks` example for the 21:00 Identity profiler:
+**Creating the scheduled tasks.** Run as `NT AUTHORITY\SYSTEM` (or a dedicated service account that's a member of the local *Administrators* group on the VM) so the modules installed `-Scope AllUsers` are visible. Concrete `schtasks` example for the 9:00 PM Identity profiler (`/ST` takes 24-hour `HH:MM`, so 9 PM is `21:00`):
 
 ```powershell
 schtasks /Create /TN "SecurityInsight\3. Asset Profiling - Identity" `
@@ -901,7 +901,7 @@ schtasks /Create /TN "SecurityInsight\3. Asset Profiling - Identity" `
     /SC DAILY /ST 21:00 /RU "SYSTEM" /RL HIGHEST /F
 ```
 
-Repeat for each row. Naming convention `SecurityInsight\<n>. <task name> (<HH:MM>)` is what shows up in the Task Scheduler library and matches the screenshot example above.
+Repeat for each row. Naming convention `SecurityInsight\<n>. <task name> (<h:mm AM/PM>)` is what shows up in the Task Scheduler library and matches the screenshot example above. The schedule runs in the **VM's local time zone** — pick a VM that's in your operations team's timezone so 9:00 PM means after-hours wherever your operators are.
 
 **Logs.** Every launcher writes a transcript to `logs\<engine>_internal-vm_<UTC-timestamp>.log` (and a config snapshot to `data\LOGS\config-<engine>-<local-timestamp>-<machine>.log`). Inspect those when a scheduled run fails — they include the full per-step output and the resolved config values.
 
@@ -918,10 +918,12 @@ For environments without a long-running VM — or for tenants large enough that 
 
 | Cron (UTC) | Job | What it does |
 |------------|-----|--------------|
-| `0 17 * * *` (≈18:00 CET) | `caj-si-tier-classifier` | Privilege Tier Classifier (single replica, OpenAI-backed) |
-| `0 20 * * *` (≈21:00 CET) | `caj-si-profile-identity`<br>`caj-si-profile-endpoint`<br>`caj-si-profile-azure`<br>`caj-si-profile-publicip` | Producer enqueues shards → KEDA scales workers → drain → exit. Each engine runs in its own job; KEDA-scaled by its own queue. |
-| `0 0 * * *`  (≈01:00 CET) | `caj-si-ra-summary` | Risk Analysis Summary (single replica) |
-| `0 2 * * *`  (≈03:00 CET) | `caj-si-ra-detailed` | Risk Analysis Detailed (single replica) |
+| `0 22 * * *` (= 6:00 PM EST / 3:00 PM PST) | `caj-si-tier-classifier` | Privilege Tier Classifier (single replica, OpenAI-backed) |
+| `0 1 * * *`  (= 9:00 PM EST / 6:00 PM PST) | `caj-si-profile-identity`<br>`caj-si-profile-endpoint`<br>`caj-si-profile-azure`<br>`caj-si-profile-publicip` | Producer enqueues shards → KEDA scales workers → drain → exit. Each engine runs in its own job; KEDA-scaled by its own queue. |
+| `0 5 * * *`  (= 1:00 AM EST / 10:00 PM PST prev. day) | `caj-si-ra-summary` | Risk Analysis Summary (single replica) |
+| `0 7 * * *`  (= 3:00 AM EST / 12:00 AM PST) | `caj-si-ra-detailed` | Risk Analysis Detailed (single replica) |
+
+> **Cron is always UTC.** Shift the hour fields above for your operations team's timezone. EST = UTC-5 (winter) / EDT = UTC-4 (summer); PST = UTC-8 / PDT = UTC-7. The recommended cadence assumes US Eastern operators — adjust if your team is elsewhere.
 
 **Bootstrap.** `Bootstrap-ContainerAppJob.ps1` is the one-shot installer — it reads `config\SecurityInsight.custom.ps1`, builds + pushes the container image to your ACR, creates the Container Apps Environment + the 6 Jobs, wires KEDA queue scalers, and grants the job's MI the same SI workspace + storage RBAC the VM SPN has. See § 4.11 for the full reference.
 
@@ -935,7 +937,7 @@ A single Windows Server / Win11 VM running the schedule in § 4.4.1 handles **up
 
 **Move to KEDA when any of these hits:**
 
-- **Single-engine wall-clock > 2 hours** at 21:00 — typically Identity at 50K+ users or Endpoint at 30K+ devices. KEDA's per-shard parallelism cuts this to ~10–20 minutes.
+- **Single-engine wall-clock > 2 hours** at the 9:00 PM start — typically Identity at 50K+ users or Endpoint at 30K+ devices. KEDA's per-shard parallelism cuts this to ~10–20 minutes.
 - **You have no long-running VM** in the environment (cloud-native estate, no on-prem footprint). Container Apps Job runs on Anthos / Microsoft.App / serverless metering — nothing to patch, nothing to keep alive between runs.
 - **You want the engines to scale to zero between runs** — VMs cost money 24/7 even when idle. Container Apps Jobs cost only the per-second compute they consume during the actual scan.
 

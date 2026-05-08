@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.147
+## v2.2.148
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.148 - schedule examples in US 12-hour format (4be7b06d)
 - release: SecurityInsight v2.2.147 - pre-flight: detect PS module presence + scope (8c065edc)
 - release: SecurityInsight v2.2.146 - pre-flight: Az PS + Mg + az CLI in ONE block (33ea07db)
 - release: SecurityInsight v2.2.145 - launch pre-flight: az CLI is a HARD block (d7ced97a)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
 - release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
 - release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
-- release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.148 — Schedule examples: 12-hour US format (3 PM / 9 PM / 1 AM)
+
+The § 4.4.1 (VM scheduling) and § 4.4.2 (Container Apps Job KEDA cron) tables previously used 24-hour times (`15:00 / 18:00 / 21:00 / 01:00 / 03:00`) with `≈18:00 CET` European-local approximations. Switched to **12-hour AM/PM format** for the VM table:
+
+- 3:00 PM — git pull
+- 6:00 PM — Privilege Tier Classifier
+- 9:00 PM — 4 profilers in parallel
+- 1:00 AM — Risk Analysis Summary
+- 3:00 AM — Risk Analysis Detailed
+
+Same daily cadence — just a label change. The `schtasks` example keeps `21:00` since `/ST` only accepts 24-hour `HH:MM`, with a comment noting "9 PM is `21:00`" so the operator can map between the two.
+
+For the cron table (always UTC), shifted the default hours to assume **US Eastern** as the operator timezone (`0 22 * * *` for 6 PM EST etc.) and added explicit "= 6:00 PM EST / 3:00 PM PST"-style annotations + a footnote explaining cron is UTC and to shift for non-US-Eastern teams.
+
+Docs only — no code changes.
 
 ---
 

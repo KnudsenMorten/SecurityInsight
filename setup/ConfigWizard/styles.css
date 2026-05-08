@@ -267,6 +267,13 @@ body {
 
 /* ------------------------------------------------------------------ form */
 
+/* The HTML `hidden` attribute defaults to `display: none` in user-agent
+   styles, but a site rule like `.form-grid { display: grid }` has equal
+   specificity (0,1,0) and lands later, so it silently overrides
+   `[hidden]`. Promote `[hidden]` to !important so syncCredBlocks
+   (b.hidden = true) actually hides .form-grid blocks. */
+[hidden] { display: none !important; }
+
 .form-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;

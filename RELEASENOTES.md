@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.108
+## v2.2.109
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
 - release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
 - release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
 - release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
 - release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
 - release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
-- release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.109 — Setup Wizard: fix Credential card visibility (secret vs cert combinations)
+
+The Credential card on Step 1 was showing impossible combinations: with **Client secret** picked, the wizard still rendered the Use-existing **Key Vault name + Secret name** input pair, the Use-existing **Certificate thumbprint** input, AND the **Local cert store (cert only)** storage radio. Three distinct bugs:
+
+**Bug 1 — `.form-grid` overrode `[hidden]`.** The two Use-existing input blocks (`data-spn-mode-block="useExisting"`) carry the `form-grid` class. The CSS rule `.form-grid { display: grid }` and the user-agent rule `[hidden] { display: none }` have equal specificity (0,1,0), and the site rule lands later — so it wins. `b.hidden = true` from `syncCredBlocks()` was silently ineffective on those blocks; they kept showing in Create-new mode regardless of toggle state. **Fix:** `[hidden] { display: none !important; }` added at the top of the form section in `styles.css` so the HTML attribute behaves consistently across every element class in the wizard.
+
+**Bug 2 — cred-storage radios had no cred-type filter.** The "Local cert store" and "Inline in custom.ps1" labels self-document as `(cert only)` and `(secret only)` but the wizard let either be selected regardless of `credType`. **Fix:** added `data-cred-block="certThumb"` to the LocalCertStore label and `data-cred-block="kvSecret"` to the Inline label, so the existing `syncCredBlocks()` cred-only branch hides each label when its credential type isn't selected. KeyVault stays visible for both (it works for secret AND cert).
+
+**Bug 3 — illegal `credType x credStorage` could survive a cred-type flip.** If the user picked **Self-signed certificate** + **Local cert store**, then flipped to **Client secret**, the LocalCertStore radio would correctly hide (post bug-2 fix) — but `state.data.credStorage` would still equal `'LocalCertStore'`, so the snippet preview / Apply payload would carry an invalid combo. **Fix:** `syncCredBlocks()` now auto-snaps `credStorage = 'KeyVault'` when the current pick becomes invalid for the new cred type (`secret + LocalCertStore` → `KeyVault`; `cert + Inline` → `KeyVault`). KeyVault is always-valid so the snap is silent and reasonable.
+
+**Bonus defensive fix:** `syncCredBlocks()` now seeds `spnMode='createNew'`, `credType='kvSecret'`, `credStorage='KeyVault'` defaults at function entry, so any pre-v2.2.106 localStorage state that's missing those three keys can't trip the visibility pass into showing every block at once.
+
+**Bonus default seeding:** the **Key Vault name** input on the Create-new + KeyVault path now also pre-fills with `kv-securityinsight` (matches the `kv-securityinsight` placeholder), so newcomers can click Next without typing — same pattern as the other 6 default-seeded inputs from `v2.2.107`.
+
+For testers: clear localStorage (DevTools → Application → Local Storage → Clear) or open a private window to verify the fix from a clean slate. Existing test sessions will pick up the auto-snap correction on the next click.
 
 ---
 

@@ -423,6 +423,19 @@ function hydrateForms() {
 // current state. This lets the HTML mark e.g. "createNew + KeyVault" with two attrs
 // and we only show it when both are active.
 function syncCredBlocks() {
+  // Defensive: ensure the three driver fields are populated. Old localStorage
+  // from pre-v2.2.106 sessions may be missing them, which breaks the visibility
+  // pass below (every conditional would compare to undefined and pass-through).
+  if (!state.data.spnMode)     state.data.spnMode     = 'createNew';
+  if (!state.data.credType)    state.data.credType    = 'kvSecret';
+  if (!state.data.credStorage) state.data.credStorage = 'KeyVault';
+  // Auto-correct illegal credType x credStorage combos so a hidden radio is
+  // never the active selection. LocalCertStore is cert-only; Inline is
+  // secret-only. KeyVault works for both. When the user flips credType, we
+  // silently snap credStorage back to KeyVault if the current pick became
+  // invalid.
+  if (state.data.credType === 'kvSecret'  && state.data.credStorage === 'LocalCertStore') state.data.credStorage = 'KeyVault';
+  if (state.data.credType === 'certThumb' && state.data.credStorage === 'Inline')         state.data.credStorage = 'KeyVault';
   const elsMode = document.querySelectorAll('[data-spn-mode-block]');
   elsMode.forEach(b => {
     const wantMode    = b.dataset.spnModeBlock;

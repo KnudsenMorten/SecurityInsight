@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.118
+## v2.2.119
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
 - release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
 - release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
 - release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
@@ -33,13 +34,39 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
 - release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
 - release: SecurityInsight v2.2.90 - Risk Analysis viewer (localhost test rig) (cc7bdaf7)
-- release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.119 — Setup Wizard: graceful Ctrl+C handler + branded startup banner + dynamic version
+
+Two listener-process fixes plus a banner refresh:
+
+**1. Ctrl+C now stops the listener cleanly.** `HttpListener.GetContext()` is a synchronous blocking call that runs entirely in the kernel HTTP.sys driver -- pwsh can't interrupt it with Ctrl+C, so the operator was forced to close the pwsh window (or kill the PID from another shell) to stop the listener. Worse: an aborted process leaves an orphaned URL prefix in HTTP.sys that takes minutes to release, so re-launching the wizard on the same port often hits "Access is denied" on `HttpListener.Start()`.
+
+**Fix:** register a `Console.CancelKeyPress` handler that flips a `$script:_stopRequested` flag, calls `$listener.Stop()` (which unblocks the pending `GetContext()` with an `HttpListenerException` our outer try/catch handles), and prints "Ctrl+C received -- stopping listener gracefully...". The `finally` block now also de-registers the handler so subsequent commands in the same pwsh shell respond to Ctrl+C normally, and prints `wizard stopped -- port 8766 released`. Re-launching the wizard works immediately.
+
+**2. Startup banner refreshed + branded.** The previous banner had stale dev breadcrumbs (`v2.2.105: backend cmdlets + /api/apply orchestration LIVE`, `HTML 'Apply' button hookup lands in v2.2.108`) baked in. New banner:
+
+```
+===================================================================
+ SecurityInsight Setup Wizard
+ v2.2.119
+===================================================================
+ Built by Morten Knudsen, Microsoft MVP
+ Web    : https://mortenknudsen.net
+ GitHub : https://github.com/KnudsenMorten/SecurityInsight
+===================================================================
+```
+
+followed by the prereq lines (port, html path, backend cmdlet names) and the green pre-flight `[OK] Az context: ... | Graph context: ...` banners. No more roadmap-tag noise.
+
+**3. Dynamic version everywhere.** The wizard now reads `SOLUTIONS/SecurityInsight/VERSION` at startup into `$siVersion`, displays it in the banner, and serves it via `/api/state.wizardVersion` -- no more hand-edited `'2.2.114'` constant drifting away from reality on every release. If the VERSION file is missing the banner shows `dev`.
 
 ---
 

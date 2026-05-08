@@ -47,6 +47,7 @@ const state = {
     openAiResMode: 'useExisting', // 'useExisting' | 'createNew' (createNew is v2.2.112+)
     shodanMode:    'off',         // 'off' | 'enabled'
     defenderMode:  'off',         // 'off' | 'linked'
+    entraDiagToSI: 'off',         // 'off' | 'enabled' -- only meaningful when defenderMode='off'
     enableJsonSink: false,        // bool -- adds 'JSON' to every SI_Sinks_<Engine>
   },
 };
@@ -71,6 +72,7 @@ function loadState() {
       if (!state.data.openAiResMode)state.data.openAiResMode= 'useExisting';
       if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
       if (!state.data.defenderMode) state.data.defenderMode = 'off';
+      if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'off';
     }
   } catch (e) {
     console.warn('Wizard: localStorage restore failed --', e);
@@ -422,11 +424,21 @@ function buildAdvancedSnippet() {
   }
   if (d.defenderMode === 'linked') {
     if (any) lines.push('');
-    lines.push('# --- Defender XDR workspace linkage (Layer 3) ---------------------------');
+    lines.push('# --- Defender XDR / Sentinel workspace linkage (Layer 3) ----------------');
     lines.push(assignLine('SI_DefenderXdrWorkspaceResourceId', 'defenderWorkspaceResourceId', '</subscriptions/.../workspaces/...>', 38));
     any = true;
   }
-  if (!any) return '# Output sinks: LA + Excel only. Defender XDR linkage: OFF.\n# (Defaults are fine for most customers.)';
+  if (d.defenderMode === 'off' && d.entraDiagToSI === 'enabled') {
+    if (any) lines.push('');
+    lines.push('# --- Entra ID Diagnostic Setting -- auto-stream sign-in + audit logs ----');
+    lines.push('# Wizard creates an Entra Diagnostic Setting on Apply targeting the SI');
+    lines.push('# workspace, with these 8 log categories enabled (derived from query refs):');
+    lines.push("$global:SI_AutoCreateEntraDiagToSelf = $true");
+    lines.push("$global:SI_EntraDiagSettingName     = 'SI-EntraDiag'");
+    lines.push("$global:SI_EntraDiagCategories      = @('SignInLogs','AuditLogs','NonInteractiveUserSignInLogs','ServicePrincipalSignInLogs','ManagedIdentitySignInLogs','UserRiskEvents','ProvisioningLogs','MicrosoftGraphActivityLogs')");
+    any = true;
+  }
+  if (!any) return '# Output sinks: LA + Excel only. Defender XDR linkage: OFF. Entra diag: OFF.\n# (Defaults are fine when you have an existing Sentinel workspace -- skip both.)';
   return lines.join('\n');
 }
 
@@ -658,6 +670,7 @@ const VIS_FILTERS = {
   openAiResModeBlock: 'openAiResMode',// useExisting | createNew
   shodanModeBlock:    'shodanMode',   // off | enabled
   defenderModeBlock:  'defenderMode', // off | linked
+  entraDiagToSiBlock: 'entraDiagToSI',// off | enabled (only when defenderMode=off)
 };
 
 // Valid storage options per (hostType, credType). Drives:
@@ -698,6 +711,7 @@ function syncCredBlocks() {
   if (!state.data.openAiResMode)state.data.openAiResMode= 'useExisting';
   if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
   if (!state.data.defenderMode) state.data.defenderMode = 'off';
+  if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'off';
   // Auto-snap credStorage to a valid combo for the current hostType x credType
   // so a hidden radio is never the active selection.
   snapCredStorage();
@@ -951,6 +965,13 @@ function buildApplyState() {
     if (d.enableJsonSink) st.enableJsonSink = true;
     if (d.defenderMode === 'linked' && d.defenderWorkspaceResourceId) {
         st.defenderWorkspaceResourceId = d.defenderWorkspaceResourceId;
+    }
+    if (d.defenderMode !== 'linked' && d.entraDiagToSI === 'enabled') {
+        st.entraDiagnosticSetting = {
+            Enabled:    true,
+            Name:       'SI-EntraDiag',
+            Categories: ['SignInLogs','AuditLogs','NonInteractiveUserSignInLogs','ServicePrincipalSignInLogs','ManagedIdentitySignInLogs','UserRiskEvents','ProvisioningLogs','MicrosoftGraphActivityLogs']
+        };
     }
     return st;
 }

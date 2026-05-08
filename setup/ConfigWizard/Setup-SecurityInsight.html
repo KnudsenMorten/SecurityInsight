@@ -816,6 +816,33 @@
         </div>
       </div>
 
+      <div class="card" data-defender-mode-block="off">
+        <h3>Entra sign-in logs &mdash; auto-stream to SI workspace</h3>
+        <p class="card-sub">Several RA reports correlate sign-in risk events + audit events with assets (e.g. <i>"identities flagged risky AND owning a Tier-0 endpoint"</i>, <i>"role-assignment activity on a critical SP"</i>). Without a Sentinel workspace there's nothing for RA to correlate against &mdash; the sign-in / audit data has to land somewhere reachable. <b>If you don't have Sentinel</b>, turn this on and the wizard creates an Entra ID Diagnostic Setting on Apply that ships the <b>8 log categories SI's queries actually reference</b> straight into your <b>SI Log Analytics workspace</b>.</p>
+        <div class="toggle-group" data-toggle-key="entraDiagToSI" style="margin-bottom: 4px;">
+          <label data-val="off"><input type="radio" name="entraDiagToSI" value="off" /> Off <span style="color:#888;">(no Entra Diagnostic Setting created)</span></label>
+          <label data-val="enabled"><input type="radio" name="entraDiagToSI" value="enabled" /> Enabled <span style="color:#888;">(recommended when you have no Sentinel)</span></label>
+        </div>
+        <div class="note" style="background:#f0f7ff;border-left:3px solid #2a8b9b;font-size:13px;margin-top:14px;">
+          <b>Log categories enabled</b> (derived from SI engine query references):
+          <ul style="margin:6px 0 0 18px;padding:0;">
+            <li><code>SignInLogs</code> &mdash; interactive user sign-ins (43 query references; primary)</li>
+            <li><code>AuditLogs</code> &mdash; directory writes (role assignments, app reg changes, etc.)</li>
+            <li><code>NonInteractiveUserSignInLogs</code> &mdash; refresh-token / device-code sign-ins</li>
+            <li><code>ServicePrincipalSignInLogs</code> &mdash; SPN logins (client-credentials grants)</li>
+            <li><code>ManagedIdentitySignInLogs</code> &mdash; MSI logins (Azure-hosted workloads)</li>
+            <li><code>UserRiskEvents</code> &mdash; Identity Protection risk detections per user</li>
+            <li><code>ProvisioningLogs</code> &mdash; SCIM / cross-tenant provisioning audit trail</li>
+            <li><code>MicrosoftGraphActivityLogs</code> &mdash; Graph API call audit (newer category)</li>
+          </ul>
+        </div>
+        <div class="note" style="background:#fff8e1;border-left:3px solid #f57c00;font-size:13px;margin-top:14px;">
+          <b>Prerequisite:</b> the operator running Apply needs the <b>Security Administrator</b> or <b>Global Administrator</b> Entra role to create tenant-level Diagnostic Settings. The wizard surfaces a clear error in the Apply panel if the role is missing &mdash; ask a Security Admin to either grant the role or run Apply themselves.
+          <br><br>
+          <b>Cost:</b> categories billed as Log Analytics ingestion + retention. Typical ~50-200 MB/day for &lt;500 users (mostly SignInLogs); MicrosoftGraphActivityLogs can be heavy in tenants with many service-principal callers &mdash; check your workspace SKU. The Diagnostic Setting targets the SI workspace only; existing Sentinel sinks stay untouched.
+        </div>
+      </div>
+
       <div class="card">
         <div class="preview-head">
           <h4>Generated snippet</h4>

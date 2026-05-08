@@ -461,18 +461,32 @@ try {
                         # the whole apply -- continue with infra + config so the operator
                         # can run the engines as soon as consent is granted (no re-apply
                         # needed). Phase status reflects the partial state.
+                        $applyLog.Add(('  app reg created     : {0} ({1})' -f $spnOut.DisplayName, $spnOut.AppId))
+                        $applyLog.Add(('  service principal   : {0}' -f $spnOut.ObjectId))
+                        $applyLog.Add(('  cred kind / storage : {0} / {1}' -f $spnOut.CredKind, ($spnArgs.CredStorage)))
+                        if ($spnOut.ExpiresUtc) { $applyLog.Add(('  cred expires (UTC)  : {0}' -f $spnOut.ExpiresUtc)) }
+                        if ($spnOut.GraphPermissionResults) {
+                            foreach ($pr in $spnOut.GraphPermissionResults) {
+                                $applyLog.Add(('  Graph perm {0,-12} : {1}' -f $pr.Status, $pr.Name))
+                            }
+                        }
+                        if ($spnOut.AzureRbacResults) {
+                            foreach ($rr in $spnOut.AzureRbacResults) {
+                                $applyLog.Add(('  Azure RBAC {0,-12} : {1} @ {2}' -f $rr.Status, $rr.Name, $rr.Scope))
+                            }
+                        }
                         if ($spnOut.ConsentStatus -ne 'granted') {
                             $phaseStatus.spn = 'consent-pending'
-                            $applyLog.Add(('phase=spn consent-pending appId={0} pendingPerms={1} consentUrl={2}' -f $spnOut.AppId, ($spnOut.PendingPermissions -join ','), $spnOut.ConsentUrl))
+                            $applyLog.Add(('phase=spn consent-pending  pending={0} consentUrl={1}' -f ($spnOut.PendingPermissions -join ','), $spnOut.ConsentUrl))
                         } else {
                             $phaseStatus.spn = 'ok'
-                            $applyLog.Add('phase=spn ok appId=' + $spnOut.AppId)
+                            $applyLog.Add('phase=spn ok')
                         }
                     } catch {
                         $phaseStatus.spn = 'failed'
                         $applyLog.Add('phase=spn FAILED: ' + $_.Exception.Message)
                         Send-Json -Response $res -Object @{
-                            ok = $false; phase = 'spn'; error = $_.Exception.Message; log = $applyLog
+                            ok = $false; phase = 'spn'; error = $_.Exception.Message; log = $applyLog; phaseStatus = $phaseStatus
                         } -Status 500
                         break
                     }
@@ -494,15 +508,26 @@ try {
                         if ($st.infra.storageResourceGroupName) { $infraArgs.StorageResourceGroupName = $st.infra.storageResourceGroupName }
                         if ($st.infra.createKeyVault)           { $infraArgs.CreateKeyVault           = $true }
                         if ($st.infra.keyVaultName)             { $infraArgs.KeyVaultName             = $st.infra.keyVaultName }
+                        $applyLog.Add(('  resource group      : {0}' -f $st.infra.resourceGroupName))
+                        $applyLog.Add(('  region              : {0}' -f $st.infra.location))
+                        $applyLog.Add(('  workspace           : {0}' -f $st.infra.workspaceName))
+                        $applyLog.Add(('  DCE                 : {0}' -f $st.infra.dceName))
+                        $applyLog.Add(('  storage account     : {0} (container={1})' -f $st.infra.storageAccountName, $st.infra.storageContainer))
                         $infraOut = & $cmdletInitInfra @infraArgs
+                        if ($infraOut.WorkspaceResourceId) { $applyLog.Add(('  workspace ResourceId: {0}' -f $infraOut.WorkspaceResourceId)) }
+                        if ($infraOut.DceResourceId)       { $applyLog.Add(('  DCE ResourceId      : {0}' -f $infraOut.DceResourceId)) }
+                        if ($infraOut.StorageResourceId)   { $applyLog.Add(('  storage ResourceId  : {0}' -f $infraOut.StorageResourceId)) }
+                        if ($infraOut.RbacScopes) {
+                            foreach ($sc in $infraOut.RbacScopes) { $applyLog.Add(('  RBAC granted        : {0}' -f $sc)) }
+                        }
                         $phaseStatus.infra = 'ok'
-                        $applyLog.Add('phase=infra ok workspace=' + $infraOut.WorkspaceResourceId)
+                        $applyLog.Add('phase=infra ok')
                     } catch {
                         $phaseStatus.infra = 'failed'
                         $applyLog.Add('phase=infra FAILED: ' + $_.Exception.Message)
                         Send-Json -Response $res -Object @{
                             ok = $false; phase = 'infra'; error = $_.Exception.Message;
-                            spn = $spnOut; log = $applyLog
+                            spn = $spnOut; log = $applyLog; phaseStatus = $phaseStatus
                         } -Status 500
                         break
                     }
@@ -518,14 +543,17 @@ try {
                         if ($st.enableJsonSink) { $cfgArgs.EnableJsonSink = $true }
                         if ($st.defenderWorkspaceResourceId) { $cfgArgs.DefenderWorkspaceResourceId = $st.defenderWorkspaceResourceId }
                         $cfgOut = & $cmdletWriteConfig @cfgArgs
+                        $applyLog.Add(('  config path         : {0}' -f $cfgOut.Path))
+                        $applyLog.Add(('  config size         : {0} bytes' -f $cfgOut.Bytes))
+                        if ($cfgOut.Sections) { $applyLog.Add(('  sections written    : {0}' -f ($cfgOut.Sections -join ', '))) }
                         $phaseStatus.config = 'ok'
-                        $applyLog.Add('phase=config ok path=' + $cfgOut.Path + ' bytes=' + $cfgOut.Bytes)
+                        $applyLog.Add('phase=config ok')
                     } catch {
                         $phaseStatus.config = 'failed'
                         $applyLog.Add('phase=config FAILED: ' + $_.Exception.Message)
                         Send-Json -Response $res -Object @{
                             ok = $false; phase = 'config'; error = $_.Exception.Message;
-                            spn = $spnOut; infra = $infraOut; log = $applyLog
+                            spn = $spnOut; infra = $infraOut; log = $applyLog; phaseStatus = $phaseStatus
                         } -Status 500
                         break
                     }

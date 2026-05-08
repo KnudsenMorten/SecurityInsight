@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.123
+## v2.2.124
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
 - release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
 - release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
 - release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.97 - README: KPI bullet to last + add 2 mail screenshots (f7648270)
 - release: SecurityInsight v2.2.96 - RiskScoreKPI: MS-inspired secure score (higher=better) (c45fd1c3)
 - release: SecurityInsight v2.2.95 - Risk Score re-tuned + viewer column UX (554afe84)
-- release: SecurityInsight v2.2.94 - email: dark-mode tolerance + total at the bottom (7e38cd7a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.124 — Setup Wizard: fix storage-account empty-name bug + per-step log panel + pre-Apply validation
+
+Three Apply-flow fixes from live test feedback:
+
+**1. Bug: blank storageAccountName became just the suffix.** With v2.2.114's namingSuffix wired through every Step-2 resource and the `storageAccountName` field having no `data-default`, accepting defaults + typing suffix `1` produced `storageAccountName = '1'` (suffix-only). Azure rejected with `[InvalidResource] : Invalid resource payload: 'properties' are missing` mid-Phase 2 -- a misleading Azure error wrapping "name too short".
+
+**Fix:** `nameWithSuffix(key, opts)` now returns empty string instead of fabricating a name from the suffix alone. The Apply payload carries the empty string; the new pre-Apply validator (below) catches it and shows a clear error.
+
+**2. New pre-Apply client-side validator (`validateApplyPayload`).** Runs in `runApply()` *before* the POST hits `/api/apply`. Inspects the built state for blank required fields and surfaces a numbered list:
+
+- Step 1: Tenant ID required.
+- Step 2: Subscription ID, region, workspace name + RG, DCE name, storage account + container all required.
+- Step 1: Key Vault name required when `Secret + KeyVault` storage selected.
+
+The storage-account problem in particular gets the explicit hint: "the default placeholder 'stmyorgsi' is just a hint -- you must type your actual account name (3-24 chars, lowercase letters + digits, globally unique)". Operator sees the missing field instantly instead of waiting 60 seconds for Azure to reject.
+
+**3. Per-step log panel rendered in the result.** The existing `applyLog` array (built by `Start-SetupWizard.ps1` during apply) now ships in EVERY response (success + failure) -- not just success -- and the JS Apply page renders it as a colour-coded monospace panel below the result banner:
+
+- Green entries: `created`, `granted`, `succeeded`, `ok` matches.
+- Red entries: `FAILED`, `ERROR`, `throw` matches.
+- Amber entries: `pending`, `consent-pending` matches.
+- Grey: everything else.
+
+Backend orchestration enriched to push *granular* sub-step events into `applyLog` -- not just the high-level `phase=spn ok` summaries. New per-step entries:
+
+- **Phase 1 (SPN):** app reg ID + display name; service principal ObjectId; cred kind + storage; cred expiry UTC; per-permission Graph status (one row per perm: `Graph perm granted     : ThreatHunting.Read.All` etc.); per-role-assignment Azure RBAC status.
+- **Phase 2 (Infra):** RG name, region, workspace name, DCE name, storage account + container (echoed back so the operator sees what was sent); workspace ResourceId, DCE ResourceId, storage ResourceId (returned by the cmdlet); per-RBAC-grant scope.
+- **Phase 3 (Config):** config file path, byte size, list of sections written.
+
+Failure responses also now include `phaseStatus` (the `{spn, infra, config}` map). Previously the failure path didn't ship phaseStatus, so the JS couldn't update the SPN pill from `running` to `ok` when only Phase 2 broke. Result: SPN card stuck on a spinning icon even after SPN finished. Now phaseStatus is in every response and the per-phase pills reflect actual state.
+
+Real **SSE / EventSource log streaming** (live per-step updates while the apply runs, not just buffered at the end) lands in v2.2.125+ -- this tag delivers the buffered version which already cuts the "what just broke" diagnosis time from minutes to seconds.
 
 ---
 

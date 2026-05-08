@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.145
+## v2.2.146
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.146 - pre-flight: Az PS + Mg + az CLI in ONE block (33ea07db)
 - release: SecurityInsight v2.2.145 - launch pre-flight: az CLI is a HARD block (d7ced97a)
 - release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
 - release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
@@ -33,13 +34,42 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
 - release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
 - release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
-- release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.146 — Pre-flight: Az PS + Mg + Azure CLI checks unified into ONE block
+
+User feedback on v2.2.145 hard block: the existing Az PS / Microsoft Graph blocked-banner fired BEFORE the new Azure CLI check ran, so an operator missing both Mg and `az login` only saw the Mg instruction — they fixed Mg, re-launched, then hit the `az login` block separately, then re-launched again. *"no difference. i need it to say that i need to login with az cli — how hard is it to understand. it doesn't mention it."*
+
+Merged the three pre-flight checks (Az PowerShell, Microsoft Graph, Azure CLI) into **one unified block**. When ANY of the three is missing, the operator gets:
+
+- A single `[BLOCKED]` banner showing all three states at once (per-line green/yellow status).
+- A single "Run these in THIS shell, then re-launch" command list — only the missing pieces are emitted, in the right order.
+- A single throw to abort startup.
+
+Example output for an operator missing Mg + `az login` (Az PS already connected):
+
+```
+[BLOCKED] /api/apply needs Az PowerShell + Microsoft Graph + Azure CLI contexts.
+
+    Az PowerShell  : mok@2linkIT.net (sub: Partner Subscription MCPP (PAYG))
+    Microsoft Graph: NOT CONNECTED
+    Azure CLI      : 2.76.0 installed but NOT LOGGED IN
+
+  Run these in THIS shell, then re-launch the wizard:
+
+    Connect-MgGraph -TenantId f0fa27a0-... -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome
+    az login --tenant f0fa27a0-...
+    .\Start-SetupWizard.ps1
+```
+
+One banner, one re-launch. The duplicate stand-alone Azure CLI block from v2.2.144/145 has been removed (its checks moved into the unified block). The `/api/apply` Phase 0 enforcement (v2.2.143) remains as defence-in-depth.
 
 ---
 

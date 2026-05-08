@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.104
+## v2.2.105
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
 - release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
 - release: SecurityInsight v2.2.103 - Setup Wizard skeleton + 3-step quick-start (ab8f4fb8)
 - release: SecurityInsight v2.2.102 - README: same provider-list rewrite for the second blurb (c2afe084)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
 - release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
 - release: SecurityInsight v2.2.76 - RA visible-noise fixes (placeholder/URLs/CVEs) (279fcba7)
-- release: SecurityInsight v2.2.75 - Send-SIRunHealthRow DCR collision guard (d67c9ceb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.105 — Setup Wizard: backend cmdlets + `/api/apply` orchestration LIVE
+
+The wizard's *Apply* page automation is now fully wired (backend side). Three new provisioner cmdlets do the entire onboarding end-to-end; `Start-SetupWizard.ps1`'s `/api/apply` endpoint chains them in sequence.
+
+**`setup\ConfigWizard\backend\New-SISpn.ps1`** — provisions the SPN.
+- Cred kinds: **Secret**, **Self-signed cert**, **Managed Identity** (the MSI branch reuses an existing MSI's SP and only grants the perms — no app-reg created).
+- Cred storage: **Azure Key Vault** (preferred — secret as KV secret, cert as KV cert), **Local cert store** (cert path only — `CurrentUser\My`), **Inline** (secret only — returned to caller for direct write to `custom.ps1`).
+- Idempotent: re-uses an existing app reg / SPN with the same display name; rotates the secret on every run.
+- Grants Microsoft Graph application permissions (13-perm SI minimum: `ThreatHunting.Read.All`, `Device.Read.All`, `User.Read.All`, `Application.Read.All`, `Group.Read.All`, `Policy.Read.All`, `AuditLog.Read.All`, `IdentityRiskEvent.Read.All`, `IdentityRiskyUser.Read.All`, `Reports.Read.All`, `DirectoryRecommendations.Read.All`, `SecurityEvents.Read.All`, `CrossTenantInformation.ReadBasic.All`) plus admin consent.
+- Grants Azure RBAC at tenant-root MG: **Reader** + **Tag Contributor**.
+
+**`setup\ConfigWizard\backend\Initialize-SIInfra.ps1`** — provisions LA + Storage.
+- Creates Resource Group(s), Log Analytics Workspace, Data Collection Endpoint, Storage Account.
+- Grants the SPN: **Log Analytics Contributor** on workspace, **Monitoring Metrics Publisher** on the DCR RG, **Storage Blob/Table/Queue Data Contributor** on the storage account.
+- **RBAC-only storage** — engine reaches storage via OAuth; **no `SI_StorageKey` written to `custom.ps1`**. Same generated config works for VM-pinned and Container Apps Job hosts.
+- Optional Key Vault provisioning (`-CreateKeyVault` switch) with RBAC for the SPN: Key Vault Secrets User + Key Vault Certificate User.
+- Idempotent: existing resources are re-used.
+
+**`setup\ConfigWizard\backend\Write-SICustomConfig.ps1`** — renders `config\SecurityInsight.custom.ps1`.
+- Combines `New-SISpn` + `Initialize-SIInfra` outputs with the wizard's optional toggles (SMTP, Azure OpenAI, Shodan, CMDB CSV, per-engine JSON sink, Defender workspace ID).
+- Backs up any existing `custom.ps1` to `*.bak.<timestamp>` before overwriting.
+- Omits `SI_StorageKey` (RBAC-only mode).
+
+**`Start-SetupWizard.ps1` `/api/apply` endpoint** — POSTs the wizard state JSON, runs the three cmdlets in sequence, returns a structured result with phase status (`spn` / `infra` / `config` each = `ok` / `failed` / `pending`), all provisioned resource IDs, and the run log. Failures localize: if the SPN succeeds but LA fails, the SPN block can still be written; the operator re-runs only the failed phase.
+
+**What's NOT yet shipped** (next tags):
+- HTML wizard's Tenant Identity step + Apply page UI changes — operators today call `/api/apply` directly via `Invoke-RestMethod` with their state JSON. Browser hookup lands in `v2.2.108`.
+- Power BI + Azure Workbook tabs removed from the HTML — `v2.2.108`.
+- Live log SSE streaming — `v2.2.108`.
 
 ---
 

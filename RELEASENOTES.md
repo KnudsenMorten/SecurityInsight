@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.140
+## v2.2.141
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
 - release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
 - release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
 - release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
@@ -33,13 +34,42 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
 - release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
 - release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
-- release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.141 — Wizard Phase 5: Container Apps Job runtime provisioned in /api/apply
+
+The wizard's UI had a Step 1 "engine host + bootstrap auth" dropdown with **Azure Container Apps Job with system-assigned MI** as one of the three host options, but `/api/apply` only ran 4 phases (SPN / Infra / Config / EntraDiag). When the operator picked the container option and clicked Setup, the SPN + workspace + storage + diag setting got built — but **no ACR, no Container Apps Environment, no Jobs**. The container infra had to be provisioned by a separate manual `Bootstrap-ContainerAppJob.ps1` invocation. Reported by user during live test: *"i dont see the container jobs + infra to be build"*.
+
+**New Phase 5** in `/api/apply`:
+
+- New backend cmdlet `setup\ConfigWizard\backend\Initialize-SIContainerInfra.ps1` — thin wrapper around the canonical `Bootstrap-ContainerAppJob.ps1` at the repo root.
+- Pre-flight: verifies `az` CLI is on PATH and logged in to the same subscription Phase 2 used (`az account show`). Fails fast with a clear remediation message if either check fails (`az login --tenant <id>` is the fix).
+- Sets `$global:SI_Bootstrap_ResourceGroupName / Location / AcrName / EnvName` so Bootstrap-ContainerAppJob's existing layered-config resolver picks them up — no rewrite of the 725-line bootstrap script.
+- Invokes `Bootstrap-ContainerAppJob.ps1` with `-UseManagedIdentity -UseKEDA -KedaMaxReplicas 30` defaults.
+- Captures resource IDs post-run via `az acr show`, `az containerapp env show`, `az containerapp job list` and returns them in the `/api/apply` response (`container.AcrLoginServer`, `container.EnvResourceId`, `container.Jobs[]` with name + engine + cron).
+
+**Gating.** Phase 5 only fires when `state.hostType === 'azureContainerMI'` (the operator picked the container option on Step 1). VM hosts get `phaseStatus.container = 'skipped'` with a clear log line — no spurious ACR creation for operators who never asked for containers.
+
+**Wizard UI** updated:
+
+- 5th progress card on the Apply page (Phase 5 — Container Apps Job runtime).
+- 5th summary block above the Setup button explaining what Phase 5 will do (and that it requires Owner / RBAC Admin + `az login`).
+- The summary renders "SKIPPED" when the operator picked a VM host on Step 1 (vs hidden) so it's obvious the wizard knows about the option but isn't acting on it.
+
+**Idempotent.** Bootstrap-ContainerAppJob's per-resource existence checks short-circuit when ACR / CAE / Jobs already exist, so re-running `/api/apply` after a partial failure resumes cleanly — same idempotency contract the other 4 phases already have.
+
+**Pre-requisites** the operator needs (clearly surfaced as pre-flight errors, not silent failures):
+
+1. `az` CLI installed (https://learn.microsoft.com/cli/azure/install-azure-cli-windows).
+2. `az login --tenant <tenant-id>` in the same shell as the wizard.
+3. Owner OR Contributor + User Access Administrator on the target subscription (creating the system-assigned Managed Identity + assigning RBAC needs `Microsoft.Authorization/roleAssignments/write`).
 
 ---
 

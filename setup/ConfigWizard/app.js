@@ -993,6 +993,15 @@ function buildApplyState() {
             Categories: ['SignInLogs','AuditLogs','NonInteractiveUserSignInLogs','ServicePrincipalSignInLogs','ManagedIdentitySignInLogs','UserRiskEvents','ProvisioningLogs','MicrosoftGraphActivityLogs']
         };
     }
+    // Container Apps Job runtime (Phase 5) -- gated on hostType. Default tuning;
+    // backend Initialize-SIContainerInfra resolves AcrName from RG when absent.
+    if (d.hostType === 'azureContainerMI') {
+        st.container = {
+            EnvName:         'cae-securityinsight',
+            UseKEDA:         true,
+            KedaMaxReplicas: 30
+        };
+    }
     return st;
 }
 
@@ -1040,6 +1049,19 @@ function renderApplySummary() {
                 'Required role: Entra Security Administrator OR Global Administrator on the operator account.';
         } else {
             diagEl.textContent = 'SKIPPED -- toggle is off (or you linked an existing Defender / Sentinel workspace whose own Diagnostic Setting already streams these categories).';
+        }
+    }
+    var caEl = document.getElementById('apply-summary-container');
+    if (caEl) {
+        if (st.container) {
+            caEl.textContent =
+                'Provision Container Apps Job runtime (ACR + image + CAE + KEDA-scaled Jobs).\n' +
+                'CAE name        : ' + (st.container.EnvName || 'cae-securityinsight') + '\n' +
+                'KEDA scaling    : ' + (st.container.UseKEDA ? 'on' : 'off') + ' (max replicas ' + (st.container.KedaMaxReplicas || 30) + ')\n' +
+                'Pre-requisites  : `az` CLI on PATH + `az login` in this shell.\n' +
+                'Required role   : Owner OR Contributor + User Access Administrator on the target subscription.';
+        } else {
+            caEl.textContent = 'SKIPPED -- engine host is not "Azure Container Apps Job with MI" on Step 1; the engines run on the VM directly.';
         }
     }
     var pre = document.getElementById('preview-apply');

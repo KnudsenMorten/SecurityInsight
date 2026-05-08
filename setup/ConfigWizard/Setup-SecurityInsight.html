@@ -877,6 +877,9 @@
           <div class="field span-2"><label>Phase 4 &mdash; Entra ID Diagnostic Setting (sign-in + audit log streaming)</label>
             <div id="apply-summary-entradiag" class="apply-summary">(creates tenant-level Diagnostic Setting <code>SI-EntraDiag</code> targeting the SI workspace; skipped when Defender / Sentinel workspace is linked or toggle is off)</div>
           </div>
+          <div class="field span-2"><label>Phase 5 &mdash; Container Apps Job runtime (ACR + CAE + KEDA-scaled Jobs)</label>
+            <div id="apply-summary-container" class="apply-summary">(creates Azure Container Registry, builds the orchestrator image, provisions Container Apps Environment + per-engine Jobs with KEDA queue scalers; only runs when engine host = <i>Azure Container Apps Job</i> on Step 1; skipped for VM hosts)</div>
+          </div>
         </div>
       </div>
 
@@ -908,6 +911,11 @@
           <div class="apply-phase" data-phase="entraDiag">
             <span class="apply-icon">&#9711;</span>
             <span class="apply-label">Entra Diagnostic Setting &mdash; PUT <code>SI-EntraDiag</code> targeting SI workspace (8 categories)</span>
+            <span class="apply-status">pending</span>
+          </div>
+          <div class="apply-phase" data-phase="container">
+            <span class="apply-icon">&#9711;</span>
+            <span class="apply-label">Container Apps Job &mdash; ACR + image build + CAE + KEDA-scaled Jobs (only when host=<i>azureContainerMI</i>)</span>
             <span class="apply-status">pending</span>
           </div>
         </div>

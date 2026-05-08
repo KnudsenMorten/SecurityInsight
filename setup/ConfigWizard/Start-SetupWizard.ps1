@@ -100,12 +100,13 @@ $cmdletNewSISpn      = Join-Path $backendDir 'New-SISpn.ps1'
 $cmdletInitInfra     = Join-Path $backendDir 'Initialize-SIInfra.ps1'
 $cmdletWriteConfig   = Join-Path $backendDir 'Write-SICustomConfig.ps1'
 $cmdletEntraDiag     = Join-Path $backendDir 'Set-SIEntraDiagnosticSetting.ps1'
-foreach ($c in $cmdletNewSISpn, $cmdletInitInfra, $cmdletWriteConfig, $cmdletEntraDiag) {
+$cmdletContainer     = Join-Path $backendDir 'Initialize-SIContainerInfra.ps1'
+foreach ($c in $cmdletNewSISpn, $cmdletInitInfra, $cmdletWriteConfig, $cmdletEntraDiag, $cmdletContainer) {
     if (-not (Test-Path -LiteralPath $c)) { throw "backend cmdlet missing: $c" }
 }
 _Info ("port        : {0}" -f $Port)
 _Info ("wizard html : {0}" -f $indexHtml)
-_Info  "backend     : New-SISpn / Initialize-SIInfra / Write-SICustomConfig / Set-SIEntraDiagnosticSetting"
+_Info  "backend     : New-SISpn / Initialize-SIInfra / Write-SICustomConfig / Set-SIEntraDiagnosticSetting / Initialize-SIContainerInfra"
 Write-Host ""
 
 # ----- Pre-flight: require Az + Microsoft Graph contexts -----
@@ -486,11 +487,12 @@ try {
                     Write-Host ''
                     Write-Host '======================  /api/apply  ======================' -ForegroundColor Magenta
                     $applyLog = New-Object System.Collections.Generic.List[string]
-                    $phaseStatus = @{ spn = 'pending'; infra = 'pending'; config = 'pending'; entraDiag = 'pending' }
+                    $phaseStatus = @{ spn = 'pending'; infra = 'pending'; config = 'pending'; entraDiag = 'pending'; container = 'pending' }
                     $spnOut    = $null
                     $infraOut  = $null
                     $cfgOut    = $null
                     $diagOut   = $null
+                    $containerOut = $null
 
                     # Phase 1 -- SPN
                     try {
@@ -643,6 +645,50 @@ try {
                         $applyLog.Add('phase=entraDiag skipped (toggle off or Defender workspace linked)')
                     }
 
+                    # Phase 5 -- Container Apps Job runtime (optional, gated on engine-host choice).
+                    # Only fires when the operator picked 'azureContainerMI' on Step 1's engine-host
+                    # dropdown. VM hosts skip Phase 5 entirely (no need for ACR / CAE / Jobs when
+                    # the engines run as Windows Scheduled Tasks).
+                    if ($st.hostType -eq 'azureContainerMI') {
+                        try {
+                            $applyLog.Add('phase=container start')
+                            $containerArgs = @{
+                                ResourceGroupName = $st.infra.resourceGroupName
+                                Location          = $st.infra.location
+                                SubscriptionId    = $st.subscriptionId
+                            }
+                            if ($st.container) {
+                                if ($st.container.AcrName)         { $containerArgs.AcrName         = $st.container.AcrName }
+                                if ($st.container.EnvName)         { $containerArgs.EnvName         = $st.container.EnvName }
+                                if ($null -ne $st.container.UseKEDA) { $containerArgs.UseKEDA       = [bool]$st.container.UseKEDA }
+                                if ($st.container.KedaMaxReplicas) { $containerArgs.KedaMaxReplicas = [int]$st.container.KedaMaxReplicas }
+                            }
+                            $containerOut = & $cmdletContainer @containerArgs
+                            if ($containerOut.AcrLoginServer) { $applyLog.Add(('  ACR login server   : {0}' -f $containerOut.AcrLoginServer)) }
+                            if ($containerOut.EnvResourceId)  { $applyLog.Add(('  CAE ResourceId     : {0}' -f $containerOut.EnvResourceId)) }
+                            $applyLog.Add(('  KEDA               : {0} (max replicas {1})' -f $containerOut.UseKEDA, $containerOut.KedaMaxReplicas))
+                            if ($containerOut.Jobs) {
+                                foreach ($j in $containerOut.Jobs) {
+                                    $applyLog.Add(('  Job created        : {0}  (engine={1}, cron={2})' -f $j.Name, $j.Engine, $j.Cron))
+                                }
+                            }
+                            $phaseStatus.container = 'ok'
+                            $applyLog.Add('phase=container ok')
+                        } catch {
+                            $phaseStatus.container = 'failed'
+                            $applyLog.Add('phase=container FAILED: ' + $_.Exception.Message)
+                            Send-Json -Response $res -Object @{
+                                ok = $false; phase = 'container'; error = $_.Exception.Message;
+                                spn = $spnOut; infra = $infraOut; configFile = $cfgOut; entraDiag = $diagOut;
+                                log = $applyLog; phaseStatus = $phaseStatus
+                            } -Status 500
+                            break
+                        }
+                    } else {
+                        $phaseStatus.container = 'skipped'
+                        $applyLog.Add(('phase=container skipped (hostType={0} -- container infra only built for azureContainerMI)' -f $st.hostType))
+                    }
+
                     Write-Host '======================  /api/apply DONE  ======================' -ForegroundColor Magenta
                     Send-Json -Response $res -Object @{
                         ok           = $true
@@ -651,6 +697,7 @@ try {
                         infra        = $infraOut
                         configFile   = $cfgOut
                         entraDiag    = $diagOut
+                        container    = $containerOut
                         log          = $applyLog
                     }
                     break

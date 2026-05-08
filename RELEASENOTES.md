@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.115
+## v2.2.116
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.116 - Welcome prereqs grouped by branch + always-start-on-Welcome (4805d38a)
 - release: SecurityInsight v2.2.115 - Setup Wizard auto-prefill tenant + sub from operator context (485c47dc)
 - release: SecurityInsight v2.2.114 - Setup Wizard namingSuffix wired through snippet + Apply payload (1f120635)
 - release: SecurityInsight v2.2.113 - graceful admin-consent + pre-flight perms probe + region dropdown + AOAI create-new fields (2fb77bfd)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.89 - Risk Score KPI + redesigned mgmt email (a6af34b4)
 - release: SecurityInsight v2.2.88 - defensive column_ifexists on Identity reports (858d75a5)
 - release: SecurityInsight v2.2.87 - transient retry + re-auth on RA bucket fails (940aad7e)
-- release: SecurityInsight v2.2.86 - refresh sample xlsx + README appendix update (e1e8a154)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.116 — Setup Wizard: Welcome prereqs grouped by branch + always-start-on-Welcome
+
+Two related Welcome-page improvements:
+
+**Welcome prereq cards rewritten + grouped by branch.** The previous "Before you begin -- have these handy" list claimed the operator needed *every* item up front -- including a service principal app ID, KV name, secret name, certificate thumbprint, etc. -- regardless of whether they planned to "Use existing" or "Create new" for each. That was wrong: a newcomer picking all the create-new defaults only needs tenant ID + subscription ID + a Global Admin to consent, NOT an existing SPN/KV/cert.
+
+The cards are now in three groups with clear pills/badges:
+- **Always required** (4 cards): tenant ID, subscription ID, Azure region, "a user/SPN with the right roles" in the launching shell. Tenant + sub flagged as **Auto-prefilled** by v2.2.115's `/api/state` operatorContext pull.
+- **Only if you pick "Use existing" on a step** (4 cards, orange dot): existing SPN App ID (Step 1), existing KV name + secret (Step 1 + KV storage), existing cert thumbprint (Step 1 + cert auth), existing OpenAI endpoint + key (Step 5). Each card explicitly says **Skip if [the create-new alternative is picked]**.
+- **Only if you enable optional features** (4 cards, grey dot): SMTP relay, CMDB CSV, Shodan API key, Defender XDR workspace ResourceId. Each card names which step turns it on.
+
+The card title hints which step the value is consumed on (e.g. `(Step 1 -- Use existing SPN + KV storage)`) so newcomers can correlate the prereq with where they'll be asked.
+
+**`init()` now always lands on Welcome on page load.** Bug: the wizard restored `state.currentPage` from localStorage, so reloading the listener (or hitting F5 in the browser) jumped straight to whatever step the operator was on when they last closed the tab -- skipping the Welcome page entirely. That's the WRONG default during active testing, and it was confusing newcomers who hit refresh after reading docs.
+
+**Fix:** `init()` always sets `state.currentPage = 'welcome'` after `loadState()`. localStorage answers are still preserved -- every previously-typed value is back in the inputs when the operator clicks Next or jumps via the rail. Only the *current page pointer* is reset.
 
 ---
 

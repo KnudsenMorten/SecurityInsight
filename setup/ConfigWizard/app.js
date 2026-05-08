@@ -820,6 +820,13 @@ async function autoFillFromOperatorContext() {
 
 function init() {
   loadState();
+  // Always start a fresh page load on the Welcome page. localStorage answers
+  // are still preserved -- when the operator clicks Next / navigates the rail,
+  // every previously-typed value is back in the inputs. But the Welcome page
+  // (with the prereq cards + "Reset all answers" button + new-vs-existing
+  // guidance) is what they need to SEE first on every launch, especially
+  // after restarting the listener mid-test.
+  state.currentPage = 'welcome';
   // Fire-and-forget: pulls operator's tenant + sub from /api/state and
   // auto-prefills blank fields. Resolves async so init() doesn't block.
   autoFillFromOperatorContext();

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.136
+## v2.2.137
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
 - release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
 - release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
 - release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
@@ -33,13 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
 - release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
 - release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
-- release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.137 — Docs catch-up for v2.2.131 → v2.2.136 + § 4.1 phases broken out as headers
+
+Documentation drift sweep covering everything the last 6 releases changed:
+
+**README.md § 4.1** — the wizard walkthrough's phase summary was a 3-row table; now broken out as **4 standalone sub-section headers** (`Phase 1 — Service principal`, `Phase 2 — Infrastructure`, `Phase 3 — Config file`, `Phase 4 — Entra ID Diagnostic Setting`) so each phase is scannable on its own. Phase 2 description now correctly lists `Contributor` + `Log Analytics Contributor` on the workspace and `Contributor` + `Monitoring Metrics Publisher` on the DCR resource group (per v2.2.134), and notes that `$global:SI_UseStorageOAuth = $true` is auto-written into the rendered custom file. Phase 4 is brand new and documents the Entra Diagnostic Setting flow + the `Security Administrator` / `Global Administrator` operator role requirement.
+
+**README.md § 4 wizard tour Step 8** — was "Review summary (3 phase cards). Click ▶ Setup. Watch SPN → Infrastructure → Config phases turn green." Now reads "4 phase cards" + adds Entra Diagnostic Setting to the phase chain + mentions the Diagnostic Setting PUT result in the per-step log description.
+
+**README.md § 4.1 Azure RBAC role assignments list** — added two new bullets matching v2.2.134:
+- `Contributor` at the workspace (in addition to `Log Analytics Contributor`)
+- `Contributor` at the DCR resource group (in addition to `Monitoring Metrics Publisher`)
+
+**`Setup-SecurityInsight.html`** — the Apply page progress tracker had only 3 `<div class="apply-phase">` divs (spn / infra / config). Added a 4th for `data-phase="entraDiag"` so the live progress UI shows all four phases (the summary cards above were already updated in v2.2.136 but the live tracker below wasn't).
+
+**`config\SecurityInsight.custom.sample.ps1`** — the commented-out `$global:SI_UseStorageOAuth = $true` line now has a header comment noting that the Setup Wizard auto-writes this into the rendered custom file (v2.2.134+), so the commented line in the sample is illustrative-only.
+
+**`setup\ConfigWizard\README.md`** — `/api/apply` flow now mentions `Set-SIEntraDiagnosticSetting` as the 4th step in the chain, the response shape now lists `entraDiag` alongside `spn`/`infra`/`configFile`, and the backend cmdlets file-layout listing now includes `Set-SIEntraDiagnosticSetting.ps1`.
+
+No code changes in this release — docs only.
 
 ---
 

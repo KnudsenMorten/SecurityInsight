@@ -41,7 +41,7 @@ This starts a localhost-only `HttpListener` at `http://localhost:8766`, opens it
 The listener exposes:
 - `GET /` -- the wizard HTML (all assets served from disk, no remote URLs).
 - `GET /api/state` -- introspection: which backend cmdlets are present, whether `/api/apply` is callable.
-- `POST /api/apply` -- the workhorse. Accepts the wizard state JSON, runs `New-SISpn` → `Initialize-SIInfra` → `Write-SICustomConfig` in sequence, returns `{ ok, phase, phaseStatus, spn, infra, configFile, log }`.
+- `POST /api/apply` -- the workhorse. Accepts the wizard state JSON, runs `New-SISpn` → `Initialize-SIInfra` → `Write-SICustomConfig` → `Set-SIEntraDiagnosticSetting` (Phase 4, gated on the wizard toggle, default ON) in sequence, returns `{ ok, phase, phaseStatus, spn, infra, configFile, entraDiag, log }`.
 - `POST /api/validate-name` -- name-format check (stub; client-side validation already covers most cases).
 - `GET /api/log-stream` -- SSE event stream (stub; lights up in `v2.2.108`).
 
@@ -86,9 +86,10 @@ setup/ConfigWizard/
   ROADMAP.md                 -- per-tag delivery plan
   README.md                  -- this file
   backend/
-    New-SISpn.ps1            -- provisions the Entra app reg + SP + cred + Graph perms + RBAC
-    Initialize-SIInfra.ps1   -- provisions LA workspace + DCE + Storage (RBAC-only)
-    Write-SICustomConfig.ps1 -- renders config\SecurityInsight.custom.ps1 from collected state
+    New-SISpn.ps1                    -- provisions the Entra app reg + SP + cred + Graph perms + RBAC
+    Initialize-SIInfra.ps1           -- provisions LA workspace + DCE + Storage (RBAC-only)
+    Write-SICustomConfig.ps1         -- renders config\SecurityInsight.custom.ps1 from collected state
+    Set-SIEntraDiagnosticSetting.ps1 -- creates tenant-level Entra ID Diagnostic Setting (Phase 4)
 ```
 
 ## Extending: adding a new functional page

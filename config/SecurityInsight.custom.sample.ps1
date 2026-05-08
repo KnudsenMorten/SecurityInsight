@@ -544,6 +544,9 @@ $global:SI_StorageKey     = '<storage-account-primary-key-base64>'
 # $global:SI_HostMode = 'container'
 
 # Storage auth mode for VM HostMode. $true = Az context (no shared key needed).
+# Auto-set to $true by the Setup Wizard (v2.2.134+) since the wizard grants
+# Storage Blob/Table/Queue Data Contributor on the SPN but not listKeys; the
+# OAuth path uses those data-plane roles directly.
 # $global:SI_UseStorageOAuth = $true
 
 # Single-process mode (no parallel runspaces; easier debugging, slower).

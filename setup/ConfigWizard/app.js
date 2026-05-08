@@ -37,8 +37,9 @@ const state = {
   visited: { welcome: true },     // page id -> true once user has navigated to it
   data: {                         // user-entered values, keyed by data-key attr
     spnMode:     'createNew',     // 'createNew' | 'useExisting'
-    credType:    'kvSecret',      // 'kvSecret' (= secret) | 'certThumb' (= cert)
-    credStorage: 'KeyVault',      // 'KeyVault' | 'LocalCertStore' | 'Inline' (createNew only)
+    credType:    'kvSecret',      // 'kvSecret' (= secret) | 'certThumb' (= cert, recommended for production)
+    credStorage: 'Inline',        // 'KeyVault' | 'LocalCertStore' | 'Inline' (auto-snapped to a valid combo for hostType + credType)
+    hostType:    'win',           // 'win' | 'azureVMMI' | 'azureContainerMI' (drives valid auth options)
   },
 };
 
@@ -54,7 +55,8 @@ function loadState() {
       state.data    = state.data    || {};
       if (!state.data.spnMode)     state.data.spnMode     = 'createNew';
       if (!state.data.credType)    state.data.credType    = 'kvSecret';
-      if (!state.data.credStorage) state.data.credStorage = 'KeyVault';
+      if (!state.data.credStorage) state.data.credStorage = 'Inline';
+      if (!state.data.hostType)    state.data.hostType    = 'win';
     }
   } catch (e) {
     console.warn('Wizard: localStorage restore failed --', e);
@@ -387,6 +389,28 @@ function hydrateForms() {
     validateField(input);
   });
 
+  // Dropdowns (e.g. host-type picker on the Tenant Identity page).
+  document.querySelectorAll('select[data-key]').forEach(sel => {
+    const key = sel.dataset.key;
+    const def = sel.getAttribute('data-default');
+    if (state.data[key] == null && def) {
+      state.data[key] = def;
+      saveState();
+    }
+    if (state.data[key] != null) sel.value = state.data[key];
+    if (!sel._wired) {
+      sel.addEventListener('change', () => {
+        state.data[key] = sel.value;
+        saveState();
+        syncCredBlocks();
+        renderPreviews();
+        renderRail();
+        renderNavButtons();
+      });
+      sel._wired = true;
+    }
+  });
+
   // Toggle groups (radio-style)
   document.querySelectorAll('[data-toggle-key]').forEach(group => {
     const key = group.dataset.toggleKey;
@@ -422,37 +446,66 @@ function hydrateForms() {
 // Compound visibility: an element is shown only if ALL its data-* filters match the
 // current state. This lets the HTML mark e.g. "createNew + KeyVault" with two attrs
 // and we only show it when both are active.
+// Map of HTML data-attribute -> state key for compound visibility filters.
+// Add new filters here only -- syncCredBlocks() iterates this map generically.
+const VIS_FILTERS = {
+  spnModeBlock:     'spnMode',
+  credBlock:        'credType',
+  credStorageBlock: 'credStorage',
+  hostTypeBlock:    'hostType',
+};
+
+// Valid storage options per (hostType, credType). Drives:
+//   - which storage radio labels are visible (HTML data-host-type-block + data-cred-block)
+//   - auto-snap for state.data.credStorage when current pick becomes invalid
+const VALID_STORAGE_BY_HOST = {
+  win:              ['LocalCertStore', 'Inline'],                 // no MI = no KV bootstrap
+  azureVMMI:        ['LocalCertStore', 'Inline', 'KeyVault'],
+  azureContainerMI: ['Inline', 'KeyVault'],                       // ephemeral container, no cert store
+};
+const VALID_STORAGE_BY_CRED = {
+  kvSecret:  ['Inline', 'KeyVault'],
+  certThumb: ['LocalCertStore', 'KeyVault'],
+};
+
+function snapCredStorage() {
+  const ht = state.data.hostType;
+  const ct = state.data.credType;
+  const cs = state.data.credStorage;
+  const allowed = (VALID_STORAGE_BY_HOST[ht] || []).filter(x => (VALID_STORAGE_BY_CRED[ct] || []).includes(x));
+  if (!allowed.includes(cs)) {
+    // Snap to the first allowed option (preferred order matches the host's valid list).
+    state.data.credStorage = allowed[0] || 'Inline';
+  }
+}
+
 function syncCredBlocks() {
-  // Defensive: ensure the three driver fields are populated. Old localStorage
+  // Defensive: ensure the four driver fields are populated. Old localStorage
   // from pre-v2.2.106 sessions may be missing them, which breaks the visibility
   // pass below (every conditional would compare to undefined and pass-through).
   if (!state.data.spnMode)     state.data.spnMode     = 'createNew';
   if (!state.data.credType)    state.data.credType    = 'kvSecret';
-  if (!state.data.credStorage) state.data.credStorage = 'KeyVault';
-  // Auto-correct illegal credType x credStorage combos so a hidden radio is
-  // never the active selection. LocalCertStore is cert-only; Inline is
-  // secret-only. KeyVault works for both. When the user flips credType, we
-  // silently snap credStorage back to KeyVault if the current pick became
-  // invalid.
-  if (state.data.credType === 'kvSecret'  && state.data.credStorage === 'LocalCertStore') state.data.credStorage = 'KeyVault';
-  if (state.data.credType === 'certThumb' && state.data.credStorage === 'Inline')         state.data.credStorage = 'KeyVault';
-  const elsMode = document.querySelectorAll('[data-spn-mode-block]');
-  elsMode.forEach(b => {
-    const wantMode    = b.dataset.spnModeBlock;
-    const wantCred    = b.dataset.credBlock;
-    const wantStorage = b.dataset.credStorageBlock;
+  if (!state.data.credStorage) state.data.credStorage = 'Inline';
+  if (!state.data.hostType)    state.data.hostType    = 'win';
+  // Auto-snap credStorage to a valid combo for the current hostType x credType
+  // so a hidden radio is never the active selection.
+  snapCredStorage();
+
+  // Single-pass visibility for every element carrying any of our filter
+  // attributes. Each filter value may be a single token ("createNew") or a
+  // comma-separated whitelist ("azureVMMI,azureContainerMI"); the element is
+  // visible only if EVERY filter the element declares matches state.
+  const selector = Object.keys(VIS_FILTERS).map(a => '[data-' + a.replace(/([A-Z])/g, '-$1').toLowerCase() + ']').join(', ');
+  document.querySelectorAll(selector).forEach(el => {
     let hide = false;
-    if (wantMode    && wantMode    !== state.data.spnMode)     hide = true;
-    if (wantCred    && wantCred    !== state.data.credType)    hide = true;
-    if (wantStorage && wantStorage !== state.data.credStorage) hide = true;
-    b.hidden = hide;
+    for (const [attr, stateKey] of Object.entries(VIS_FILTERS)) {
+      const want = el.dataset[attr];
+      if (!want) continue;
+      const wants = want.split(',').map(s => s.trim()).filter(Boolean);
+      if (!wants.includes(state.data[stateKey])) { hide = true; break; }
+    }
+    el.hidden = hide;
   });
-  // Legacy single-attr blocks (cred-block only, no spn-mode) -- keep working.
-  const credOnly = document.querySelectorAll('[data-cred-block]:not([data-spn-mode-block])');
-  credOnly.forEach(b => { b.hidden = (b.dataset.credBlock !== state.data.credType); });
-  // Cred-storage-only blocks (rare).
-  const storageOnly = document.querySelectorAll('[data-cred-storage-block]:not([data-spn-mode-block])');
-  storageOnly.forEach(b => { b.hidden = (b.dataset.credStorageBlock !== state.data.credStorage); });
 }
 
 function validateField(input) {
@@ -583,6 +636,7 @@ function buildApplyState() {
     var st = {
         tenantId:       d.tenantId       || '',
         subscriptionId: d.subscriptionId || '',
+        hostType:       d.hostType       || 'win',
         spn: {
             displayName: d.spnMode === 'createNew' ? (d.spnDisplayName || 'sp-securityinsight') : null,
             credKind:    d.credType === 'certThumb' ? 'Cert' : 'Secret',

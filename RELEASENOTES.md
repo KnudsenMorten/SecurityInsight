@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.109
+## v2.2.110
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
 - release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
 - release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
 - release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
 - release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
 - release: SecurityInsight v2.2.81 - PublicIP sample with verifiable Shodan data (8a90c3eb)
-- release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.110 — Setup Wizard: ask "host + bootstrap auth" first, gate every storage option below
+
+The Credential card had a long-standing chicken-and-egg problem: it offered **Client secret + Azure Key Vault** as a valid combo for any host. But on a Win11 / Win Server box without a Managed Identity, there's nothing the engine can use to *read* the secret from KV at startup — KV access itself needs an authenticated identity, and the secret we want to retrieve IS that identity. Same problem for **Self-signed cert + Local cert store** in an Azure Container Apps Job — there's no traditional Windows cert store inside an ephemeral container.
+
+**New first card on Step 1: "Engine host + bootstrap auth"** (a 3-option `<select>` dropdown):
+
+| Host | Bootstrap auth | Valid SI cred storage |
+|------|----------------|------------------------|
+| **Windows 11 / Windows Server** (on-prem, or Azure VM *without* MI) — *default* | None — must work without prior Azure auth | **Cert + Local cert store** *(production)* &nbsp; OR &nbsp; **Secret + Inline** *(testing only)* |
+| **Azure VM** *with* system-assigned Managed Identity | The MI on the VM | Cert / Secret in Key Vault, Cert in local cert store, Secret inline (any combo) |
+| **Azure Container Apps Job** *with* system-assigned Managed Identity | The MI on the job | Cert / Secret in Key Vault, Secret inline (no local cert store — ephemeral container) |
+
+Each host choice gets a coloured callout below the dropdown explaining the bootstrap chain in plain English (orange-amber for the Win path; green for the two MI paths). The wizard makes the trade-off explicit so newcomers don't pick a combo that can't bootstrap.
+
+**The storage radios on the Credential card auto-filter** based on the host pick:
+
+- `data-host-type-block="azureVMMI,azureContainerMI"` on the **Azure Key Vault** label → hidden on Win.
+- `data-host-type-block="win,azureVMMI"` on the **Local cert store** label → hidden on Container.
+- **Inline in custom.ps1** stays available everywhere but now also carries a red `(testing only)` marker — secret in plaintext on disk is fine for dev/lab, not for production.
+
+**Auto-snap when a pick becomes invalid:** `syncCredBlocks()` now calls `snapCredStorage()` which checks the current `(hostType, credType, credStorage)` triple against a whitelist (`VALID_STORAGE_BY_HOST` × `VALID_STORAGE_BY_CRED`) and silently moves `state.data.credStorage` to the first valid option for the new combo. Examples:
+
+- Was on **Azure VM MI + Cert + KeyVault** → flip host to **Win** → KeyVault becomes invalid → snap to **LocalCertStore**.
+- Was on **Win + Secret + Inline** → flip cred type to **Cert** → Inline becomes invalid for cert → snap to **LocalCertStore**.
+
+**`syncCredBlocks()` refactored to a generic single-pass.** Old version had three separate iterations with overlapping logic. New version reads a `VIS_FILTERS` map (`{ spnModeBlock: 'spnMode', credBlock: 'credType', credStorageBlock: 'credStorage', hostTypeBlock: 'hostType' }`) and applies compound visibility uniformly. Filter values support comma-separated whitelists (`data-host-type-block="azureVMMI,azureContainerMI"`) so an option valid for *multiple* host types can declare them in one attribute instead of needing inverse logic.
+
+**`hydrateForms()` now wires `<select data-key="...">` elements** the same way as text inputs — first-touch default seeding (from `data-default`), state binding on `change`, and `syncCredBlocks()` re-run after every change. Without this, the new host dropdown wouldn't have persisted to `localStorage`.
+
+**`buildApplyState()` passes `hostType` through** to `/api/apply` (top-level `st.hostType`) so the backend can record which host profile the operator picked when it writes the config file. Backend cmdlets (`New-SISpn.ps1`, `Initialize-SIInfra.ps1`, `Write-SICustomConfig.ps1`) accept the new field but don't yet branch on it — the v2.2 engine reads `$global:SI_HostMode` from `LauncherConfig.custom.ps1` (preview.18 contract) and that hook is unchanged. Wizard-set `hostType` will start affecting backend behaviour in `v2.2.111+` (createNew vs use-existing KV, cert-store path selection, container-mode launcher template choice).
+
+**Clear localStorage if testing** — old wizard sessions don't have `state.data.hostType`; the defensive default (`'win'`) kicks in on next page load, but the storage radios may render once with the old combo before the auto-snap settles.
 
 ---
 

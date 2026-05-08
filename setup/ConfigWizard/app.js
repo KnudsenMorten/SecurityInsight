@@ -782,8 +782,47 @@ async function copyById(id) {
 // ---------------------------------------------------------------------------
 // INIT
 // ---------------------------------------------------------------------------
+// Pull /api/state from the listener and auto-prefill blank tenantId +
+// subscriptionId from the operator's connected Az + Graph contexts. The
+// operator just authenticated to the tenant they want to provision into --
+// retyping the GUID is friction. Only fills when state is empty (never
+// overrides what the operator typed). Best-effort: fails silently if the
+// wizard is opened from disk (file://) without a listener.
+async function autoFillFromOperatorContext() {
+  try {
+    const resp = await fetch('/api/state', { method: 'GET' });
+    if (!resp.ok) return;
+    const obj = await resp.json();
+    const op  = obj && obj.operatorContext;
+    if (!op) return;
+    let dirty = false;
+    if (op.tenantId && !state.data.tenantId) {
+      state.data.tenantId = op.tenantId;
+      dirty = true;
+    }
+    if (op.subscriptionId && !state.data.subscriptionId) {
+      state.data.subscriptionId = op.subscriptionId;
+      dirty = true;
+    }
+    if (dirty) {
+      saveState();
+      // Refresh any visible inputs + snippet/rail (wizard may already be on
+      // tenant or workspace page when this resolves async).
+      hydrateForms();
+      renderPreviews();
+      renderRail();
+      renderNavButtons();
+    }
+  } catch (e) {
+    // file:// context or listener unreachable -- silent.
+  }
+}
+
 function init() {
   loadState();
+  // Fire-and-forget: pulls operator's tenant + sub from /api/state and
+  // auto-prefills blank fields. Resolves async so init() doesn't block.
+  autoFillFromOperatorContext();
 
   // Wire the hero buttons on the Welcome page.
   document.getElementById('btn-start').addEventListener('click', () => goToPage('tenant'));

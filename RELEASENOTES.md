@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.149
+## v2.2.150
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.150 - install guides for git + Azure CLI (4914f51b)
 - release: SecurityInsight v2.2.149 - Bootstrap-ContainerAppJob.ps1 no longer hardcodes dev path (0c6be29a)
 - release: SecurityInsight v2.2.148 - schedule examples in US 12-hour format (4be7b06d)
 - release: SecurityInsight v2.2.147 - pre-flight: detect PS module presence + scope (8c065edc)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
 - release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
 - release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
-- release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.150 — Install guides for git + Azure CLI (wizard pre-flight + README §4)
+
+Two new install sections under § 4 Prerequisites + matching expansion of the wizard pre-flight remediation block. Both use the same direct-download-MSI/EXE pattern (no winget dependency — works on stock Windows Server images that don't have the App Installer pre-installed).
+
+**`Azure CLI` sub-section.** New 3-line MSI install:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi
+Start-Process msiexec.exe -Wait -ArgumentList '/I', 'AzureCLI.msi'
+```
+
+Same commands now mirrored into the wizard's pre-flight `[BLOCKED]` block — when `Azure CLI: NOT INSTALLED`, the operator sees copy-paste-ready PowerShell instead of just a documentation URL. `aka.ms/installazurecliwindows` is Microsoft's official redirector to the latest MSI (no version pinning), and `$ProgressPreference = 'SilentlyContinue'` makes `Invoke-WebRequest` ~30× faster on Windows PowerShell 5.1.
+
+**`Git for Windows` sub-section.** Required for the § 4.2 `git clone` + the `git pull` update path; stock Windows Server images don't ship with `git`. Install command resolves the latest Git for Windows release URL via the GitHub API (no version pinning), filters to the 64-bit standard installer (skipping `PortableGit*` / `MinGit*` artefacts), downloads, and runs Inno Setup unattended:
+
+```powershell
+$ProgressPreference = 'SilentlyContinue'
+$gitUrl = ((Invoke-RestMethod 'https://api.github.com/repos/git-for-windows/git/releases/latest').assets |
+    Where-Object { $_.name -like '*-64-bit.exe' -and $_.name -notlike 'PortableGit*' -and $_.name -notlike 'MinGit*' } |
+    Select-Object -First 1).browser_download_url
+Invoke-WebRequest -Uri $gitUrl -OutFile .\GitInstaller.exe
+Start-Process .\GitInstaller.exe -Wait -ArgumentList '/VERYSILENT','/NORESTART','/NOCANCEL','/SP-'
+```
+
+Both sections close with the *"close + reopen PowerShell so PATH picks up the new binary"* reminder — the most common gotcha after a fresh install.
+
+Docs / wizard text only — no functional changes to the install flow itself.
 
 ---
 

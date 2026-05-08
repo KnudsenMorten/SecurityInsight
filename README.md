@@ -598,6 +598,45 @@ The full module set every engine + the wizard might need:
 Install-Module Az, Az.ResourceGraph, Microsoft.Graph, Microsoft.Graph.Beta, AzLogDcrIngestPS, MicrosoftGraphPS, ImportExcel, powershell-yaml -Scope AllUsers -Force
 ```
 
+##### Git for Windows
+
+Required for cloning the repo (§ 4.2) and pulling future updates. Stock Windows Server / Windows 11 doesn't ship with `git`.
+
+**Install via direct download (recommended):**
+
+```powershell
+# Run in an elevated PowerShell window (Run as Administrator).
+$ProgressPreference = 'SilentlyContinue'
+$gitUrl = ((Invoke-RestMethod 'https://api.github.com/repos/git-for-windows/git/releases/latest').assets |
+    Where-Object { $_.name -like '*-64-bit.exe' -and $_.name -notlike 'PortableGit*' -and $_.name -notlike 'MinGit*' } |
+    Select-Object -First 1).browser_download_url
+Invoke-WebRequest -Uri $gitUrl -OutFile .\GitInstaller.exe
+Start-Process .\GitInstaller.exe -Wait -ArgumentList '/VERYSILENT','/NORESTART','/NOCANCEL','/SP-'
+
+# Then close + reopen PowerShell so PATH picks up `git`, then verify:
+git --version
+```
+
+The GitHub API call resolves the latest release URL (no version pinning); `/VERYSILENT /SP-` is Inno Setup's unattended install flag — no GUI prompts.
+
+##### Azure CLI
+
+The Setup Wizard's **Phase 5 (Container Apps Job runtime)** shells out to `az acr build` for server-side container image builds. The Wizard's launch pre-flight refuses to start without `az` installed + logged in.
+
+**Install via direct MSI download (recommended):**
+
+```powershell
+# 1. Download + install. Run in an elevated PowerShell window (Run as Administrator).
+$ProgressPreference = 'SilentlyContinue'
+Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi
+Start-Process msiexec.exe -Wait -ArgumentList '/I', 'AzureCLI.msi'
+
+# 2. Close + reopen PowerShell so PATH picks up `az`, then sign in:
+az login --tenant <your-tenant-id>
+```
+
+`$ProgressPreference = 'SilentlyContinue'` makes the download ~30× faster on Windows PowerShell 5.1 (the default progress UI is what's slow, not the network).
+
 ##### Azure + Entra
 
 - An **Azure subscription** to host the workspace + DCE + storage account.

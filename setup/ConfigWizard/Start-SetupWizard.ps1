@@ -494,6 +494,66 @@ try {
                     $diagOut   = $null
                     $containerOut = $null
 
+                    # Phase 0 -- pre-flight checks. Runs BEFORE any Azure write so that
+                    # missing prerequisites fail the whole apply cleanly, with no orphan
+                    # SPN / workspace / storage / diag setting left behind. Today's checks:
+                    #   - When hostType=azureContainerMI: az CLI installed + logged in to
+                    #     the target subscription. Without these, Phase 5 (container infra)
+                    #     would inevitably fail mid-build. We refuse to start the apply at
+                    #     all rather than create Phases 1-4 then crash on Phase 5.
+                    if ($st.hostType -eq 'azureContainerMI') {
+                        $applyLog.Add('phase=preflight start (hostType=azureContainerMI requires az CLI ready)')
+                        $azFound = $false
+                        try {
+                            $azVerJson = & az version --output json 2>&1 | Out-String
+                            if ($LASTEXITCODE -eq 0 -and $azVerJson -match '"azure-cli"') {
+                                $azFound = $true
+                                $azVer = ($azVerJson | ConvertFrom-Json).'azure-cli'
+                                $applyLog.Add(('  az CLI found        : {0}' -f $azVer))
+                            }
+                        } catch { }
+                        if (-not $azFound) {
+                            $msg = "az CLI not found on PATH. Phase 5 (container infra) needs 'az acr build' for server-side image builds. Install from https://learn.microsoft.com/cli/azure/install-azure-cli-windows, run 'az login --tenant $($st.tenantId)' in this shell, then re-launch the wizard. (Or change Step 1's engine host to a VM option to skip Phase 5 entirely.)"
+                            $applyLog.Add('phase=preflight FAILED: ' + $msg)
+                            Send-Json -Response $res -Object @{
+                                ok = $false; phase = 'preflight'; error = $msg; log = $applyLog; phaseStatus = $phaseStatus
+                            } -Status 500
+                            break
+                        }
+                        $azLoggedIn = $false
+                        $azSub = $null
+                        try {
+                            $azAcctJson = & az account show --output json 2>&1 | Out-String
+                            if ($LASTEXITCODE -eq 0 -and $azAcctJson -match '"id"') {
+                                $azAcct = $azAcctJson | ConvertFrom-Json
+                                $azLoggedIn = $true
+                                $azSub = $azAcct.id
+                                $applyLog.Add(('  az CLI signed in    : {0} (sub {1})' -f $azAcct.user.name, $azSub))
+                            }
+                        } catch { }
+                        if (-not $azLoggedIn) {
+                            $msg = "az CLI is installed but not logged in. Run 'az login --tenant $($st.tenantId)' in this shell, then re-click Setup. (Or change Step 1's engine host to a VM option to skip Phase 5 entirely.)"
+                            $applyLog.Add('phase=preflight FAILED: ' + $msg)
+                            Send-Json -Response $res -Object @{
+                                ok = $false; phase = 'preflight'; error = $msg; log = $applyLog; phaseStatus = $phaseStatus
+                            } -Status 500
+                            break
+                        }
+                        if ($azSub -and $azSub -ne $st.subscriptionId) {
+                            $applyLog.Add(('  az CLI sub mismatch : was {0}, switching to {1}' -f $azSub, $st.subscriptionId))
+                            $null = & az account set --subscription $st.subscriptionId 2>&1
+                            if ($LASTEXITCODE -ne 0) {
+                                $msg = "az CLI logged in but cannot switch to target subscription $($st.subscriptionId). Run 'az account set --subscription $($st.subscriptionId)' manually, or 'az login --tenant $($st.tenantId)' if the account doesn't have access."
+                                $applyLog.Add('phase=preflight FAILED: ' + $msg)
+                                Send-Json -Response $res -Object @{
+                                    ok = $false; phase = 'preflight'; error = $msg; log = $applyLog; phaseStatus = $phaseStatus
+                                } -Status 500
+                                break
+                            }
+                        }
+                        $applyLog.Add('phase=preflight ok')
+                    }
+
                     # Phase 1 -- SPN
                     try {
                         $applyLog.Add('phase=spn start')

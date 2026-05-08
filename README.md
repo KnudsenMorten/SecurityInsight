@@ -415,11 +415,6 @@ Every Risk Analysis run produces all of these from a single in-memory dataset (n
 
 ---
 
-<a id="3-how-to-implement-quick-start"></a><a id="how-to-implement-quick-start"></a>
-
-[⤴ Back to top](#top)
-
-<a id="41-severity-definitions"></a><a id="severity-definitions"></a>
 <a id="3-supported-inputs-enrichment-outputs"></a><a id="supported-inputs-enrichment-outputs"></a>
 ## 🔌 3. What's supported — Inputs, Enrichment, Outputs
 
@@ -449,9 +444,9 @@ flowchart LR
     end
     subgraph ENRICH ["🟡 Enrichment (optional)"]
         E1[ServiceNow CMDB CSV]
-        E2[Azure OpenAI<br/>(role/permission tiering)]
-        E3[Customer .custom.yaml<br/>(per-rule overrides + adds)]
-        E4[Shodan<br/>(public-IP exposure)]
+        E2["Azure OpenAI<br/>(role/permission tiering)"]
+        E3["Customer .custom.yaml<br/>(per-rule overrides + adds)"]
+        E4["Shodan<br/>(public-IP exposure)"]
     end
     subgraph OUT ["🟢 Outputs (sinks — pick any combo)"]
         O1[Excel + email]
@@ -474,16 +469,37 @@ flowchart LR
 <a id="31-inputs"></a>
 ### 3.1 Inputs — supported data providers
 
-| Provider | What it gives us | Engine that reads it | Required? |
-|---|---|---|---|
-| **Microsoft Defender for Endpoint** (XDR + advanced hunting) | Devices, vulnerabilities, secure-config posture | `endpoint`, `risk-analysis` | ✅ Yes |
-| **Microsoft Defender Exposure Graph** (`ExposureGraphNodes`, `ExposureGraphEdges`) | Asset graph: nodes (devices/users/azure resources), edges (relationships, attack paths) | `endpoint`, `azure`, `identity`, `risk-analysis` | ✅ Yes |
-| **Entra ID + Microsoft Graph** | Users, service principals, groups, role assignments, app permissions, MFA registration | `identity`, `risk-analysis` | ✅ Yes |
-| **Azure Resource Graph (ARG)** | Subscriptions, resource groups, every Azure resource + tags + properties | `azure`, `risk-analysis` | ✅ Yes |
-| **Sentinel `SigninLogs` + `AADNonInteractiveUserSignInLogs`** (Log Analytics) | Per-signin events: location, device, risk, conditional access | `risk-analysis` (Identity reports) | ⚠️ Required if you want sign-in reports — needs Entra diagnostic settings → LA |
-| **Defender Vulnerabilities KB** (`DeviceTvmSecureConfigurationAssessmentKB`) | CVE descriptions, MITRE ATT&CK mapping, compliance benchmarks (CIS / NIST / PCI) | `risk-analysis` (Device_Recommendations) | ✅ Yes (auto from MDE) |
-| **Shodan API** (optional) | Public-IP exposure: open ports, CVEs on internet-facing assets | `publicip` | Optional (Tier 0/1 only) |
-| **Provider connectors** (`asset-profiling-providers/<provider>/`) | Pluggable. Today: `entra` (built-in), `servicenow-cmdb` (CSV pull) | All asset-profiling engines | Optional |
+- ✅ **Microsoft Defender for Endpoint** *(XDR + advanced hunting)*
+  Devices, vulnerabilities, secure-config posture. Required.
+  *Read by:* `endpoint`, `risk-analysis`
+
+- ✅ **Microsoft Defender Exposure Graph** *(`ExposureGraphNodes`, `ExposureGraphEdges`)*
+  Asset graph: nodes (devices / users / Azure resources) + edges (relationships, attack paths). Required.
+  *Read by:* `endpoint`, `azure`, `identity`, `risk-analysis`
+
+- ✅ **Entra ID + Microsoft Graph**
+  Users, service principals, groups, role assignments, app permissions, MFA registration. Required.
+  *Read by:* `identity`, `risk-analysis`
+
+- ✅ **Azure Resource Graph (ARG)**
+  Subscriptions, resource groups, every Azure resource + tags + properties. Required.
+  *Read by:* `azure`, `risk-analysis`
+
+- ⚠️ **Sentinel `SigninLogs` + `AADNonInteractiveUserSignInLogs`** *(Log Analytics)*
+  Per-signin events: location, device, risk, conditional access. Required **only if you want the Identity sign-in reports** — needs an Entra ID Diagnostic Setting routing into LA (the wizard auto-creates one if you don't have Sentinel; see Step 7).
+  *Read by:* `risk-analysis` (Identity reports)
+
+- ✅ **Defender Vulnerabilities KB** *(`DeviceTvmSecureConfigurationAssessmentKB`)*
+  CVE descriptions, MITRE ATT&CK mapping, compliance benchmarks (CIS / NIST / PCI). Auto-included with MDE.
+  *Read by:* `risk-analysis` (`Device_Recommendations`)
+
+- *Optional* — **Shodan API**
+  Public-IP exposure: open ports, CVEs on internet-facing assets. Tier 0/1 assets only.
+  *Read by:* `publicip`
+
+- *Optional* — **Provider connectors** *(`asset-profiling-providers/<provider>/`)*
+  Pluggable. Today: `entra` (built-in), `servicenow-cmdb` (CSV pull).
+  *Read by:* all asset-profiling engines
 
 > 🔒 **All inputs are read-only.** SecurityInsight never writes back to MDE / Entra / ARM during a collection run. The optional `CriticalAssetTagging` engine ships separately for customers who want active tag writes.
 

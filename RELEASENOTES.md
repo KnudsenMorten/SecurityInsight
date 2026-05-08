@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.128
+## v2.2.129
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.129 - README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table (bfaf8fe2)
 - release: SecurityInsight v2.2.128 - handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT (057e97f0)
 - release: SecurityInsight v2.2.127 - README §4 refresh + DCE-via-REST fix + Tag Contributor opt-in (9671dea1)
 - release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.102 - README: same provider-list rewrite for the second blurb (c2afe084)
 - release: SecurityInsight v2.2.101 - README intro: hook-led + full provider list (ca2c2170)
 - release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
-- release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.129 — README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table
+
+Three doc-only fixes from live testing:
+
+**1. TOC link "4. How to Implement" was jumping to §3.** A stale `<a id="how-to-implement-quick-start"></a>` anchor was sitting two lines ABOVE the §3 heading (left over from a prior section renumbering). Clicking the §4 TOC entry hit that orphan first → browser scrolled to ~§3 territory, not the actual §4 heading. Removed the stale anchor block (kept the legitimate one at the actual §4 heading).
+
+**2. Mermaid flowchart in §3 failed with parse error.** The diagram nodes for ENRICH had unquoted parens in their labels:
+```
+E2[Azure OpenAI<br/>(role/permission tiering)]
+E3[Customer .custom.yaml<br/>(per-rule overrides + adds)]
+E4[Shodan<br/>(public-IP exposure)]
+```
+Mermaid parses `(` inside `[...]` as the start of a stadium-shape token, throwing `Expecting 'SQE', 'DOUBLECIRCLEEND', ...`. Fix: wrap each label in double quotes per Mermaid syntax for special chars:
+```
+E2["Azure OpenAI<br/>(role/permission tiering)"]
+E3["Customer .custom.yaml<br/>(per-rule overrides + adds)"]
+E4["Shodan<br/>(public-IP exposure)"]
+```
+The diagram now renders cleanly on GitHub.
+
+**3. §3.1 "Inputs — supported data providers" table reformatted as a list.** The previous 4-column table (`Provider | What | Engine | Required?`) overflowed every reasonable viewport on GitHub — the rightmost "Required?" column was clipped on screens narrower than ~1900 px because GitHub's Markdown→HTML doesn't add horizontal scroll. Converted to a bulleted list with the same content (provider name + status emoji as the bullet lead, what-it-gives-us as the body, *Read by:* annotation in italics underneath). Reads cleanly at any width and the structure preserves all the original info (no content lost).
+
+No code changes — pure docs fixes. Customers cloning fresh from `main` see a working TOC, a rendering Mermaid diagram, and a readable §3.1 inputs section.
 
 ---
 

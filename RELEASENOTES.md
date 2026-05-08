@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.146
+## v2.2.147
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.147 - pre-flight: detect PS module presence + scope (8c065edc)
 - release: SecurityInsight v2.2.146 - pre-flight: Az PS + Mg + az CLI in ONE block (33ea07db)
 - release: SecurityInsight v2.2.145 - launch pre-flight: az CLI is a HARD block (d7ced97a)
 - release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
 - release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
 - release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
-- release: SecurityInsight v2.2.117 - Setup Wizard refresh OpenAI model SKU dropdown to GPT-4.1 family (9c4460ee)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.147 — Pre-flight: also detect PS module presence + scope (AllUsers vs CurrentUser)
+
+User feedback: *"do you also check for the proper ps module like az and graph and az cli. otherwise it must guide user to install in allusers"*. The previous pre-flight verified the connection contexts (`Connect-AzAccount` + `Connect-MgGraph`) but assumed the underlying modules were already installed. If `Az.Accounts` or `Microsoft.Graph.Authentication` weren't on disk at all, the operator saw "NOT CONNECTED" with no hint that the actual fix was `Install-Module`. And if installed only at `CurrentUser` scope, the wizard worked for the interactive operator but the engines (running as SYSTEM / service account / Container Apps Job MI) couldn't see the modules at runtime.
+
+Pre-flight now probes each module via `Get-Module -ListAvailable` + path inspection:
+
+- **Module path under `$env:ProgramFiles\…\Modules`** → AllUsers scope (engines visible, **OK**).
+- **Module path under `$HOME\Documents\…\Modules`** → CurrentUser scope (warned — engines won't see it).
+- **No path returned** → not installed (blocked).
+
+The unified `[BLOCKED]` block now shows **5 status lines** when any prerequisite is missing:
+
+```
+Az PowerShell module    : NOT INSTALLED
+Microsoft.Graph module  : 2.x (Scope=CurrentUser -- engines run as SYSTEM and CANNOT see CurrentUser modules)
+Az PowerShell context   : NOT CONNECTED
+Microsoft Graph context : NOT CONNECTED
+Azure CLI               : 2.76.0 installed but NOT LOGGED IN
+```
+
+…with the corresponding install/connect commands emitted in order. The remediation banner now also calls out the elevation requirement: *"Run these in an ELEVATED PowerShell window (Run as Administrator)"* + the rationale (engines run as SYSTEM and need AllUsers-scoped modules).
+
+When everything's green, the success banner shows 5 `[OK]` lines (modules + contexts + CLI) so the operator can confirm scope at a glance:
+
+```
+[OK]   Az PS module   : 5.x.x (Scope=AllUsers)
+[OK]   MgGraph module : 2.x.x (Scope=AllUsers)
+[OK]   Az context     : ...
+[OK]   Graph context  : ...
+[OK]   Azure CLI      : ...
+```
+
+This matches the README §4 Prerequisites (v2.2.138) which already documented the `-Scope AllUsers` requirement; the wizard now enforces it at launch.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.120
+## v2.2.121
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
 - release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
 - release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
 - release: SecurityInsight v2.2.118 - strip developer version-tag notes from customer-facing GUI (8a4d328b)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.94 - email: dark-mode tolerance + total at the bottom (7e38cd7a)
 - release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
 - release: SecurityInsight v2.2.92 - KPI strict-mode fix + MoreDetails URL split + nicer AI summary (89ac38bd)
-- release: SecurityInsight v2.2.91 - move viewer/ to top-level (5a0bbb9f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.121 — Setup Wizard: Entra Diagnostic Setting auto-create option (when no Sentinel)
+
+The wizard's Defender XDR linkage card was binary: link an existing Sentinel/XDR workspace, or off entirely. Off-entirely was the wrong default for tenants without Sentinel: RA reports that correlate sign-in risk events with assets had nothing to query against, so they returned empty.
+
+**Fix:** new sub-card on Step 7 -- **"Entra sign-in logs -- auto-stream to SI workspace"** -- visible only when `defenderMode = off` (i.e. when you don't have a Sentinel workspace to link). Off / Enabled toggle. When enabled, the wizard creates an Entra ID Diagnostic Setting on Apply that ships the sign-in + audit log categories straight into your SI Log Analytics workspace.
+
+**Log categories enabled** -- derived from actual SI engine query references (not a guess):
+
+| Category | Purpose | Ref count |
+|----------|---------|-----------|
+| `SignInLogs` | interactive user sign-ins | 43 |
+| `AuditLogs` | directory writes (role assignments, app reg changes) | 5 |
+| `NonInteractiveUserSignInLogs` | refresh-token / device-code sign-ins | 3 |
+| `ServicePrincipalSignInLogs` | SPN logins (client-credentials grants) | 5 |
+| `ManagedIdentitySignInLogs` | MSI logins (Azure-hosted workloads) | 5 |
+| `UserRiskEvents` | Identity Protection risk detections | 1 |
+| `ProvisioningLogs` | SCIM / cross-tenant provisioning audit | 1 |
+| `MicrosoftGraphActivityLogs` | Graph API call audit | 1 |
+
+The list is **derived from grep'ing the engine's RA queries** for table references (`grep -rhoE '\b(SigninLogs|AADNonInteractive...|MicrosoftGraphActivityLogs)\b' engine/`). Future RA queries that reference additional Entra tables will need this list extended.
+
+**State + payload changes:**
+- New state key `entraDiagToSI` (`'off'` | `'enabled'`), default `off`. Persisted in localStorage like every other toggle.
+- `VIS_FILTERS` extended with `entraDiagToSiBlock`.
+- `buildAdvancedSnippet()` writes a new block when enabled: `$global:SI_AutoCreateEntraDiagToSelf = $true` + `SI_EntraDiagSettingName = 'SI-EntraDiag'` + `SI_EntraDiagCategories = @(...)`.
+- `buildApplyState()` ships `st.entraDiagnosticSetting = { Enabled, Name, Categories }` to `/api/apply` when enabled. Backend cmdlet (`Initialize-SIInfra.ps1` extension) consumes this in a follow-up tag.
+
+**UI guidance:** the card surfaces two callouts:
+- **Teal info box:** the 8 log categories with one-line purpose for each (so the operator sees exactly what the diag setting subscribes to).
+- **Amber prerequisite box:** Entra `Security Administrator` or `Global Administrator` role required to create tenant-level Diagnostic Settings; cost note about workspace ingestion (~50-200 MB/day for <500 users); reassurance that the Diagnostic Setting targets only the SI workspace so existing Sentinel sinks stay untouched.
 
 ---
 

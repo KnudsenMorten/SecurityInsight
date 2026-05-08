@@ -356,8 +356,20 @@ body {
   border-radius: var(--radius-sm);
   font-family: "Consolas", "SF Mono", ui-monospace, monospace;
   background: #fbfcfd;
+  color: var(--navy);            /* explicit dark text -- browser default for <select> is light grey on some platforms */
   transition: border-color var(--transition), box-shadow var(--transition);
 }
+.field select {
+  /* Selects look weird in monospace + browser defaults often shrink the
+     selected text; force the same family the rail / cards use, slightly
+     larger so the chosen option is easy to read. */
+  font-family: -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.field select option       { color: var(--navy); background: #fff; }
+.field select optgroup     { color: #5a6a7a; font-weight: 700; font-style: normal; background: #f0f4f8; }
 .field input:focus,
 .field select:focus {
   outline: none;

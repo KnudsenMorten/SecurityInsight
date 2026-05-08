@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.124
+## v2.2.125
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
 - release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
 - release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
 - release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
 - release: SecurityInsight v2.2.97 - README: KPI bullet to last + add 2 mail screenshots (f7648270)
 - release: SecurityInsight v2.2.96 - RiskScoreKPI: MS-inspired secure score (higher=better) (c45fd1c3)
-- release: SecurityInsight v2.2.95 - Risk Score re-tuned + viewer column UX (554afe84)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.125 — Setup Wizard: select-element readability fix (dark navy text, sans font, optgroup styling)
+
+The `<select>` controls (Engine host dropdown on Step 1, Azure region dropdowns on Step 2 + Step 5, model SKU + Shodan tier dropdowns) inherited browser-default text colour -- which renders as a low-contrast light grey on white in several browsers (notably Chrome on Windows). Combined with the `Consolas` monospace font inherited from the input rule, the SELECTED option was hard to read.
+
+**Fix in `styles.css`:**
+
+- Explicit `color: var(--navy)` (`#1a3a5c`) on every input + select + textarea so text is always dark on the light input background.
+- Override the input-shared monospace font for `<select>` only -- selects now use the page's primary sans stack (`-apple-system, Segoe UI, Inter, system-ui`) at 14px / weight 500, matching the rail labels and card headings.
+- Added explicit colour rules for `<option>` (navy on white) and `<optgroup>` (`#5a6a7a` slate, bold, light-grey background `#f0f4f8`) so the dropdown menu items also read clearly when the dropdown is open.
+
+No HTML / state changes -- pure CSS readability pass.
 
 ---
 

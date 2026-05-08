@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.130
+## v2.2.131
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
 - release: SecurityInsight v2.2.130 - README cleanup + Az binary-compat smoke test in wizard pre-flight (2e51f0f5)
 - release: SecurityInsight v2.2.129 - README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table (bfaf8fe2)
 - release: SecurityInsight v2.2.128 - handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT (057e97f0)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
 - release: SecurityInsight v2.2.103 - Setup Wizard skeleton + 3-step quick-start (ab8f4fb8)
 - release: SecurityInsight v2.2.102 - README: same provider-list rewrite for the second blurb (c2afe084)
-- release: SecurityInsight v2.2.101 - README intro: hook-led + full provider list (ca2c2170)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.131 — Hotfix: wizard fails to start with `_Step is not recognized` regression
+
+`v2.2.130` introduced an Az binary-compat smoke test in `Start-SetupWizard.ps1` pre-flight, but called `_Step` — a helper that exists in the backend cmdlets (`Initialize-SIInfra.ps1`, `New-SISpn.ps1`) but **not** in the listener script itself. The listener only defines `_Info`, `_Ok`, `_Warn`, `_Err`. As a result, every `v2.2.130` wizard launch failed at line 247 with:
+
+```
+The term '_Step' is not recognized as the name of a cmdlet, function, script file, or operable program.
+```
+
+before the smoke test could run, before the HttpListener could bind, before the operator could even open the wizard UI. Hard block.
+
+Fix: replaced `_Step "verify Az PowerShell binary-compat..."` with `_Info ...`. The smoke test logic itself is unchanged — it still runs `Get-AzAccessToken` and gates wizard startup on the Az.Identity.Broker mismatch markers documented in `v2.2.130`. Only the helper-call typo is corrected.
+
+Recommend everyone on `v2.2.130` upgrade to `v2.2.131` — the previous tag is unusable.
 
 ---
 

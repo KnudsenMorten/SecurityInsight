@@ -106,6 +106,70 @@ if (-not $ctx -or $ctx.Tenant.Id -ne $TenantId -or $ctx.Subscription.Id -ne $Sub
 }
 _Ok ("Az context: {0} / {1}" -f (Get-AzContext).Account, (Get-AzContext).Subscription.Name)
 
+# ----- 1b. Auto-register required Azure resource providers --------------
+# Brand-new subs often have only a handful of RPs registered. Without these,
+# resource creation calls fail with "[InvalidResource] : Invalid resource
+# payload: 'properties' are missing" -- a misleading wrapper for "the RP
+# this resource lives under isn't registered". Auto-registering up-front
+# turns a confusing mid-Phase-2 failure into a clean prereq + wait.
+$requiredRps = @(
+    'Microsoft.Resources',
+    'Microsoft.OperationalInsights',   # Log Analytics workspace
+    'Microsoft.Insights',              # Diagnostic Settings + classic metrics
+    'Microsoft.Monitor',               # Data Collection Endpoints + Rules (newer namespace)
+    'Microsoft.Storage',               # Storage account
+    'Microsoft.Authorization',         # Role assignments
+    'Microsoft.AlertsManagement'       # Alerts + Smart Detection (used by RA reports)
+)
+if ($CreateKeyVault -or $KeyVaultName) { $requiredRps += 'Microsoft.KeyVault' }
+_Step "verify Azure resource providers"
+$rpStates = Get-AzResourceProvider -ListAvailable -ErrorAction SilentlyContinue |
+    Where-Object { $requiredRps -contains $_.ProviderNamespace } |
+    Select-Object ProviderNamespace, RegistrationState
+$missing = @($requiredRps | Where-Object {
+    $rp = $rpStates | Where-Object ProviderNamespace -ieq $_
+    -not $rp -or $rp.RegistrationState -ne 'Registered'
+})
+if ($missing.Count -eq 0) {
+    _Ok "all required resource providers are Registered"
+} else {
+    _Warn ("registering {0} missing resource provider(s): {1}" -f $missing.Count, ($missing -join ', '))
+    foreach ($rp in $missing) {
+        try {
+            $null = Register-AzResourceProvider -ProviderNamespace $rp -ErrorAction Stop
+            _Info ("  Register-AzResourceProvider {0} kicked off" -f $rp)
+        } catch {
+            _Warn ("  Register-AzResourceProvider {0} failed: {1}" -f $rp, $_.Exception.Message)
+        }
+    }
+    _Step "waiting for resource providers to finish registering (up to 4 min)"
+    $deadline = (Get-Date).AddSeconds(240)
+    while ((Get-Date) -lt $deadline) {
+        $rpStates = Get-AzResourceProvider -ProviderNamespace $missing -ErrorAction SilentlyContinue |
+            Group-Object -Property ProviderNamespace
+        $stillPending = @()
+        foreach ($g in $rpStates) {
+            $registered = ($g.Group | Where-Object RegistrationState -eq 'Registered').Count
+            if ($registered -ne $g.Count) { $stillPending += $g.Name }
+        }
+        if ($stillPending.Count -eq 0) { _Ok "all providers Registered"; break }
+        _Info ("  still registering: {0}" -f ($stillPending -join ', '))
+        Start-Sleep -Seconds 12
+    }
+    # Final check -- any provider still pending is logged but not a hard fail
+    # (resource creation will surface the real error if it actually matters).
+    $rpStatesFinal = Get-AzResourceProvider -ProviderNamespace $missing -ErrorAction SilentlyContinue |
+        Group-Object -Property ProviderNamespace
+    $stillBad = @()
+    foreach ($g in $rpStatesFinal) {
+        $registered = ($g.Group | Where-Object RegistrationState -eq 'Registered').Count
+        if ($registered -ne $g.Count) { $stillBad += $g.Name }
+    }
+    if ($stillBad.Count -gt 0) {
+        _Warn ("provider(s) still not fully Registered after wait: {0}. Continuing -- resource creation may still work for already-Registered child types." -f ($stillBad -join ', '))
+    }
+}
+
 # ----- 2. Resource group(s) -----
 foreach ($rg in @($ResourceGroupName, $DcrResourceGroupName, $StorageResourceGroupName) | Sort-Object -Unique) {
     if (-not (Get-AzResourceGroup -Name $rg -ErrorAction SilentlyContinue)) {

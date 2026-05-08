@@ -93,13 +93,16 @@ const validators = {
   appId:           v => !!v && GUID_RE.test(v),
   subscriptionId:  v => !!v && GUID_RE.test(v),
   spnDisplayName:  v => !!v && /^[A-Za-z0-9][A-Za-z0-9 \-_.]{2,}$/.test(v),
-  kvName:          v => !!v && KV_RE.test(v),
-  secretName:      v => !!v && v.length > 0,
-  certThumbprint:  v => !!v && HEX40_RE.test(v.replace(/\s/g, '')),
-  workspaceName:   v => !!v && v.length > 0,
-  workspaceRg:     v => !!v && v.length > 0,
-  dceName:         v => !!v && v.length > 0,
-  dceRg:           v => !!v && v.length > 0,
+  kvName:               v => !!v && KV_RE.test(v),
+  secretName:           v => !!v && v.length > 0,
+  certThumbprint:       v => !!v && HEX40_RE.test(v.replace(/\s/g, '')),
+  workspaceName:        v => !!v && v.length > 0,
+  workspaceRg:          v => !!v && v.length > 0,
+  dceName:              v => !!v && v.length > 0,
+  dceRg:                v => !!v && v.length > 0,
+  storageAccountName:   v => !!v && /^[a-z0-9]{3,24}$/.test(v),  // Azure storage account name rules
+  storageResourceGroup: v => !!v && v.length > 0,
+  storageContainer:     v => !!v && /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(v),
 };
 
 function isFieldValid(key) {
@@ -114,7 +117,7 @@ function isFieldValid(key) {
 const PAGE_REQS = {
   welcome:   [],
   tenant:    ['tenantId', 'appId'].concat(/* credType-dependent, added dynamically */),
-  workspace: ['subscriptionId', 'workspaceName', 'workspaceRg', 'dceName', 'dceRg'],
+  workspace: ['subscriptionId', 'workspaceName', 'workspaceRg', 'dceName', 'dceRg', 'storageAccountName', 'storageResourceGroup', 'storageContainer'],
 };
 
 function tenantRequiredKeys() {
@@ -256,14 +259,25 @@ function buildWorkspaceSnippet() {
   const lines = [];
   lines.push(buildTenantSnippet());
   lines.push('');
-  lines.push('# --- Subscription + Log Analytics workspace ----------------------------');
-  lines.push(assignLine('SubscriptionId',         'subscriptionId', '<sub-guid>',       25));
-  lines.push(assignLine('WorkspaceName',          'workspaceName',  '<workspace-name>', 25));
-  lines.push(assignLine('WorkspaceResourceGroup', 'workspaceRg',    '<workspace-rg>',   25));
+  lines.push('# --- Subscription + Log Analytics workspace + ingestion ----------------');
+  lines.push('$global:SI_PrestageInfra        = $true');
+  lines.push(assignLine('SI_AzSubscriptionId',     'subscriptionId', '<sub-guid>',       30));
+  lines.push(assignLine('SI_Location',             'location',       'westeurope',       30));
+  lines.push(assignLine('SI_WorkspaceName',        'workspaceName',  '<workspace-name>', 30));
+  lines.push(assignLine('SI_WorkspaceResourceGroup','workspaceRg',   '<workspace-rg>',   30));
+  lines.push('# SI_WorkspaceResourceId is composed at config-load time from the parts above.');
+  lines.push('$global:SI_WorkspaceResourceId  = "/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_WorkspaceResourceGroup)/providers/Microsoft.OperationalInsights/workspaces/$($global:SI_WorkspaceName)"');
   lines.push('');
   lines.push('# --- Data Collection Endpoint ------------------------------------------');
-  lines.push(assignLine('DceName',          'dceName', '<dce-name>', 18));
-  lines.push(assignLine('DceResourceGroup', 'dceRg',   '<dce-rg>',   18));
+  lines.push(assignLine('SI_DceName',          'dceName', '<dce-name>', 25));
+  lines.push(assignLine('SI_DceResourceGroup', 'dceRg',   '<dce-rg>',   25));
+  lines.push(assignLine('SI_DcrResourceGroup', 'dceRg',   '<dce-rg>',   25));
+  lines.push('');
+  lines.push('# --- Storage account (RBAC-only, no SI_StorageKey written) -------------');
+  lines.push(assignLine('SI_StorageAccount',       'storageAccountName',   '<storage-acct>', 25));
+  lines.push(assignLine('SI_StorageResourceGroup', 'storageResourceGroup', '<storage-rg>',   25));
+  lines.push(assignLine('SI_ExportContainer',      'storageContainer',     'securityinsight',25));
+  lines.push('$global:ExportDestination       = "https://$($global:SI_StorageAccount).blob.core.windows.net/$($global:SI_ExportContainer)/"');
   return lines.join('\n');
 }
 
@@ -777,11 +791,14 @@ function buildApplyState() {
             credStorage: d.credStorage || 'Inline'
         },
         infra: {
-            location:           d.location           || 'westeurope',
-            resourceGroupName:  d.workspaceRg        || 'rg-securityinsight',
-            workspaceName:      d.workspaceName      || 'log-platform-management-securityinsight',
-            dceName:            d.dceName            || 'dce-securityinsight',
-            storageAccountName: d.storageAccountName || ''
+            location:             d.location             || 'westeurope',
+            resourceGroupName:    d.workspaceRg          || 'rg-securityinsight',
+            workspaceName:        d.workspaceName        || 'log-platform-management-securityinsight',
+            dceName:              d.dceName              || 'dce-securityinsight',
+            dceResourceGroup:     d.dceRg                || (d.workspaceRg || 'rg-securityinsight'),
+            storageAccountName:   d.storageAccountName   || '',
+            storageResourceGroup: d.storageResourceGroup || (d.workspaceRg || 'rg-securityinsight'),
+            storageContainer:     d.storageContainer     || 'securityinsight'
         }
     };
     if (d.kvName) {

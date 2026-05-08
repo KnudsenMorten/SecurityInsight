@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.111
+## v2.2.112
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.112 - Setup Wizard storage account fields on Step 2 (98c668d6)
 - release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
 - release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
 - release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
@@ -33,13 +34,39 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.85 - Defender-native MITRE plumbing + 9-framework Compliance (27eb6162)
 - release: SecurityInsight v2.2.84 - RA Summary MoreDetails strip CVE prefix (17991209)
 - release: SecurityInsight v2.2.83 - RA ComplianceTags inference (44353168)
-- release: SecurityInsight v2.2.82 - revert missing-table silencing (cbcc77a9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.112 — Setup Wizard: storage account fields on Step 2 (workspace + ingestion)
+
+The wizard's Step 2 collected workspace + DCE but never asked for the **storage account** -- the third leg of the SI ingestion stool (fingerprint cache + worker queue + Excel staging container). The backend `Initialize-SIInfra.ps1` already accepted `storageAccountName` / `storageResourceGroup` / `storageContainer` parameters but the HTML never sent them. Without the storage account, the engine prestage fell back to "compute from workspace name" which clashed for customers running prod + preview side-by-side, or for any name that didn't satisfy Azure's strict storage-account naming rules (3-24 chars, lowercase letters + digits only, globally unique).
+
+**New fields on Step 2 (Storage account card):**
+
+- `storageAccountName` — 3-24 chars, lowercase a-z and 0-9, globally unique. Inline validator enforces the regex; tooltip explains the convention `st<org>si` / `st<org>securityinsight`. Engine creates the account on first prestage if missing and grants the SPN **Storage Blob/Table/Queue Data Contributor** on the account scope.
+- `storageResourceGroup` — defaults to the workspace RG (`rg-securityinsight`), keeping the SI footprint in one RG. Tooltip explains the trade-off.
+- `storageContainer` — blob container that holds staged Excel reports + the fingerprint cache. Defaults to `securityinsight`. Inline validator enforces Azure container naming (3-63 chars, lowercase + digits + hyphens).
+- `namingSuffix` — *optional* — a free-form suffix string (e.g. `-v22`, `-preview`, `-prod`). Documented in the tooltip; not yet auto-applied to the other Step-2 defaults but state-bound for v2.2.113 to consume.
+
+**Snippet upgrade.** `buildWorkspaceSnippet()` now emits the v2.2-correct `$global:SI_*` block (matching the shape of customer custom files): `SI_PrestageInfra=$true`, `SI_AzSubscriptionId`, `SI_Location`, `SI_WorkspaceName`, `SI_WorkspaceResourceGroup`, computed `SI_WorkspaceResourceId`, `SI_DceName`, `SI_DceResourceGroup`, `SI_DcrResourceGroup` (defaults to DCE RG), `SI_StorageAccount`, `SI_StorageResourceGroup`, `SI_ExportContainer`, computed `ExportDestination`. Replaces the legacy `SubscriptionId` / `WorkspaceName` / `WorkspaceResourceGroup` shortform that didn't include the `SI_` prefix.
+
+**Page completion gate.** `PAGE_REQS.workspace` now requires the storage trio (`storageAccountName`, `storageResourceGroup`, `storageContainer`) in addition to the workspace + DCE fields. Step 2's "done" badge in the rail and the Next button both honor the new check.
+
+**Apply payload upgrade.** `buildApplyState()`'s `infra` object now passes `dceResourceGroup`, `storageResourceGroup`, `storageContainer` through to `/api/apply` so the backend `Initialize-SIInfra.ps1` provisions everything in one call (workspace + RG + DCE + DCE RG + storage account + storage RG + container + RBAC).
+
+**Tooltips on every field.** Step 2's existing fields (DCE name + RG) gained `?` tooltips matching the v2.2.111 pattern; the new storage trio + naming suffix all carry tooltips with concrete naming examples and what-if-blank guidance.
+
+**Coming next (v2.2.113+):**
+- Per-mode mail recipients on Step 3 (`RiskAnalysis_Summary_To`, `RiskAnalysis_Detailed_To`).
+- Auto-apply `namingSuffix` to the workspace / RG / DCE / storage defaults so a single suffix word produces a consistent prod-vs-preview deployment.
+- "Use existing resource by ResourceId" pattern for KV / Storage / OpenAI / Log Analytics workspace.
+- Activate `raexcl` + `assettag` power-user pages.
 
 ---
 

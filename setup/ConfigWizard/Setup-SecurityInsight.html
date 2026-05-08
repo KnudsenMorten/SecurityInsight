@@ -166,8 +166,8 @@
           <p class="card-sub" style="margin-top:0;">Where the credential lives once generated:</p>
           <div class="toggle-group" data-toggle-key="credStorage">
             <label data-val="KeyVault"><input type="radio" name="credStorage" value="KeyVault" /> Azure Key Vault <b style="color:#5a6a7a;">(preferred)</b></label>
-            <label data-val="LocalCertStore"><input type="radio" name="credStorage" value="LocalCertStore" /> Local cert store <span style="color:#888;">(cert only)</span></label>
-            <label data-val="Inline"><input type="radio" name="credStorage" value="Inline" /> Inline in custom.ps1 <span style="color:#888;">(secret only)</span></label>
+            <label data-val="LocalCertStore" data-cred-block="certThumb"><input type="radio" name="credStorage" value="LocalCertStore" /> Local cert store <span style="color:#888;">(cert only)</span></label>
+            <label data-val="Inline" data-cred-block="kvSecret"><input type="radio" name="credStorage" value="Inline" /> Inline in custom.ps1 <span style="color:#888;">(secret only)</span></label>
           </div>
         </div>
 
@@ -193,7 +193,8 @@
           <div class="field required span-2">
             <label for="f_kvnew">Key Vault name <span style="color:#888;font-weight:400;">(must already exist; wizard stores the cred here)</span></label>
             <input type="text" id="f_kvnew" data-key="kvName" autocomplete="off"
-                   placeholder="kv-myorg-securityinsight" />
+                   placeholder="kv-securityinsight"
+                   data-default="kv-securityinsight" />
             <span class="err" data-err="kvName">3-24 chars, lowercase letters / digits / hyphens, must start with a letter.</span>
           </div>
         </div>

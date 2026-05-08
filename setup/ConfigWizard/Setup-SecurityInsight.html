@@ -298,14 +298,14 @@
         <p class="card-sub">DCE for the SI_* tables. The bootstrap creates the matching DCRs alongside it.</p>
         <div class="form-grid">
           <div class="field required">
-            <label for="f_dce">DCE name</label>
+            <label for="f_dce">DCE name <span class="help" data-tip="Azure Monitor Data Collection Endpoint. The bootstrap creates one DCR per engine and points all of them at this DCE. Naming convention: dce-securityinsight (or dce-securityinsight-&lt;env&gt; for prod / preview side-by-side).">?</span></label>
             <input type="text" id="f_dce" data-key="dceName" autocomplete="off"
                    placeholder="dce-securityinsight"
                    data-default="dce-securityinsight" />
             <span class="err" data-err="dceName">Required.</span>
           </div>
           <div class="field required">
-            <label for="f_dcerg">DCE resource group</label>
+            <label for="f_dcerg">DCE resource group <span class="help" data-tip="RG that hosts the DCE. Often same as workspace RG to simplify RBAC. Engine grants the SPN Monitoring Metrics Publisher on this RG so DCRs auto-created at first ingest land here.">?</span></label>
             <input type="text" id="f_dcerg" data-key="dceRg" autocomplete="off"
                    placeholder="rg-dce-securityinsight"
                    data-default="rg-dce-securityinsight" />
@@ -315,9 +315,41 @@
       </div>
 
       <div class="card">
+        <h3>Storage account <span style="color:#888;font-weight:400;font-size:14px;">(fingerprint cache + worker queues + Excel staging)</span></h3>
+        <p class="card-sub">SecurityInsight uses a single storage account for: per-engine fingerprint blobs (skip-when-unchanged), the worker queue when running on Container Apps Job, and a staging container for the Excel reports before mail. The bootstrap creates the account if missing and grants the SPN <b>Storage Blob/Table/Queue Data Contributor</b> on the account scope (RBAC-only, no shared key written to your config).</p>
+        <div class="form-grid">
+          <div class="field required">
+            <label for="f_storacct">Storage account name <span class="help" data-tip="3-24 chars, all lowercase letters and digits, globally unique across Azure. Convention: st&lt;org&gt;si or st&lt;org&gt;securityinsight (truncate to fit). Example: st2linkitsi or stcontososi-p.">?</span></label>
+            <input type="text" id="f_storacct" data-key="storageAccountName" autocomplete="off"
+                   placeholder="stmyorgsi" />
+            <span class="err" data-err="storageAccountName">3-24 chars, lowercase letters / digits only.</span>
+          </div>
+          <div class="field required">
+            <label for="f_storrg">Storage resource group <span class="help" data-tip="RG for the storage account. Defaults to the workspace RG if left blank, which keeps the SI footprint in one RG (recommended).">?</span></label>
+            <input type="text" id="f_storrg" data-key="storageResourceGroup" autocomplete="off"
+                   placeholder="rg-securityinsight"
+                   data-default="rg-securityinsight" />
+            <span class="err" data-err="storageResourceGroup">Required.</span>
+          </div>
+          <div class="field required">
+            <label for="f_storcontainer">Container name <span class="help" data-tip="Blob container holding the staged Excel reports + fingerprint cache. Engine creates it on first ingest. Default: securityinsight. Lowercase, 3-63 chars, no underscores.">?</span></label>
+            <input type="text" id="f_storcontainer" data-key="storageContainer" autocomplete="off"
+                   placeholder="securityinsight"
+                   data-default="securityinsight" />
+            <span class="err" data-err="storageContainer">Required.</span>
+          </div>
+          <div class="field">
+            <label for="f_naming">Resource naming suffix <span style="color:#888;font-weight:400;">(optional)</span> <span class="help" data-tip="Optional suffix appended to every default name on this page (workspace + RG + DCE + DCE RG + storage account + storage RG + container) so you can run preview / prod side-by-side. Example: '-v22' produces log-platform-management-securityinsight-v22, rg-securityinsight-v22, etc. Leave blank for plain defaults.">?</span></label>
+            <input type="text" id="f_naming" data-key="namingSuffix" autocomplete="off"
+                   placeholder="(blank)" />
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="preview-head">
           <h4>Generated snippet (cumulative)</h4>
-          <span class="target">launcher/&lt;engine&gt;/LauncherConfig.custom.ps1 (Layer 5)</span>
+          <span class="target">config/SecurityInsight.custom.ps1 (Layer 3)</span>
         </div>
         <pre class="preview" id="preview-workspace"># Fill in the fields above to generate the PowerShell snippet.</pre>
         <div style="margin-top: 10px;">

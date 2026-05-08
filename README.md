@@ -577,13 +577,44 @@ If you'd rather drive each provisioning task by hand (one script per phase), Ste
 
 #### ✅ Prerequisites
 
-- **PowerShell 7+** (`pwsh`) installed.
-- **Az PowerShell** modules: `Install-Module Az -Scope CurrentUser` (Az.Accounts, Az.Resources, Az.OperationalInsights, Az.Monitor, Az.Storage, Az.KeyVault).
-- **Microsoft Graph PowerShell**: `Install-Module Microsoft.Graph -Scope CurrentUser`.
+##### PowerShell
+
+- **Wizard / Setup**: **PowerShell 7+** (`pwsh`). The wizard's HttpListener + Az.Accounts 5.0+ token marshaling need pwsh 7.
+- **Engines (runtime)**: **Windows PowerShell 5.1** is the canonical engine runtime — the launchers, asset-profiling pipeline, and Risk-Analysis engine all run on PS 5.1. Engines also run on pwsh 7 if you prefer, but the published behaviour (and integration tests) target 5.1.
+
+##### PowerShell modules
+
+The full module set every engine + the wizard might need:
+
+| Module | Source | Used by |
+|--------|--------|---------|
+| `Az` (meta-module) | PSGallery (Microsoft) | Wizard + engines — pulls in `Az.Accounts`, `Az.Resources`, `Az.OperationalInsights`, `Az.Monitor`, `Az.Storage`, `Az.KeyVault` |
+| `Az.ResourceGraph` | PSGallery (Microsoft) | Engines — `Search-AzGraph` for Azure asset discovery (NOT in the Az meta-module, install separately) |
+| `Microsoft.Graph` (meta-module) | PSGallery (Microsoft) | Wizard + engines — Authentication, Applications, Identity.* submodules |
+| `Microsoft.Graph.Beta` | PSGallery (Microsoft) | Engines — beta endpoints for some inventory paths |
+| `AzLogDcrIngestPS` | PSGallery (Morten Knudsen) | Engines — DCR + Log Ingestion API for `SI_*_Profile_CL` writes |
+| `MicrosoftGraphPS` | PSGallery (Morten Knudsen) | Engines — `Connect-MicrosoftGraphPS` SPN-based Graph auth helper |
+| `ImportExcel` | PSGallery (Doug Finke) | Engines — XLSX export of risk-analysis reports |
+| `powershell-yaml` | PSGallery | Engines — parses `*_Locked.yaml` and `*_Custom.yaml` rule packs |
+
+**Always install with `-Scope AllUsers`.** Engines run unattended — under `NT AUTHORITY\SYSTEM` (Scheduled Tasks), under a service account, or under a Container Apps Job MI — not under the interactive user who first ran `Install-Module`. `-Scope CurrentUser` lands modules in `$HOME\Documents\PowerShell\Modules` of the installing user, which the SYSTEM / service account cannot see. `-Scope AllUsers` lands them in `$env:ProgramFiles\PowerShell\Modules`, which every account on the box can load.
+
+**Auto-install on first engine run.** Every engine calls `Ensure-SecurityInsightModules` at startup, which installs any missing modules from PSGallery into `AllUsers` by default (no Import-Module — PowerShell auto-loads on first cmdlet call). A fresh customer VM with just stock PowerShell + Internet access auto-bootstraps on the first launcher run; no manual `Install-Module` chain needed. *Run the first launcher invocation in an elevated shell so the AllUsers install can write to `$env:ProgramFiles`; subsequent runs (and the actual engine work) don't need elevation.*
+
+**Manual install** (if you'd rather seed the box upfront, or on an air-gapped host):
+
+```powershell
+# Run once in an elevated PowerShell window (Run as Administrator):
+Install-Module Az, Az.ResourceGraph, Microsoft.Graph, Microsoft.Graph.Beta, AzLogDcrIngestPS, MicrosoftGraphPS, ImportExcel, powershell-yaml -Scope AllUsers -Force
+```
+
+##### Azure + Entra
+
 - An **Azure subscription** to host the workspace + DCE + storage account.
 - The operator running the wizard needs (at least one of):
   - **Owner** OR **Contributor** + **User Access Administrator** at the target subscription (for resource creation + SPN role assignments).
   - For Microsoft Graph permission grants: **Application Administrator**, **Cloud Application Administrator**, **Privileged Role Administrator**, OR **Global Administrator**. *If you don't have any of these, the wizard still creates the SPN but surfaces an admin-consent URL you hand to a Global Admin — re-clicking Setup after they consent finishes the run.*
+  - For **Phase 4 (Entra ID Diagnostic Setting)**: **Security Administrator** OR **Global Administrator** at tenant scope. Subscription-level Owner is **not** sufficient — `aadiam` diagnosticSettings are tenant-scoped, not ARM-scoped.
 
 #### Step 1 — Get the code
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.148
+## v2.2.149
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.149 - Bootstrap-ContainerAppJob.ps1 no longer hardcodes dev path (0c6be29a)
 - release: SecurityInsight v2.2.148 - schedule examples in US 12-hour format (4be7b06d)
 - release: SecurityInsight v2.2.147 - pre-flight: detect PS module presence + scope (8c065edc)
 - release: SecurityInsight v2.2.146 - pre-flight: Az PS + Mg + az CLI in ONE block (33ea07db)
@@ -33,13 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
 - release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
 - release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
-- release: SecurityInsight v2.2.119 - graceful Ctrl+C handler + branded startup banner + dynamic version (9a308631)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.149 — Critical fix: `Bootstrap-ContainerAppJob.ps1` no longer hard-codes the dev tree path
+
+User report: clicked Setup Infrastructure with `azureContainerMI` host, watched Phases 1-4 run cleanly (SPN + workspace + storage + EntraDiag all created), then Phase 5 immediately threw:
+
+```
+C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1 not found -- run Bootstrap-Auth.ps1 first
+```
+
+Root cause: `Bootstrap-ContainerAppJob.ps1` line 93 hard-coded the customer config path to `C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1` — that's the upstream **dev tree** location, not the customer's `C:\SecurityInsight\config\…`. Every customer install would hit this immediately.
+
+**Fix:** resolve the customer config relative to the script's own location (`$PSScriptRoot`), with a CWD fallback for invocations from other directories. Now works for:
+
+- Customer installs at `C:\SecurityInsight\` → reads `C:\SecurityInsight\config\SecurityInsight.custom.ps1`.
+- Dev tree at `C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\` → reads the same dev-tree path it always did.
+- Operator runs `.\Bootstrap-ContainerAppJob.ps1` from a different CWD → falls back to `<cwd>\config\SecurityInsight.custom.ps1` if the script-relative path doesn't exist.
+
+Error message also updated to point at the **Setup Wizard's Phase 3** (the canonical way to generate the file in v2.2) instead of the legacy `Bootstrap-Auth.ps1`.
+
+This was a regression from v2.2.105's repo restructure — the dev-tree path got committed, customer installs were never tested. Live test on `C:\SecurityInsight\` now reproduces the failure on v2.2.148; should pass on v2.2.149.
 
 ---
 

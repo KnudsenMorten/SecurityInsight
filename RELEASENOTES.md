@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.122
+## v2.2.123
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
 - release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
 - release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
 - release: SecurityInsight v2.2.120 - clarify Defender XDR workspace = Sentinel workspace (b4f3bf13)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.96 - RiskScoreKPI: MS-inspired secure score (higher=better) (c45fd1c3)
 - release: SecurityInsight v2.2.95 - Risk Score re-tuned + viewer column UX (554afe84)
 - release: SecurityInsight v2.2.94 - email: dark-mode tolerance + total at the bottom (7e38cd7a)
-- release: SecurityInsight v2.2.93 - email exec summary: severity-by-domain table (e6200d26)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.123 — Setup Wizard: deployment name defaults to OpenAI resource INSTANCE name (not the model SKU)
+
+The wizard's two **Deployment name** fields (Step 5 use-existing + create-new branches) defaulted to the model SKU string (`gpt-4.1-mini` / previously `gpt-4o-mini`). That's a wrong convention -- the deployment name is an **arbitrary alias** YOU assign on top of a model, and the recommended pattern (matching real customer configs like Morten's `oai-mortenknudsen-security-insight`) is to align it with the OpenAI **RESOURCE INSTANCE name** so resource + deployment are 1:1.
+
+**Fix:**
+
+- **Use-existing branch deployment field**: default removed (was `gpt-4.1-mini`); placeholder changed to `oai-myorg-securityinsight`. Operator types whatever they actually named their existing deployment in Azure OpenAI Studio > Deployments.
+- **Create-new branch deployment field**: default changed from `gpt-4.1-mini` → `oai-myorg-securityinsight` (matches the resource-name default on the same page so the two stay aligned 1:1 by default).
+- **Snippet generator**: the createNew snippet's `OpenAI_deployment` line now falls back to the resource name (not the model SKU) when the field is blank, keeping the resource ↔ deployment alignment in the generated config too. The use-existing branch's snippet fallback changed from `gpt-4.1-mini` to a generic `<your-deployment-name>` placeholder.
+- **Migration:** `loadState()` now snaps any saved `openAiDeployment` / `openAiNewDeployment` value that's still `gpt-4o-mini` OR `gpt-4.1-mini` (legacy defaults from v2.2.111-v2.2.122) to `oai-myorg-securityinsight` (the new instance-name default). If the operator deliberately wants a model-SKU deployment name they can re-type it after migration.
+- **Tooltips rewritten** on both fields to clarify: "deployment name is NOT the model SKU; it's an arbitrary alias YOU created on top of a model. Convention: name it after the resource INSTANCE so they line up 1:1; some teams name it after the SKU -- both work as long as it matches Azure OpenAI Studio > Deployments tab".
+
+The model SKU dropdown (also on Step 5) still defaults to `gpt-4.1-mini` -- that's the actual underlying model and the default is correct.
 
 ---
 

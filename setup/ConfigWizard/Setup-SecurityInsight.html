@@ -617,9 +617,9 @@
                    placeholder="https://my-aoai-westeurope.openai.azure.com/" />
           </div>
           <div class="field required">
-            <label for="f_openAiDeployment">Deployment name <span class="help" data-tip="The name you gave your model deployment in Azure OpenAI Studio (NOT the model name). Recommended model: gpt-4.1-mini (replaces the deprecated gpt-4o-mini; ~10x cheaper than gpt-4.1 for similar summary quality on the SI prompt).">?</span></label>
+            <label for="f_openAiDeployment">Deployment name <span class="help" data-tip="The name you gave your model deployment in Azure OpenAI Studio. This is NOT the model SKU (gpt-4.1-mini etc.) -- it's the arbitrary deployment alias YOU created on top of a model. The recommended convention is to name it after the OpenAI RESOURCE INSTANCE (e.g. oai-myorg-securityinsight) so resource + deployment line up 1:1; some teams instead name it after the model SKU (gpt-4.1-mini) -- both work as long as it matches what's in your Azure OpenAI Studio > Deployments tab.">?</span></label>
             <input type="text" id="f_openAiDeployment" data-key="openAiDeployment" autocomplete="off"
-                   placeholder="gpt-4.1-mini" data-default="gpt-4.1-mini" />
+                   placeholder="oai-myorg-securityinsight" />
           </div>
           <div class="field required">
             <label for="f_openAiApiVersion">API version <span class="help" data-tip="The Azure OpenAI API version string. 2024-08-01-preview is current as of this wizard release; future versions are usually backward-compatible for chat/completions.">?</span></label>
@@ -688,10 +688,10 @@
               </select>
             </div>
             <div class="field required">
-              <label for="f_openAiNewDeployment">Deployment name <span class="help" data-tip="Name you give the model deployment (used to address it in API calls -- it's NOT the model itself). Convention: same as the model SKU lower-cased + dashed (gpt-4.1-mini, gpt-4o-2024-08-06). The wizard creates this deployment after the resource on Apply.">?</span></label>
+              <label for="f_openAiNewDeployment">Deployment name <span class="help" data-tip="Arbitrary alias YOU assign to the model deployment -- used to address it in API calls. Convention (matches the rest of SI's naming): same as the OpenAI RESOURCE INSTANCE NAME above so resource + deployment line up 1:1, e.g. oai-myorg-securityinsight. Some teams instead name it after the model SKU (gpt-4.1-mini) -- both work; the wizard provisions whatever you type here as a deployment on top of the model SKU below.">?</span></label>
               <input type="text" id="f_openAiNewDeployment" data-key="openAiNewDeployment" autocomplete="off"
-                     placeholder="gpt-4.1-mini"
-                     data-default="gpt-4.1-mini" />
+                     placeholder="oai-myorg-securityinsight"
+                     data-default="oai-myorg-securityinsight" />
             </div>
             <div class="field required">
               <label for="f_openAiModel">Model SKU <span class="help" data-tip="The actual Azure OpenAI model. gpt-4.1-mini is the SI default -- replaces gpt-4o-mini (deprecated 2025). For higher fidelity pick gpt-4.1; for fastest-cheapest pick gpt-4.1-nano. Reasoning models (o3-mini / o4-mini) work but are overkill for summarisation. Check region availability before picking.">?</span></label>

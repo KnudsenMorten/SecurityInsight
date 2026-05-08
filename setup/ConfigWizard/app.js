@@ -73,13 +73,20 @@ function loadState() {
       if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
       if (!state.data.defenderMode) state.data.defenderMode = 'off';
       if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'off';
-      // Migration: gpt-4o-mini was the wizard's default model in v2.2.111-
-      // v2.2.116. v2.2.117 switched to gpt-4.1-mini after OpenAI deprecated
-      // the old SKU. Auto-snap any saved state still carrying the old value
-      // so existing testers don't see the deprecated SKU pre-selected.
-      if (state.data.openAiModel        === 'gpt-4o-mini') state.data.openAiModel        = 'gpt-4.1-mini';
-      if (state.data.openAiDeployment   === 'gpt-4o-mini') state.data.openAiDeployment   = 'gpt-4.1-mini';
-      if (state.data.openAiNewDeployment === 'gpt-4o-mini') state.data.openAiNewDeployment = 'gpt-4.1-mini';
+      // Migration A: gpt-4o-mini was the default model in v2.2.111-v2.2.116.
+      // v2.2.117 switched to gpt-4.1-mini after OpenAI deprecated the old SKU.
+      // openAiModel still gets the SKU snap (it IS a model SKU field).
+      if (state.data.openAiModel === 'gpt-4o-mini') state.data.openAiModel = 'gpt-4.1-mini';
+      // Migration B: deployment-name fields were defaulted to the model SKU
+      // string ('gpt-4o-mini' / 'gpt-4.1-mini') in v2.2.111-v2.2.122. v2.2.123
+      // switches the convention to use the OpenAI RESOURCE INSTANCE NAME
+      // (oai-myorg-securityinsight) so resource + deployment align 1:1 -- the
+      // pattern Morten uses in his real custom config. Auto-snap saved state
+      // that still holds either model-SKU default to the new instance-name
+      // default (operators who deliberately picked an SKU-name deployment
+      // can re-type it in the field after migration).
+      if (state.data.openAiDeployment    === 'gpt-4o-mini' || state.data.openAiDeployment    === 'gpt-4.1-mini') state.data.openAiDeployment    = 'oai-myorg-securityinsight';
+      if (state.data.openAiNewDeployment === 'gpt-4o-mini' || state.data.openAiNewDeployment === 'gpt-4.1-mini') state.data.openAiNewDeployment = 'oai-myorg-securityinsight';
     }
   } catch (e) {
     console.warn('Wizard: localStorage restore failed --', e);
@@ -390,15 +397,15 @@ function buildApptagSnippet() {
     lines.push('#   Subscription: ' + (d.openAiSubscriptionId || '(inherits Step 2 subscription)'));
     lines.push('#   Region      : ' + (d.openAiLocation || 'swedencentral'));
     lines.push('#   Model SKU   : ' + (d.openAiModel    || 'gpt-4.1-mini'));
-    lines.push('#   Deployment  : ' + (d.openAiNewDeployment || 'gpt-4.1-mini'));
+    lines.push('#   Deployment  : ' + (d.openAiNewDeployment || resName));
     lines.push('# Endpoint + API key are filled in by the wizard on Apply:');
     lines.push("$global:OpenAI_endpoint   = 'https://" + resName + ".openai.azure.com/'");
-    lines.push(assignLine('OpenAI_deployment', 'openAiNewDeployment', 'gpt-4.1-mini',          22));
+    lines.push(assignLine('OpenAI_deployment', 'openAiNewDeployment', resName,             22));
     lines.push("$global:OpenAI_apiVersion = '2025-01-01-preview'");
     lines.push("$global:OpenAI_apiKey     = '(filled in by wizard on Apply)'");
   } else {
     lines.push(assignLine('OpenAI_endpoint',   'openAiEndpoint',   '<https://your-aoai.openai.azure.com/>', 22));
-    lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', 'gpt-4.1-mini',                          22));
+    lines.push(assignLine('OpenAI_deployment', 'openAiDeployment', '<your-deployment-name>',                22));
     lines.push(assignLine('OpenAI_apiVersion', 'openAiApiVersion', '2025-01-01-preview',                   22));
     lines.push(assignLine('OpenAI_apiKey',     'openAiApiKey',     '<your-aoai-key>',                      22));
   }

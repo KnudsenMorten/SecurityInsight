@@ -99,12 +99,13 @@ $backendDir = Join-Path $scriptDir 'backend'
 $cmdletNewSISpn      = Join-Path $backendDir 'New-SISpn.ps1'
 $cmdletInitInfra     = Join-Path $backendDir 'Initialize-SIInfra.ps1'
 $cmdletWriteConfig   = Join-Path $backendDir 'Write-SICustomConfig.ps1'
-foreach ($c in $cmdletNewSISpn, $cmdletInitInfra, $cmdletWriteConfig) {
+$cmdletEntraDiag     = Join-Path $backendDir 'Set-SIEntraDiagnosticSetting.ps1'
+foreach ($c in $cmdletNewSISpn, $cmdletInitInfra, $cmdletWriteConfig, $cmdletEntraDiag) {
     if (-not (Test-Path -LiteralPath $c)) { throw "backend cmdlet missing: $c" }
 }
 _Info ("port        : {0}" -f $Port)
 _Info ("wizard html : {0}" -f $indexHtml)
-_Info  "backend     : New-SISpn / Initialize-SIInfra / Write-SICustomConfig"
+_Info  "backend     : New-SISpn / Initialize-SIInfra / Write-SICustomConfig / Set-SIEntraDiagnosticSetting"
 Write-Host ""
 
 # ----- Pre-flight: require Az + Microsoft Graph contexts -----
@@ -485,10 +486,11 @@ try {
                     Write-Host ''
                     Write-Host '======================  /api/apply  ======================' -ForegroundColor Magenta
                     $applyLog = New-Object System.Collections.Generic.List[string]
-                    $phaseStatus = @{ spn = 'pending'; infra = 'pending'; config = 'pending' }
+                    $phaseStatus = @{ spn = 'pending'; infra = 'pending'; config = 'pending'; entraDiag = 'pending' }
                     $spnOut    = $null
                     $infraOut  = $null
                     $cfgOut    = $null
+                    $diagOut   = $null
 
                     # Phase 1 -- SPN
                     try {
@@ -611,6 +613,36 @@ try {
                         break
                     }
 
+                    # Phase 4 -- Entra ID Diagnostic Setting (optional, gated on wizard toggle).
+                    # Skipped when the operator linked an existing Defender / Sentinel workspace,
+                    # since their existing Diagnostic Setting already streams the same categories.
+                    if ($st.entraDiagnosticSetting -and $st.entraDiagnosticSetting.Enabled) {
+                        try {
+                            $applyLog.Add('phase=entraDiag start')
+                            $diagArgs = @{ WorkspaceResourceId = $infraOut.WorkspaceResourceId }
+                            if ($st.entraDiagnosticSetting.Name)       { $diagArgs.Name       = $st.entraDiagnosticSetting.Name }
+                            if ($st.entraDiagnosticSetting.Categories) { $diagArgs.Categories = @($st.entraDiagnosticSetting.Categories) }
+                            $diagOut = & $cmdletEntraDiag @diagArgs
+                            $applyLog.Add(('  diag setting name : {0}' -f $diagOut.Name))
+                            $applyLog.Add(('  workspace target  : {0}' -f $diagOut.WorkspaceResourceId))
+                            $applyLog.Add(('  categories        : {0}' -f ($diagOut.Categories -join ', ')))
+                            $phaseStatus.entraDiag = 'ok'
+                            $applyLog.Add('phase=entraDiag ok')
+                        } catch {
+                            $phaseStatus.entraDiag = 'failed'
+                            $applyLog.Add('phase=entraDiag FAILED: ' + $_.Exception.Message)
+                            Send-Json -Response $res -Object @{
+                                ok = $false; phase = 'entraDiag'; error = $_.Exception.Message;
+                                spn = $spnOut; infra = $infraOut; configFile = $cfgOut;
+                                log = $applyLog; phaseStatus = $phaseStatus
+                            } -Status 500
+                            break
+                        }
+                    } else {
+                        $phaseStatus.entraDiag = 'skipped'
+                        $applyLog.Add('phase=entraDiag skipped (toggle off or Defender workspace linked)')
+                    }
+
                     Write-Host '======================  /api/apply DONE  ======================' -ForegroundColor Magenta
                     Send-Json -Response $res -Object @{
                         ok           = $true
@@ -618,6 +650,7 @@ try {
                         spn          = $spnOut
                         infra        = $infraOut
                         configFile   = $cfgOut
+                        entraDiag    = $diagOut
                         log          = $applyLog
                     }
                     break

@@ -821,7 +821,7 @@
         <p class="card-sub">Several RA reports correlate sign-in risk events + audit events with assets (e.g. <i>"identities flagged risky AND owning a Tier-0 endpoint"</i>, <i>"role-assignment activity on a critical SP"</i>). Without a Sentinel workspace there's nothing for RA to correlate against &mdash; the sign-in / audit data has to land somewhere reachable. <b>If you don't have Sentinel</b>, turn this on and the wizard creates an Entra ID Diagnostic Setting on Apply that ships the <b>8 log categories SI's queries actually reference</b> straight into your <b>SI Log Analytics workspace</b>.</p>
         <div class="toggle-group" data-toggle-key="entraDiagToSI" style="margin-bottom: 4px;">
           <label data-val="off"><input type="radio" name="entraDiagToSI" value="off" /> Off <span style="color:#888;">(no Entra Diagnostic Setting created)</span></label>
-          <label data-val="enabled"><input type="radio" name="entraDiagToSI" value="enabled" /> Enabled <span style="color:#888;">(recommended when you have no Sentinel)</span></label>
+          <label data-val="enabled"><input type="radio" name="entraDiagToSI" value="enabled" checked /> Enabled <span style="color:#888;">(default; recommended when you have no Sentinel)</span></label>
         </div>
         <div class="note" style="background:#f0f7ff;border-left:3px solid #2a8b9b;font-size:13px;margin-top:14px;">
           <b>Log categories enabled</b> (derived from SI engine query references):
@@ -873,6 +873,9 @@
           </div>
           <div class="field span-2"><label>Phase 3 &mdash; Write <code>config\SecurityInsight.custom.ps1</code></label>
             <div id="apply-summary-config" class="apply-summary">(includes SMTP / OpenAI / Shodan / CMDB only when toggled on the relevant pages)</div>
+          </div>
+          <div class="field span-2"><label>Phase 4 &mdash; Entra ID Diagnostic Setting (sign-in + audit log streaming)</label>
+            <div id="apply-summary-entradiag" class="apply-summary">(creates tenant-level Diagnostic Setting <code>SI-EntraDiag</code> targeting the SI workspace; skipped when Defender / Sentinel workspace is linked or toggle is off)</div>
           </div>
         </div>
       </div>

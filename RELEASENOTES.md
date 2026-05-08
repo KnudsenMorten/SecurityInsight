@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.135
+## v2.2.136
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
 - release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
 - release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
 - release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
 - release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
 - release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
-- release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.136 — Wizard Phase 4: Entra ID Diagnostic Setting created on Setup (default ON)
+
+The wizard's `entraDiagToSI` toggle in the UI was wired through to a config-only flag (`$global:SI_AutoCreateEntraDiagToSelf`) that **no engine code consumed** — meaning even with the toggle enabled, no Diagnostic Setting was ever created in Azure. Sign-in / audit logs never landed in the SI workspace, and RA queries that correlate sign-in risk against Tier-0 assets returned empty. Reported by the user during live tenant test.
+
+**New Phase 4** in `/api/apply` now creates the tenant-level Diagnostic Setting in code:
+
+- New backend cmdlet `setup/ConfigWizard/backend/Set-SIEntraDiagnosticSetting.ps1`
+- PUTs to `https://management.azure.com/providers/microsoft.aadiam/diagnosticSettings/SI-EntraDiag?api-version=2017-04-01`
+- 8 categories enabled by default: `SignInLogs`, `AuditLogs`, `NonInteractiveUserSignInLogs`, `ServicePrincipalSignInLogs`, `ManagedIdentitySignInLogs`, `UserRiskEvents`, `ProvisioningLogs`, `MicrosoftGraphActivityLogs`
+- Targets the SI workspace ResourceId from Phase 2 output (`infraOut.WorkspaceResourceId`)
+- Idempotent — PUT replaces the named setting, leaves other settings (e.g. an existing Sentinel-side one) untouched
+- AuthorizationFailed on the `aadiam` provider scope is surfaced with a clear remediation: the operator running the wizard needs Entra **Security Administrator** OR **Global Administrator** at tenant scope. Subscription-level Owner is **not** sufficient — `aadiam` diagnosticSettings are tenant-scoped, not ARM-scoped.
+
+**Default flipped to ON.** `entraDiagToSI` was previously `'off'` by default. Operators expected the toggle to be on automatically (you can't have an SI deployment with no sign-in logs landing anywhere). Now defaults to `'enabled'`. Auto-skipped when the operator linked an existing Defender / Sentinel workspace via `defenderMode='linked'` (the linked workspace's existing Diagnostic Setting already streams the same categories).
+
+**Phase status reporting.** The `/api/apply` response now includes `phaseStatus.entraDiag` with values `pending` / `ok` / `failed` / `skipped`, plus an `entraDiag` output object on success (`Name`, `WorkspaceResourceId`, `Categories`, `Url`). The Apply page UI shows a 4th summary card "Phase 4 — Entra ID Diagnostic Setting".
+
+After upgrading: re-run the wizard's `/api/apply`. You'll see `phase=entraDiag start ... [OK] Entra Diagnostic Setting 'SI-EntraDiag' created / updated`. Verify in Azure portal: **Entra ID → Monitoring → Diagnostic settings → SI-EntraDiag** — should show all 8 categories streaming to your SI workspace.
 
 ---
 

@@ -55,33 +55,66 @@
         </div>
       </div>
 
-      <h3 style="margin: 28px 0 6px; color: var(--navy); font-size: 18px;">Before you begin -- have these handy</h3>
-      <p style="color: var(--muted); margin: 0 0 8px;">Skim the cards below; you'll need each value at some point in the wizard.</p>
+<h3 style="margin: 28px 0 6px; color: var(--navy); font-size: 18px;">Before you begin -- have these handy</h3>
+      <p style="color: var(--muted); margin: 0 0 8px;">Most cards depend on choices you make in the wizard -- the badges below tell you when each value is needed. <b>Newcomers picking all defaults need only the &quot;Always&quot; cards.</b></p>
 
+      <h4 style="margin: 18px 0 6px; color: var(--navy); font-size: 14px; text-transform: uppercase; letter-spacing: .04em;">Always required</h4>
       <div class="prereqs">
         <div class="prereq">
           <div class="prereq-title"><span class="dot"></span>Entra tenant ID</div>
-          <div class="prereq-body">Azure portal &rarr; Microsoft Entra ID &rarr; Overview &rarr; "Tenant ID" GUID.</div>
-        </div>
-        <div class="prereq">
-          <div class="prereq-title"><span class="dot"></span>Service principal app ID</div>
-          <div class="prereq-body">An app registration in Entra with the SecurityInsight Graph + Defender + Log Analytics permissions.</div>
-        </div>
-        <div class="prereq">
-          <div class="prereq-title"><span class="dot"></span>Key Vault + secret name <em>or</em> certificate thumbprint</div>
-          <div class="prereq-body">Where the SPN credential lives. Cert is recommended for production; secret is fine for lab.</div>
-        </div>
-        <div class="prereq">
-          <div class="prereq-title"><span class="dot"></span>Log Analytics workspace + DCE</div>
-          <div class="prereq-body">Name of the workspace that will host SI_*_CL tables, plus the Data Collection Endpoint and its resource group.</div>
+          <div class="prereq-body">Azure portal &rarr; Microsoft Entra ID &rarr; Overview &rarr; "Tenant ID" GUID. <b>Auto-prefilled</b> from the shell that launched the wizard (Connect-AzAccount target).</div>
         </div>
         <div class="prereq">
           <div class="prereq-title"><span class="dot"></span>Subscription ID</div>
-          <div class="prereq-body">Where Log Analytics + DCE live (the wizard supports cross-sub later).</div>
+          <div class="prereq-body">Sub that hosts Log Analytics + DCE + Storage. <b>Auto-prefilled</b> from the operator's Az context.</div>
         </div>
         <div class="prereq">
-          <div class="prereq-title"><span class="dot"></span>(Optional) CMDB CSV, Shodan API key</div>
-          <div class="prereq-body">Only needed if you want CMDB enrichment or Shodan attack-surface signals. Asked later.</div>
+          <div class="prereq-title"><span class="dot"></span>Azure region</div>
+          <div class="prereq-body">Where workspace + DCE + storage land. Pick from the dropdown on Step 2 (53 regions); default is West Europe.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot"></span>A user / SPN with the right roles</div>
+          <div class="prereq-body">In the launching shell: an Az login with <b>Owner</b>/<b>Contributor</b> at the target sub, and a Microsoft Graph login with <b>Application.ReadWrite.All</b> + <b>AppRoleAssignment.ReadWrite.All</b> + <b>Directory.ReadWrite.All</b>. Pre-flight checks both before <b>Apply</b>.</div>
+        </div>
+      </div>
+
+      <h4 style="margin: 22px 0 6px; color: var(--navy); font-size: 14px; text-transform: uppercase; letter-spacing: .04em;">Only if you pick &quot;Use existing&quot; on a step</h4>
+      <div class="prereqs">
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Service principal app ID <span style="font-size:11px;color:#888;font-weight:400;">(Step 1 -- Use existing SPN)</span></div>
+          <div class="prereq-body">App registration in Entra with the SI Graph permissions already consented. <b>Skip</b> if Step 1 = "Create new SPN" -- the wizard creates + consents it for you.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Key Vault name + secret name <span style="font-size:11px;color:#888;font-weight:400;">(Step 1 -- Use existing SPN + KV storage)</span></div>
+          <div class="prereq-body">Where the existing SPN's secret lives in Key Vault. <b>Skip</b> if Step 1 = "Create new SPN" (wizard creates the cred + stores it for you), or if cred storage = Local cert store / Inline.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Certificate thumbprint <span style="font-size:11px;color:#888;font-weight:400;">(Step 1 -- Use existing SPN + cert auth)</span></div>
+          <div class="prereq-body">40-hex-char thumbprint of the cert in the launcher's local cert store. <b>Skip</b> if Step 1 = "Create new SPN" -- wizard generates a self-signed cert and writes its thumbprint to the config.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#f57c00;"></span>Existing OpenAI endpoint + key <span style="font-size:11px;color:#888;font-weight:400;">(Step 5 -- Use existing OpenAI + AI summary on)</span></div>
+          <div class="prereq-body">Resource endpoint URL + deployment name + API key from your existing Azure OpenAI resource. <b>Skip</b> if Step 5 = "Create new" (wizard creates the resource on Apply) or AI summary = off.</div>
+        </div>
+      </div>
+
+      <h4 style="margin: 22px 0 6px; color: var(--navy); font-size: 14px; text-transform: uppercase; letter-spacing: .04em;">Only if you enable optional features</h4>
+      <div class="prereqs">
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>SMTP relay details <span style="font-size:11px;color:#888;font-weight:400;">(Step 3 -- Mail enabled)</span></div>
+          <div class="prereq-body">Server hostname + port + From address + recipients. Plus user/password if authenticated relay (SendGrid / Brevo / M365). Skip entirely if mail mode = Off.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>CMDB CSV path <span style="font-size:11px;color:#888;font-weight:400;">(Step 4 -- CMDB enabled)</span></div>
+          <div class="prereq-body">Local or UNC path to your CMDB asset export with at minimum AssetName + Tier + Owner columns.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>Shodan API key <span style="font-size:11px;color:#888;font-weight:400;">(Step 6 -- Shodan enabled)</span></div>
+          <div class="prereq-body">From account.shodan.io. Free tier (~100 lookups/month) works for &lt;200 assets; Membership ($49) needed for larger tenants + CVE history.</div>
+        </div>
+        <div class="prereq">
+          <div class="prereq-title"><span class="dot" style="background:#5a6a7a;"></span>Defender XDR workspace ResourceId <span style="font-size:11px;color:#888;font-weight:400;">(Step 7 -- Defender linkage enabled)</span></div>
+          <div class="prereq-body">Full ARM ResourceId of the Log Analytics workspace ingesting Defender XDR data. Find in Defender XDR portal &gt; Settings &gt; Microsoft Sentinel.</div>
         </div>
       </div>
 

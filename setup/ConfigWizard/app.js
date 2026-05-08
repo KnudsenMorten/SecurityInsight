@@ -47,7 +47,7 @@ const state = {
     openAiResMode: 'useExisting', // 'useExisting' | 'createNew' (createNew is v2.2.112+)
     shodanMode:    'off',         // 'off' | 'enabled'
     defenderMode:  'off',         // 'off' | 'linked'
-    entraDiagToSI: 'off',         // 'off' | 'enabled' -- only meaningful when defenderMode='off'
+    entraDiagToSI: 'enabled',     // 'off' | 'enabled' -- ON by default; auto-skipped when defenderMode='linked'
     enableJsonSink: false,        // bool -- adds 'JSON' to every SI_Sinks_<Engine>
   },
 };
@@ -72,7 +72,7 @@ function loadState() {
       if (!state.data.openAiResMode)state.data.openAiResMode= 'useExisting';
       if (!state.data.shodanMode)   state.data.shodanMode   = 'off';
       if (!state.data.defenderMode) state.data.defenderMode = 'off';
-      if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'off';
+      if (!state.data.entraDiagToSI)state.data.entraDiagToSI= 'enabled';
       // Migration A: gpt-4o-mini was the default model in v2.2.111-v2.2.116.
       // v2.2.117 switched to gpt-4.1-mini after OpenAI deprecated the old SKU.
       // openAiModel still gets the SKU snap (it IS a model SKU field).
@@ -1030,6 +1030,17 @@ function renderApplySummary() {
         if (st.enableJsonSink) optional.push('JSON sink');
         cfgEl.textContent = 'Write config\\SecurityInsight.custom.ps1 (existing file backed up to *.bak.<timestamp>).\n' +
             'Optional sections: ' + (optional.length ? optional.join(', ') : 'none');
+    }
+    var diagEl = document.getElementById('apply-summary-entradiag');
+    if (diagEl) {
+        if (st.entraDiagnosticSetting && st.entraDiagnosticSetting.Enabled) {
+            diagEl.textContent =
+                'Create tenant-level Entra Diagnostic Setting "' + (st.entraDiagnosticSetting.Name || 'SI-EntraDiag') + '" targeting the SI workspace.\n' +
+                'Categories : ' + (st.entraDiagnosticSetting.Categories || []).join(', ') + '\n' +
+                'Required role: Entra Security Administrator OR Global Administrator on the operator account.';
+        } else {
+            diagEl.textContent = 'SKIPPED -- toggle is off (or you linked an existing Defender / Sentinel workspace whose own Diagnostic Setting already streams these categories).';
+        }
     }
     var pre = document.getElementById('preview-apply');
     if (pre) {

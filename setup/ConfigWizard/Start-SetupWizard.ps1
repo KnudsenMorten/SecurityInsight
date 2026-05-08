@@ -296,7 +296,11 @@ if ($needsModuleInstall -or -not $pre.Az -or -not $pre.Mg -or -not $azFound -or 
         Write-Host "    Install-Module Microsoft.Graph -Scope AllUsers -Force" -ForegroundColor White
     }
     if (-not $azFound) {
-        Write-Host "    # Install Azure CLI: https://learn.microsoft.com/cli/azure/install-azure-cli-windows" -ForegroundColor White
+        Write-Host "    # Install Azure CLI (download MSI + run msiexec):" -ForegroundColor White
+        Write-Host "    `$ProgressPreference = 'SilentlyContinue'" -ForegroundColor White
+        Write-Host "    Invoke-WebRequest -Uri https://aka.ms/installazurecliwindows -OutFile .\AzureCLI.msi" -ForegroundColor White
+        Write-Host "    Start-Process msiexec.exe -Wait -ArgumentList '/I', 'AzureCLI.msi'" -ForegroundColor White
+        Write-Host "    # Then close + reopen PowerShell so PATH picks up `az`, then re-launch the wizard." -ForegroundColor Gray
     }
     if (-not $pre.Az) {
         Write-Host ("    Connect-AzAccount -Tenant {0}" -f $tenantHint) -ForegroundColor White

@@ -521,3 +521,26 @@ body {
   font-size: 11px;
   color: var(--text);
 }
+
+/* === Apply page (Step 10) ============================================ */
+.apply-summary {
+    font-family: Consolas, monospace; font-size: 12px; color: #2d3748;
+    background: #fafbfc; border: 1px solid var(--panel-border);
+    padding: 8px 10px; border-radius: var(--radius-sm); white-space: pre-wrap;
+}
+.apply-phase {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+    border: 1px solid var(--panel-border); border-radius: var(--radius-sm);
+    margin: 6px 0; background: #fafbfc; font-size: 13px;
+}
+.apply-phase .apply-icon  { font-size: 16px; color: #999; min-width: 18px; text-align:center; }
+.apply-phase .apply-label { flex: 1; color: #333; }
+.apply-phase .apply-status { font-size: 11px; padding: 2px 8px; border-radius: 10px;
+                              background: #eef2f7; color: #5a6a7a; text-transform: uppercase; letter-spacing: .4px; }
+.apply-phase[data-status="running"] .apply-icon  { color: #2c5a8e; animation: spin 1.2s linear infinite; }
+.apply-phase[data-status="running"] .apply-status { background: #d3e3f5; color: #1a3a5e; }
+.apply-phase[data-status="ok"]      .apply-icon  { color: #2e7d32; }
+.apply-phase[data-status="ok"]      .apply-status { background: #c8e6c9; color: #1b5e20; }
+.apply-phase[data-status="failed"]  .apply-icon  { color: #c62828; }
+.apply-phase[data-status="failed"]  .apply-status { background: #ffcdd2; color: #b71c1c; }
+@keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }

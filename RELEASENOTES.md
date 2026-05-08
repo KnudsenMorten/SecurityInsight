@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.106
+## v2.2.107
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
 - release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
 - release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
 - release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.80 - quiet launcher startup + PublicIP project fix (d83f0173)
 - release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
 - release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
-- release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.107 — Setup Wizard: Apply page (POST → 3-phase progress UI) + default-seeded inputs
+
+The HTML wizard's final step (Step 10) is no longer a "copy this snippet" placeholder — it now drives the v2.2.105 `/api/apply` backend end-to-end from the browser. Click **Apply now**, and the wizard creates the SPN, provisions Log Analytics + DCE + Storage (RBAC-only), and writes `config\SecurityInsight.custom.ps1` for you. No copy/paste, no PowerShell.
+
+**Apply page (Step 10) — what it shows:**
+
+- **Three summary cards** before you click — exactly what the wizard will do for *(1) SPN*, *(2) Infrastructure*, *(3) Config file* — built from your answers across all earlier steps.
+- **Big "Apply now" button** + **state pill** (`READY` → `RUNNING` → `DONE` / `FAILED`).
+- **Per-phase progress UI** (`SPN` / `Infrastructure` / `Config file`): each phase has its own card with a pending / running / ok / failed icon and status. The running phase gets an animated spinner.
+- **Result panel** on success: SPN AppId, Workspace resource ID, config-file path + bytes + sections written.
+- **Result panel** on failure: which phase broke, the error message, and which phases the backend reports as `ok` / `pending` / `failed` so you know what to re-run.
+- **Secret-redacted state JSON preview** below the action — so power users can see the exact payload being POSTed (SMTP / OpenAI / Shodan API keys all rendered as `***`).
+
+**First-touch default seeding** — recommended values are now pre-filled into the input fields, not just shown as ghost placeholder text. Six fields seed automatically on first load:
+
+- `spnDisplayName` → `sp-securityinsight`
+- `secretName` (Use-existing mode) → `SecurityInsight-Secret`
+- `workspaceName` → `log-platform-management-securityinsight`
+- `workspaceRg` → `rg-securityinsight`
+- `dceName` → `dce-securityinsight`
+- `dceRg` → `rg-dce-securityinsight`
+
+Newcomers who want the v2.2 standard layout can now click straight through Next → Next → Apply without typing a single value (besides the GUIDs that have to come from your own tenant). Power users see the same defaults and overwrite them inline; the snippet preview keeps a `# default` tag next to any line whose value still matches the recommended setting.
+
+**Cosmetic:** Step 1's SPN-mode toggle now reads **"Create new SecurityInsight Service Principal"** / **"Use existing Service Principal"** instead of the older "Create new SPN (recommended for newbies)" — clearer about what the wizard will name the app registration.
+
+**End-to-end story for a new customer is now complete:**
+
+1. Open `Start-SetupWizard.ps1` → browser at `http://localhost:8766`.
+2. Step 1 — Tenant ID + accept the SPN display-name default.
+3. Steps 2-9 — accept defaults or override.
+4. Step 10 — review summary, click **Apply now**, watch the three phases turn green.
+5. `config\SecurityInsight.custom.ps1` is on disk; the engine is ready to run.
+
+**What's still pending:**
+- Live log SSE streaming on `/api/log-stream` so the Apply page tails per-phase stdout in real time — `v2.2.108`.
+- Drop Power BI + Workbook tabs from the HTML wizard — `v2.2.108`.
+- Smoke-test on lab + 2 customer tenants, README Step 2 rewrite to "fully working" status — `v2.2.109`.
 
 ---
 

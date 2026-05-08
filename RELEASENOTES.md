@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.105
+## v2.2.106
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
 - release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
 - release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
 - release: SecurityInsight v2.2.103 - Setup Wizard skeleton + 3-step quick-start (ab8f4fb8)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.79 - output folder + storage OAuth auto-detect (e0dab35e)
 - release: SecurityInsight v2.2.78 - AI summary lookup chain reads ImpactedAssetsList (3b23c3c1)
 - release: SecurityInsight v2.2.77 - RA MITRE_Tactics/Techniques inference (c880bcbd)
-- release: SecurityInsight v2.2.76 - RA visible-noise fixes (placeholder/URLs/CVEs) (279fcba7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.106 — Setup Wizard: SPN-mode toggle (Create new vs Use existing)
+
+The Tenant Identity step in the HTML wizard was forcing operators to enter an existing **App registration (client) ID GUID** — wrong default for a new-customer workflow, since the v2.2.105 backend can create the SPN automatically. Added the choice.
+
+**New on the Tenant Identity page:**
+
+- **SPN mode** toggle at the top: **Create new SPN** (default, recommended for newbies) | **Use existing SPN** (legacy / power-user).
+- When **Create new** is selected:
+  - The App ID GUID field is hidden — replaced with a single **SPN display name** input (e.g. `sp-securityinsight-myorg`).
+  - Credential card switches to "Client secret / Self-signed certificate" (what to **generate**) plus a **cred storage** radio (`Azure Key Vault` *(preferred)* / `Local cert store` *(cert only)* / `Inline in custom.ps1` *(secret only)*).
+  - Generated snippet preview shows a comment block describing what `/api/apply` will do on submit (creates app reg, generates cred, applies Graph + Azure perms, grants RBAC).
+- When **Use existing** is selected: the original v2.2 form (App ID + KV name + secret name OR certificate thumbprint) is preserved verbatim — existing operators see no change.
+
+Required-field validation is mode-aware: `tenantRequiredKeys()` now branches on `spnMode` so the Next button gates correctly per chosen path. State persists in `localStorage` like every other wizard answer.
+
+**What's still pending:**
+- HTML "Apply" page that POSTs the full state to `/api/apply` and renders progress UI — `v2.2.107`.
+- Live log SSE streaming + drop Power BI / Workbook tabs — `v2.2.108`.
+
+Until the Apply page lands, operators using **Create new** can drive the wizard's HTML to fill in all 10 pages, then trigger the apply directly via `Invoke-RestMethod -Method POST http://localhost:8766/api/apply -Body $stateJson` (the API is live since v2.2.105).
 
 ---
 

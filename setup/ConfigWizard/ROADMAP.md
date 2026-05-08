@@ -89,7 +89,7 @@ For **Azure-hosted runners with a Managed Identity**, the wizard offers a "Use M
 | `v2.2.103` | ✅ shipped | `Start-SetupWizard.ps1` HttpListener skeleton + this ROADMAP + 3-step Quick Start docs |
 | `v2.2.104` | ✅ shipped | README cleanup: Quick Start moved under § 4, stale `3.X` labels renumbered to match TOC |
 | `v2.2.105` | ✅ shipped | **Backend cmdlets + `/api/apply` orchestration LIVE** — `New-SISpn` (Secret + Cert + MSI; KV / Local / Inline storage), `Initialize-SIInfra` (LA + DCE + Storage with **RBAC-only**, no `SI_StorageKey`), `Write-SICustomConfig` (renders `custom.ps1` from collected state with optional sections). API callable directly via `Invoke-RestMethod` against `http://localhost:8766/api/apply`. |
-| `v2.2.106` | ⏳ planned | HTML wizard's Tenant Identity step — SPN-name field + cred-type radios + cred-storage radios |
+| `v2.2.106` | ✅ shipped | HTML wizard's Tenant Identity step — **SPN mode toggle** (Create new vs Use existing) + SPN-name field + cred-type radios + cred-storage radios |
 | `v2.2.107` | ⏳ planned | HTML wizard's new Apply page — collects state → POSTs to `/api/apply` → renders progress UI |
 | `v2.2.108` | ⏳ planned | Live log SSE streaming on `/api/log-stream`; drop Power BI + Workbook tabs from HTML |
 | `v2.2.109` | ⏳ planned | Smoke-test on lab + 2 customer tenants, polish, README Step 2 rewrite to "fully working" |

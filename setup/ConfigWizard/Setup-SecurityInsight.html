@@ -99,40 +99,84 @@
       </div>
 
       <div class="card">
-        <h3>Tenant + service principal</h3>
-        <p class="card-sub">All three are required. Tenant + App ID are GUIDs; the wizard validates the format inline.</p>
+        <h3>SPN mode</h3>
+        <p class="card-sub">First time setting up SecurityInsight? Pick <b>Create new SPN</b> &mdash; the wizard creates an Entra app registration, generates the credential, applies all the Microsoft Graph + Azure permissions, and grants the right RBAC for you. Already have an SPN? Pick <b>Use existing</b> and paste its details.</p>
 
-        <div class="form-grid">
-          <div class="field required">
-            <label for="f_tenant">Tenant ID (GUID)</label>
-            <input type="text" id="f_tenant" data-key="tenantId" autocomplete="off"
-                   placeholder="00000000-0000-0000-0000-000000000000" />
-            <span class="err" data-err="tenantId">Must be a GUID, e.g. 12345678-aaaa-bbbb-cccc-1234567890ab</span>
+        <div class="toggle-group" data-toggle-key="spnMode" style="margin-bottom: 4px;">
+          <label data-val="createNew"><input type="radio" name="spnMode" value="createNew" /> Create new SPN <b style="color:#1b5e20;">(recommended for newbies)</b></label>
+          <label data-val="useExisting"><input type="radio" name="spnMode" value="useExisting" /> Use existing SPN</label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Tenant + service principal</h3>
+
+        <!-- ===== Create-new mode ===== -->
+        <div data-spn-mode-block="createNew">
+          <p class="card-sub">Type a friendly display name for the new SPN; the wizard creates the app registration on Apply.</p>
+          <div class="form-grid">
+            <div class="field required">
+              <label for="f_tenant">Tenant ID (GUID)</label>
+              <input type="text" id="f_tenant" data-key="tenantId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="tenantId">Must be a GUID, e.g. 12345678-aaaa-bbbb-cccc-1234567890ab</span>
+            </div>
+            <div class="field required">
+              <label for="f_spnname">SPN display name</label>
+              <input type="text" id="f_spnname" data-key="spnDisplayName" autocomplete="off"
+                     placeholder="sp-securityinsight-myorg"
+                     data-default="sp-securityinsight" />
+              <span class="err" data-err="spnDisplayName">Required. 3+ chars; alphanumerics + hyphens.</span>
+            </div>
           </div>
-          <div class="field required">
-            <label for="f_app">App registration (client) ID (GUID)</label>
-            <input type="text" id="f_app" data-key="appId" autocomplete="off"
-                   placeholder="00000000-0000-0000-0000-000000000000" />
-            <span class="err" data-err="appId">Must be a GUID</span>
+        </div>
+
+        <!-- ===== Use-existing mode ===== -->
+        <div data-spn-mode-block="useExisting" hidden>
+          <p class="card-sub">All three are required. Tenant + App ID are GUIDs; the wizard validates the format inline.</p>
+          <div class="form-grid">
+            <div class="field required">
+              <label for="f_tenant_e">Tenant ID (GUID)</label>
+              <input type="text" id="f_tenant_e" data-key="tenantId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="tenantId">Must be a GUID</span>
+            </div>
+            <div class="field required">
+              <label for="f_app">App registration (client) ID (GUID)</label>
+              <input type="text" id="f_app" data-key="appId" autocomplete="off"
+                     placeholder="00000000-0000-0000-0000-000000000000" />
+              <span class="err" data-err="appId">Must be a GUID</span>
+            </div>
           </div>
         </div>
       </div>
 
       <div class="card">
         <h3>Credential</h3>
-        <p class="card-sub">Pick how the SPN proves who it is. Certificate is recommended for production; Key Vault secret is the easiest for lab tenants.</p>
+        <p class="card-sub" data-spn-mode-block="createNew">Pick what kind of credential the wizard should generate, and where it should be stored. <b>Client secret</b> is easiest; <b>self-signed certificate</b> is recommended for production.</p>
+        <p class="card-sub" data-spn-mode-block="useExisting" hidden>Pick how your existing SPN proves who it is. Key Vault secret is the easiest path; certificate thumbprint requires the cert to be in the launcher's local cert store.</p>
 
         <div class="toggle-group" data-toggle-key="credType" style="margin-bottom: 16px;">
-          <label data-val="kvSecret"><input type="radio" name="credType" value="kvSecret" /> Key Vault secret</label>
-          <label data-val="certThumb"><input type="radio" name="credType" value="certThumb" /> Certificate thumbprint</label>
+          <label data-val="kvSecret"><input type="radio" name="credType" value="kvSecret" /> Client secret</label>
+          <label data-val="certThumb"><input type="radio" name="credType" value="certThumb" /> Self-signed certificate</label>
         </div>
 
-        <!-- Key Vault secret block -->
-        <div class="form-grid" data-cred-block="kvSecret">
+        <!-- Cred storage choice (Create-new mode only) -->
+        <div data-spn-mode-block="createNew" style="margin-bottom: 16px;">
+          <p class="card-sub" style="margin-top:0;">Where the credential lives once generated:</p>
+          <div class="toggle-group" data-toggle-key="credStorage">
+            <label data-val="KeyVault"><input type="radio" name="credStorage" value="KeyVault" /> Azure Key Vault <b style="color:#5a6a7a;">(preferred)</b></label>
+            <label data-val="LocalCertStore"><input type="radio" name="credStorage" value="LocalCertStore" /> Local cert store <span style="color:#888;">(cert only)</span></label>
+            <label data-val="Inline"><input type="radio" name="credStorage" value="Inline" /> Inline in custom.ps1 <span style="color:#888;">(secret only)</span></label>
+          </div>
+        </div>
+
+        <!-- Key Vault secret block (Use-existing mode -- type the existing secret name) -->
+        <div class="form-grid" data-cred-block="kvSecret" data-spn-mode-block="useExisting" hidden>
           <div class="field required">
             <label for="f_kv">Key Vault name</label>
             <input type="text" id="f_kv" data-key="kvName" autocomplete="off"
-                   placeholder="kv-2linkit-automation-p" />
+                   placeholder="kv-myorg-automation-p" />
             <span class="err" data-err="kvName">3-24 chars, lowercase letters / digits / hyphens, must start with a letter.</span>
           </div>
           <div class="field required">
@@ -144,8 +188,18 @@
           </div>
         </div>
 
-        <!-- Certificate thumbprint block -->
-        <div class="form-grid" data-cred-block="certThumb" hidden>
+        <!-- Optional KV name input for Create-new + KeyVault storage -->
+        <div class="form-grid" data-spn-mode-block="createNew" data-cred-storage-block="KeyVault">
+          <div class="field required span-2">
+            <label for="f_kvnew">Key Vault name <span style="color:#888;font-weight:400;">(must already exist; wizard stores the cred here)</span></label>
+            <input type="text" id="f_kvnew" data-key="kvName" autocomplete="off"
+                   placeholder="kv-myorg-securityinsight" />
+            <span class="err" data-err="kvName">3-24 chars, lowercase letters / digits / hyphens, must start with a letter.</span>
+          </div>
+        </div>
+
+        <!-- Certificate thumbprint block (Use-existing mode only) -->
+        <div class="form-grid" data-cred-block="certThumb" data-spn-mode-block="useExisting" hidden>
           <div class="field required span-2">
             <label for="f_thumb">Certificate thumbprint (40 hex chars, no spaces)</label>
             <input type="text" id="f_thumb" data-key="certThumbprint" autocomplete="off"

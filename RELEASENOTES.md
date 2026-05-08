@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.126
+## v2.2.127
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.127 - README §4 refresh + DCE-via-REST fix + Tag Contributor opt-in (9671dea1)
 - release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
 - release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
 - release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.100 - README headline blurb rewrite (930776df)
 - release: SecurityInsight v2.2.99 - AI summary: Total + Weighted Risk Score per asset + reference links (c89d113a)
 - release: SecurityInsight v2.2.98 - README: drop "See § 10 What's New" pointer (2ea0d016)
-- release: SecurityInsight v2.2.97 - README: KPI bullet to last + add 2 mail screenshots (f7648270)
 
 ---
 
@@ -43,23 +43,101 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 
 ---
 
+## v2.2.127 — README §4.1 refresh + DCE-creation-via-REST fix + Tag Contributor opt-in (no longer default)
+
+Three changes bundled together — two are fixes the live test surfaced, one is the docs refresh:
+
+### Fix 1 — `New-AzDataCollectionEndpoint` always fails with "InvalidResource" → switch to REST PUT
+
+The Az.Monitor cmdlet `New-AzDataCollectionEndpoint` (verified up to module v0.10.x as of 2026-04) sends a body without the required `properties` wrapper. Live test stack:
+
+```
+[STEP] create Data Collection Endpoint
+phase=infra FAILED: [InvalidResource] : Invalid resource payload: 'properties' are missing.
+```
+
+`Initialize-SIInfra.ps1` now **always uses REST PUT** for DCE creation -- the body is the same shape that was already in the cmdlet-missing fallback path (`{ location, properties: { networkAcls: { publicNetworkAccess: 'Enabled' } } }`), just promoted to the always-on path. The Az PowerShell module is still used to mint the bearer token (`Get-AzAccessToken` inherits the wizard's pre-flighted Az context). The `Az.Monitor` import is now `-ErrorAction SilentlyContinue` and only used for `Get-AzDataCollectionEndpoint` (read-only existence check) when the module ships it. Failure path also now surfaces the actual ARM response body (via `$_.ErrorDetails.Message`) instead of the wrapped exception string, so future ARM errors here get a clear stack.
+
+### Fix 2 — Tag Contributor at tenant-root MG is now opt-in, NOT default
+
+`Tag Contributor` at tenant-root MG lets the SPN write tags to **every resource in every subscription in the tenant** -- way too broad for the default install. It's only needed by the asset-exclusion-tagging engine, which most customers don't run.
+
+`New-SISpn.ps1` now grants:
+- **Reader** at tenant-root MG -- always (drives Azure asset-profiling sub discovery + cross-sub LA queries).
+- **Tag Contributor** at tenant-root MG -- **only when `-IncludeTagContributor` switch is set**.
+
+`Start-SetupWizard.ps1`'s `/api/apply` handler now passes `-IncludeTagContributor` through when `state.spn.includeTagContributor` is true (a future asset-tagging wizard page will toggle this; for now it stays false → Tag Contributor not granted).
+
+Existing customers who already ran the wizard pre-v2.2.127 will have Tag Contributor at tenant-root MG -- it's harmless on subsequent runs (idempotent re-use sees it as `already in place` and continues). To remove it manually:
+
+```powershell
+Remove-AzRoleAssignment -ObjectId <spn-object-id> `
+  -RoleDefinitionName 'Tag Contributor' `
+  -Scope "/providers/Microsoft.Management/managementGroups/<tenant-id>"
+```
+
+### Docs — README §4 fully refreshed
+
+Comprehensive refresh of `README.md` §4 "How to Implement (Quick Start)" to match v2.2.126's wizard reality + add docs the user kept hitting friction on:
+
+**§4.1 — Three-step quick start, fully rewritten:**
+- Prereqs section drops the "Global Admin required" hard line (consent-pending fallback handles non-admin operators); lists the actual `Install-Module` commands; calls out the two `Connect-*` commands the operator must run BEFORE launching the wizard.
+- Step 2 fully documents the v2.2.113 pre-flight pattern (Connect-AzAccount + Connect-MgGraph in the launching shell; wizard refuses to start if either is missing). Explains why no popups/device-codes inside the wizard process (Conditional-Access-friendly).
+- "What the wizard does" 3-row table (SPN / Infrastructure / Config file) with concrete tenant-side outcomes per phase.
+- "Engine host + bootstrap auth" 3-row explainer table for Win11/Server vs Azure VM with MI vs Container Apps Job with MI.
+- Wizard tour: 9-row screenshot walkthrough table with one PNG per step (Welcome through Setup before/after).
+
+**New sub-section — Permissions granted by the wizard (full disclosure):** 5 tables documenting:
+1. 13 Microsoft Graph application permissions granted to the SI SPN.
+2. 9 Azure RBAC role assignments — role / scope / why / skip-able.
+3. Managed Identity permissions (when host = Azure VM/Container Apps with MI).
+4. Entra ID Diagnostic Setting categories (when no-Sentinel path picked).
+5. Azure resource provider auto-registrations.
+
+This is the full inventory of what the wizard touches. Nothing hidden.
+
+**New sub-section §4.1.1 — Updating to the latest version:** documents `git pull` workflow (stash → pull → pop), what gets updated vs preserved across pulls (gitignored: custom config + launcher overrides + DATA/OUTPUT + logs + *.bak.*), version verification (`Get-Content .\VERSION`), rollback procedure (`git checkout SI-2.2.<n>`).
+
+**Updated `docs/screenshots/wizard/README.md`** — capture-list now lists 10 screenshot filenames (was 4) covering Welcome + Steps 1-7 + Step 8 before/after with one-line description per screenshot.
+
+---
+
 ## v2.2.126 — Setup Wizard: auto-register Azure resource providers + rename "Apply" button to "Setup"
 
-**1. Auto-register required Azure resource providers (the actual Phase-2 fix).** Live test on a brand-new sub failed Phase 2 with `[InvalidResource] : Invalid resource payload: 'properties' are missing` -- a misleading wrapper for "the resource provider this resource lives under isn't registered on the subscription." On the test sub, three RPs were `NotRegistered`:
+Comprehensive refresh of `README.md` §4 "How to Implement (Quick Start)" to match v2.2.126's wizard reality + add docs the user kept hitting friction on:
 
-- `Microsoft.Monitor` -- newer namespace where Az.Monitor SDK now PUTs Data Collection Endpoints
-- `Microsoft.AlertsManagement` -- triggered by some Az.OperationalInsights workspace settings
-- `Microsoft.KeyVault` -- needed when cred storage = KV
+**§4.1 — Three-step quick start, fully rewritten:**
 
-`Initialize-SIInfra.ps1` now runs an explicit pre-flight (new "step 1b") at the start of Phase 2:
-- Lists 7 required RPs (`Microsoft.Resources`, `Microsoft.OperationalInsights`, `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.Storage`, `Microsoft.Authorization`, `Microsoft.AlertsManagement`) plus `Microsoft.KeyVault` if `-CreateKeyVault` or `-KeyVaultName` is set.
-- Checks each one's `RegistrationState`. If any are not `Registered`, calls `Register-AzResourceProvider` for each and waits up to 4 minutes for them to flip (polling every 12 s).
-- Logs each step (`Register-AzResourceProvider X kicked off` / `still registering: ...` / `all providers Registered`).
-- Soft-failure if a provider doesn't finish within 4 min: emits a warning and continues -- already-Registered child types may still let creation succeed, and the actual resource creation will surface a clearer error if it really matters.
+- **Prereqs section** rewritten: drops the "Global Admin required" hard line (consent-pending fallback handles non-admin operators), lists the actual `Install-Module` commands, calls out the two `Connect-*` commands the operator must run BEFORE launching the wizard.
+- **Step 2 — Authenticate, then launch the Setup Wizard**: fully documents the v2.2.113 pre-flight pattern (Connect-AzAccount + Connect-MgGraph in the launching shell; wizard refuses to start if either is missing). Explains why no popups/device-codes inside the wizard process (Conditional-Access-friendly).
+- **What the wizard does** table: 3 rows (SPN / Infrastructure / Config file) with concrete tenant-side outcomes for each phase.
+- **Engine host + bootstrap auth** explainer (3-row table for Win11/Server vs Azure VM with MI vs Container Apps Job with MI) covering valid storage options per host.
+- **Wizard tour — screenshot walkthrough**: 9-row table with one screenshot per step (Welcome through Setup before/after). Filenames documented in `docs/screenshots/wizard/README.md` so operator knows exactly which PNGs to drop in.
 
-This turns a confusing mid-Phase-2 rejection into a clean "wait while we light up the providers" step that just works the first time.
+**New sub-section §4.1.0 (in-line) — Permissions granted by the wizard:**
 
-**2. "Apply now" button renamed to "Setup".** Aligns with the operator's vocabulary -- this is a setup wizard, not an Azure ARM "apply". Renamed in three places: the page-lead paragraph ("Click **Setup** to provision everything..."), the button label (`▶ Setup`), and the consent-pending callout instruction ("re-click **Setup** above"). The `id="btn-apply"` is unchanged for state-bind compatibility, and the underlying `/api/apply` REST endpoint stays the same (it's the API surface, not user-facing copy). The intermediate button text while running changed from `Applying...` to `Setting up...`.
+Full disclosure of every grant, in 5 tables:
+
+1. **Microsoft Graph application permissions** (13 perms granted to the SI SPN, with one-line rationale per perm).
+2. **Azure RBAC role assignments** (9 rows: role / scope / why / skip-able). Tenant-root MG grants flagged as skip-able via `-SkipTenantRbac`. Workspace + DCR-RG + storage-account scoped grants explained.
+3. **Managed Identity** (when host = Azure VM/Container Apps with MI) — the one role the wizard grants to the operator-provided MI (`Key Vault Secrets User` on the cred KV).
+4. **Entra ID Diagnostic Setting** (only when no-Sentinel path picked) — the 8 log categories, derived from RA query references.
+5. **Azure resource provider registrations** — the 7-8 RPs Phase 2 auto-registers if not already `Registered`.
+
+This is the FULL inventory of what the wizard touches in your tenant. Nothing else gets created or modified.
+
+**New sub-section §4.1.1 — Updating to the latest version:**
+
+Documents `git pull` workflow:
+- The `git stash` → `git pull --ff-only origin main` → `git stash pop` dance for preserving local tweaks.
+- What gets updated (engines, launchers, queries, docs, wizard).
+- What is preserved across pulls (gitignored): `config\SecurityInsight.custom.ps1`, `launcher\<engine>\LauncherConfig.custom.ps1`, `DATA\OUTPUT\`, `logs\`, `*.bak.<timestamp>`.
+- Verifying current version after pull (`Get-Content .\VERSION` + `git log -1`).
+- Rollback procedure (`git checkout SI-2.2.<n>`).
+
+**Updated `docs/screenshots/wizard/README.md`** — capture-list now lists 10 screenshot filenames (was 4) covering Welcome + Steps 1-7 + Step 8 before/after, with one-line description per screenshot. Operator knows exactly which PNGs to drop in. PowerShell capture commands included.
+
+Ships in lock-step with the wizard backend changes (DCE REST + Tag Contributor opt-in) so customers cloning fresh from `main` see docs that match the wizard they get.
 
 ---
 

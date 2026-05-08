@@ -195,29 +195,46 @@ if (-not $ws) {
 $workspaceResourceId = $ws.ResourceId
 
 # ----- 4. Data Collection Endpoint -----
-Import-Module Az.Monitor -ErrorAction Stop
-$dceCmd = Get-Command New-AzDataCollectionEndpoint -ErrorAction SilentlyContinue
+# We ALWAYS use REST PUT for DCE creation. The Az.Monitor cmdlet
+# `New-AzDataCollectionEndpoint` (verified up to module v0.10.x as of
+# 2026-04) ships a body without the required `properties` wrapper, so the
+# call fails with `[InvalidResource] : Invalid resource payload:
+# 'properties' are missing.` mid-Phase-2. The REST PUT body below was
+# already in the cmdlet-missing fallback path -- we just promote it to
+# the always-on path. Az PowerShell still gets us the bearer token
+# (Get-AzAccessToken inherits the Az context the wizard pre-flighted).
+Import-Module Az.Monitor -ErrorAction SilentlyContinue   # for Get-AzDataCollectionEndpoint read-only check (if available)
 $dce = $null
+$dceCmd = Get-Command Get-AzDataCollectionEndpoint -ErrorAction SilentlyContinue
 if ($dceCmd) {
     $dce = Get-AzDataCollectionEndpoint -ResourceGroupName $ResourceGroupName -Name $DceName -ErrorAction SilentlyContinue
-    if (-not $dce) {
-        _Step "create Data Collection Endpoint"
-        $dce = New-AzDataCollectionEndpoint -ResourceGroupName $ResourceGroupName -Name $DceName -Location $Location -ErrorAction Stop
-        _Ok ("DCE created: {0}" -f $dce.LogIngestion.Endpoint)
-    } else {
-        _Info ("DCE already exists: {0}" -f $dce.LogIngestion.Endpoint)
-    }
-} else {
-    _Warn 'Az.Monitor lacks New-AzDataCollectionEndpoint -- falling back to REST.'
+}
+if (-not $dce) {
+    _Step "create Data Collection Endpoint (via REST)"
     $token = (Get-AzAccessToken -ResourceUrl 'https://management.azure.com/').Token
     $dceUri = "https://management.azure.com/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName/providers/Microsoft.Insights/dataCollectionEndpoints/$($DceName)?api-version=2023-03-11"
-    $body = @{ location = $Location; properties = @{ networkAcls = @{ publicNetworkAccess = 'Enabled' } } } | ConvertTo-Json -Depth 5
-    $resp = Invoke-RestMethod -Uri $dceUri -Method Put -Headers @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' } -Body $body
+    $body = @{
+        location   = $Location
+        properties = @{
+            networkAcls = @{ publicNetworkAccess = 'Enabled' }
+        }
+    } | ConvertTo-Json -Depth 5
+    try {
+        $resp = Invoke-RestMethod -Uri $dceUri -Method Put -Headers @{ Authorization = "Bearer $token"; 'Content-Type' = 'application/json' } -Body $body -ErrorAction Stop
+    } catch {
+        # Surface the actual ARM error body so the operator sees more than
+        # the wrapped exception message.
+        $detail = $_.Exception.Message
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $detail = $_.ErrorDetails.Message }
+        throw "DCE REST PUT failed for $DceName : $detail"
+    }
     $dce = [pscustomobject]@{
         LogIngestion = [pscustomobject]@{ Endpoint = $resp.properties.logsIngestion.endpoint }
         Id           = $resp.id
     }
-    _Ok ("DCE provisioned via REST: {0}" -f $dce.LogIngestion.Endpoint)
+    _Ok ("DCE created: {0}" -f $dce.LogIngestion.Endpoint)
+} else {
+    _Info ("DCE already exists: {0}" -f $dce.LogIngestion.Endpoint)
 }
 $dceIngestionUri = $dce.LogIngestion.Endpoint
 

@@ -29,7 +29,7 @@
     Azure subscription ID where SI will run. Used to scope the RBAC.
 
 .PARAMETER RootMgId
-    Tenant-root management group ID. RBAC (Reader + Tag Contributor) is granted at this scope
+    Tenant-root management group ID. RBAC (Reader by default; Tag Contributor only when -IncludeTagContributor is set) is granted at this scope
     so the engine can query Azure Resource Graph across all subscriptions in the tenant.
     Defaults to the TenantId (which is the default name of the root MG).
 
@@ -103,7 +103,8 @@ param(
     [Parameter()]          [string]$ManagedIdentityClientId,   # required when CredKind=ManagedIdentity
     [Parameter()]          [string[]]$GraphPermissions,
     [Parameter()]          [switch]$SkipAdminConsent,
-    [Parameter()]          [switch]$SkipTenantRbac
+    [Parameter()]          [switch]$SkipTenantRbac,
+    [Parameter()]          [switch]$IncludeTagContributor   # opt-in: granted ONLY when asset-exclusion-tagging engine is in scope
 )
 
 $ErrorActionPreference = 'Stop'
@@ -375,13 +376,25 @@ $rootMgScope = "/providers/Microsoft.Management/managementGroups/$RootMgId"
 $readerRoleId       = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'   # Reader
 $tagContributorId   = '4a9ae827-6dc8-4573-8ac7-8239d42aa03f'   # Tag Contributor
 
+# Build the role list for tenant-root MG. Reader is always included (drives
+# subscription discovery + cross-sub LA queries). Tag Contributor is OPT-IN
+# only when -IncludeTagContributor is set -- it's needed exclusively by the
+# asset-exclusion-tagging engine, which most customers don't run. Granting
+# Tag Contributor at tenant-root MG by default is too broad: it lets the SPN
+# write tags to every resource in every subscription in the tenant.
+$tenantRolePairs = @(@{Name='Reader'; Id=$readerRoleId})
+if ($IncludeTagContributor) {
+    $tenantRolePairs += @{Name='Tag Contributor'; Id=$tagContributorId}
+}
+
 if ($SkipTenantRbac) {
-    _Info 'SkipTenantRbac set -- skipping Reader + Tag Contributor at tenant-root MG'
-    foreach ($pair in @(@{Name='Reader'; Id=$readerRoleId}, @{Name='Tag Contributor'; Id=$tagContributorId})) {
+    $rolesSkipped = ($tenantRolePairs | ForEach-Object { $_.Name }) -join ' + '
+    _Info ("SkipTenantRbac set -- skipping {0} at tenant-root MG" -f $rolesSkipped)
+    foreach ($pair in $tenantRolePairs) {
         $rbacResults += @{ Name = $pair.Name; Scope = $rootMgScope; Status = 'skipped'; Error = 'SkipTenantRbac set' }
     }
 } else {
-    foreach ($pair in @(@{Name='Reader'; Id=$readerRoleId}, @{Name='Tag Contributor'; Id=$tagContributorId})) {
+    foreach ($pair in $tenantRolePairs) {
         $existing = Get-AzRoleAssignment -ObjectId $sp.Id -Scope $rootMgScope -RoleDefinitionId $pair.Id -ErrorAction SilentlyContinue
         if ($existing) {
             _Info ("RBAC {0} already in place at root MG" -f $pair.Name)

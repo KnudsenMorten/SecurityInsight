@@ -598,7 +598,16 @@ The wizard opens in your browser at `http://localhost:8766` and walks you throug
 
 Cross-platform: runs on **Windows 11** + **Windows Server**, both **on-prem** and **Azure-hosted**. On Azure-hosted runners with a Managed Identity, the wizard offers an MSI alternative for storage RBAC instead of an SPN cred.
 
-> 🚧 **Status — building incrementally on `main`.** The HTML wizard (config-snippet generator) ships today; the *Apply* page automation rolls in across `v2.2.103+`. Per-tag scope: [`setup/ConfigWizard/ROADMAP.md`](./setup/ConfigWizard/ROADMAP.md). Until the Apply page is fully wired, Steps 4–7 below are the manual-equivalent path — exactly what the wizard will orchestrate for you, just one script per phase.
+> ✅ **Apply page is LIVE** as of `v2.2.107`. The wizard now drives the entire onboarding from the browser — SPN creation, Log Analytics + DCE + Storage provisioning, and the `config\SecurityInsight.custom.ps1` write all happen on **Apply now**. Per-tag scope: [`setup/ConfigWizard/ROADMAP.md`](./setup/ConfigWizard/ROADMAP.md). Steps 4–7 below remain available as the manual-equivalent path for power users who want to drive each phase by hand.
+
+**Wizard tour (screenshots):**
+
+| Step | Screenshot |
+|------|------------|
+| 1 — Tenant identity (SPN mode toggle + display name) | ![Wizard Step 1 — Tenant identity](docs/screenshots/wizard/01-tenant-identity.png) |
+| 2 — Workspace + ingestion (defaults pre-filled) | ![Wizard Step 2 — Workspace + ingestion](docs/screenshots/wizard/02-workspace-ingestion.png) |
+| 10 — Apply page (3-phase progress) | ![Wizard Step 10 — Apply page](docs/screenshots/wizard/10-apply-page.png) |
+| 10 — Apply page after success | ![Wizard Step 10 — Apply succeeded](docs/screenshots/wizard/10-apply-success.png) |
 
 #### Step 3 — Create your customer config (the ONLY file you must edit)
 

@@ -161,9 +161,13 @@ function psQuote(v) {
 // Returns { quoted, isDefault } so the snippet can mark default lines visibly.
 function resolveValue(key, fallback) {
   const v = state.data[key];
-  if (v != null && v !== '') return { quoted: psQuote(v), isDefault: false };
   const el = document.querySelector('input[data-key="' + key + '"]');
   const def = el ? el.getAttribute('data-default') : null;
+  if (v != null && v !== '') {
+    // Defaults are pre-seeded into state, so flag isDefault when the
+    // user-visible value still matches the recommended default.
+    return { quoted: psQuote(v), isDefault: (def != null && v === def) };
+  }
   if (def) return { quoted: psQuote(def), isDefault: true };
   return { quoted: psQuote(fallback), isDefault: false };
 }
@@ -358,6 +362,16 @@ function hydrateForms() {
   // Text inputs
   document.querySelectorAll('input[data-key]').forEach(input => {
     const key = input.dataset.key;
+    // First-touch default seeding: if the field has a data-default and the
+    // user has never written to it (state is null/undefined, NOT empty
+    // string -- empty means they cleared it deliberately), seed the state
+    // and the input value from data-default so the recommended value is
+    // visible and "accept defaults = just click Next" works.
+    const def = input.getAttribute('data-default');
+    if (state.data[key] == null && def) {
+      state.data[key] = def;
+      saveState();
+    }
     if (state.data[key] != null) input.value = state.data[key];
     if (!input._wired) {
       input.addEventListener('input', () => {
@@ -544,3 +558,213 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+
+
+// ===========================================================================
+// APPLY PAGE  (Step 10) -- POSTs the wizard's collected state to /api/apply,
+// renders 3-phase progress (SPN -> Infrastructure -> Config file), shows the
+// result (or error) in-page. The /api/apply backend is live since v2.2.105.
+// ===========================================================================
+function buildApplyState() {
+    var d = state.data || {};
+    var st = {
+        tenantId:       d.tenantId       || '',
+        subscriptionId: d.subscriptionId || '',
+        spn: {
+            displayName: d.spnMode === 'createNew' ? (d.spnDisplayName || 'sp-securityinsight') : null,
+            credKind:    d.credType === 'certThumb' ? 'Cert' : 'Secret',
+            credStorage: d.credStorage || 'Inline'
+        },
+        infra: {
+            location:           d.location           || 'westeurope',
+            resourceGroupName:  d.workspaceRg        || 'rg-securityinsight',
+            workspaceName:      d.workspaceName      || 'log-platform-management-securityinsight',
+            dceName:            d.dceName            || 'dce-securityinsight',
+            storageAccountName: d.storageAccountName || ''
+        }
+    };
+    if (d.kvName) {
+        st.spn.keyVaultName = d.kvName;
+        st.infra.keyVaultName = d.kvName;
+    }
+    if (d.smtpServer || d.mailTo) {
+        st.smtp = {
+            Server:   d.smtpServer || null,
+            Port:     d.smtpPort   ? Number(d.smtpPort) : 587,
+            UseSsl:   d.smtpUseSsl !== false,
+            User:     d.smtpUser     || null,
+            Password: d.smtpPassword || null,
+            From:     d.smtpFrom     || null,
+            MailTo:   (d.mailTo || '').split(/[,;\s]+/).filter(Boolean)
+        };
+    }
+    if (d.openAiEndpoint) {
+        st.openAi = {
+            Endpoint:    d.openAiEndpoint,
+            Deployment:  d.openAiDeployment || null,
+            ApiKey:      d.openAiApiKey || null
+        };
+    }
+    if (d.shodanApiKey) {
+        st.shodan = { ApiKey: d.shodanApiKey };
+    }
+    if (d.cmdbEnabled) {
+        st.cmdb = { Enabled: true, RefreshHours: d.cmdbRefreshHours ? Number(d.cmdbRefreshHours) : 24, CsvPath: d.cmdbCsvPath || null };
+    }
+    if (d.enableJsonSink) st.enableJsonSink = true;
+    if (d.defenderWorkspaceResourceId) st.defenderWorkspaceResourceId = d.defenderWorkspaceResourceId;
+    return st;
+}
+
+function renderApplySummary() {
+    var d = state.data || {};
+    var st = buildApplyState();
+    var spnEl = document.getElementById('apply-summary-spn');
+    if (spnEl) {
+        if (d.spnMode === 'createNew') {
+            spnEl.textContent =
+                'Create SPN "' + st.spn.displayName + '" in tenant ' + (st.tenantId || '<TENANT-ID>') + '\n' +
+                'Cred kind    : ' + st.spn.credKind + '\n' +
+                'Cred storage : ' + st.spn.credStorage +
+                (st.spn.keyVaultName ? ('\nKey Vault    : ' + st.spn.keyVaultName) : '');
+        } else {
+            spnEl.textContent = 'Use existing SPN ' + (d.appId || '<APP-ID>') + ' in tenant ' + (st.tenantId || '<TENANT-ID>');
+        }
+    }
+    var inEl = document.getElementById('apply-summary-infra');
+    if (inEl) {
+        inEl.textContent =
+            'Subscription : ' + (st.subscriptionId || '<SUB-ID>') + '\n' +
+            'Location     : ' + st.infra.location + '\n' +
+            'Workspace    : ' + st.infra.workspaceName + ' (RG ' + st.infra.resourceGroupName + ')\n' +
+            'DCE          : ' + st.infra.dceName + '\n' +
+            'Storage      : ' + (st.infra.storageAccountName || '<STORAGE-ACCT>') + '   <- RBAC-only, no shared key';
+    }
+    var cfgEl = document.getElementById('apply-summary-config');
+    if (cfgEl) {
+        var optional = [];
+        if (st.smtp)     optional.push('SMTP');
+        if (st.openAi)   optional.push('Azure OpenAI');
+        if (st.shodan)   optional.push('Shodan');
+        if (st.cmdb)     optional.push('CMDB');
+        if (st.enableJsonSink) optional.push('JSON sink');
+        cfgEl.textContent = 'Write config\\SecurityInsight.custom.ps1 (existing file backed up to *.bak.<timestamp>).\n' +
+            'Optional sections: ' + (optional.length ? optional.join(', ') : 'none');
+    }
+    var pre = document.getElementById('preview-apply');
+    if (pre) {
+        var safeSt = JSON.parse(JSON.stringify(st));
+        if (safeSt.smtp && safeSt.smtp.Password)   safeSt.smtp.Password = '***';
+        if (safeSt.openAi && safeSt.openAi.ApiKey) safeSt.openAi.ApiKey = '***';
+        if (safeSt.shodan && safeSt.shodan.ApiKey) safeSt.shodan.ApiKey = '***';
+        pre.textContent = JSON.stringify(safeSt, null, 2);
+    }
+}
+
+function setApplyPhase(phase, status) {
+    var el = document.querySelector('.apply-phase[data-phase="' + phase + '"]');
+    if (!el) return;
+    el.dataset.status = status;
+    var ic = el.querySelector('.apply-icon');
+    var stEl = el.querySelector('.apply-status');
+    if (ic) {
+        ic.innerHTML = status === 'ok' ? '&#10003;'
+                       : status === 'failed' ? '&#10007;'
+                       : status === 'running' ? '&#9696;'
+                       : '&#9711;';
+    }
+    if (stEl) stEl.textContent = status;
+}
+
+function setApplyStatePill(text, bg) {
+    var p = document.getElementById('apply-state-pill');
+    if (!p) return;
+    p.textContent = text;
+    if (bg) p.style.background = bg;
+}
+
+function _esc(s) {
+    return String(s).replace(/[<&>]/g, function(c) { return c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&amp;'; });
+}
+
+async function runApply() {
+    var btn = document.getElementById('btn-apply');
+    var progress = document.getElementById('apply-progress');
+    var result = document.getElementById('apply-result');
+    if (!btn || !progress || !result) return;
+    btn.disabled = true;
+    btn.textContent = 'Applying...';
+    progress.style.display = 'block';
+    result.innerHTML = '';
+    setApplyPhase('spn', 'running');
+    setApplyPhase('infra', 'pending');
+    setApplyPhase('config', 'pending');
+    setApplyStatePill('RUNNING', '#fff4e5');
+
+    var payload = JSON.stringify(buildApplyState());
+    var respText = '';
+    try {
+        var resp = await fetch('/api/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: payload
+        });
+        respText = await resp.text();
+        var obj = null;
+        try { obj = JSON.parse(respText); } catch (e) { /* keep raw */ }
+
+        if (resp.ok && obj && obj.ok) {
+            setApplyPhase('spn', 'ok');
+            setApplyPhase('infra', 'ok');
+            setApplyPhase('config', 'ok');
+            setApplyStatePill('DONE', '#e8f5e9');
+            var appId = (obj.spn && obj.spn.AppId) || '?';
+            var wsId  = (obj.infra && obj.infra.WorkspaceResourceId) || '?';
+            var cfgPath = (obj.configFile && obj.configFile.Path) || '?';
+            var cfgBytes = (obj.configFile && obj.configFile.Bytes) || 0;
+            var cfgSecs = (obj.configFile && obj.configFile.Sections) || [];
+            result.innerHTML =
+                '<div class="note" style="background:#e8f5e9;border-left-color:#2e7d32;">' +
+                '<b>&#10003; Apply succeeded.</b><br>' +
+                'SPN AppId: <code>' + _esc(appId) + '</code><br>' +
+                'Workspace: <code>' + _esc(wsId) + '</code><br>' +
+                'Config file: <code>' + _esc(cfgPath) + '</code> (' + cfgBytes + ' bytes)<br>' +
+                'Sections written: ' + _esc(cfgSecs.join(', ') || '(none)') + '</div>';
+        } else {
+            var phase = (obj && obj.phase) || 'unknown';
+            var err   = (obj && obj.error) || respText || ('HTTP ' + resp.status);
+            var ps = (obj && obj.phaseStatus) || {};
+            ['spn','infra','config'].forEach(function(p) {
+                if (ps[p]) setApplyPhase(p, ps[p]);
+                else if (p === phase) setApplyPhase(p, 'failed');
+            });
+            setApplyStatePill('FAILED', '#fdecea');
+            result.innerHTML =
+                '<div class="note warn"><b>&#10007; Apply failed at phase: ' + _esc(phase) + '</b><br>' +
+                '<pre style="white-space:pre-wrap;font-size:12px;margin:8px 0;">' + _esc(err) + '</pre></div>';
+        }
+    } catch (e) {
+        setApplyPhase('spn', 'failed');
+        setApplyStatePill('FAILED', '#fdecea');
+        result.innerHTML = '<div class="note warn"><b>&#10007; Apply failed (network)</b><br>' + _esc(e.message || e) + '</div>';
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '&#9658; Apply now';
+    }
+}
+
+function wireApplyPage() {
+    var btn = document.getElementById('btn-apply');
+    if (btn && !btn._wired) {
+        btn.addEventListener('click', runApply);
+        btn._wired = true;
+    }
+    renderApplySummary();
+}
+
+// Re-render the apply summary every time the user lands on the review page.
+var _origGoToPage = goToPage;
+goToPage = function(id) {
+    _origGoToPage(id);
+    if (id === 'review') wireApplyPage();
+};

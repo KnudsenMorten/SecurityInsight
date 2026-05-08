@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.133
+## v2.2.134
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
 - release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
 - release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
 - release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
@@ -33,13 +34,40 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.107 - Setup Wizard Apply page LIVE + default-seeded inputs (c995910e)
 - release: SecurityInsight v2.2.106 - Setup Wizard: SPN mode toggle (Create new vs Use existing) (04859cc4)
 - release: SecurityInsight v2.2.105 - Setup Wizard backend + /api/apply LIVE (bcb9b9ad)
-- release: SecurityInsight v2.2.104 - README: move Quick Start under section 4 (fe88acdc)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.134 — Wizard SPN: add `Contributor` on workspace + DCR RG + force `SI_UseStorageOAuth`
+
+Three runtime-warning fixes the live engine surfaced after a clean v2.2.133 wizard run:
+
+**1. `Contributor` added at the LA workspace.** The engine self-heals its own RBAC every run by probing each role assignment and warning when one is missing. It expects `Contributor` (in addition to `Log Analytics Contributor`) at the workspace scope. The wizard previously only granted LA Contributor, so every engine run logged:
+
+```
+WARNING: could not grant 'Contributor' on workspace: AuthorizationFailed ...
+```
+
+`Initialize-SIInfra` now also assigns the built-in `Contributor` role (`b24988ac-6180-42a0-ab88-20f7382dd24c`) at the workspace. LA Contributor stays — the two roles together are the engine's expectation.
+
+**2. `Contributor` added at the DCR resource group.** Same pattern as #1, same warning text but at RG scope. The engine wants Contributor + Monitoring Metrics Publisher; the wizard previously only granted MMPub. Both now assigned.
+
+**3. `$global:SI_UseStorageOAuth = $true` written into `SecurityInsight.custom.ps1`.** The engine's storage path probes `Get-AzStorageAccountKey` first and falls back to OAuth when the key fetch fails. The SPN has `Storage Blob/Table/Queue Data Contributor` (data-plane only) — it does **not** have `Microsoft.Storage/storageAccounts/listKeys/action`, which is a control-plane permission only `Storage Account Contributor` or full `Contributor` on the storage account would grant. The probe failed every run with:
+
+```
+WARNING: Prestage: storage key fetch failed: Forbidden
+WARNING: 'sistaging' container ensure failed: Forbidden
+WARNING: 'securityinsight' container ensure failed: Forbidden
+```
+
+even though the engine's downstream OAuth code path would have worked. Setting `SI_UseStorageOAuth = $true` skips the listKeys probe entirely; the engine goes straight to AAD-based blob ops, where the existing data-plane RBAC roles cover create-container + read/write.
+
+**Net effect:** clean engine run with no Forbidden / AuthorizationFailed warnings on a fresh wizard install. Existing v2.2.131-133 deployments need either a) re-run wizard `/api/apply` (idempotent — adds the missing role assignments + rewrites custom config), or b) two manual `New-AzRoleAssignment -RoleDefinitionName 'Contributor'` calls + an edit to `SecurityInsight.custom.ps1` to add the new flag.
 
 ---
 

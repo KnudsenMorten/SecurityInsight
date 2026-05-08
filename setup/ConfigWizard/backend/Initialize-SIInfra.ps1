@@ -281,9 +281,18 @@ function _GrantRbac {
     }
 }
 $rbacGrants = @(
-    # Workspace: Log Analytics Contributor (lets engine create DCRs against this workspace)
-    @{ RoleId = '92aaf0da-9dab-42b6-94a3-d43ce8d16293'; Name = 'Log Analytics Contributor'; Scope = $workspaceResourceId }
-    # DCR RG: Monitoring Metrics Publisher (required for ingest)
+    # Workspace: Contributor + Log Analytics Contributor.
+    # Plain Contributor is needed because the engine itself does idempotent
+    # role-existence checks at the workspace and tries to top-up missing
+    # assignments; without Contributor the engine warns "could not grant
+    # Contributor on workspace" on every run. LA Contributor remains for
+    # explicit DCR-table-schema management semantics.
+    @{ RoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'; Name = 'Contributor';                Scope = $workspaceResourceId }
+    @{ RoleId = '92aaf0da-9dab-42b6-94a3-d43ce8d16293'; Name = 'Log Analytics Contributor';  Scope = $workspaceResourceId }
+    # DCR RG: Contributor + Monitoring Metrics Publisher.
+    # Same rationale -- the engine probes Contributor at the RG and warns when
+    # it's missing. MMPub remains as the documented ingest role.
+    @{ RoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'; Name = 'Contributor';                  Scope = "/subscriptions/$SubscriptionId/resourceGroups/$DcrResourceGroupName" }
     @{ RoleId = '3913510d-42f4-4e42-8a64-420c390055eb'; Name = 'Monitoring Metrics Publisher'; Scope = "/subscriptions/$SubscriptionId/resourceGroups/$DcrResourceGroupName" }
     # Storage account: RBAC-only -- engine reads via OAuth, no shared key in custom.ps1
     @{ RoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'; Name = 'Storage Blob Data Contributor'; Scope = $sa.Id }

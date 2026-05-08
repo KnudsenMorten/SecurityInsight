@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.137
+## v2.2.138
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
 - release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
 - release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
 - release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
@@ -33,13 +34,29 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.111 - full optional-section pages live with mouseover help + requirements-aware sub-fields (d8f535b9)
 - release: SecurityInsight v2.2.110 - Setup Wizard host+auth dropdown gates every storage option (cf40eee8)
 - release: SecurityInsight v2.2.109 - Setup Wizard Credential card visibility fix (secret vs cert) (1af73021)
-- release: SecurityInsight v2.2.108 - drop CUSTOMDATA from new SI deployments (config\ is the home) (4ca8429b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.138 — README Prerequisites: complete PowerShell module set + PS-5.1 vs pwsh-7 split
+
+The Prerequisites section listed only `Az` + `Microsoft.Graph`, missing **6 of 8** modules SI actually needs at engine runtime. New operators following the prereq list as-is would have engine runs fail on the first `Search-AzGraph` (no `Az.ResourceGraph`), `Export-Excel` (no `ImportExcel`), `ConvertFrom-Yaml` (no `powershell-yaml`), or DCR ingest (no `AzLogDcrIngestPS`).
+
+**Now documented in §4 Prerequisites:**
+
+- Full 8-module set as a table with source + which surface (wizard / engines) uses each: `Az`, `Az.ResourceGraph`, `Microsoft.Graph`, `Microsoft.Graph.Beta`, `AzLogDcrIngestPS`, `MicrosoftGraphPS`, `ImportExcel`, `powershell-yaml`.
+- Note that `Az.ResourceGraph` is **NOT** part of the `Az` meta-module — needs separate install. Easy to miss.
+- The `Ensure-SecurityInsightModules` auto-installer pattern: every engine calls it at startup, so a fresh VM with stock PS + Internet auto-bootstraps on first launcher run. Documented as the recommended path.
+- One-line manual `Install-Module` for operators who want to seed the box upfront or work air-gapped — **scoped `AllUsers`, not `CurrentUser`**, because engines run unattended under `NT AUTHORITY\SYSTEM` (Scheduled Tasks), service accounts, or Container Apps Job MIs that can't see `CurrentUser`-scoped modules. `Ensure-SecurityInsightModules` already defaults to `AllUsers`.
+- **PowerShell version split** clarified: wizard runs on **pwsh 7+** (HttpListener + Az.Accounts 5.0+ SecureString marshaling); engines run on **Windows PowerShell 5.1** as the canonical runtime (engines also run on pwsh 7, but published behaviour targets 5.1).
+- Phase 4 operator-role requirement (Security Administrator OR Global Administrator at tenant scope) added to the Azure/Entra prerequisites — `aadiam` is tenant-scoped, subscription Owner is not sufficient.
+
+Docs only — no code changes.
 
 ---
 

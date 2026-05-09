@@ -1,0 +1,52 @@
+{
+  "_comment": "Setup-SecurityInsight-Unattended.ps1 configuration. Copy to setup-unattended.json (gitignored) in this folder, then edit. null = use script default. CLI switches override anything set here.",
+
+  "Flavour": "Internal",
+  "_Flavour_options": "'Internal' = re-uses the v1 cert-based SPN, dot-sources platform-defaults.ps1, renders bridged custom.ps1. 'Community' = creates a standalone SPN, renders inline custom.ps1.",
+
+  "Sub": {
+    "TenantId":       null,
+    "SubscriptionId": null,
+    "Location":       "westeurope"
+  },
+  "_Sub_comment": "Internal flavour: TenantId null -> $global:AzureTenantId. SubscriptionId null -> $global:MainLogAnalyticsWorkspaceSubId. Community flavour: both required.",
+
+  "Resources": {
+    "ResourceGroupName":  "rg-securityinsight",
+    "WorkspaceName":      "log-platform-management-securityinsight",
+    "DceName":            "dce-securityinsight",
+    "StorageAccountName": null,
+    "NamingSuffix":       null
+  },
+  "_Resources_comment": "StorageAccountName null -> auto-derived from RG. NamingSuffix appended to all 4 names if set (e.g. '-fvf' -> rg-securityinsight-fvf).",
+
+  "Auth_Internal": {
+    "AppId":                 null,
+    "CertificateThumbprint": null,
+    "PlatformDefaultsPath":  null,
+    "TopUpGraphPerms":       true
+  },
+  "_Auth_Internal_comment": "AppId null -> $global:HighPriv_Modern_ApplicationID_Azure. CertificateThumbprint null -> $global:HighPriv_Modern_CertificateThumbprint_Azure. PlatformDefaultsPath null -> auto-resolves to <repo>\\..\\PlatformConfiguration\\config\\platform-defaults.ps1. TopUpGraphPerms=true grants the 13 SI Graph perms idempotently.",
+
+  "Auth_Community": {
+    "DisplayName":  "sp-securityinsight",
+    "CredKind":     "Cert",
+    "CredStorage":  "LocalCertStore",
+    "KeyVaultName": null
+  },
+  "_Auth_Community_comment": "Used only when Flavour=Community. CredKind: Secret|Cert. CredStorage: KeyVault|LocalCertStore|Inline. KeyVaultName required when CredStorage=KeyVault.",
+
+  "EntraDiag": {
+    "Enabled": false
+  },
+  "_EntraDiag_comment": "false (default) for Sentinel customers -- their existing Diagnostic Setting already streams the same categories. true for non-Sentinel customers.",
+
+  "Container": {
+    "Enabled":         false,
+    "AcrName":         null,
+    "EnvName":         "cae-securityinsight",
+    "UseKEDA":         true,
+    "KedaMaxReplicas": 30
+  },
+  "_Container_comment": "Enabled=true provisions ACR + Container Apps Environment + KEDA-scaled Jobs. AcrName null -> auto-derived from RG. Requires `az` CLI installed + `az login`."
+}

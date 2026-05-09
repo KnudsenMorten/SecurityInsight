@@ -60,7 +60,15 @@ param(
     [Parameter()]          [hashtable]$Shodan,
     [Parameter()]          [hashtable]$Cmdb,
     [Parameter()]          [switch]$EnableJsonSink,
-    [Parameter()]          [string]$DefenderWorkspaceResourceId
+    [Parameter()]          [string]$DefenderWorkspaceResourceId,
+
+    # Inline   (default, wizard / community flavour) -- emits resolved values
+    #          directly: $global:SI_SPN_AppId = '<guid>', $global:SI_SPN_Secret = '<...>'.
+    # Bridged  (Setup-SecurityInsight-Unattended.ps1 Internal flavour) -- emits the
+    #          v1<->v2 bridge: $global:SI_SPN_AppId = $global:HighPriv_Modern_ApplicationID_Azure
+    #          + $global:AutomationFramework = $true. The customer file holds NO secrets;
+    #          everything resolves at engine load time via the v1 platform layer.
+    [Parameter()]          [ValidateSet('Inline','Bridged')] [string]$Mode = 'Inline'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,29 +110,47 @@ $null = $sb.AppendLine()
 $null = $sb.AppendLine("# ============================================================================")
 $null = $sb.AppendLine("# 1. SPN  --  identity SI uses for Graph + Az + LA Ingest")
 $null = $sb.AppendLine("# ============================================================================")
-$null = $sb.AppendLine("`$global:SI_SPN_AppId    = '$($Spn.AppId)'")
-$null = $sb.AppendLine("`$global:SI_SPN_TenantId = '$($Spn.TenantId)'")
-$null = $sb.AppendLine("`$global:SI_SPN_ObjectId = '$($Spn.ObjectId)'")
-switch ($Spn.CredKind) {
-    'Secret' {
-        if ($Spn.CredValue) {
-            $null = $sb.AppendLine("`$global:SI_SPN_Secret   = '$($Spn.CredValue)'")
+if ($Mode -eq 'Bridged') {
+    # Bridged mode: don't hardcode the SPN values. Reference the v1 platform-layer
+    # globals that AutomationFramework/Initialize-PlatformAutomationFramework sets
+    # up. AutomationFramework=$true triggers the bridge; SI_SPN_* picks up the v1
+    # cert-based SPN at engine load time. This file holds NO secrets -- the cert
+    # in the local store is the only credential material.
+    $null = $sb.AppendLine("`$global:AutomationFramework = `$true")
+    $null = $sb.AppendLine("`$global:SI_SPN_TenantId          = `$global:AzureTenantId")
+    $null = $sb.AppendLine("`$global:SI_SPN_AppId             = `$global:HighPriv_Modern_ApplicationID_Azure")
+    $null = $sb.AppendLine("`$global:SI_SPN_CertThumbprint    = `$global:HighPriv_Modern_CertificateThumbprint_Azure")
+    $null = $sb.AppendLine("`$global:SI_SPN_ObjectId          = (Get-AzADServicePrincipal -ApplicationId `$global:SI_SPN_AppId -ErrorAction Stop).Id")
+    $null = $sb.AppendLine("# Launcher auth surface (Method 3 -- SPN + cert in local store):")
+    $null = $sb.AppendLine("`$global:SpnTenantId              = `$global:AzureTenantId")
+    $null = $sb.AppendLine("`$global:SpnClientId              = `$global:HighPriv_Modern_ApplicationID_Azure")
+    $null = $sb.AppendLine("`$global:SpnCertificateThumbprint = `$global:HighPriv_Modern_CertificateThumbprint_Azure")
+} else {
+    # Inline mode (default, wizard / community flavour) -- emit resolved values directly.
+    $null = $sb.AppendLine("`$global:SI_SPN_AppId    = '$($Spn.AppId)'")
+    $null = $sb.AppendLine("`$global:SI_SPN_TenantId = '$($Spn.TenantId)'")
+    $null = $sb.AppendLine("`$global:SI_SPN_ObjectId = '$($Spn.ObjectId)'")
+    switch ($Spn.CredKind) {
+        'Secret' {
+            if ($Spn.CredValue) {
+                $null = $sb.AppendLine("`$global:SI_SPN_Secret   = '$($Spn.CredValue)'")
+            }
+            if ($Spn.KvName) {
+                $null = $sb.AppendLine("`$global:SI_KeyVaultName       = '$($Spn.KvName)'")
+                $null = $sb.AppendLine("`$global:SI_SPN_KvSecretName   = '$($Spn.KvSecretName)'")
+            }
         }
-        if ($Spn.KvName) {
-            $null = $sb.AppendLine("`$global:SI_KeyVaultName       = '$($Spn.KvName)'")
-            $null = $sb.AppendLine("`$global:SI_SPN_KvSecretName   = '$($Spn.KvSecretName)'")
+        'Cert' {
+            $null = $sb.AppendLine("`$global:SI_SPN_CertThumbprint = '$($Spn.CertThumbprint)'")
+            if ($Spn.KvName) {
+                $null = $sb.AppendLine("`$global:SI_KeyVaultName     = '$($Spn.KvName)'")
+                $null = $sb.AppendLine("`$global:SI_SPN_KvCertName   = '$($Spn.KvCertName)'")
+            }
         }
-    }
-    'Cert' {
-        $null = $sb.AppendLine("`$global:SI_SPN_CertThumbprint = '$($Spn.CertThumbprint)'")
-        if ($Spn.KvName) {
-            $null = $sb.AppendLine("`$global:SI_KeyVaultName     = '$($Spn.KvName)'")
-            $null = $sb.AppendLine("`$global:SI_SPN_KvCertName   = '$($Spn.KvCertName)'")
+        'ManagedIdentity' {
+            $null = $sb.AppendLine("`$global:SI_SPN_UseManagedIdentity = `$true")
+            $null = $sb.AppendLine("`$global:SI_SPN_ManagedIdentityClientId = '$($Spn.ManagedIdentityId)'")
         }
-    }
-    'ManagedIdentity' {
-        $null = $sb.AppendLine("`$global:SI_SPN_UseManagedIdentity = `$true")
-        $null = $sb.AppendLine("`$global:SI_SPN_ManagedIdentityClientId = '$($Spn.ManagedIdentityId)'")
     }
 }
 $null = $sb.AppendLine()
@@ -294,9 +320,24 @@ if ($Cmdb -and $Cmdb.Enabled) {
     $sectionsWritten += 'CMDB'
 }
 
-# ---- 11. Provenance footer ----
+# ---- 11. Bridged-mode KV pulls (Internal flavour only) ----
+# These late-binding pulls run after platform-defaults.ps1 has set up $global:Context
+# and Get-PlatformSecret. They populate the SI_*/OpenAI_* secrets only when not
+# already set elsewhere -- safe to re-source.
+if ($Mode -eq 'Bridged') {
+    $null = $sb.AppendLine("# ============================================================================")
+    $null = $sb.AppendLine("# 11. KV PULLS  --  late-binding from the v1 Key Vault via Get-PlatformSecret")
+    $null = $sb.AppendLine("# ============================================================================")
+    $null = $sb.AppendLine("if (-not `$global:SI_StorageKey)    { `$global:SI_StorageKey    = Get-PlatformSecret -Context `$global:Context -Name 'SI-StorageKey'    -AsPlainText }")
+    $null = $sb.AppendLine("if (-not `$global:SI_Shodan_ApiKey) { `$global:SI_Shodan_ApiKey = Get-PlatformSecret -Context `$global:Context -Name 'SI-Shodan-ApiKey' -AsPlainText }")
+    $null = $sb.AppendLine("if (-not `$global:OpenAI_apiKey)    { `$global:OpenAI_apiKey    = Get-PlatformSecret -Context `$global:Context -Name 'OpenAI-ApiKey'    -AsPlainText }")
+    $null = $sb.AppendLine()
+    $sectionsWritten += 'KvPulls'
+}
+
+# ---- 12. Provenance footer ----
 $null = $sb.AppendLine("# ============================================================================")
-$null = $sb.AppendLine("# Generated by Setup Wizard v2.2.105+ -- regenerate via .\setup\ConfigWizard\Start-SetupWizard.ps1")
+$null = $sb.AppendLine(("# Generated by Setup Wizard / Setup-SecurityInsight-Unattended (Mode={0}) -- {1}" -f $Mode, ((Get-Date).ToUniversalTime().ToString('u'))))
 $null = $sb.AppendLine("# ============================================================================")
 
 $content = $sb.ToString()

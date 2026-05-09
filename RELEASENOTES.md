@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.150
+## v2.2.151
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.151 - unattended setup + Internal/Community flavours (dae40cd9)
 - release: SecurityInsight v2.2.150 - install guides for git + Azure CLI (4914f51b)
 - release: SecurityInsight v2.2.149 - Bootstrap-ContainerAppJob.ps1 no longer hardcodes dev path (0c6be29a)
 - release: SecurityInsight v2.2.148 - schedule examples in US 12-hour format (4be7b06d)
@@ -33,13 +34,52 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
 - release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
 - release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
-- release: SecurityInsight v2.2.121 - Entra Diagnostic Setting auto-create option (when no Sentinel) (0545d42f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.151 — Unattended setup: `Setup-SecurityInsight-Unattended.ps1` + Internal/Community flavours
+
+The HTML wizard (`setup\ConfigWizard\Start-SetupWizard.ps1`) is great for first-time community installs but is a poor fit for the migration use case where a customer already has a v1 platform layer (cert-based SPN, KV, `$global:HighPriv_Modern_*` globals, `Automation-DefaultVariables.psm1`). For migration the operator wants to: re-use the v1 cert SPN, dot-source the ported `platform-defaults.ps1`, render a **bridged** `SecurityInsight.custom.ps1` that references the v1 globals via `$global:AutomationFramework=$true` — none of which the GUI wizard does.
+
+**New top-level script** `SOLUTIONS\SecurityInsight\Setup-SecurityInsight-Unattended.ps1` covers it. Reads `config\setup-unattended.json` (+ optional CLI overrides), connects via cert (Internal flavour) or relies on the operator's `Connect-Az`/`Connect-Mg` (Community flavour), and runs the same Phase 1-5 chain the HTML wizard does — just sequentially, no browser.
+
+**Two flavours, one script.**
+
+- **Internal** (FVF-style migration): re-uses the existing v1 cert-based SPN, dot-sources `platform-defaults.ps1`, calls `New-SISpn -UseExistingAppId` to top up Graph perms only (no new app reg, no new cred), renders `Write-SICustomConfig -Mode Bridged` (no secrets in the file — references `$global:HighPriv_Modern_*` + `$global:AutomationFramework=$true`). Connects to all 3 surfaces (Az PS / Mg / az CLI) using the v1 cert in `LocalMachine\My`. No operator interaction.
+- **Community**: standalone install, no v1 platform layer. Creates a new SI SPN, renders the existing inline `SecurityInsight.custom.ps1`. Operator must `Connect-AzAccount` + `Connect-MgGraph` first (same as the GUI wizard's contract).
+
+**JSON-driven config** lives at `config\setup-unattended.json` (gitignored — the customer-owned working copy) with a sample at `config\setup-unattended.sample.json`. Six functional sections: `Flavour` / `Sub` / `Resources` / `Auth_Internal` / `Auth_Community` / `EntraDiag` / `Container`. `null` everywhere = "use script default or platform-defaults global". Every JSON value has a matching CLI switch for one-off overrides:
+
+```powershell
+.\Setup-SecurityInsight-Unattended.ps1                                   # reads JSON, defaults
+.\Setup-SecurityInsight-Unattended.ps1 -EntraDiag_Enabled                # one-off override
+.\Setup-SecurityInsight-Unattended.ps1 -Flavour Community                # flavour override
+.\Setup-SecurityInsight-Unattended.ps1 -ConfigPath D:\customers\acme.json  # multi-customer admin VM
+```
+
+**Two backend cmdlet edits enable this:**
+
+- **`New-SISpn.ps1`** — new `-UseExistingAppId` + `-ExistingAppId` + `-ExistingThumbprint` parameters. When set, the cmdlet looks up the SP by AppId (instead of by DisplayName), skips `New-MgApplication`, skips cred generation. The existing Graph-perms-grant + Azure-RBAC blocks run as-is (already idempotent — already-granted perms are no-ops). `DisplayName` and `CredStorage` become optional in this mode (looked up from the existing app reg).
+- **`Write-SICustomConfig.ps1`** — new `-Mode <Inline|Bridged>` parameter (default `Inline` keeps the existing wizard behaviour). When `Bridged`, the SPN section emits `$global:SI_SPN_AppId = $global:HighPriv_Modern_ApplicationID_Azure` etc. and a new section 11 renders the `Get-PlatformSecret` late-binding for `SI_StorageKey` / `SI_Shodan_ApiKey` / `OpenAI_apiKey`. The customer file holds **zero secrets** — everything resolves at engine load time via the v1 platform layer.
+
+**Idempotent re-run.** Every backend cmdlet already handles "already in place" / "already granted" cases. Schedule the unattended script in VisualCron daily and it self-heals if anything drifted.
+
+**Files in this release:**
+
+| Path | Status | Purpose |
+|------|--------|---------|
+| `SOLUTIONS\SecurityInsight\Setup-SecurityInsight-Unattended.ps1` | **NEW** | The unattended setup tool |
+| `SOLUTIONS\SecurityInsight\config\setup-unattended.sample.json` | **NEW** | Public-repo template the operator copies |
+| `SOLUTIONS\SecurityInsight\setup\ConfigWizard\backend\New-SISpn.ps1` | edit | `-UseExistingAppId` / `-ExistingAppId` / `-ExistingThumbprint` mode |
+| `SOLUTIONS\SecurityInsight\setup\ConfigWizard\backend\Write-SICustomConfig.ps1` | edit | `-Mode <Inline\|Bridged>` parameter + bridged SPN section + KV-pull footer |
+
+The HTML wizard (`Start-SetupWizard.ps1`) is unchanged — community + new-customer onboarding still uses it, no breaking change.
 
 ---
 

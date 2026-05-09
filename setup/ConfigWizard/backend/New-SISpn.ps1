@@ -90,12 +90,12 @@
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory)] [string]$DisplayName,
+    [Parameter()]          [string]$DisplayName,                                                                        # required UNLESS -UseExistingAppId
     [Parameter(Mandatory)] [string]$TenantId,
     [Parameter(Mandatory)] [string]$SubscriptionId,
     [Parameter()]          [string]$RootMgId,
     [Parameter()]          [ValidateSet('Secret','Cert','ManagedIdentity')] [string]$CredKind = 'Secret',
-    [Parameter(Mandatory)] [ValidateSet('KeyVault','LocalCertStore','Inline')] [string]$CredStorage,
+    [Parameter()]          [ValidateSet('KeyVault','LocalCertStore','Inline')] [string]$CredStorage,                    # required UNLESS -UseExistingAppId
     [Parameter()]          [string]$KeyVaultName,
     [Parameter()]          [string]$KvSecretName = 'SI-SPN-Secret',
     [Parameter()]          [string]$KvCertName   = 'SI-SPN-Cert',
@@ -104,7 +104,18 @@ param(
     [Parameter()]          [string[]]$GraphPermissions,
     [Parameter()]          [switch]$SkipAdminConsent,
     [Parameter()]          [switch]$SkipTenantRbac,
-    [Parameter()]          [switch]$IncludeTagContributor   # opt-in: granted ONLY when asset-exclusion-tagging engine is in scope
+    [Parameter()]          [switch]$IncludeTagContributor,  # opt-in: granted ONLY when asset-exclusion-tagging engine is in scope
+
+    # ---- Use-existing-SPN mode (Setup-SecurityInsight-Unattended.ps1 Internal flavour) ----
+    # When -UseExistingAppId is set, the cmdlet skips Create-app-registration AND
+    # cred generation. Caller passes the v1 cert-based SPN's AppId; the cmdlet
+    # looks up the SP by AppId, then runs the existing perms-grant + RBAC blocks
+    # idempotently against the looked-up SP. The cert in the local store stays
+    # the only credential material -- no secret is generated, nothing is written
+    # to disk, nothing is added to Key Vault.
+    [Parameter()]          [switch]$UseExistingAppId,
+    [Parameter()]          [string]$ExistingAppId,
+    [Parameter()]          [string]$ExistingThumbprint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -133,27 +144,47 @@ if (-not $GraphPermissions -or $GraphPermissions.Count -eq 0) {
 
 if (-not $RootMgId) { $RootMgId = $TenantId }
 
-# ----- Validate cred-kind / cred-storage combination -----
-switch ($CredKind) {
-    'Secret' {
-        if ($CredStorage -eq 'LocalCertStore') {
-            throw "CredStorage 'LocalCertStore' is only valid with CredKind 'Cert'."
+# ----- Mode-dependent param validation -----
+if ($UseExistingAppId) {
+    # Use-existing-SPN mode: caller must supply the AppId of the existing v1
+    # cert-based SPN. No DisplayName / CredStorage required (we don't create
+    # the app or any new cred). DisplayName gets populated FROM the looked-up
+    # app a few steps below.
+    if (-not $ExistingAppId) {
+        throw "-ExistingAppId is required when -UseExistingAppId is set. Pass the v1 SPN's AppId (typically `$global:HighPriv_Modern_ApplicationID_Azure`)."
+    }
+    # CredKind defaults to 'Cert' in existing-SPN mode (the v1 cert IS the cred).
+    if (-not $PSBoundParameters.ContainsKey('CredKind')) { $CredKind = 'Cert' }
+} else {
+    # Create-new-SPN mode (the existing wizard / community-flavour path).
+    if (-not $DisplayName) {
+        throw "-DisplayName is required when not using -UseExistingAppId. Pass a name for the new app registration (e.g. 'sp-securityinsight-<customer>')."
+    }
+    if (-not $CredStorage) {
+        throw "-CredStorage is required when not using -UseExistingAppId. Pick KeyVault | LocalCertStore | Inline."
+    }
+    # ----- Validate cred-kind / cred-storage combination -----
+    switch ($CredKind) {
+        'Secret' {
+            if ($CredStorage -eq 'LocalCertStore') {
+                throw "CredStorage 'LocalCertStore' is only valid with CredKind 'Cert'."
+            }
+        }
+        'Cert' {
+            if ($CredStorage -eq 'Inline') {
+                throw "CredStorage 'Inline' is only valid with CredKind 'Secret' (a cert thumbprint is fine inline; the private key must live in KV or LocalCertStore)."
+            }
+        }
+        'ManagedIdentity' {
+            if (-not $ManagedIdentityClientId) {
+                throw "When CredKind = ManagedIdentity, -ManagedIdentityClientId is required (the user-assigned or system-assigned MSI ClientId)."
+            }
+            # CredStorage is N/A for MSI -- ignored.
         }
     }
-    'Cert' {
-        if ($CredStorage -eq 'Inline') {
-            throw "CredStorage 'Inline' is only valid with CredKind 'Secret' (a cert thumbprint is fine inline; the private key must live in KV or LocalCertStore)."
-        }
+    if ($CredKind -ne 'ManagedIdentity' -and $CredStorage -eq 'KeyVault' -and -not $KeyVaultName) {
+        throw "When -CredStorage 'KeyVault', -KeyVaultName is required."
     }
-    'ManagedIdentity' {
-        if (-not $ManagedIdentityClientId) {
-            throw "When CredKind = ManagedIdentity, -ManagedIdentityClientId is required (the user-assigned or system-assigned MSI ClientId)."
-        }
-        # CredStorage is N/A for MSI -- ignored.
-    }
-}
-if ($CredKind -ne 'ManagedIdentity' -and $CredStorage -eq 'KeyVault' -and -not $KeyVaultName) {
-    throw "When -CredStorage 'KeyVault', -KeyVaultName is required."
 }
 
 function _Step([string]$msg) { Write-Host "  [STEP] $msg" -ForegroundColor Cyan }
@@ -162,11 +193,17 @@ function _Info([string]$msg) { Write-Host "  [INFO] $msg" -ForegroundColor Gray 
 function _Warn([string]$msg) { Write-Host "  [WARN] $msg" -ForegroundColor Yellow }
 
 Write-Host ""
-Write-Host "=== New-SISpn  --  $DisplayName  ===" -ForegroundColor Cyan
+$bannerLabel = if ($UseExistingAppId) { "USE-EXISTING-SPN appId=$ExistingAppId" } else { $DisplayName }
+Write-Host "=== New-SISpn  --  $bannerLabel  ===" -ForegroundColor Cyan
 _Info "tenant       : $TenantId"
 _Info "subscription : $SubscriptionId"
 _Info "root MG      : $RootMgId"
-_Info "cred storage : $CredStorage"
+if ($UseExistingAppId) {
+    _Info "mode         : USE-EXISTING-SPN (v1 cert-based; no app reg / cred created)"
+    if ($ExistingThumbprint) { _Info "cert thumb   : $ExistingThumbprint" }
+} else {
+    _Info "cred storage : $CredStorage"
+}
 if ($CredStorage -eq 'KeyVault') { _Info "key vault    : $KeyVaultName / $KvSecretName" }
 Write-Host ""
 
@@ -207,21 +244,38 @@ if ($missingScopes.Count -gt 0) {
 _Ok ("Graph context: {0} ({1})" -f $ctx.Account, $ctx.AppName)
 
 # ----- 2. Find or create the application -----
-_Step "look up application by display name"
-$app = Get-MgApplication -Filter "displayName eq '$DisplayName'" -ConsistencyLevel eventual -CountVariable c -ErrorAction Stop
-if ($app -is [array]) { $app = $app[0] }
-if ($app) {
-    _Ok ("re-using existing app reg: {0}" -f $app.AppId)
+if ($UseExistingAppId) {
+    _Step ("look up application by AppId {0}" -f $ExistingAppId)
+    $app = Get-MgApplication -Filter "appId eq '$ExistingAppId'" -ConsistencyLevel eventual -CountVariable c -ErrorAction Stop
+    if ($app -is [array]) { $app = $app[0] }
+    if (-not $app) {
+        throw ("App registration with AppId '{0}' not found in tenant {1}. Verify the v1 cert-based SPN exists. (Hint: `$global:HighPriv_Modern_ApplicationID_Azure` should resolve to a valid app reg in this tenant.)" -f $ExistingAppId, $TenantId)
+    }
+    $DisplayName = $app.DisplayName
+    _Ok ("re-using existing app reg: {0} (DisplayName='{1}')" -f $app.AppId, $app.DisplayName)
 } else {
-    _Step "create app registration"
-    $app = New-MgApplication -DisplayName $DisplayName -SignInAudience 'AzureADMyOrg' -ErrorAction Stop
-    _Ok ("created app reg: {0}" -f $app.AppId)
+    _Step "look up application by display name"
+    $app = Get-MgApplication -Filter "displayName eq '$DisplayName'" -ConsistencyLevel eventual -CountVariable c -ErrorAction Stop
+    if ($app -is [array]) { $app = $app[0] }
+    if ($app) {
+        _Ok ("re-using existing app reg: {0}" -f $app.AppId)
+    } else {
+        _Step "create app registration"
+        $app = New-MgApplication -DisplayName $DisplayName -SignInAudience 'AzureADMyOrg' -ErrorAction Stop
+        _Ok ("created app reg: {0}" -f $app.AppId)
+    }
 }
 
 # ----- 3. Find or create the service principal -----
 _Step "look up service principal"
 $sp = Get-MgServicePrincipal -Filter "appId eq '$($app.AppId)'" -ErrorAction SilentlyContinue
 if (-not $sp) {
+    if ($UseExistingAppId) {
+        # In use-existing mode the SP MUST already exist alongside the app reg.
+        # Missing SP = the v1 SPN was never fully provisioned. Don't auto-create
+        # one -- that masks a deeper config problem.
+        throw ("Service Principal for AppId '{0}' not found in tenant {1}. The v1 SPN appears incomplete -- run the v1 Bootstrap-Auth.ps1 (or whatever provisioned the v1 SPN) before re-trying the unattended setup." -f $app.AppId, $TenantId)
+    }
     _Step "create service principal"
     $sp = New-MgServicePrincipal -AppId $app.AppId -ErrorAction Stop
     _Ok ("created SP: {0}" -f $sp.Id)
@@ -229,10 +283,13 @@ if (-not $sp) {
     _Ok ("re-using existing SP: {0}" -f $sp.Id)
 }
 
-# ----- 4. Generate the cred (Secret OR Cert; MSI path skips this entirely) -----
+# ----- 4. Generate the cred (Secret OR Cert; MSI + UseExistingAppId paths skip this entirely) -----
 $pwd       = $null   # secret object
 $certInfo  = $null   # @{ Thumbprint; PfxBytes; PfxPassword }
-if ($CredKind -eq 'Secret') {
+if ($UseExistingAppId) {
+    _Info ("UseExistingAppId set -- skipping cred generation; v1 cert in local store (thumbprint {0}) is the credential" -f $ExistingThumbprint)
+}
+elseif ($CredKind -eq 'Secret') {
     _Step "create new client secret (validity ${SecretValidityYears}y)"
     $secretParams = @{
         PasswordCredential = @{
@@ -422,7 +479,14 @@ $kvCertOut        = $null
 $certThumbprintOut= $null
 $expiresOut       = $null
 
-if ($CredKind -eq 'Secret') {
+if ($UseExistingAppId) {
+    # Existing v1 cert in local store; we don't generate / move / store anything.
+    # CertThumbprint surfaces in the result so the caller can confirm parity
+    # with what they passed in.
+    $certThumbprintOut = $ExistingThumbprint
+    _Info "cred storage = ExistingCert -- v1 cert in local store; nothing written"
+}
+elseif ($CredKind -eq 'Secret') {
     if ($CredStorage -eq 'KeyVault') {
         _Step "store secret in Key Vault"
         Import-Module Az.KeyVault -ErrorAction Stop

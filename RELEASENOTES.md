@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.152
+## v2.2.153
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.153 - drop legacy AutomateIT_InstallUpdate refs (3cda6e1e)
 - release: SecurityInsight v2.2.152 - Update-SecurityInsight.ps1 one-liner updater (6624ab59)
 - release: SecurityInsight v2.2.151 - unattended setup + Internal/Community flavours (dae40cd9)
 - release: SecurityInsight v2.2.150 - install guides for git + Azure CLI (4914f51b)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
 - release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
 - release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
-- release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.153 — Drop legacy `AutomateIT_InstallUpdate` references in active code
+
+Three engine / launcher files carried comments referencing the old `AutomateIT_InstallUpdate.ps1` name from the early bootstrap layout. Rewrote the comments to reference whichever updater the operator uses (no specific tool name), so the comments stay accurate as the bootstrap layer evolves:
+
+- `tools\Run-AllEngines.ps1` — the "skip git pull" hint when the install isn't a git clone now points at the generic `Sync-AutomateIT.ps1` / `Update-SecurityInsight.ps1` pair instead of the obsolete name.
+- `launcher\_lib\Get-PublishedVersion.ps1` — comment about why the per-solution `VERSION` file wins over root `VERSION.txt` no longer name-checks a specific updater.
+- `engine\privilege-tier-classifier\Invoke-PrivilegeTierClassifier.ps1` — comment about why PTC writes to `.custom.json` (so it survives updates) no longer name-checks a specific updater.
+- `engine\asset-profiling\shared\IdentityCatalogTierComputer.ps1` — same comment cleanup, generic "(or whichever updater)" wording.
+
+No code behaviour changes. Comments-only.
+
+`RELEASENOTES.md` and `README.md` historical entries still mention `AutomateIT_InstallUpdate.ps1` — those are the changelog and the "What's New" table; they describe past state and are intentionally left as-is.
 
 ---
 

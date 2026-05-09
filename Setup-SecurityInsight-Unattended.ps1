@@ -433,7 +433,7 @@ if ($cfg.Container.Enabled) {
 # ----------------------------------------------------------------------------
 Write-Host ""
 Write-Host "===================================================================" -ForegroundColor Magenta
-Write-Host " UNATTENDED SETUP DONE  (flavour={0})" -f $cfg.Flavour -ForegroundColor Magenta
+Write-Host (" UNATTENDED SETUP DONE  (flavour={0})" -f $cfg.Flavour) -ForegroundColor Magenta
 Write-Host "===================================================================" -ForegroundColor Magenta
 Write-Host (" SPN       : {0}" -f $phaseStatus.spn)       -ForegroundColor Gray
 Write-Host (" Infra     : {0}" -f $phaseStatus.infra)     -ForegroundColor Gray

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.161
+## v2.2.162
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
 - release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
 - release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
 - release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
@@ -33,13 +34,25 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
 - release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
 - release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
-- release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.162 — `Write-SICustomConfig.ps1`: guard KV pulls with `$global:Context` check
+
+The generated `SecurityInsight.custom.ps1` section 11 (KV PULLS) called `Get-PlatformSecret -Context $global:Context` unconditionally. On internal-flavour customers using the v1 `Connect_Azure.ps1` chain, `$global:Context` is `$null` (v1 doesn't build the v2 PlatformContext object), so dot-sourcing the custom file from a launcher's Layer 3 blew up with `Cannot bind argument to parameter 'Context' because it is null` -- before any engine even started.
+
+Generator now emits the 3 KV pulls inside an `if ($global:Context) { ... } else { Write-Verbose ... }` guard:
+
+- Storage doesn't need the key: `SI_UseStorageOAuth=$true` makes the SPN authenticate via OAuth (Storage Blob/Table/Queue Data Contributor RBAC).
+- Shodan + OpenAI engines fail later with a clearer error if those keys are actually needed.
+
+Existing customer custom.ps1 files won't auto-update -- either re-run `Setup-SecurityInsight-Unattended.ps1` or hand-wrap the section 11 block with the same `if ($global:Context)` guard.
 
 ---
 

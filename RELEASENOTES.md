@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.162
+## v2.2.163
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
 - release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
 - release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
 - release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
 - release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
 - release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
-- release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
 
 ---
 
@@ -43,7 +43,13 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 
 ---
 
-## v2.2.162 — `Write-SICustomConfig.ps1`: guard KV pulls with `$global:Context` check
+## v2.2.163 — re-ship v2.2.162 KV-pull guard (the actual code change)
+
+v2.2.162 RELEASENOTES described the fix but the `Write-SICustomConfig.ps1` edit silently failed (Read prerequisite), so only the doc + VERSION shipped. This release contains the actual code change to the generator -- emits section 11 inside an `if ($global:Context) { ... } else { Write-Verbose ... }` guard.
+
+---
+
+## v2.2.162 — `Write-SICustomConfig.ps1`: guard KV pulls with `$global:Context` check (DOC ONLY -- code in v2.2.163)
 
 The generated `SecurityInsight.custom.ps1` section 11 (KV PULLS) called `Get-PlatformSecret -Context $global:Context` unconditionally. On internal-flavour customers using the v1 `Connect_Azure.ps1` chain, `$global:Context` is `$null` (v1 doesn't build the v2 PlatformContext object), so dot-sourcing the custom file from a launcher's Layer 3 blew up with `Cannot bind argument to parameter 'Context' because it is null` -- before any engine even started.
 

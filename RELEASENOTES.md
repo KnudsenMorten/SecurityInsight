@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.168
+## v2.2.169
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
 - release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
 - release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
 - release: SecurityInsight v2.2.166 - Phase 2.5 seed v1 KV with SI secrets (6fcaf56d)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
 - release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
 - release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
-- release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.169 — `Initialize-PlatformAutomationFramework`: short-circuit returns proper PlatformContext
+
+v2.2.168's short-circuit returned a flat `pscustomobject` with bare fields (`AppId`, `TenantId`, `Thumbprint`). Get-PlatformSecret expects a properly-shaped PlatformContext with `.Providers.Secret = 'KeyVault'` + `.Tenant.KeyVaultName` to switch on. So Layer 1.5 set `$global:Context = <my flat object>`, then custom.ps1 section 11 called `Get-PlatformSecret` and threw `PropertyNotFoundException: 'Providers'`.
+
+Fix: short-circuit now calls `New-PlatformContext` to build a fully-shaped context from v1 globals (TenantId from `$global:AzureTenantId`, KeyVaultName from `$global:KV_HighPriv_KeyVaultName`, SubscriptionId from `$global:KV_HighPriv_SubscriptionId`, SecretProvider explicitly `'KeyVault'`, HostKind `'VM'`). KV pulls in custom.ps1 section 11 now resolve through the v2 abstraction without needing the v1-fallback elseif branch.
 
 ---
 

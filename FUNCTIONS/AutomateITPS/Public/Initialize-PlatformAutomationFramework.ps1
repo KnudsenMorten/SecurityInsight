@@ -121,6 +121,24 @@ function Initialize-PlatformAutomationFramework {
         [Environment]::GetEnvironmentVariable($Name, 'Machine')
     }
 
+    # Short-circuit: when v1 chain (Connect_Azure.ps1 / ConnectDetails / Default_Variables)
+    # has already populated the v1-contract globals, this function has nothing to do.
+    # The 5 things it would build (cert-connect + Modern-* secrets + $global:HighPriv_Modern_*)
+    # are already in place. Returning early keeps internal-flavour customers from needing
+    # platform-config.json or PLATFORM_* env vars when their v1 install is the source of truth.
+    if ($global:HighPriv_Modern_ApplicationID_Azure -and
+        $global:HighPriv_Modern_CertificateThumbprint_Azure -and
+        $global:AzureTenantId) {
+        Write-Verbose "Initialize-PlatformAutomationFramework: v1 globals already populated -- short-circuit (no-op)"
+        return [pscustomobject]@{
+            Source       = 'v1-chain'
+            TenantId     = $global:AzureTenantId
+            AppId        = $global:HighPriv_Modern_ApplicationID_Azure
+            Thumbprint   = $global:HighPriv_Modern_CertificateThumbprint_Azure
+            KeyVaultName = $global:KV_HighPriv_KeyVaultName
+        }
+    }
+
     # Inline resolution: param > env > file.
     if (-not $TenantId)            { $TenantId            = & $GetEnv 'PLATFORM_TENANT_ID' }
     if (-not $TenantId -and $fileCfg -and $fileCfg.PSObject.Properties.Name -contains 'TenantId') { $TenantId = [string]$fileCfg.TenantId }

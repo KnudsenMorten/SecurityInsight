@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.154
+## v2.2.155
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.155 - Sync-AutomateIT-Engine auto-Unblock-File (c17fd9ee)
 - release: SecurityInsight v2.2.154 - Port-V1Platform + Test-PlatformConnect (bbc0e783)
 - release: SecurityInsight v2.2.153 - drop legacy AutomateIT_InstallUpdate refs (3cda6e1e)
 - release: SecurityInsight v2.2.152 - Update-SecurityInsight.ps1 one-liner updater (6624ab59)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.128 - handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT (057e97f0)
 - release: SecurityInsight v2.2.127 - README §4 refresh + DCE-via-REST fix + Tag Contributor opt-in (9671dea1)
 - release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
-- release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.155 — `Sync-AutomateIT-Engine.ps1`: auto-unblock copied scripts
+
+After the zipball extract, the engine now runs `Unblock-File` recursively across `*.ps1,*.psm1,*.psd1,*.dll,*.exe` under every synced solution's `SOLUTIONS\<Name>\` tree. Files downloaded from GitHub carry a `Zone.Identifier` ADS that triggers `RemoteSigned` execution-policy refusal — this strips it as part of the sync, so launchers and engines run without "file is blocked, operator must Unblock-File first" friction.
+
+Internal-only change (engine lives under `INTERNAL/` and is scrubbed from public mirrors). Community-edition operators are unaffected.
 
 ---
 

@@ -242,16 +242,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $Root 'engine'))) {
 # 3. Refresh repo (skip in -Install mode -- we just cloned)
 # ---------------------------------------------------------------------------
 if (-not $Install -and -not $SkipPull) {
-    # Internal installs deployed via AutomateIT_InstallUpdate.ps1 are stream-extracts,
-    # not git clones -- no .git/ + no git binary on the host. Earlier versions still
-    # invoked `git pull` and crashed loudly with CommandNotFoundException + a stack trace.
-    # Now: silently skip when either prerequisite is missing (point user at the right
-    # updater).
+    # Stream-extract installs (no .git/ + no git binary on the host) skip git pull.
+    # Updates flow through Sync-AutomateIT.ps1 (internal) or Update-SecurityInsight.ps1
+    # (community) on those hosts; this engine wrapper just runs the engines.
     $haveGit  = [bool](Get-Command git -ErrorAction SilentlyContinue)
     $isGitRepo = Test-Path -LiteralPath (Join-Path $Root '.git')
     if (-not $haveGit -or -not $isGitRepo) {
         $reason = if (-not $haveGit) { 'git command not on PATH' } else { 'no .git/ in install root' }
-        Write-Host ("`n==> skipping git pull -- {0}. Use AutomateIT_InstallUpdate.ps1 for non-git installs." -f $reason) -ForegroundColor DarkGray
+        Write-Host ("`n==> skipping git pull -- {0}. Updates flow through Sync-AutomateIT.ps1 or Update-SecurityInsight.ps1 on this host." -f $reason) -ForegroundColor DarkGray
     } else {
         Write-Host "`n==> git pull" -ForegroundColor Cyan
         Push-Location $Root

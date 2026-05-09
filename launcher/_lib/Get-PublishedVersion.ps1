@@ -33,10 +33,10 @@ function Get-PublishedVersion {
     )
     if (-not $RepoRoot) { return '(dev)' }
 
-    # Layer 1: per-solution VERSION file -- canonical for monorepo + internal
-    # AutomateIT_InstallUpdate installs (where root VERSION.txt holds the
-    # AutomateIT install marker, NOT the SI release). Banner shows e.g.
-    # "SecurityInsight-v2.2.17" which is what operators care about.
+    # Layer 1: per-solution VERSION file -- canonical for monorepo installs
+    # (where root VERSION.txt holds the install marker, NOT the SI release).
+    # Banner shows e.g. "SecurityInsight-v2.2.17" which is what operators
+    # care about.
     $solVerFile = Join-Path $RepoRoot ("SOLUTIONS\{0}\VERSION" -f $Solution)
     if (Test-Path -LiteralPath $solVerFile) {
         $raw = Get-Content -Raw -LiteralPath $solVerFile -ErrorAction SilentlyContinue

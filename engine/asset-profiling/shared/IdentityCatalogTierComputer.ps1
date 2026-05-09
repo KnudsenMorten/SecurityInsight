@@ -118,7 +118,7 @@ function Initialize-SIIdentityCatalog {
     if ([string]::IsNullOrWhiteSpace($CustomPath)) {
         # Customer overlay = sibling .custom.json next to the shipped .locked.json.
         # PrivilegeTierClassifier writes here on customer machines; gitignored
-        # so it survives `git pull` / AutomateIT_InstallUpdate. Engine merges
+        # so it survives `git pull` (or whichever updater). Engine merges
         # this on top of .locked.json -- custom wins on key collisions, but
         # NEW keys added in shipped .locked.json (via baseline updates) still
         # apply because they're not shadowed in custom.

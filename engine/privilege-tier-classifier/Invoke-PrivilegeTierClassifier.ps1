@@ -295,7 +295,8 @@ if (-not (Test-Path -LiteralPath $OutputFolder)) {
 }
 # Write to .custom.json -- the customer overlay -- NOT .locked.json.
 # .locked.json is the shipped baseline (Microsoft + AD core), updated via
-# `git pull` / AutomateIT_InstallUpdate. PTC output goes to .custom.json so:
+# `git pull` (or whichever updater the operator runs). PTC output goes to
+# .custom.json so:
 #   1. Customer's tenant-specific tier choices survive `git pull`
 #   2. Baseline updates (new Microsoft roles, new AD group conventions) still
 #      flow through whenever the customer pulls the next release

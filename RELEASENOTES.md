@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.163
+## v2.2.164
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.164 - dual-path KV pulls (v2 Context + v1 fallback) (d1626a0e)
 - release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
 - release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
 - release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
 - release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
 - release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
-- release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.164 — `Write-SICustomConfig.ps1`: dual-path KV pulls (v2 Context + v1 fallback)
+
+Section 11 now emits a 3-way branch instead of just guarding the v2 path:
+
+```powershell
+if ($global:Context) {
+    # v2 path -- Get-PlatformSecret via PlatformContext (cleanest)
+} elseif ($global:KV_HighPriv_KeyVaultName) {
+    # v1 fallback -- direct Get-AzKeyVaultSecret using v1's KV name global
+    # (set by Automation-ConnectDetails.psm1 ConnectDetails). Live Az context
+    # from v1 cert connect carries the auth.
+} else {
+    Write-Verbose "SI custom: neither set -- skipping KV pulls"
+}
+```
+
+Means SI_StorageKey / SI_Shodan_ApiKey / OpenAI_apiKey actually populate on FVF-style internal customers using the v1 Connect_Azure.ps1 chain (where `$global:Context` is null but `$global:KV_HighPriv_KeyVaultName` is set by v1's ConnectDetails). No more "Shodan/OpenAI engines fail at runtime because the keys never loaded" surprise.
 
 ---
 

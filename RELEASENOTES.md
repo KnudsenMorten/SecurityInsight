@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.151
+## v2.2.152
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.152 - Update-SecurityInsight.ps1 one-liner updater (6624ab59)
 - release: SecurityInsight v2.2.151 - unattended setup + Internal/Community flavours (dae40cd9)
 - release: SecurityInsight v2.2.150 - install guides for git + Azure CLI (4914f51b)
 - release: SecurityInsight v2.2.149 - Bootstrap-ContainerAppJob.ps1 no longer hardcodes dev path (0c6be29a)
@@ -33,13 +34,36 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
 - release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
 - release: SecurityInsight v2.2.123 - deployment name defaults to OpenAI resource INSTANCE name (not model SKU) (6bcb84e8)
-- release: SecurityInsight v2.2.122 - auto-migrate stale gpt-4o-mini state to gpt-4.1-mini (8c7d6c4b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.152 — `Update-SecurityInsight.ps1` — one-liner updater
+
+New top-level script alongside `README.md` and `Setup-SecurityInsight.ps1`. Pulls the latest stable release and prints the version delta. Replaces the old "`cd <repo> && git pull`" muscle memory with a single command + sanity checks + readable output.
+
+```powershell
+cd C:\SecurityInsight
+.\Update-SecurityInsight.ps1                       # git pull, report version delta
+.\Update-SecurityInsight.ps1 -ShowReleaseNotes     # also dump curated entries since your old version
+```
+
+What it does:
+
+1. Verifies `git` is on PATH. If missing, prints the canonical Git for Windows installer block (matches the README § 4 Prerequisites install snippet).
+2. Verifies the current folder is a `git clone` of `KnudsenMorten/SecurityInsight`. Warns (doesn't block) if the `origin` URL doesn't match — handy for forks.
+3. Captures `VERSION` + `git rev-parse --short HEAD` for the before-pull state.
+4. Runs `git pull --ff-only origin main` — fast-forward only, never merges. If the local has diverged (you committed local edits to tracked files), the pull fails cleanly and the script prints the canonical `git stash` workaround.
+5. Captures the new `VERSION` + commit, prints the delta (`v2.2.149 → v2.2.152, commit abc123 → def456`) or "already on latest".
+6. With `-ShowReleaseNotes`, dumps every `## v…` block from `RELEASENOTES.md` between your old and new versions so you see exactly what changed without opening the file.
+7. Closes with a "what's next" reminder — re-launch the Setup Wizard only if you crossed a major release boundary; scheduled engines pick up new code on their next cycle without manual action.
+
+`config\SecurityInsight.custom.ps1` and per-engine `LauncherConfig.custom.ps1` files are gitignored — your customer-specific values + secrets are never touched by this update.
 
 ---
 

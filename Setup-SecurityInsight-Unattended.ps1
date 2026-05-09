@@ -373,6 +373,47 @@ try {
 }
 
 # ----------------------------------------------------------------------------
+# Phase 2.5 -- Seed v1 Key Vault with SI-required secrets (Internal only)
+# ----------------------------------------------------------------------------
+# Ensures SI-Shodan-ApiKey + OpenAI-ApiKey exist in the v1 platform KV so the
+# generated SecurityInsight.custom.ps1 KV-pull section works at engine runtime.
+# Idempotent (Set-AzKeyVaultSecret creates a new version each call but Azure
+# auto-prunes; cheap operation). Skipped for Community flavour.
+$phaseStatus.kvSeed = 'skipped'
+if ($cfg.Flavour -eq 'Internal' -and $global:KV_HighPriv_KeyVaultName) {
+    _Banner "Seed v1 KeyVault with SI secrets"
+    $kv = $global:KV_HighPriv_KeyVaultName
+    _Info ("KeyVault: {0}" -f $kv)
+
+    # Shodan -- fixed key shared across all internal customers
+    try {
+        $shodanKey = 'tyScfnKkuf4hz87DaHwnhzXST3wKExfg'
+        Set-AzKeyVaultSecret -VaultName $kv -Name 'SI-Shodan-ApiKey' `
+            -SecretValue (ConvertTo-SecureString $shodanKey -AsPlainText -Force) -ErrorAction Stop | Out-Null
+        _Ok "SI-Shodan-ApiKey seeded"
+    } catch {
+        _Warn ("SI-Shodan-ApiKey seed failed: {0}" -f $_.Exception.Message)
+    }
+
+    # OpenAI -- migrate from v1's $global:OpenAI_apiKey (set by v1 Default_Variables)
+    if ($global:OpenAI_apiKey) {
+        try {
+            Set-AzKeyVaultSecret -VaultName $kv -Name 'OpenAI-ApiKey' `
+                -SecretValue (ConvertTo-SecureString $global:OpenAI_apiKey -AsPlainText -Force) -ErrorAction Stop | Out-Null
+            _Ok ("OpenAI-ApiKey seeded ({0} chars from `$global:OpenAI_apiKey)" -f $global:OpenAI_apiKey.Length)
+            _Info "Safe to delete `$global:OpenAI_apiKey from v1 Automation-DefaultVariables.psm1 -- engines load from KV via custom.ps1 section 11"
+        } catch {
+            _Warn ("OpenAI-ApiKey seed failed: {0}" -f $_.Exception.Message)
+        }
+    } else {
+        _Warn "`$global:OpenAI_apiKey not set in v1 globals -- skipping OpenAI seed (set it in v1 Default_Variables, or pre-create the KV secret manually)"
+    }
+    $phaseStatus.kvSeed = 'ok'
+} elseif ($cfg.Flavour -eq 'Internal') {
+    _Warn "Phase 2.5 (KV secret seed) skipped: `$global:KV_HighPriv_KeyVaultName not set (Legacy-Connect.ps1 didn't run, or v1 ConnectDetails uses a different global name)"
+}
+
+# ----------------------------------------------------------------------------
 # Phase 3 -- Config file (Bridged for Internal, Inline for Community)
 # ----------------------------------------------------------------------------
 try {

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.165
+## v2.2.166
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.166 - Phase 2.5 seed v1 KV with SI secrets (6fcaf56d)
 - release: SecurityInsight v2.2.165 - Flavour-driven auth model in Setup-Unattended (f77a4cce)
 - release: SecurityInsight v2.2.164 - dual-path KV pulls (v2 Context + v1 fallback) (d1626a0e)
 - release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
@@ -33,13 +34,25 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
 - release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
 - release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
-- release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.166 — `Setup-SecurityInsight-Unattended.ps1`: Phase 2.5 — seed v1 KV with SI secrets
+
+New phase between Infrastructure (Phase 2) and Config-file render (Phase 3). Internal flavour only. When `$global:KV_HighPriv_KeyVaultName` is set (loaded by `Legacy-Connect.ps1` from v1's `Automation-ConnectDetails.psm1`), the script writes two secrets to the v1 platform Key Vault:
+
+- `SI-Shodan-ApiKey` — fixed key shared across internal customers
+- `OpenAI-ApiKey` — migrated from v1's `$global:OpenAI_apiKey` (set by `Default_Variables`); skip-with-warn if v1 global not present
+
+After the migration, the operator can delete the `$global:OpenAI_apiKey = '...'` line from v1's `Automation-DefaultVariables.psm1` — engines load it from KV via `SecurityInsight.custom.ps1` section 11 (the dual-path pulls added in v2.2.164).
+
+Each `Set-AzKeyVaultSecret` is wrapped in try/catch so a single secret failure (e.g. KV RBAC missing for one name) doesn't block the rest of the deploy.
 
 ---
 

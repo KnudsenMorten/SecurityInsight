@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.153
+## v2.2.154
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.154 - Port-V1Platform + Test-PlatformConnect (bbc0e783)
 - release: SecurityInsight v2.2.153 - drop legacy AutomateIT_InstallUpdate refs (3cda6e1e)
 - release: SecurityInsight v2.2.152 - Update-SecurityInsight.ps1 one-liner updater (6624ab59)
 - release: SecurityInsight v2.2.151 - unattended setup + Internal/Community flavours (dae40cd9)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.127 - README §4 refresh + DCE-via-REST fix + Tag Contributor opt-in (9671dea1)
 - release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
 - release: SecurityInsight v2.2.125 - select-element readability fix (dark navy text, sans font, optgroup styling) (24bb34a6)
-- release: SecurityInsight v2.2.124 - fix storage-account empty-name bug + per-step log panel + pre-Apply validation (5f7fd322)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.154 — Internal migration tooling: `Port-V1Platform.ps1` + `Test-PlatformConnect.ps1`
+
+Two new internal-only helpers under `SOLUTIONS\PlatformConfiguration\INTERNAL\` (scrubbed from public mirrors by the publish workflow). They cut the FVF-style v1→v2 customer onboarding from ~30 min of manual file copies + ad-hoc smoke tests down to two commands.
+
+**`Port-V1Platform.ps1`** — one-shot v1→v2 platform port. Reads `<V1ROOT>\FUNCTIONS\Automation-DefaultVariables.psm1`, strips the `function Default_Variables() { ... }` wrapper, writes the body verbatim to `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1`, copies `Connect_Azure.ps1` alongside it, and appends the dot-source line so `$global:HighPriv_Modern_*` + `$global:Context` + `Get-PlatformSecret` load with one `. platform-defaults.ps1`. Also drops the `setup-unattended.json` template into the SI config folder when missing. Idempotent, backs up existing files to `.bak.<timestamp>`, supports `-DryRun` and `-Force`.
+
+**`Test-PlatformConnect.ps1`** — read-only end-to-end smoke test of the `$global:AutomationFramework = $true` bridge. Seven phases: dot-source → globals contract check → bridge mirrors → `Connect-AzAccount -ServicePrincipal -CertificateThumbprint` → `Connect-MgGraph -ClientId -CertificateThumbprint` → `Get-PlatformSecret` KV pull → PASS/FAIL summary with exit code. Skip flags: `-SkipMgGraph`, `-SkipKv`, `-KeyVaultProbeName`. Replaces the manual `pwsh -NoProfile -Command { ... }` one-liner that operators had to assemble from `Onboarding.txt`.
+
+Run order on a new internal customer VM:
+
+```powershell
+cd C:\AutomateIT\SOLUTIONS\PlatformConfiguration\INTERNAL
+.\Port-V1Platform.ps1 -V1Source <V1ROOT>     # port + drop json
+.\Test-PlatformConnect.ps1                   # smoke test, exit 0 = green
+
+cd C:\AutomateIT\SOLUTIONS\SecurityInsight
+.\Setup-SecurityInsight-Unattended.ps1       # actual deploy
+```
+
+Community-edition operators see none of this — `INTERNAL/` is excluded by the publish workflow.
 
 ---
 

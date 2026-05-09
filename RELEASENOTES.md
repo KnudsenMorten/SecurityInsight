@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.159
+## v2.2.160
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
 - release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
 - release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
 - release: SecurityInsight v2.2.157 - v1->v2 bridge cert-auth + PS 5.1 unattended (d0f968da)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
 - release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
 - release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
-- release: SecurityInsight v2.2.130 - README cleanup + Az binary-compat smoke test in wizard pre-flight (2e51f0f5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.160 — `Port-V1Platform.ps1`: ACL self-repair before write
+
+New "Phase 0" runs `takeown /F <folder> /R /A` + `icacls <folder> /grant USERNAME:(OI)(CI)F /T` + `icacls <folder> /grant Administrators:(OI)(CI)F /T` on both target folders (`SOLUTIONS\PlatformConfiguration\config\` + `SOLUTIONS\SecurityInsight\config\`) before writing `platform-defaults.ps1` / `Connect_Azure.ps1` / `setup-unattended.json`. Also clears any `IsReadOnly` attribute on existing files in the tree.
+
+Fixes the case where `Sync-AutomateIT.ps1` ran elevated and created the folders owned by SYSTEM/admin, then a regular-shell re-run of the porter hit `Access denied`. Self-heals when run elevated; silent no-op (with `[WARN]`) when not elevated, falling through to let the actual write surface a real error if perms still block it.
 
 ---
 

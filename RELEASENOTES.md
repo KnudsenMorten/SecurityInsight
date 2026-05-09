@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.155
+## v2.2.156
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.156 - Port-V1Platform + Test-PlatformConnect auto-detect V2Root (7a3afd4f)
 - release: SecurityInsight v2.2.155 - Sync-AutomateIT-Engine auto-Unblock-File (c17fd9ee)
 - release: SecurityInsight v2.2.154 - Port-V1Platform + Test-PlatformConnect (bbc0e783)
 - release: SecurityInsight v2.2.153 - drop legacy AutomateIT_InstallUpdate refs (3cda6e1e)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.129 - README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table (bfaf8fe2)
 - release: SecurityInsight v2.2.128 - handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT (057e97f0)
 - release: SecurityInsight v2.2.127 - README §4 refresh + DCE-via-REST fix + Tag Contributor opt-in (9671dea1)
-- release: SecurityInsight v2.2.126 - auto-register Azure resource providers + rename Apply button to Setup (d521058a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.156 — `Port-V1Platform.ps1` + `Test-PlatformConnect.ps1`: auto-detect V2Root
+
+Both internal helpers used to default `-V2Root` to a hardcoded `C:\AutomateIT`, which broke for installs on any other drive (D:\, E:\, network share). They now auto-detect V2Root from `$PSScriptRoot` (three folders up — script lives at `<V2Root>\SOLUTIONS\PlatformConfiguration\INTERNAL\`), so they always target the install they were launched from regardless of drive letter. `-V2Root` override still works for the rare cross-install case.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.166
+## v2.2.167
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
 - release: SecurityInsight v2.2.166 - Phase 2.5 seed v1 KV with SI secrets (6fcaf56d)
 - release: SecurityInsight v2.2.165 - Flavour-driven auth model in Setup-Unattended (f77a4cce)
 - release: SecurityInsight v2.2.164 - dual-path KV pulls (v2 Context + v1 fallback) (d1626a0e)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
 - release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
 - release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
-- release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.167 — `Port-V1Platform.ps1`: generate `platform-defaults.ps1` as v1 shim (full chain)
+
+Previous porter approaches kept failing because the cert thumbprint global is set by `ConnectDetails` (in v1's `Automation-ConnectDetails.psm1`), not by `Default_Variables` (in `Automation-DefaultVariables.psm1`). Porting only `Default_Variables` left `$global:HighPriv_Modern_CertificateThumbprint_Azure` null, so `Connect_Azure.ps1` exploded at every launcher Layer 1 dot-source.
+
+New strategy: instead of copying / re-shaping the v1 file content, generate a small `platform-defaults.ps1` shim that mirrors `Legacy-Connect.ps1` — imports all v1 modules from the v1 install path (baked in at port time) and invokes the full chain:
+
+```powershell
+$global:AutomationFramework = $true
+Import-Module ...\2LINKIT-Functions.psm1
+Import-Module ...\Automation-ConnectDetails.psm1   ; ConnectDetails        # ← THE missing call
+Import-Module ...\Automation-DefaultVariables.psm1 ; Default_Variables
+& ...\Connect_Azure.ps1
+```
+
+Every launcher's Layer 1 dot-sources this on each cycle, getting the full v1 platform-foundation context (HighPriv_Modern_*, KV_HighPriv_KeyVaultName, SMTP/LA/AD_*, connected Az/Mg). Re-run Port-V1Platform.ps1 if the v1 install path moves.
+
+Also: dropped the `Copy Connect_Azure.ps1` step (the shim references the v1 path directly — no need for a local copy).
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.158
+## v2.2.159
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
 - release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
 - release: SecurityInsight v2.2.157 - v1->v2 bridge cert-auth + PS 5.1 unattended (d0f968da)
 - release: SecurityInsight v2.2.156 - Port-V1Platform + Test-PlatformConnect auto-detect V2Root (7a3afd4f)
@@ -33,13 +34,25 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
 - release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
 - release: SecurityInsight v2.2.130 - README cleanup + Az binary-compat smoke test in wizard pre-flight (2e51f0f5)
-- release: SecurityInsight v2.2.129 - README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table (bfaf8fe2)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.159 — `Setup-SecurityInsight-Unattended.ps1`: `-SkipPlatformDefaults`
+
+New switch lets the operator pre-load v1 platform globals (via their own `connect.ps1` that imports `2LINKIT-Functions.psm1` + `Automation-ConnectDetails.psm1` + `Automation-DefaultVariables.psm1` + dot-sources `Connect_Azure.ps1`) and tell Setup-Unattended to skip its own dot-source of `platform-defaults.ps1`. Sanity-checks `$global:HighPriv_Modern_CertificateThumbprint_Azure` to ensure the operator actually ran the connect script before passing the switch.
+
+```powershell
+. .\connect.ps1                                  # operator's manual v1 connect
+.\Setup-SecurityInsight-Unattended.ps1 -SkipPlatformDefaults
+```
+
+Cleanest path for FVF-style customers who already have a working v1 connect chain and don't want Port-V1Platform.ps1 to re-derive everything.
 
 ---
 

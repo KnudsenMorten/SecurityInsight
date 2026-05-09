@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.167
+## v2.2.168
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
 - release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
 - release: SecurityInsight v2.2.166 - Phase 2.5 seed v1 KV with SI secrets (6fcaf56d)
 - release: SecurityInsight v2.2.165 - Flavour-driven auth model in Setup-Unattended (f77a4cce)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
 - release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
 - release: SecurityInsight v2.2.139 - README S4 restructure + screenshots + scheduling + legacy cleanup (dae64158)
-- release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.168 — `Initialize-PlatformAutomationFramework`: short-circuit when v1 globals already loaded
+
+When the launcher's Layer 1 dot-source of `platform-defaults.ps1` runs the v1 chain (`ConnectDetails` + `Default_Variables` + `Connect_Azure.ps1`), the v1-contract globals (`$global:HighPriv_Modern_ApplicationID_Azure` + `$global:HighPriv_Modern_CertificateThumbprint_Azure` + `$global:AzureTenantId`) are already set. Engines that subsequently call `Initialize-PlatformAutomationFramework` (e.g. `Invoke-RiskAnalysis.ps1` line 4404) would re-do the work — but more importantly, they'd fail with "missing config -- TenantId, SubscriptionId, KeyVaultName, ..." because no `platform-config.json` exists.
+
+Function now early-returns when those 3 v1 globals are populated, returning a `pscustomobject` with `Source='v1-chain'` instead of trying to build a fresh PlatformContext from JSON / env vars / params. Customers using the v1 connect chain don't need `platform-config.json` at all. Customers without v1 (community / fresh tenant) still get the original full-init path.
+
+Fixes the Phase ER on every internal-flavour launcher's engine call when the operator has Legacy-Connect / platform-defaults.ps1 working.
 
 ---
 

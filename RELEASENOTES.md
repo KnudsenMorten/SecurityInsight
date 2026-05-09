@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.157
+## v2.2.158
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
 - release: SecurityInsight v2.2.157 - v1->v2 bridge cert-auth + PS 5.1 unattended (d0f968da)
 - release: SecurityInsight v2.2.156 - Port-V1Platform + Test-PlatformConnect auto-detect V2Root (7a3afd4f)
 - release: SecurityInsight v2.2.155 - Sync-AutomateIT-Engine auto-Unblock-File (c17fd9ee)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
 - release: SecurityInsight v2.2.130 - README cleanup + Az binary-compat smoke test in wizard pre-flight (2e51f0f5)
 - release: SecurityInsight v2.2.129 - README §3 docs: fix TOC anchor + Mermaid parse error + readability of §3.1 inputs table (bfaf8fe2)
-- release: SecurityInsight v2.2.128 - handle Az.Accounts 5.0+ SecureString tokens for DCE REST PUT (057e97f0)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.158 — `Port-V1Platform.ps1`: drop `-Force`, always overwrite
+
+`-Force` is gone. Old behavior backed up `platform-defaults.ps1` + `Connect_Azure.ps1` to `.bak.<timestamp>` before overwrite unless `-Force` was passed; that meant operators had to remember to pass `-Force` to skip cruft accumulation, and re-running the porter would slowly fill the config folder with timestamp-suffixed copies. New behavior is the simpler model: the v1 source files are the truth, the v2 generated files are caches; re-running just overwrites in place. No backups, no flag.
+
+The v1 input is never touched, and the porter itself ships from a versioned repo, so there's no real backup-recovery scenario the old `-Force`-default-off behavior was protecting against.
 
 ---
 

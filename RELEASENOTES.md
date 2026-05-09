@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.160
+## v2.2.161
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
 - release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
 - release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
 - release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.134 - wizard grants Contributor + forces SI_UseStorageOAuth (43004c62)
 - release: SecurityInsight v2.2.133 - don't leak SMTP/OpenAI when operator picked Off (009923d4)
 - release: SecurityInsight v2.2.132 - wizard Phase 3 fix for null sub-properties (99d66665)
-- release: SecurityInsight v2.2.131 - hotfix _Step regression in wizard pre-flight (cd3edf7d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.161 — `Setup-SecurityInsight-Unattended.ps1`: fix Write-Host format-operator parse bug
+
+The "UNATTENDED SETUP DONE" banner at the very end of the orchestrator was:
+
+```powershell
+Write-Host " ... (flavour={0})" -f $cfg.Flavour -ForegroundColor Magenta
+```
+
+PowerShell prefix-matched `-f` to `-ForegroundColor` and tried to bind `$cfg.Flavour` (`"Internal"`) to the colour param, throwing `Cannot convert value "Internal" to type "System.ConsoleColor"` at the very last line — after all 5 phases had already succeeded. Wrap the format expression in `()` so it's resolved before the named-param parser sees `-ForegroundColor Magenta`.
 
 ---
 

@@ -90,8 +90,7 @@ param(
     [Parameter()] [string]$NamingSuffix,
     [Parameter()] [switch]$EntraDiag_Enabled,
     [Parameter()] [switch]$Container_Enabled,
-    [Parameter()] [switch]$SkipPhase1,
-    [Parameter()] [switch]$SkipPlatformDefaults
+    [Parameter()] [switch]$SkipPhase1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -162,43 +161,26 @@ if ($Container_Enabled)                                 { $cfg.Container.Enabled
 if (-not $cfg.Flavour) { throw "Flavour not set (must be 'Internal' or 'Community')." }
 _Info ("flavour      : {0}" -f $cfg.Flavour)
 
-# ----------- Internal flavour: dot-source platform-defaults.ps1 -----------
-$pdLoaded = $false
+# ----------- Phase 0: pre-deploy globals load (Internal flavour only) -----------
+# Auth model is driven by Flavour:
+#   Internal  -> cert SPN path. Operator is expected to have run their connect
+#                script (e.g. bootstrap\Onboarding\Legacy-Connect.ps1) before
+#                invoking this script, which loads $global:HighPriv_Modern_*
+#                + $global:AzureTenantId + connects Az/Mg via cert.
+#   Community -> interactive browser Connect-AzAccount + Connect-MgGraph.
+#                No v1 globals expected.
 if ($cfg.Flavour -eq 'Internal') {
-    if ($SkipPlatformDefaults) {
-        # Operator pre-loaded platform-defaults via their own connect script
-        # (e.g. v1 ConnectDetails + Default_Variables + Connect_Azure.ps1 chain).
-        # Trust that $global:AzureTenantId / HighPriv_Modern_* are already set.
-        _Step "skip platform-defaults dot-source (-SkipPlatformDefaults)"
-        if (-not $global:HighPriv_Modern_CertificateThumbprint_Azure) {
-            throw "-SkipPlatformDefaults was passed but `$global:HighPriv_Modern_CertificateThumbprint_Azure is not set. Run your connect script first, then re-run."
-        }
-        $global:AutomationFramework = $true
-        $pdLoaded = $true
-        _Ok "using pre-loaded globals"
-    } else {
-        $pdPath = $cfg.Auth_Internal.PlatformDefaultsPath
-        if (-not $pdPath) {
-            # Auto-resolve: SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1
-            # is at <repo>\..\PlatformConfiguration\config\platform-defaults.ps1 since
-            # the SI repo lives at SOLUTIONS\SecurityInsight\.
-            $pdPath = Join-Path (Split-Path -Parent $repoRoot) 'PlatformConfiguration\config\platform-defaults.ps1'
-        }
-        if (-not (Test-Path -LiteralPath $pdPath)) {
-            throw ("platform-defaults.ps1 not found at {0}. Internal flavour requires it (port from v1's Automation-DefaultVariables.psm1), OR pass -SkipPlatformDefaults if you've pre-loaded globals via your own connect script. See bootstrap\Onboarding.txt step 3." -f $pdPath)
-        }
-        # v1 Connect_Azure.ps1 + Default_Variables branch on this flag to take the
-        # cert-based unattended auth path (vs interactive). Set BEFORE dot-source so
-        # the cert thumbprint + tenant + KV context globals get populated.
-        $global:AutomationFramework = $true
-
-        _Step ("dot-source platform-defaults.ps1 ({0})" -f $pdPath)
-        . $pdPath
-        $pdLoaded = $true
-        _Ok "platform-defaults.ps1 loaded"
+    # Internal customers MUST run Legacy-Connect.ps1 (or equivalent v1 chain)
+    # ONCE before invoking Setup-Unattended. That script loads $global:HighPriv_Modern_*
+    # + $global:AzureTenantId + $global:MainLogAnalyticsWorkspaceSubId + cert-connects
+    # Az/Mg. We just verify here -- no fallback dot-source.
+    if (-not $global:HighPriv_Modern_CertificateThumbprint_Azure) {
+        throw "Internal flavour: `$global:HighPriv_Modern_CertificateThumbprint_Azure not set. Run bootstrap\Onboarding\Legacy-Connect.ps1 first, then re-run Setup-Unattended."
     }
+    _Step "Internal flavour -- using pre-loaded v1 globals + Az/Mg context"
+    _Ok ("cert SPN: {0} (thumb {1})" -f $global:HighPriv_Modern_ApplicationID_Azure, $global:HighPriv_Modern_CertificateThumbprint_Azure)
 
-    # Resolve Internal-flavour params from globals when not explicitly set
+    # Resolve Sub.TenantId / SubscriptionId / Auth_Internal from v1 globals when not in JSON
     if (-not $cfg.Sub.TenantId)            { $cfg.Sub.TenantId       = $global:AzureTenantId }
     if (-not $cfg.Sub.SubscriptionId)      { $cfg.Sub.SubscriptionId = $global:MainLogAnalyticsWorkspaceSubId }
     if (-not $cfg.Auth_Internal.AppId)     { $cfg.Auth_Internal.AppId                 = $global:HighPriv_Modern_ApplicationID_Azure }
@@ -208,8 +190,8 @@ if ($cfg.Flavour -eq 'Internal') {
 }
 
 # Validate the resolved values
-if (-not $cfg.Sub.TenantId)       { throw "Sub.TenantId not set (and `$global:AzureTenantId is empty). Pass -TenantId or fix platform-defaults.ps1." }
-if (-not $cfg.Sub.SubscriptionId) { throw "Sub.SubscriptionId not set (and `$global:MainLogAnalyticsWorkspaceSubId is empty). Pass -SubscriptionId or fix platform-defaults.ps1." }
+if (-not $cfg.Sub.TenantId)       { throw "Sub.TenantId not set. Pass -TenantId or set Sub.TenantId in setup-unattended.json." }
+if (-not $cfg.Sub.SubscriptionId) { throw "Sub.SubscriptionId not set. Pass -SubscriptionId or set Sub.SubscriptionId in setup-unattended.json." }
 if (-not $cfg.Sub.Location)       { $cfg.Sub.Location = 'westeurope' }
 if ($cfg.Flavour -eq 'Internal') {
     if (-not $cfg.Auth_Internal.AppId)                  { throw "Auth_Internal.AppId not set (and `$global:HighPriv_Modern_ApplicationID_Azure is empty)." }
@@ -235,6 +217,28 @@ _Info ("subscription : {0}" -f $cfg.Sub.SubscriptionId)
 _Info ("location     : {0}" -f $cfg.Sub.Location)
 _Info ("RG / WS / DCE / Storage : {0} / {1} / {2} / {3}" -f $cfg.Resources.ResourceGroupName, $cfg.Resources.WorkspaceName, $cfg.Resources.DceName, $cfg.Resources.StorageAccountName)
 Write-Host ""
+
+# ----------- Community flavour: interactive browser auth -----------
+if ($cfg.Flavour -eq 'Community') {
+    _Banner "Interactive auth (browser)"
+    _Step ("Connect-AzAccount -Tenant {0} -Subscription {1}" -f $cfg.Sub.TenantId, $cfg.Sub.SubscriptionId)
+    Import-Module Az.Accounts -ErrorAction Stop
+    $null = Connect-AzAccount -Tenant $cfg.Sub.TenantId -Subscription $cfg.Sub.SubscriptionId -ErrorAction Stop
+    _Ok "Az PS connected"
+
+    _Step ("Connect-MgGraph -TenantId {0} (browser)" -f $cfg.Sub.TenantId)
+    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
+    $null = Connect-MgGraph -TenantId $cfg.Sub.TenantId -NoWelcome -ErrorAction Stop
+    _Ok "Microsoft Graph connected"
+
+    if ($cfg.Container.Enabled) {
+        _Step "az login (interactive) -- Container Apps Job phase needs it"
+        $null = & az login --tenant $cfg.Sub.TenantId --output none 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "az login (interactive) failed" }
+        $null = & az account set --subscription $cfg.Sub.SubscriptionId 2>&1
+        _Ok ("az CLI signed in (sub {0})" -f $cfg.Sub.SubscriptionId)
+    }
+}
 
 # ----------- Internal flavour: cert-based connect (Az PS + Mg + optional az CLI) -----------
 if ($cfg.Flavour -eq 'Internal') {

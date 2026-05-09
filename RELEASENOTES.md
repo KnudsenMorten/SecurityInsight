@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.164
+## v2.2.165
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.165 - Flavour-driven auth model in Setup-Unattended (f77a4cce)
 - release: SecurityInsight v2.2.164 - dual-path KV pulls (v2 Context + v1 fallback) (d1626a0e)
 - release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
 - release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.138 - README Prerequisites: full module set + AllUsers scope (88dcbb92)
 - release: SecurityInsight v2.2.137 - docs catch-up + 4.1 phases as headers (ea7b2b5c)
 - release: SecurityInsight v2.2.136 - Phase 4 creates Entra Diagnostic Setting (ef946223)
-- release: SecurityInsight v2.2.135 - _GrantRbac filters inherited assignments (b00bcd30)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.165 — `Setup-SecurityInsight-Unattended.ps1`: Flavour-driven auth model
+
+Auth path is now driven by `Flavour` in `setup-unattended.json`:
+
+| Flavour | Auth |
+|---------|------|
+| `Internal` | Cert SPN. **Requires** `Legacy-Connect.ps1` (or equivalent v1 chain) to have run first; throws if `$global:HighPriv_Modern_CertificateThumbprint_Azure` is null. |
+| `Community` | Interactive browser `Connect-AzAccount` + `Connect-MgGraph`. No v1 chain needed. |
+
+Removed:
+
+- `-SkipPlatformDefaults` switch — Internal always expects pre-loaded globals now, no opt-out needed.
+- The dot-source-`platform-defaults.ps1` fallback path — replaced by the `Legacy-Connect.ps1` model. Setup-Unattended no longer touches `platform-defaults.ps1`.
+
+Bonus: Community flavour now actually has working auth (the previous code path assumed Internal everywhere).
+
+Operator workflow (FVF-style internal):
+
+```powershell
+. .\Legacy-Connect.ps1                              # one-time, setup-only
+.\Setup-SecurityInsight-Unattended.ps1               # auto-detects Internal flavour
+```
+
+Operator workflow (community / new tenant):
+
+```powershell
+.\Setup-SecurityInsight-Unattended.ps1 -Flavour Community -TenantId <tid> -SubscriptionId <sub>
+```
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.169
+## v2.2.170
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
 - release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
 - release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
 - release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
@@ -33,13 +34,25 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
 - release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
 - release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
-- release: SecurityInsight v2.2.140 - chapter 3 diagram redesigned for readability (dfc6ab78)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.170 — `Get-PlatformSecret`: tolerate both Context shapes (defense-in-depth)
+
+`Get-PlatformSecret` now handles two `Context` shapes instead of requiring the proper PlatformContext schema:
+
+1. **Properly-shaped `PlatformContext`** from `New-PlatformContext` — uses native `Get-PlatformSecretKeyVault` via `.Providers.Secret = 'KeyVault'`.
+2. **Flat short-circuit object** (e.g. v2.2.168's old return shape, or any minimal context) — no `.Providers` field; falls back to direct `Get-AzKeyVaultSecret` using `.KeyVaultName`, `.Tenant.KeyVaultName`, or `$global:KV_HighPriv_KeyVaultName` — whichever resolves first.
+
+Means existing customer installs still on v2.2.168's flat short-circuit (e.g. customers who haven't synced v2.2.169 yet) get KV pulls working via the compatibility fallback. v2.2.169's proper context still uses the primary v2 path.
+
+Future-proofs against further Context-shape evolution: any caller passing a partial Context now degrades gracefully to direct KV access instead of throwing `PropertyNotFoundException`.
 
 ---
 

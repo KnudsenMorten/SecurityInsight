@@ -416,60 +416,57 @@ function Initialize-LauncherConfig {
     # not noise from $PROFILE / prior runs / parent scripts.
     $script:_CfgSnapBefore = _CfgGatherGlobals
 
-    # ---- Layer 1: platform-defaults.ps1 (tenant, internal mode only) ---------
-    $platformPath = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1'
-    _CfgStep "Layer 1/5: platform-defaults.ps1 (tenant -- internal mode only)"
+    # ---- Layer 1: Connect-Platform (tenant scope, internal mode only) --------
+    # v2.3: Connect-Platform reads bootstrap\platform-config.json, MI/cert-
+    # connects Bootstrap, secret-connects Modern, populates $global:Context +
+    # $global:HighPriv_Modern_* + friends. Replaces the v2.2 dot-source of
+    # SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1 (still
+    # supported as fallback below for v2.2 deployments not yet migrated via
+    # Convert-V1ToPlatform).
+    $platformConfigPath = Join-Path $RepoRoot 'bootstrap\platform-config.json'
+    $platformDefaultsPath = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1'   # v2.2 legacy fallback
+    _CfgStep "Layer 1/5: Connect-Platform (v2.3) or platform-defaults.ps1 (v2.2 fallback)"
+
     if ($Mode -eq 'internal') {
-        if (Test-Path -LiteralPath $platformPath) {
-            . $platformPath
-            _CfgOk "loaded"
-            _CfgRecordLayer 'Layer 1 - platform-defaults (internal)' $platformPath $true
+        if (Test-Path -LiteralPath $platformConfigPath) {
+            $aitpsPath = Join-Path $RepoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'
+            if (-not (Test-Path -LiteralPath $aitpsPath)) {
+                _CfgInfo "v2.3 platform-config.json present but AutomateITPS module missing at $aitpsPath -- launcher cannot Connect-Platform. Skipping Layer 1."
+                _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
+            } else {
+                try {
+                    Import-Module $aitpsPath -Force -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+                    $null = Connect-Platform -ErrorAction Stop
+                    _CfgOk ("Connect-Platform succeeded (Modern AppId {0}, KV {1})" -f $global:HighPriv_Modern_ApplicationID_Azure, $global:KV_HighPriv_KeyVaultName)
+                    _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $true
+                } catch {
+                    _CfgInfo ("Connect-Platform failed: {0}. Falling back to v2.2 platform-defaults.ps1 if present." -f $_.Exception.Message)
+                    if (Test-Path -LiteralPath $platformDefaultsPath) {
+                        . $platformDefaultsPath
+                        _CfgOk "loaded v2.2 fallback ($platformDefaultsPath)"
+                        _CfgRecordLayer 'Layer 1 - platform-defaults (v2.2 fallback)' $platformDefaultsPath $true
+                    } else {
+                        _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
+                    }
+                }
+            }
+        } elseif (Test-Path -LiteralPath $platformDefaultsPath) {
+            # No v2.3 config -- fall back to v2.2 chain (operator hasn't migrated yet).
+            . $platformDefaultsPath
+            _CfgOk "loaded v2.2 platform-defaults.ps1 ($platformDefaultsPath)"
+            _CfgInfo "v2.2 fallback active. Migrate to v2.3 via SOLUTIONS\PlatformConfiguration\INTERNAL\Migrate\Convert-V1ToPlatform.ps1 to use Connect-Platform."
+            _CfgRecordLayer 'Layer 1 - platform-defaults (v2.2 fallback)' $platformDefaultsPath $true
         } else {
-            _CfgInfo "absent ($platformPath) -- skipping"
-            _CfgRecordLayer 'Layer 1 - platform-defaults (internal)' $platformPath $false
+            _CfgInfo "absent (no $platformConfigPath, no $platformDefaultsPath) -- skipping"
+            _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
         }
     } else {
-        _CfgInfo "skipped (community mode; platform-defaults only applies in internal / AF deployments)"
-        _CfgRecordLayer 'Layer 1 - platform-defaults (internal)' $platformPath $false
+        _CfgInfo "skipped (community mode; Layer 1 only applies in internal / AF deployments)"
+        _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
     }
-
-    # ---- Layer 1.5: auto-init AutomationFramework (internal mode) -----------
-    # Layer 3 customer files often call Get-PlatformSecret -Context $global:Context
-    # to KV-fetch SI_StorageKey / SI_Shodan_ApiKey / OpenAI_apiKey at runtime.
-    # That requires $global:Context to be populated by Initialize-PlatformAutomationFramework
-    # BEFORE Layer 3 dot-sources. v2.2.18 and earlier expected the caller to
-    # have called it manually upstream (profile.ps1 / scheduled-task wrapper);
-    # SYSTEM-context jobs and fresh PS sessions skipped that step and got
-    # cryptic "Cannot bind argument to parameter 'Context' because it is null"
-    # bubbled up from the customer's KV fetch. Auto-init here when needed.
-    if ($Mode -eq 'internal' -and -not $global:Context) {
-        $aitpsPath = Join-Path $RepoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'
-        if (Test-Path -LiteralPath $aitpsPath) {
-            try {
-                Import-Module $aitpsPath -Force -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
-                _CfgStep "Layer 1.5/5: Initialize-PlatformAutomationFramework (auto-init -- `$global:Context was null)"
-                # Initialize-PlatformAutomationFramework RETURNS the Context object;
-                # caller must assign it to $global:Context. (It also sets $global:HighPriv_*
-                # internally as a side effect, but Context itself is returned, not globalised.)
-                # -IgnoreMissingSecrets: legacy on-prem creds (Azure-VM-LocalAdmin-*,
-                # Legacy-* zone creds) are optional for v2 cloud-only engines, so missing
-                # KV secrets shouldn't fire WARNING noise on every launcher start. Customers
-                # who need legacy creds opt in by setting them in KV; the engine still
-                # surfaces the failure via Write-Verbose for diagnostic runs.
-                $global:Context = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets -ErrorAction Stop
-                if ($global:Context) {
-                    _CfgOk ("Context populated (CorrelationId={0})" -f $global:Context.CorrelationId)
-                } else {
-                    _CfgInfo "Initialize-PlatformAutomationFramework returned but `$global:Context still null"
-                }
-            } catch {
-                _CfgInfo ("auto-init skipped: {0}" -f $_.Exception.Message)
-                _CfgInfo "If Layer 3 custom.ps1 calls Get-PlatformSecret, that will fail; either call Initialize-PlatformAutomationFramework manually upstream OR drop platform-config.json at SOLUTIONS\PlatformConfiguration\config\platform-config.json"
-            }
-        } else {
-            _CfgInfo "auto-init skipped: AutomateITPS module not found at $aitpsPath"
-        }
-    }
+    # NB: Layer 1.5 (auto-init Initialize-PlatformAutomationFramework) is gone in v2.3.
+    # Connect-Platform IS the auto-init -- it returns the same PlatformContext + sets
+    # the same v1-contract globals as Initialize-PlatformAutomationFramework did.
 
     # ---- Layer 2: <Solution>.shared-defaults.ps1 (solution baseline, ours) ---
     $sharedPath = Join-Path (Split-Path -Parent $LauncherDir) ("_lib\{0}.shared-defaults.ps1" -f $Solution)

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.172
+## v2.2.173
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.173 - Write-SICustomConfig emits SI_SPN_Secret + global SI_ForceFullRun (3fb9690d)
 - release: SecurityInsight v2.2.172 - re-auth secret-SPN before LA ingest in profilers + RA (29b6f92e)
 - release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
 - release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
@@ -33,13 +34,25 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.146 - pre-flight: Az PS + Mg + az CLI in ONE block (33ea07db)
 - release: SecurityInsight v2.2.145 - launch pre-flight: az CLI is a HARD block (d7ced97a)
 - release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
-- release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.173 — `Write-SICustomConfig.ps1`: emit SI_SPN_Secret + global SI_ForceFullRun
+
+Generator now adds two more lines to every newly-rendered `SecurityInsight.custom.ps1`:
+
+- **§1 (Bridged mode)** — `$global:SI_SPN_Secret = $global:HighPriv_Modern_Secret_Azure` so AzLogDcrIngestPS has the LA Log Ingestion endpoint client secret without operator manual editing. Cert stays primary for Az/Mg/KV.
+- **§6 (Engine Tuning)** — `$global:SI_ForceFullRun = $true` (global override). Per-engine `SI_ForceFullRun_<E>` flags weren't honored by every launcher's mode-resolver; the global one always wins. Operator should flip to `$false` after first runs populate the cadence cache.
+
+Existing customer custom.ps1 files won't auto-update — re-run `Setup-SecurityInsight-Unattended` to regenerate, or manually add the 2 lines to existing custom.ps1.
+
+Combined with v2.2.172 (engine-side secret-SPN re-auth) → fresh internal-flavour deploy now produces working LA ingest on first launcher run, no manual config tweaks.
 
 ---
 

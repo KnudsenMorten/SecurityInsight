@@ -6288,6 +6288,23 @@ elseif ([bool]$global:SendToLogAnalytics) {
                                 'rg-dce-securityinsight'
                             }
 
+                # AzLogDcrIngestPS (1.6.2) reads tokens from the active Az session cache.
+                # When v1 chain (Connect_Azure.ps1) leaves us in cert-SPN context, the
+                # cached token won't satisfy the LA ingest endpoint -> AADSTS7000215.
+                # Refresh the session here with the secret SPN so subsequent ingest calls
+                # find a usable token. Idempotent. Skipped when secret is missing (UAMI / cert-only).
+                if ($global:SpnClientId -and $global:SpnClientSecret -and $global:SpnTenantId) {
+                    try {
+                        $secCred = [pscredential]::new($global:SpnClientId, (ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force))
+                        $null = Connect-AzAccount -ServicePrincipal `
+                                                  -Tenant $global:SpnTenantId `
+                                                  -Credential $secCred `
+                                                  -ErrorAction Stop -WarningAction SilentlyContinue
+                    } catch {
+                        Write-Warning ("RA LA ingest: secret-SPN session refresh failed -- AzLogDcrIngestPS may 401: {0}" -f $_.Exception.Message)
+                    }
+                }
+
                 $null = Ensure-SecurityInsightDce `
                               -DceName              $laDceName `
                               -DceResourceGroup     $laDceRg `

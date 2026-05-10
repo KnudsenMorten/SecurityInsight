@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.171
+## v2.2.172
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.172 - re-auth secret-SPN before LA ingest in profilers + RA (29b6f92e)
 - release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
 - release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
 - release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.145 - launch pre-flight: az CLI is a HARD block (d7ced97a)
 - release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
 - release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
-- release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.172 — Re-establish secret-SPN Az session before LA ingest (profilers + RA)
+
+`AzLogDcrIngestPS` 1.6.2 reads tokens from the active Az session cache instead of doing clean client-credentials calls internally. When the session was established via cert (e.g., v1 `Connect_Azure.ps1`), the cached token doesn't satisfy the LA Log Ingestion endpoint and we get `AADSTS7000215: Invalid client secret provided` — even though the SPN secret IS valid and the value being sent is correct.
+
+Fix: refresh the Az session with `Connect-AzAccount -ServicePrincipal -Credential` (using `$global:SI_SPN_Secret` / `$global:SpnClientSecret`) right before the AzLogDcrIngestPS calls. Idempotent. Two call sites:
+
+- `engine\asset-profiling\stages\Invoke-Output.ps1` — covers all 4 profilers (identity, endpoint, azure, publicip)
+- `engine\risk-analysis\Invoke-RiskAnalysis.ps1` — RA's LA ingest path
+
+Skipped when secret is missing (UAMI installs / cert-only deploys), so no regression for those.
+
+Long-term fix (future v3): patch `AzLogDcrIngestPS` to do explicit `Invoke-RestMethod` token requests with the supplied `AzAppSecret` instead of relying on session cache. Removes the order-of-operations dependency entirely. Tracked separately.
 
 ---
 

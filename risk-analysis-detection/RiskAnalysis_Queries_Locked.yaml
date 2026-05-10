@@ -769,7 +769,7 @@
               | extend SecurityDomain = "Endpoint"
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RF_P_LegacyEoS       = iff(UnsupportedOSDetected == true, 1, 0)
-              | extend RiskFactor_Consequence = 0
+              | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
               | extend RiskFactor_Probability = RF_P_InternetExposed + RF_P_LegacyEoS
               | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]),   dynamic([])),
@@ -1046,7 +1046,7 @@
               | extend SecurityDomain = "Endpoint"
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RF_P_LegacyEoS       = iff(UnsupportedOSDetected == true, 1, 0)
-              | extend RiskFactor_Consequence = 0
+              | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
               | extend RiskFactor_Probability = RF_P_InternetExposed + RF_P_LegacyEoS
               | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]),   dynamic([])),
@@ -1267,7 +1267,7 @@
               // Internet-Exposed adds +1 to RiskFactor_Probability when the asset is customer-facing.
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RiskFactor_Probability = array_length(RiskFactorSet) + RF_P_InternetExposed
-              | extend RiskFactor_Consequence = 0
+              | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
               | extend RiskFactor_Probability_Detailed = strcat_array(array_sort_asc(array_concat(
                   RiskFactorSet,
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])))), ";")
@@ -1511,7 +1511,7 @@
               | extend RiskFactorSet = coalesce(RiskFactorSet, dynamic([]))
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RiskFactor_Probability = array_length(RiskFactorSet) + RF_P_InternetExposed
-              | extend RiskFactor_Consequence = 0
+              | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
               | extend RiskFactor_Probability_Detailed = strcat_array(array_sort_asc(array_concat(
                   RiskFactorSet,
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])))), ";")
@@ -1841,8 +1841,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -2736,8 +2735,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -3384,8 +3382,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -3672,8 +3669,7 @@
             | extend ConfigurationName = "PublicIPWithCVE"
             | extend ConfigurationId = tostring(FirstCVEName)
             | extend SecuritySeverity = AttackPathPriority
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | project
                 SecurityDomain,
                 Category,
@@ -4202,8 +4198,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -4841,8 +4836,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -5087,8 +5081,7 @@
             | extend SubCategory = "GroupMembershipPrivilege"
             | extend ConfigurationName = tostring(LateralMovementType)
             | extend SecuritySeverity  = tostring(AttackPathPriority)
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | project
                 SecurityDomain,
                 Category,
@@ -5590,8 +5583,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -6189,8 +6181,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -6891,8 +6882,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -7481,8 +7471,7 @@
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
 
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
-
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                   array_sort_asc(
@@ -7750,7 +7739,7 @@
             | extend SubCategory = "LateralMovement"
             | extend ConfigurationName = tostring(LateralMovementType)
             | extend SecuritySeverity  = tostring(AttackPathPriority)
-            | extend RiskFactor_Consequence = 0
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | summarize
                 TargetCriticalityTier_Path      = any(TargetCriticalityTier),
                 TargetCriticalityTierLevel_Path = any(TargetCriticalityTierLevel),
@@ -8254,7 +8243,7 @@
             | extend RF_P_InternetExposed  = iff(IsInternetExposed == true, 1, 0)
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -9047,7 +9036,7 @@
                 TierEscalation == 1, strcat("CVE-Based Movement Tier ",   tostring(SourceDeviceCriticalityTier), " to Tier ", tostring(TargetCriticalityTier)),
                 "Vulnerable Device to Azure Target"
             )
-        | extend RiskFactor_Consequence = 0
+        | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability              = TargetRiskFactor_Probability
         | extend RiskFactor_Probability_Detailed     = TargetRiskFactor_Probability_Detailed
         | extend RiskFactor_Probability_DetailedScore = TargetRiskFactor_Probability_DetailedScore
@@ -9528,7 +9517,7 @@
             | extend RF_P_InternetExposed  = iff(IsInternetExposed == true, 1, 0)
             | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
             | extend RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
-            | extend RiskFactor_Consequence = 0
+            | extend RiskFactor_Consequence = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
                     array_sort_asc(
@@ -9965,7 +9954,7 @@
             | extend RF_P_PrivilegedRole    = iff(IsPrivileged == true, 1, 0)
             | extend RF_P_PermanentRole     = iff(HasPermanentPrivilegedRole == true, 1, 0)
             | extend RF_P_Tier0             = iff(CriticalityTier == 0, 1, 0)
-            | extend RiskFactor_Consequence = 3
+            | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
             | extend RiskFactor_Probability = RF_P_PrivilegedRole + RF_P_PermanentRole + RF_P_Tier0
             | extend RiskFactor_Probability_Detailed =
                 strcat_array(
@@ -10118,7 +10107,7 @@
         | extend Subcategory        = "MFA Registration"
         | extend ConfigurationName  = "Privileged user missing MFA registration"
         | extend ConfigurationId    = "IDENTITY-MFA-001"
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = iff(HasPermanentPrivilegedRole == true, 2, 1) + iff(CriticalityTier == 0, 1, 0)
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(HasPermanentPrivilegedRole == true, dynamic(["PermanentAssignment"]), dynamic([])),
@@ -10403,7 +10392,7 @@
         | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
         | extend RF_P_OnPremSynced = iff(OnPremisesSyncEnabled == true, 1, 0)
         | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
@@ -10558,7 +10547,7 @@
         | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
         | extend RF_P_OnPremSynced = iff(OnPremisesSyncEnabled == true, 1, 0)
         | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
@@ -10990,7 +10979,7 @@
         | extend RF_P_NeverLoggedIn = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_VeryStale     = iff(LastSignInDays > 365 or (LastSignInDays == -1 and CreatedDays > 365), 1, 0)
         | extend RF_P_HasRoles      = iff(IsPrivileged == true, 1, 0)
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_NeverLoggedIn + RF_P_VeryStale + RF_P_HasRoles
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_NeverLoggedIn == 1, dynamic(["NeverLoggedIn"]),   dynamic([])),
@@ -12272,7 +12261,7 @@
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_Permanent     = iff(HasPermanentPrivilegedRole == true, 1, 0)
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_Tier0 + RF_P_NoMFA + RF_P_Permanent
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_Tier0     == 1, dynamic(["Tier0Role"]),           dynamic([])),
@@ -12877,8 +12866,8 @@
         | extend RF_P_Frequent       = iff(NonTrustedSigninCount > 5, 1, 0)
         | extend RF_P_MultipleIPs    = iff(UniqueIPs > 3, 1, 0)
         | extend RF_P_NoMFA          = iff(MfaIsRegistered == false, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_Frequent + RF_P_MultipleIPs + RF_P_NoMFA
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_Frequent + RF_P_MultipleIPs + RF_P_NoMFA   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["NonTrustedLocationSignin"]),
             iff(RF_P_Tier0       == 1, dynamic(["Tier0Identity"]),          dynamic([])),
@@ -13055,7 +13044,7 @@
         | extend Subcategory           = "Location Anomalies"
         | extend ConfigurationName     = "Privileged user signed in from non-trusted network location"
         | extend ConfigurationId       = "IDENTITY-SIGNIN-001"
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + iff(CriticalityTier == 0, 1, 0)
                                            + iff(NonTrustedSigninCount > 5, 1, 0)
                                            + iff(MfaIsRegistered == false, 1, 0)
@@ -13215,8 +13204,8 @@
         | extend RF_P_Tier0          = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_Frequent       = iff(NonTrustedSigninCount > 3, 1, 0)
         | extend RF_P_MultiCountry   = iff(array_length(split(Countries, ";")) > 1, 1, 0)
-        | extend RiskFactor_Consequence = 2
-        | extend RiskFactor_Probability = 1 + RF_P_Privileged + RF_P_Tier0 + RF_P_Frequent + RF_P_MultiCountry
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Privileged + RF_P_Tier0 + RF_P_Frequent + RF_P_MultiCountry   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["NonTrustedLocationSignin"]),
             iff(RF_P_Privileged   == 1, dynamic(["ServiceAccountPrivileged"]),dynamic([])),
@@ -13379,8 +13368,8 @@
         | extend SecuritySeverity = "Very High"
         | extend RF_P_NonTrusted      = iff(NonTrustedSignins > 0, 1, 0)
         | extend RF_P_MultipleSignins = iff(SigninCount > 1, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_NonTrusted + RF_P_MultipleSignins
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_NonTrusted + RF_P_MultipleSignins   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Consequence_Detailed = "LastResortAccessLoss;EmergencyRecoveryCompromise;TenantTakeoverPotential"
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["BreakGlassSignInDetected"]),
@@ -13526,8 +13515,8 @@
         | extend RF_P_Stale         = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
         | extend RF_P_HasSecret     = iff(HasExpiringCredentials == true, 1, 0)
         | extend RiskFactor_Probability = 1 + RF_P_NoOwner + RF_P_NotVerified + RF_P_MultiTenant
-                                           + RF_P_Stale + RF_P_HasSecret
-        | extend RiskFactor_Consequence = 3
+                                           + RF_P_Stale + RF_P_HasSecret   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Consequence_Detailed = "DomainTakeoverPotential;AnyEntraRoleAssignable;GlobalAdminGrantable"
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["RoleManagementWritePermission"]),
@@ -13675,9 +13664,9 @@
         | extend RF_P_NotVerified    = iff(PublisherVerified == false, 1, 0)
         | extend RF_P_MultiTenant    = iff(IsMultiTenant == true, 1, 0)
         | extend RF_P_Stale          = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + RF_P_AlsoHasDirectoryWrite + RF_P_NoOwner
-                                           + RF_P_NotVerified + RF_P_MultiTenant + RF_P_Stale
+                                           + RF_P_NotVerified + RF_P_MultiTenant + RF_P_Stale   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["AppRoleAssignmentWritePermission"]),
             iff(RF_P_AlsoHasDirectoryWrite == 1, dynamic(["AlsoHasDirectoryWrite"]),  dynamic([])),
@@ -13825,9 +13814,9 @@
         | extend RF_P_MultiTenant   = iff(IsMultiTenant == true, 1, 0)
         | extend RF_P_HasSecret     = iff(HasExpiringCredentials == true, 1, 0)
         | extend RF_P_Stale         = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + RF_P_NoOwner + RF_P_NotVerified
-                                           + RF_P_MultiTenant + RF_P_HasSecret + RF_P_Stale
+                                           + RF_P_MultiTenant + RF_P_HasSecret + RF_P_Stale   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["PIMManipulationPermission"]),
             iff(RF_P_NoOwner     == 1, dynamic(["NoOwner"]),              dynamic([])),
@@ -13976,9 +13965,9 @@
         | extend RF_P_MultiTenant   = iff(IsMultiTenant == true, 1, 0)
         | extend RF_P_HasRoleWrite  = iff(EntraAppPermissions_Application has '"HasRoleWrite":true', 1, 0)
         | extend RF_P_HasDirWrite   = iff(EntraAppPermissions_Application has '"HasDirectoryWrite":true', 1, 0)
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_NoOwner + RF_P_MultiTenant
-                                           + RF_P_HasRoleWrite + RF_P_HasDirWrite
+                                           + RF_P_HasRoleWrite + RF_P_HasDirWrite   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["UnverifiedPublisher"]),
             iff(RF_P_Tier0        == 1, dynamic(["Tier0Permissions"]),    dynamic([])),
@@ -14125,8 +14114,8 @@
         | extend RF_P_Permanent     = iff(HasPermanentPrivilegedRole == true, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_AlreadySignedIn = iff(LastSignInDays == 0, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_Permanent + RF_P_NoMFA + RF_P_AlreadySignedIn
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Permanent + RF_P_NoMFA + RF_P_AlreadySignedIn   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["ImmediateTier0OnNewAccount"]),
             iff(RF_P_Permanent       == 1, dynamic(["PermanentRoleAssignment"]), dynamic([])),
@@ -14273,7 +14262,7 @@
         | extend RF_P_AlsoPermanent   = iff(HasPermanentPrivilegedRole == true, 1, 0)
         | extend RF_P_RecentlyDisabled = iff(LastSignInDays <= 30, 1, 0)
         | extend RiskFactor_Consequence = case(CriticalityTier == 0, 3, 2)
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_AlsoPermanent + RF_P_RecentlyDisabled
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_AlsoPermanent + RF_P_RecentlyDisabled   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["DisabledAccountWithEligibleRole"]),
             iff(RF_P_Tier0            == 1, dynamic(["Tier0EligibleRole"]),       dynamic([])),
@@ -14448,7 +14437,7 @@
         | extend RF_P_NonTrusted     = iff(NonTrustedCount > 0, 1, 0)
         | extend RF_P_Frequent       = iff(InteractiveSigninCount > 5, 1, 0)
         | extend RiskFactor_Consequence = case(CriticalityTier == 0, 3, 2)
-        | extend RiskFactor_Probability = 1 + RF_P_Privileged + RF_P_Tier0 + RF_P_NonTrusted + RF_P_Frequent
+        | extend RiskFactor_Probability = 1 + RF_P_Privileged + RF_P_Tier0 + RF_P_NonTrusted + RF_P_Frequent   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["ServiceAccountInteractiveLogin"]),
             iff(RF_P_Privileged  == 1, dynamic(["ServiceAccountIsPrivileged"]),  dynamic([])),
@@ -14597,7 +14586,7 @@
         | extend RF_P_AtRisk            = iff(tostring(column_ifexists("MDI_RiskState", "")) == "atRisk", 1, 0)
         | extend RF_P_HighBlastRadius   = iff(tostring(column_ifexists("MDI_BlastRadius", "")) == "high", 1, 0)
         | extend RiskFactor_Consequence = case(CriticalityTier == 0, 3, CriticalityTier == 1, 2, 1)
-        | extend RiskFactor_Probability = 1 + RF_P_Tier01 + RF_P_Top5Pct + RF_P_AtRisk + RF_P_HighBlastRadius
+        | extend RiskFactor_Probability = 1 + RF_P_Tier01 + RF_P_Top5Pct + RF_P_AtRisk + RF_P_HighBlastRadius   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["HighMDIInvestigationPriority"]),
             iff(RF_P_Tier01          == 1, dynamic(["PrivilegedIdentity"]),     dynamic([])),
@@ -14745,8 +14734,8 @@
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_ADTier0       = iff(Tier == 0, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_NoMFA + RF_P_ADTier0
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_NoMFA + RF_P_ADTier0   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["OnPremisesSyncEnabled"]),
             iff(RF_P_Tier0   == 1, dynamic(["Tier0CloudRole"]),  dynamic([])),
@@ -14894,8 +14883,8 @@
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_VeryOld     = iff(CreatedDays > 90, 1, 0)
         | extend RF_P_Permanent   = iff(HasPermanentPrivilegedRole == true, 1, 0)
-        | extend RiskFactor_Consequence = 2
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_VeryOld + RF_P_Permanent
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_VeryOld + RF_P_Permanent   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["NeverSignedIn"]),
             iff(RF_P_Tier0     == 1, dynamic(["Tier0Identity"]),          dynamic([])),
@@ -15043,7 +15032,7 @@
         | extend CriticalityTierLevel = "Critical - tier 0"
         | extend SecuritySeverity     = "Medium"
         | extend RF_P_ExcessiveCount  = iff(GACount > 10, 2, 1)
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_ExcessiveCount
         | extend RiskFactor_Probability_Detailed =
             iff(GACount > 10, "ExcessiveGlobalAdminCount_Critical", "ExcessiveGlobalAdminCount")
@@ -15160,8 +15149,8 @@
         | extend RF_P_NeverTested  = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_NoMFA        = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_Permanent    = iff(HasPermanentPrivilegedRole == true, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_RecentUse + RF_P_NeverTested + RF_P_NoMFA + RF_P_Permanent
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_RecentUse + RF_P_NeverTested + RF_P_NoMFA + RF_P_Permanent   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["BreakGlassAnomaly"]),
             iff(RF_P_RecentUse   == 1, dynamic(["RecentUnexpectedUsage"]), dynamic([])),
@@ -15311,7 +15300,7 @@
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NeverLoggedIn = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_VeryStale   = iff(LastSignInDays > 365, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = toint(CriticalityTier <= 1) + RF_P_Tier0 + RF_P_NeverLoggedIn + RF_P_VeryStale
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(CriticalityTier <= 1, dynamic(["PrivilegedEligibleRole"]),  dynamic([])),
@@ -15459,7 +15448,7 @@
         
         | extend RF_P_Tier0  = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA  = iff(MfaIsRegistered == false, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = toint(CriticalityTier <= 1) + RF_P_Tier0 + RF_P_NoMFA
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["DuplicateRoleAssignment"]),
@@ -15605,7 +15594,7 @@
         | extend RF_P_Privileged    = iff(Tier <= 1, 1, 0)
         | extend RF_P_NoOwner       = iff(IsOrphanSPN == true, 1, 0)
         | extend RF_P_HasExpired    = iff(CredentialExpiryDays < 0, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_Privileged + RF_P_NoOwner + RF_P_HasExpired
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["BothSecretAndCert"]),
@@ -15767,8 +15756,8 @@
         | extend RF_P_Tier0           = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_Internet        = iff(IsInternetFacing == true, 1, 0)
         | extend RF_P_HighCvss        = iff(MaxCvssScore >= 9.0, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_Internet + RF_P_HighCvss
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_Internet + RF_P_HighCvss   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["AdminOnVulnerableDevice"]),
             iff(RF_P_Tier0    == 1, dynamic(["Tier0Admin"]),          dynamic([])),
@@ -15934,7 +15923,7 @@
         | extend Subcategory           = "Credential Exposure via Device"
         | extend ConfigurationName     = "Privileged user authenticating to device with High/Critical CVEs"
         | extend ConfigurationId       = "IDENTITY-DEVICE-001"
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + iff(CriticalityTier == 0, 1, 0)
                                            + iff(IsInternetFacing == true, 1, 0)
                                            + iff(MaxCvssScore >= 9.0, 1, 0)
@@ -16080,8 +16069,8 @@
         | extend RF_P_Tier0          = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_HasCVEs        = iff(HasCVEs == true, 1, 0)
         | extend RF_P_HighRisk       = iff(DeviceRiskScore in ("High", "Critical"), 1, 0)
-        | extend RiskFactor_Consequence = 2
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_HasCVEs + RF_P_HighRisk
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_HasCVEs + RF_P_HighRisk   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["InternetExposedDevice"]),
             iff(RF_P_Tier0    == 1, dynamic(["Tier0Admin"]),         dynamic([])),
@@ -16243,8 +16232,8 @@
         | extend RF_P_DeviceTier2Plus = iff(isnull(DeviceCritLvl) or DeviceCritLvl >= 2, 1, 0)
         | extend RF_P_HasCVEs         = iff(HasCVEs == true, 1, 0)
         | extend RF_P_HighRiskDevice  = iff(DeviceRiskScore in ("High", "Critical"), 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_DeviceTier2Plus + RF_P_HasCVEs + RF_P_HighRiskDevice
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_DeviceTier2Plus + RF_P_HasCVEs + RF_P_HighRiskDevice   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["Tier0AdminOnNonPAW"]),
             iff(RF_P_DeviceTier2Plus == 1, dynamic(["DeviceTier2OrUnclassified"]),dynamic([])),
@@ -16406,8 +16395,8 @@
         | extend RF_P_Tier0           = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_Verified        = iff(IsVerified == true, 1, 0)
         | extend RF_P_InKit           = iff(IsInKit == true, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_Verified + RF_P_InKit
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_Verified + RF_P_InKit   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["EligibleAdminOnExploitableDevice"]),
             iff(RF_P_Tier0    == 1, dynamic(["Tier0EligibleAdmin"]),dynamic([])),
@@ -16558,8 +16547,8 @@
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_VeryOld     = iff(CreatedDays > 90, 1, 0)
         | extend RF_P_Permanent   = iff(HasPermanentPrivilegedRole == true, 1, 0)
-        | extend RiskFactor_Consequence = 2
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_VeryOld + RF_P_Permanent
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_VeryOld + RF_P_Permanent   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["NeverSignedIn"]),
             iff(RF_P_Tier0     == 1, dynamic(["Tier0Identity"]),          dynamic([])),
@@ -16727,8 +16716,8 @@
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_ADTier0       = iff(Tier == 0, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_NoMFA + RF_P_ADTier0
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_NoMFA + RF_P_ADTier0   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["OnPremisesSyncEnabled"]),
             iff(RF_P_Tier0   == 1, dynamic(["Tier0CloudRole"]),  dynamic([])),
@@ -16912,7 +16901,7 @@
         | extend Subcategory           = "Credential Exposure via Device"
         | extend ConfigurationName     = "Privileged user authenticating to internet-exposed device"
         | extend ConfigurationId       = "IDENTITY-DEVICE-002"
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + iff(CriticalityTier == 0, 1, 0)
                                            + iff(HasCVEs == true, 1, 0)
                                            + iff(DeviceRiskScore in ("High","Critical"), 1, 0)
@@ -17064,7 +17053,7 @@
         | extend Subcategory           = "Privileged Access Workstation Compliance"
         | extend ConfigurationName     = "Tier 0 admin authenticating to non-PAW (tiering violation)"
         | extend ConfigurationId       = "IDENTITY-DEVICE-003"
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + iff(isnull(DeviceCritLvl) or DeviceCritLvl >= 2, 1, 0)
                                            + iff(HasCVEs == true, 1, 0)
                                            + iff(DeviceRiskScore in ("High","Critical"), 1, 0)
@@ -17369,7 +17358,7 @@
         | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
         | extend RF_P_OnPremSynced = iff(OnPremisesSyncEnabled == true, 1, 0)
         | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
@@ -17514,7 +17503,7 @@
         | extend RF_P_StaleLogin   = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
         | extend RF_P_OnPremSynced = iff(OnPremisesSyncEnabled == true, 1, 0)
         | extend RF_P_OldAccount   = iff(CreatedDays > 365, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_StaleLogin + RF_P_OnPremSynced + RF_P_OldAccount
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_StaleLogin   == 1, dynamic(["StaleLastLogin"]),     dynamic([])),
@@ -17654,8 +17643,8 @@
         | extend RF_P_NeverTested  = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_NoMFA        = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_Permanent    = iff(HasPermanentPrivilegedRole == true, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_RecentUse + RF_P_NeverTested + RF_P_NoMFA + RF_P_Permanent
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_RecentUse + RF_P_NeverTested + RF_P_NoMFA + RF_P_Permanent   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["BreakGlassAnomaly"]),
             iff(RF_P_RecentUse   == 1, dynamic(["RecentUnexpectedUsage"]), dynamic([])),
@@ -17819,7 +17808,7 @@
         | extend Subcategory           = "Break-Glass Usage"
         | extend ConfigurationName     = "Break-glass emergency account sign-in detected - immediate review required"
         | extend ConfigurationId       = "IDENTITY-SIGNIN-008"
-        | extend RiskFactor_Consequence  = 3
+        | extend RiskFactor_Consequence  = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability  = 1 + iff(HasPermanentPrivilegedRole == true, 1, 0)
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["BreakGlassAccount"]),
@@ -17956,7 +17945,7 @@
         | extend RF_P_AlsoPermanent   = iff(HasPermanentPrivilegedRole == true, 1, 0)
         | extend RF_P_RecentlyDisabled = iff(LastSignInDays <= 30, 1, 0)
         | extend RiskFactor_Consequence = case(CriticalityTier == 0, 3, 2)
-        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_AlsoPermanent + RF_P_RecentlyDisabled
+        | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_AlsoPermanent + RF_P_RecentlyDisabled   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["DisabledAccountWithEligibleRole"]),
             iff(RF_P_Tier0            == 1, dynamic(["Tier0EligibleRole"]),       dynamic([])),
@@ -18140,7 +18129,7 @@
         | extend Subcategory           = "Credential Exposure via Device"
         | extend ConfigurationName     = "PIM-eligible admin authenticated to device with known exploits"
         | extend ConfigurationId       = "IDENTITY-DEVICE-004"
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + iff(CriticalityTier == 0, 1, 0)
                                            + iff(IsVerified == true, 1, 0)
                                            + iff(IsInKit == true, 1, 0)
@@ -18275,7 +18264,7 @@
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_Permanent     = iff(HasPermanentPrivilegedRole == true, 1, 0)
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_Tier0 + RF_P_NoMFA + RF_P_Permanent
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_Tier0     == 1, dynamic(["Tier0Role"]),           dynamic([])),
@@ -18444,7 +18433,7 @@
         | extend RF_P_AtRisk            = iff(tostring(column_ifexists("MDI_RiskState", "")) == "atRisk", 1, 0)
         | extend RF_P_HighBlastRadius   = iff(tostring(column_ifexists("MDI_BlastRadius", "")) == "high", 1, 0)
         | extend RiskFactor_Consequence = case(CriticalityTier == 0, 3, CriticalityTier == 1, 2, 1)
-        | extend RiskFactor_Probability = 1 + RF_P_Tier01 + RF_P_Top5Pct + RF_P_AtRisk + RF_P_HighBlastRadius
+        | extend RiskFactor_Probability = 1 + RF_P_Tier01 + RF_P_Top5Pct + RF_P_AtRisk + RF_P_HighBlastRadius   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["HighMDIInvestigationPriority"]),
             iff(RF_P_Tier01          == 1, dynamic(["PrivilegedIdentity"]),     dynamic([])),
@@ -18946,8 +18935,8 @@
         | extend RF_P_Permanent     = iff(HasPermanentPrivilegedRole == true, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_AlreadySignedIn = iff(LastSignInDays == 0, 1, 0)
-        | extend RiskFactor_Consequence = 3
-        | extend RiskFactor_Probability = 1 + RF_P_Permanent + RF_P_NoMFA + RF_P_AlreadySignedIn
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1 + RF_P_Permanent + RF_P_NoMFA + RF_P_AlreadySignedIn   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["ImmediateTier0OnNewAccount"]),
             iff(RF_P_Permanent       == 1, dynamic(["PermanentRoleAssignment"]), dynamic([])),
@@ -19115,7 +19104,7 @@
         
         | extend RF_P_Tier0  = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA  = iff(MfaIsRegistered == false, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = toint(CriticalityTier <= 1) + RF_P_Tier0 + RF_P_NoMFA
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["DuplicateRoleAssignment"]),
@@ -19285,7 +19274,7 @@
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NeverLoggedIn = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_VeryStale   = iff(LastSignInDays > 365, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = toint(CriticalityTier <= 1) + RF_P_Tier0 + RF_P_NeverLoggedIn + RF_P_VeryStale
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(CriticalityTier <= 1, dynamic(["PrivilegedEligibleRole"]),  dynamic([])),
@@ -19946,9 +19935,9 @@
         | extend RF_P_NotVerified    = iff(PublisherVerified == false, 1, 0)
         | extend RF_P_MultiTenant    = iff(IsMultiTenant == true, 1, 0)
         | extend RF_P_Stale          = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + RF_P_AlsoHasDirectoryWrite + RF_P_NoOwner
-                                           + RF_P_NotVerified + RF_P_MultiTenant + RF_P_Stale
+                                           + RF_P_NotVerified + RF_P_MultiTenant + RF_P_Stale   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["AppRoleAssignmentWritePermission"]),
             iff(RF_P_AlsoHasDirectoryWrite == 1, dynamic(["AlsoHasDirectoryWrite"]),  dynamic([])),
@@ -20629,7 +20618,7 @@
         | extend RF_P_Privileged    = iff(Tier <= 1, 1, 0)
         | extend RF_P_NoOwner       = iff(IsOrphanSPN == true, 1, 0)
         | extend RF_P_HasExpired    = iff(CredentialExpiryDays < 0, 1, 0)
-        | extend RiskFactor_Consequence = 1
+        | extend RiskFactor_Consequence = 1   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_Privileged + RF_P_NoOwner + RF_P_HasExpired
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["BothSecretAndCert"]),
@@ -20799,9 +20788,9 @@
         | extend RF_P_MultiTenant   = iff(IsMultiTenant == true, 1, 0)
         | extend RF_P_HasSecret     = iff(HasExpiringCredentials == true, 1, 0)
         | extend RF_P_Stale         = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + RF_P_NoOwner + RF_P_NotVerified
-                                           + RF_P_MultiTenant + RF_P_HasSecret + RF_P_Stale
+                                           + RF_P_MultiTenant + RF_P_HasSecret + RF_P_Stale   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["PIMManipulationPermission"]),
             iff(RF_P_NoOwner     == 1, dynamic(["NoOwner"]),              dynamic([])),
@@ -20974,8 +20963,8 @@
         | extend RF_P_Stale         = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
         | extend RF_P_HasSecret     = iff(HasExpiringCredentials == true, 1, 0)
         | extend RiskFactor_Probability = 1 + RF_P_NoOwner + RF_P_NotVerified + RF_P_MultiTenant
-                                           + RF_P_Stale + RF_P_HasSecret
-        | extend RiskFactor_Consequence = 3
+                                           + RF_P_Stale + RF_P_HasSecret   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Consequence_Detailed = "DomainTakeoverPotential;AnyEntraRoleAssignable;GlobalAdminGrantable"
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["RoleManagementWritePermission"]),
@@ -21149,9 +21138,9 @@
         | extend RF_P_MultiTenant   = iff(IsMultiTenant == true, 1, 0)
         | extend RF_P_HasRoleWrite  = iff(EntraAppPermissions_Application has '"HasRoleWrite":true', 1, 0)
         | extend RF_P_HasDirWrite   = iff(EntraAppPermissions_Application has '"HasDirectoryWrite":true', 1, 0)
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + RF_P_Tier0 + RF_P_NoOwner + RF_P_MultiTenant
-                                           + RF_P_HasRoleWrite + RF_P_HasDirWrite
+                                           + RF_P_HasRoleWrite + RF_P_HasDirWrite   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["UnverifiedPublisher"]),
             iff(RF_P_Tier0        == 1, dynamic(["Tier0Permissions"]),    dynamic([])),
@@ -21456,7 +21445,7 @@
         | extend Subcategory           = "Location Anomalies"
         | extend ConfigurationName     = "Service account authenticated from non-trusted network location"
         | extend ConfigurationId       = "IDENTITY-SIGNIN-002"
-        | extend RiskFactor_Consequence  = 2
+        | extend RiskFactor_Consequence  = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability  = 1 + iff(IsPrivileged == true, 1, 0) + iff(CriticalityTier == 0, 1, 0)
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["NonTrustedLocationSignin"]),
@@ -21760,7 +21749,7 @@
         | extend RF_P_NeverLoggedIn = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_VeryStale     = iff(LastSignInDays > 365 or (LastSignInDays == -1 and CreatedDays > 365), 1, 0)
         | extend RF_P_HasRoles      = iff(IsPrivileged == true, 1, 0)
-        | extend RiskFactor_Consequence = 2
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = RF_P_NeverLoggedIn + RF_P_VeryStale + RF_P_HasRoles
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             iff(RF_P_NeverLoggedIn == 1, dynamic(["NeverLoggedIn"]),   dynamic([])),
@@ -21926,8 +21915,8 @@
         | extend Subcategory           = "Role Assignment Governance"
         | extend ConfigurationName     = "Excessive Global Administrator count - more than 5 active accounts"
         | extend ConfigurationId       = "IDENTITY-ADMIN-004"
-        | extend RiskFactor_Consequence = 2
-        | extend RiskFactor_Probability = 1
+        | extend RiskFactor_Consequence = 2   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
+        | extend RiskFactor_Probability = 1   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = "GlobalAdmin"
         // CL identity-metadata enrichment (cmdb only). Detection logic above is unchanged.
         | extend DeviceKey = PrimaryEntityId
@@ -22047,10 +22036,10 @@
         | extend Subcategory       = "Open Port"
         | extend ConfigurationName = strcat("Public IP with open port ", tostring(Port))
         | extend ConfigurationId   = strcat("PUBLICIP-OPENPORT-", tostring(Port))
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RF_P_HighRiskPort = IsHighRiskPort
         | extend RF_P_Tier0        = iff(CriticalityTier == 0, 1, 0)
-        | extend RiskFactor_Probability = 1 + RF_P_HighRiskPort + RF_P_Tier0
+        | extend RiskFactor_Probability = 1 + RF_P_HighRiskPort + RF_P_Tier0   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["InternetExposed"]),
             iff(RF_P_HighRiskPort == 1, dynamic(["AdminPort"]), dynamic([])),
@@ -22165,7 +22154,7 @@
         | extend Subcategory       = "Open Port"
         | extend ConfigurationName = strcat("Public IP with open port ", tostring(Port))
         | extend ConfigurationId   = strcat("PUBLICIP-OPENPORT-", tostring(Port))
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 1 + IsHighRiskPort + iff(CriticalityTier == 0, 1, 0)
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
@@ -22261,9 +22250,9 @@
         | extend Subcategory       = "Vulnerability"
         | extend ConfigurationName = strcat("Public IP with known CVE: ", Cve)
         | extend ConfigurationId   = Cve
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RF_P_Tier0    = iff(CriticalityTier == 0, 1, 0)
-        | extend RiskFactor_Probability = 2 + RF_P_Tier0
+        | extend RiskFactor_Probability = 2 + RF_P_Tier0   // engine overrides this from RiskFactor_Probability_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability_Detailed = strcat_array(array_concat(
             dynamic(["InternetExposedCVE"]),
             iff(RF_P_Tier0 == 1, dynamic(["Tier0Asset"]), dynamic([]))), ";")
@@ -22372,7 +22361,7 @@
         | extend Subcategory       = "Vulnerability"
         | extend ConfigurationName = strcat("Public IP with known CVE: ", Cve)
         | extend ConfigurationId   = Cve
-        | extend RiskFactor_Consequence = 3
+        | extend RiskFactor_Consequence = 3   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
         | extend RiskFactor_Probability = 2 + iff(CriticalityTier == 0, 1, 0)
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
@@ -22682,7 +22671,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -22787,7 +22776,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -22894,7 +22883,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23000,7 +22989,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23109,7 +23098,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23222,7 +23211,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23324,7 +23313,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23434,7 +23423,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23548,7 +23537,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsStaleAsset", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsStaleAsset", false)) == true, "IsStaleAsset", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23649,7 +23638,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23755,7 +23744,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Weight               = case(tostring(column_ifexists("cmdbCriticality","")) == "Critical", 2.0, tostring(column_ifexists("cmdbCriticality","")) == "High", 1.5, tostring(column_ifexists("cmdbCriticality","")) == "Medium", 1.2, tostring(column_ifexists("cmdbCriticality","")) == "Low", 1.05, 1.0)
@@ -23864,7 +23853,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -23986,7 +23975,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24110,7 +24099,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24232,7 +24221,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24356,7 +24345,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24482,7 +24471,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24605,7 +24594,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24735,7 +24724,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24860,7 +24849,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsStaleAsset", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsStaleAsset", false)) == true, "IsStaleAsset", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsStaleAsset=", tostring(toint(iff(tobool(column_ifexists("IsStaleAsset", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -24981,7 +24970,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))
@@ -25103,7 +25092,7 @@
                 | extend SecuritySeverity                = case(toreal(Impact) >= 9, "Very High", toreal(Impact) >= 7, "High", toreal(Impact) >= 4, "Medium", toreal(Impact) >= 0.1, "Low", "Low")
                 | extend CriticalityTier                 = toint(coalesce(column_ifexists("Tier", 999), 999))
                 | extend CriticalityTierLevel            = case(toint(CriticalityTier) == 0, "Critical - tier 0", toint(CriticalityTier) == 1, "High - tier 1", toint(CriticalityTier) == 2, "Medium - tier 2", toint(CriticalityTier) == 3, "Low - tier 3", "Low - tier 3")
-                | extend RiskFactor_Consequence          = 0
+                | extend RiskFactor_Consequence          = 0   // engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only
                 | extend RiskFactor_Probability          = toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0)) + toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))
                 | extend RiskFactor_Probability_Detailed = strcat_array(pack_array(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, "IsExternalIdentity", ""), iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, "IsCmdbOrphan", "")), ", ")
                 | extend RiskFactor_Probability_DetailedScore = strcat("IsExternalIdentity=", tostring(toint(iff(tobool(column_ifexists("IsExternalIdentity", false)) == true, 1, 0))), ";IsCmdbOrphan=", tostring(toint(iff(tobool(column_ifexists("IsCmdbOrphan", false)) == true, 1, 0))))

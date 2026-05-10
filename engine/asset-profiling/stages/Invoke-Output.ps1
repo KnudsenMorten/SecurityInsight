@@ -207,6 +207,24 @@ function Write-SIClassificationToLogAnalytics {
         }
         $authNote = if ($useMi) { 'UAMI' } else { 'SPN' }
 
+        # AzLogDcrIngestPS (1.6.2) reads tokens from the active Az session cache
+        # rather than doing a clean client_credentials call internally. When the
+        # session was established via cert (v1 Connect_Azure.ps1) the cached
+        # token won't satisfy the LA ingest endpoint and we get AADSTS7000215
+        # "Invalid client secret". Refresh the session here with the secret SPN
+        # so the cache holds a token AzLogDcrIngestPS can use. Idempotent.
+        if (-not $useMi -and $spnAppId -and $spnSecret -and $spnTenantId) {
+            try {
+                $secCred = [pscredential]::new($spnAppId, (ConvertTo-SecureString $spnSecret -AsPlainText -Force))
+                $null = Connect-AzAccount -ServicePrincipal `
+                                          -Tenant $spnTenantId `
+                                          -Credential $secCred `
+                                          -ErrorAction Stop -WarningAction SilentlyContinue
+            } catch {
+                Write-Warning ("LA ingest: secret-SPN session refresh failed -- AzLogDcrIngestPS may 401: {0}" -f $_.Exception.Message)
+            }
+        }
+
         Write-Host ''
         Write-SIInfo ('table : {0}_CL' -f $tableName)
         Write-SIInfo ('DCR   : {0}  (rg={1})' -f $dcrName, $global:SI_DcrResourceGroup)

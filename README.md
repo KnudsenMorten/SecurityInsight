@@ -116,31 +116,39 @@
    - 4.9 [Distribution model — community + internal launchers](#39-distribution-model)
    - 4.10 [Asset-profiling engine catalog](#310-asset-profiling-engine-catalog)
    - 4.11 [Container & KEDA host-mode](#311-container-keda)
-5. [Severity & Criticality Definitions](#severity--criticality-definitions)
-   - 5.1 [Severity definitions](#severity-definitions)
-   - 5.2 [Criticality definitions](#criticality-definitions)
-   - 5.3 [Asset classification: Identity](#asset-classification-identity)
-   - 5.4 [Asset classification: Endpoint](#asset-classification-endpoint)
-   - 5.5 [Asset classification: Azure](#asset-classification-azure)
-6. [The YAML Concept (Locked + Custom)](#the-yaml-concept-locked--custom)
-   - 6.1 [Two files per topic](#two-files-per-topic)
-   - 6.2 [Merge flow](#merge-flow)
-   - 6.3 [Three things you do in Custom](#three-things-you-do-in-custom)
-   - 6.4 [Concrete example](#concrete-example)
-   - 6.5 [What a release upgrade does to your YAML](#what-a-release-upgrade-does-to-your-yaml)
-   - 6.6 [`AssetTagName` naming convention](#assettagname-naming-convention)
-7. [Appendix](#appendix) — reference + technical detail
-   - 7.1 [Permissions catalog](#permissions-catalog)
-   - 7.2 [Bucketing — beating the 30k row ceiling](#bucketing--beating-the-30k-row-ceiling)
-   - 7.3 [Output destinations](#output-destinations)
-   - 7.4 [Per-template mail recipient override (YAML)](#per-template-mail-recipient-override-yaml)
-   - 7.5 [Cross-subscription workspace support](#cross-subscription-workspace-support)
-   - 7.6 [Layered config flow](#layered-config-flow)
-   - 7.7 [End-to-end architecture](#end-to-end-architecture)
-   - 7.8 [Locked catalog — Detection queries + Tagging rules + Profile schema + AI tier catalog](#locked-catalog)
-8. [Video walkthroughs](#video-walkthroughs)
-9. [Support](#support)
-10. [What's New](#whats-new)
+5. [How to fine-tune reporting](#how-to-fine-tune-reporting) — pick reports, override queries, manage exclusions
+   - 5.1 [Override the standard template (add/remove reports)](#51-override-template)
+   - 5.2 [Override a standard report by changing its query (or add a new custom report)](#52-override-report-query)
+   - 5.3 [Exclude a configuration recommendation per report](#53-exclude-configuration-recommendation)
+   - 5.4 [Exclude a CVE per report](#54-exclude-cve)
+   - 5.5 [Exclude an asset finding per report](#55-exclude-asset-tag)
+   - 5.6 [Scalar overrides per report (e.g. CVE minimum age)](#56-scalar-overrides)
+   - 5.7 [Weighted risk-factor rules (per-engine field-driven uplifts)](#57-weighted-risk-factors)
+6. [Severity & Criticality Definitions](#severity--criticality-definitions)
+   - 6.1 [Severity definitions](#severity-definitions)
+   - 6.2 [Criticality definitions](#criticality-definitions)
+   - 6.3 [Asset classification: Identity](#asset-classification-identity)
+   - 6.4 [Asset classification: Endpoint](#asset-classification-endpoint)
+   - 6.5 [Asset classification: Azure](#asset-classification-azure)
+7. [The YAML Concept (Locked + Custom)](#the-yaml-concept-locked--custom)
+   - 7.1 [Two files per topic](#two-files-per-topic)
+   - 7.2 [Merge flow](#merge-flow)
+   - 7.3 [Three things you do in Custom](#three-things-you-do-in-custom)
+   - 7.4 [Concrete example](#concrete-example)
+   - 7.5 [What a release upgrade does to your YAML](#what-a-release-upgrade-does-to-your-yaml)
+   - 7.6 [`AssetTagName` naming convention](#assettagname-naming-convention)
+8. [Appendix](#appendix) — reference + technical detail
+   - 8.1 [Permissions catalog](#permissions-catalog)
+   - 8.2 [Bucketing — beating the 30k row ceiling](#bucketing--beating-the-30k-row-ceiling)
+   - 8.3 [Output destinations](#output-destinations)
+   - 8.4 [Per-template mail recipient override (YAML)](#per-template-mail-recipient-override-yaml)
+   - 8.5 [Cross-subscription workspace support](#cross-subscription-workspace-support)
+   - 8.6 [Layered config flow](#layered-config-flow)
+   - 8.7 [End-to-end architecture](#end-to-end-architecture)
+   - 8.8 [Locked catalog — Detection queries + Tagging rules + Profile schema + AI tier catalog](#locked-catalog)
+9. [Video walkthroughs](#video-walkthroughs)
+10. [Support](#support)
+11. [What's New](#whats-new)
 
 ## 📘 1. Introduction
 
@@ -1667,10 +1675,363 @@ The `Push-PreviewBundle.ps1` helper bundles the dev tree + `AutomateITPS` / `Aut
 
 **Same `config/SecurityInsight.custom.ps1` works in both modes** — engine reads `$global:SI_HostMode` to pick path. No CLI args required (layered config).
 
-<a id="4-severity--criticality-definitions"></a><a id="severity--criticality-definitions"></a>
-## 5. Severity & Criticality Definitions
+<a id="how-to-fine-tune-reporting"></a>
+## 🛠 5. How to fine-tune reporting
 
-### 5.1 Severity definitions
+Once the engines are scheduled and the daily output looks roughly right, the
+next step is tuning what each report includes/excludes for your tenant.
+Everything below is **additive** on top of the locked catalog — you never
+edit the shipped `*.locked.yaml` files; you sit alongside them with a
+`*.custom.yaml` (queries / templates) or a `<ReportName>.exclude.custom.json`
+(per-report ignore lists). Release upgrades replace the locked half;
+your custom files survive untouched.
+
+```
+config/<ReportName>.exclude.custom.json   ← ignore-lists (CVEs, scid-* IDs, asset tags)
+engine/risk-analysis/_source/             ← *.locked.yaml (shipped) + *.custom.yaml (yours)
+```
+
+The launcher's `Layer 3` reads everything in `config/`, the engine reads everything
+under `_source/`, and the merge runs at engine startup.
+
+---
+
+<a id="51-override-template"></a>
+### 5.1 Override the standard template (add/remove reports)
+
+A **template** is a named bundle of reports. Shipped templates:
+- `RiskAnalysis_Summary` — the per-domain digest used in daily mails
+- `RiskAnalysis_Detailed` — full row-level export to Excel + LA
+
+To customize what reports a template includes (drop noisy ones, add new
+internal ones), define a same-named template in your custom YAML — the
+engine merges and your `ReportsIncluded` list **wins** on name collision.
+
+**Sample** — `engine/risk-analysis/_source/SecurityInsight_RiskAnalysis_Custom.yaml`:
+
+```yaml
+ReportTemplates:
+- ReportName: RiskAnalysis_Detailed                # SAME name as locked = override
+  ReportsIncluded:
+  - Identity_PrivilegedUser_NoMFA_Detailed         # keep this
+  - Identity_PrivilegedSPN_NoLogin180Days_Detailed # keep this
+  - Endpoint_InternetFacing_Tier01_With_CVE_Detailed
+  # - Endpoint_StaleHost_NotSeen7Days_Detailed     # ← removed: too noisy for us
+  - MyCustom_TenantSpecific_Report_Detailed        # ← added: see 5.2 below
+
+# OR define a brand-new template with a different name
+- ReportName: RiskAnalysis_Detailed_IdentityOnly
+  ReportsIncluded:
+  - Identity_PrivilegedUser_NoMFA_Detailed
+  - Identity_PrivilegedSPN_NoLogin180Days_Detailed
+  - Identity_SPN_ExpiringCredentials_Detailed
+```
+
+**Activate a custom-named template** via either:
+
+a) **`SecurityInsight.custom.ps1`** (sticky default for this customer):
+```powershell
+$global:RiskAnalysis_ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed_IdentityOnly'
+```
+
+b) **CLI override on a single launcher run** (one-off / ad-hoc):
+```powershell
+.\launcher.internal-vm.ps1 -Detailed -ReportTemplate RiskAnalysis_Detailed_IdentityOnly
+```
+
+The shipped `RiskAnalysis_Summary` / `RiskAnalysis_Detailed` definitions in
+`*_Locked.yaml` are untouched on disk; your custom file wins at merge time
+when names collide.
+
+---
+
+<a id="52-override-report-query"></a>
+### 5.2 Override a standard report by changing its query (or add a new custom report)
+
+Same merge mechanism, on the `Reports:` section. Define a report with the
+**same `ReportName`** as a shipped one to override its query, severity, or
+output property order — or use a **new `ReportName`** to add a brand-new
+report (and remember to include it in 5.1's template).
+
+**Sample** — same `*_Custom.yaml` file:
+
+```yaml
+Reports:
+
+# Override: same ReportName as shipped, our query wins
+- ReportName: Identity_PrivilegedUser_NoMFA_Detailed
+  ReportPurpose: |-
+    [CUSTOMIZED] Tighter than the shipped query: only fires if the user
+    has a Tier-0 role (we already accept Tier-1 risk per policy).
+  SecurityDomain: Identity
+  CategoryInputName:                Category
+  SubcategoryInputName:             Subcategory
+  ConfigurationIdInputName:         ConfigurationId
+  SecuritySeverityInputName:        SecuritySeverity
+  CriticalityTierLevelInputName:    CriticalityTierLevel
+  RiskConsequenceScoreOutputName:   RiskConsequenceScore
+  RiskProbabilityScoreOutputName:   RiskProbabilityScore
+  RiskScoreOutputName:              RiskScoreTotal
+  OutputPropertyOrder:
+  - { Name: ConfigurationName,     Length: 30 }
+  - { Name: ConfigurationId,       Length: 40 }
+  - { Name: Tier,                  Length: 6  }
+  - { Name: EntraRoles_Permanent,  Length: 40 }
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where IdentityType == "User" and AccountEnabled == true
+    | where HasNoMfa == true
+    | where Tier == 0                                   // ← TIGHTENED: was Tier in (0,1)
+    | project SecurityDomain="Identity", Category="Authentication",
+              Subcategory="Privileged user without MFA (Tier-0 only)",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              EntraRoles_Permanent, RiskScoreTotal
+    | sort by RiskScoreTotal desc
+
+# Brand-new report (also list this name in your template's ReportsIncluded)
+- ReportName: MyCustom_TenantSpecific_Report_Detailed
+  ReportPurpose: |-
+    Detect Finance-OU users with admin role on prod resources.
+  SecurityDomain: Identity
+  CategoryInputName: Category
+  SubcategoryInputName: Subcategory
+  ConfigurationIdInputName: ConfigurationId
+  SecuritySeverityInputName: SecuritySeverity
+  CriticalityTierLevelInputName: CriticalityTierLevel
+  RiskConsequenceScoreOutputName: RiskConsequenceScore
+  RiskProbabilityScoreOutputName: RiskProbabilityScore
+  RiskScoreOutputName: RiskScoreTotal
+  OutputPropertyOrder:
+  - { Name: ConfigurationName, Length: 30 }
+  - { Name: ConfigurationId,   Length: 40 }
+  - { Name: Department,        Length: 20 }
+  SortBy: RiskScoreTotal
+  ReportQuery: |-
+    SI_Identity_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | where Department startswith "Finance"
+    | where (array_length(todynamic(EntraRoles_Permanent)) > 0)
+    | project SecurityDomain="Identity",
+              Category="Tenant policy",
+              Subcategory="Finance-OU user has admin role",
+              ConfigurationName=DisplayName, ConfigurationId=Upn,
+              Department, SecuritySeverity, CriticalityTier, CriticalityTierLevel,
+              RiskScoreTotal
+    | sort by RiskScoreTotal desc
+```
+
+Run order: **locked YAML loads first → custom YAML loads second → custom
+wins on `ReportName` collision**. The full report list (locked + custom)
+is what the engine considers; the active template's `ReportsIncluded`
+picks which subset actually runs.
+
+---
+
+<a id="53-exclude-configuration-recommendation"></a>
+### 5.3 Exclude a configuration recommendation per report
+
+Some recommendations are noise for your environment (irrelevant policy ID,
+already-mitigated config). Ignore them on a per-report basis without
+touching any YAML — drop a small JSON next to the report's name:
+
+**File** — `config/<ReportName>.exclude.custom.json`:
+
+```json
+{
+  "_comment": "Operator-curated exclusion list -- safe to commit/tag for audit. Customer file wins over .exclude.json.",
+  "ExcludedConfigurationIds": [
+    "scid-2090",
+    "scid-22",
+    "scid-3001"
+  ]
+}
+```
+
+The engine substitutes `__EXCLUDED_CONFIGURATION_IDS__` in the report's
+KQL with `dynamic(["scid-2090","scid-22","scid-3001"])` (or `dynamic([])`
+if the file is missing). The KQL filter looks like:
+
+```kusto
+let _excludedConfigIds = dynamic(__EXCLUDED_CONFIGURATION_IDS__);
+SI_Endpoint_Profile_CL
+| where ConfigurationId !in (_excludedConfigIds)
+| ...
+```
+
+No engine restart, no YAML edits. Per-report file always wins on the same
+property name.
+
+---
+
+<a id="54-exclude-cve"></a>
+### 5.4 Exclude a CVE per report
+
+Same JSON, different property — `ExcludedCves`. Use when an upstream patch
+isn't available yet, or when a CVE is genuinely not exploitable in your
+environment.
+
+**File** — `config/<ReportName>.exclude.custom.json`:
+
+```json
+{
+  "ExcludedCves": [
+    "CVE-2024-12345",
+    "CVE-2023-99999"
+  ],
+  "ExcludedConfigurationIds": [
+    "scid-2090"
+  ],
+  "_comment": "CVE-2024-12345 = vendor patch ETA Q3 2026 (case #INC-7821). CVE-2023-99999 = network-segmented, not internet-reachable."
+}
+```
+
+Multiple property-types coexist in the same file — keep one file per report.
+
+KQL substitution token: `__EXCLUDED_CVES__` → `dynamic(["CVE-2024-12345","CVE-2023-99999"])`.
+
+---
+
+<a id="55-exclude-asset-tag"></a>
+### 5.5 Exclude an asset finding per report
+
+For per-asset exclusions (specific machine name, lab/test asset), use
+**asset tags** — apply the tag in MDE/Defender, then list the tag here.
+The engine filters out any row whose asset carries one of these tags.
+
+**Per-report file** — `config/<ReportName>.exclude.custom.json`:
+
+```json
+{
+  "ExcludedAssetTags": [
+    "lab-only",
+    "kioske",
+    "decommission-pending"
+  ]
+}
+```
+
+**Tenant-wide fallback** (apply across ALL Endpoint reports without
+per-report duplication) — `config/RiskAnalysisGlobalExclusions.custom.json`:
+
+```json
+{
+  "_comment": "Tenant-wide ignore list. Per-report files (above) ALWAYS win on the same property name.",
+  "ExcludedAssetTags": [
+    "honeypot",
+    "training-classroom"
+  ]
+}
+```
+
+KQL substitution token: `__EXCLUDED_ASSET_TAGS__`. Combine with 5.3/5.4
+in the same file — engine reads each property independently.
+
+---
+
+> **Operator-rationalize tip**: every exclude file is plain JSON, so you
+> can `git diff` it to track *who excluded what + why*. Use the `_comment`
+> field as your changelog. When a vendor patches a CVE or your policy
+> changes, just delete the entry + re-run — no engine recompile.
+
+---
+
+<a id="56-scalar-overrides"></a>
+### 5.6 Scalar overrides per report (e.g. CVE minimum age)
+
+Some reports support **scalar tunables** in the same `<ReportName>.exclude.custom.json`
+— values that change a query threshold without rewriting the YAML. The
+shipped query has a `let` block bracketed by sentinel comments
+(`//__CVE_MIN_AGE_DAYS_BEGIN__` ... `//__CVE_MIN_AGE_DAYS_END__`); the engine
+rewrites it from your JSON at runtime.
+
+| Token | Property name(s) | Default | Used by |
+|---|---|---|---|
+| `__CVE_MIN_AGE_DAYS__` | `CveMinAgeDays` or `CveMinDays` | `0` | Endpoint CVE reports — only fire for CVEs ≥ N days old |
+
+**Sample** — `config/Endpoint_InternetFacing_Tier01_With_CVE_Detailed.exclude.custom.json`:
+
+```json
+{
+  "ExcludedCves":             ["CVE-2024-12345"],
+  "ExcludedConfigurationIds": ["scid-2090"],
+  "CveMinAgeDays":            30,
+  "_comment": "Suppress CVEs younger than 30 days -- gives our patch pipeline 30 days to ship."
+}
+```
+
+Per-report only — no tenant-wide fallback for scalars (different reports
+have different sensible defaults). Without engine substitution the inline
+default in the YAML applies.
+
+---
+
+<a id="57-weighted-risk-factors"></a>
+### 5.7 Weighted risk-factor rules (per-engine field-driven uplifts)
+
+The deepest customization point: define **field-driven multipliers** that
+amplify (or dampen) a row's `RiskScoreTotal_Weighted` based on per-asset
+attributes. Use cases:
+- "Tier-0 hosts in production get 2× weight"
+- "Identity rows where the user has `EmployeeType=Contractor` get 1.5× weight"
+- "Azure resources tagged `env=test` get 0.5× weight (less worry)"
+
+Two file scopes — same shape:
+
+| File | Scope | Wins on conflict |
+|---|---|---|
+| `config/<ReportName>.weighted.custom.json` | Per-report | ✅ wins |
+| `config/riskscore_weighted.schema.custom.json` | Tenant-wide (every report) | fallback |
+
+**Sample** — `config/riskscore_weighted.schema.custom.json`:
+
+```json
+{
+  "weightedRiskFactors": {
+    "endpoint": {
+      "combine": "product",
+      "rules": [
+        { "field": "Tier",                "op": "eq", "value": 0,         "weight": 200 },
+        { "field": "IsProductionEnvironment","op":"eq","value": true,     "weight": 150 },
+        { "field": "MachineRiskState",    "op": "eq", "value": "High",    "weight": 175 }
+      ]
+    },
+    "identity": {
+      "combine": "product",
+      "rules": [
+        { "field": "EmployeeType",        "op": "eq", "value": "Contractor", "weight": 150 },
+        { "field": "Tier",                "op": "eq", "value": 0,         "weight": 200 }
+      ]
+    },
+    "azure": {
+      "combine": "product",
+      "rules": [
+        { "field": "EgCriticality",       "op": "eq", "value": "high",    "weight": 175 }
+      ]
+    }
+  }
+}
+```
+
+Weights are on the **basis-100 scale** (200 = 2.0×, 150 = 1.5×, 50 = 0.5×).
+`combine: product` multiplies all matching rules' weights together; missing/
+empty config = no-op (`RiskScoreTotal_Weighted == RiskScoreTotal`).
+
+Inside the report's KQL the engine looks for sentinels
+`//__WEIGHTED_FACTORS_BEGIN__` ... `//__WEIGHTED_FACTORS_END__` and rewrites
+the bracketed block. Any report YAML can adopt this — most shipped queries
+already include the sentinels for endpoint + identity + azure engines.
+
+---
+
+<a id="4-severity--criticality-definitions"></a><a id="severity--criticality-definitions"></a>
+## 6. Severity & Criticality Definitions
+
+### 6.1 Severity definitions
 
 [⤴ Back to top](#top)
 
@@ -1688,7 +2049,7 @@ The `Push-PreviewBundle.ps1` helper bundles the dev tree + `AutomateITPS` / `Aut
 
 <a id="42-criticality-definitions"></a><a id="criticality-definitions"></a>
 
-### 5.2 Criticality definitions
+### 6.2 Criticality definitions
 
 [⤴ Back to top](#top)
 
@@ -1723,7 +2084,7 @@ flowchart TD
 Tier 0 sits at the top because one compromise there is a full-environment compromise — the blast radius shrinks rapidly as you go down. The tables in §§ 5.3 – 5.5 show how these tiers map concretely to **Identity**, **Endpoint**, and **Azure** assets.
 
 <a id="43-asset-classification-identity"></a><a id="asset-classification-identity"></a>
-### 5.3 Asset classification: Identity
+### 6.3 Asset classification: Identity
 
 [⤴ Back to top](#top)
 
@@ -1741,7 +2102,7 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 
 <a id="44-asset-classification-endpoint"></a><a id="asset-classification-endpoint"></a>
 
-### 5.4 Asset classification: Endpoint
+### 6.4 Asset classification: Endpoint
 
 [⤴ Back to top](#top)
 
@@ -1759,7 +2120,7 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 
 <a id="45-asset-classification-azure"></a><a id="asset-classification-azure"></a>
 
-### 5.5 Asset classification: Azure
+### 6.5 Asset classification: Azure
 
 [⤴ Back to top](#top)
 
@@ -1779,7 +2140,7 @@ Tier 0 sits at the top because one compromise there is a full-environment compro
 
 <a id="6-the-yaml-concept-locked--custom"></a><a id="the-yaml-concept-locked--custom"></a>
 
-## 📜 6. The YAML Concept (Locked + Custom)
+## 📜 7. The YAML Concept (Locked + Custom)
 
 [⤴ Back to top](#top)
 
@@ -1788,7 +2149,7 @@ SecurityInsight is **data-driven**. Engines (`SecurityInsight_RiskAnalysis`, ass
 - You can add a new report template, a new tagging rule, or a new KQL query **without touching PowerShell**.
 - Releases update the curated "Locked" content in-place, while your environment-specific content lives alongside it in a sibling "Custom" file that a release **never overwrites**.
 
-### 6.1 Two files per topic
+### 7.1 Two files per topic
 
 For every engine that reads YAML, there are exactly two files:
 
@@ -1797,7 +2158,7 @@ For every engine that reads YAML, there are exactly two files:
 | Risk Analysis queries | `DATA/SecurityInsight_RiskAnalysis_Queries_Locked.yaml` | `DATA/SecurityInsight_RiskAnalysis_Queries_Custom.yaml` |
 | Asset Tagging rules | `DATA/SecurityInsight_CriticalAssetTagging_Locked.yaml` | `DATA/SecurityInsight_CriticalAssetTagging_Custom.yaml` |
 
-### 6.2 Merge flow
+### 7.2 Merge flow
 
 ```mermaid
 flowchart LR
@@ -1816,7 +2177,7 @@ flowchart LR
 
 Precedence rule (same for every topic): **Custom entries with the same `ReportName` / `AssetTagName` as a Locked entry OVERRIDE the Locked entry. New entries in Custom are ADDED.**
 
-### 6.3 Three things you do in Custom
+### 7.3 Three things you do in Custom
 
 | What | Example | Why |
 |---|---|---|
@@ -1824,7 +2185,7 @@ Precedence rule (same for every topic): **Custom entries with the same `ReportNa
 | **Override** a Locked entry | Redefine `RiskAnalysis_Detailed_Bucket` with your own `ReportQuery` | Rare. Customize the shipped behaviour without editing a tracked file. |
 | **Disable** a Locked entry | Re-declare the name with `Mode: Disabled` in Custom | Rare. Skip a shipped template that doesn't apply to your environment. |
 
-### 6.4 Concrete example
+### 7.4 Concrete example
 
 <details open>
 <summary>📋 <b>Asset tagging — adding a custom rule</b></summary>
@@ -1894,7 +2255,7 @@ ReportTemplates:
 Running `-Detailed` now sends the email to `vuln-team@` and `audit@` regardless of what `$global:MailTo` says.
 </details>
 
-### 6.5 What a release upgrade does to your YAML
+### 7.5 What a release upgrade does to your YAML
 
 ```mermaid
 flowchart TB
@@ -1916,7 +2277,7 @@ flowchart TB
 **Locked is replaced; Custom is sacred.** Your edits survive every upgrade. The only time you touch Custom during an upgrade is if the RELEASE NOTES point out that a template you overrode has an updated schema — then you re-apply your override against the new Locked definition.
 
 <a id="66-critical-asset-tagging-mode-and-scope"></a><a id="critical-asset-tagging-mode-and-scope"></a>
-### 6.6 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
+### 7.6 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
 
 [⤴ Back to top](#top)
 
@@ -2026,12 +2387,12 @@ Run with `$global:Scope = @('TEST')` first to confirm the row set, then flip to 
 
 <a id="7-appendix"></a><a id="appendix"></a>
 <a id="5-concepts"></a><a id="concepts"></a>
-## 📎 7. Appendix
+## 📎 8. Appendix
 
 [⤴ Back to top](#top)
 
 <a id="71-permissions-catalog"></a><a id="permissions-catalog"></a>
-### 7.1 Permissions catalog
+### 8.1 Permissions catalog
 
 [⤴ Back to top](#top)
 
@@ -2101,7 +2462,7 @@ The exact set the `Validate-SIPermissions.ps1` utility grants (and validates on 
 
 <a id="72-files-deep-dive"></a><a id="files-deep-dive"></a>
 
-### 7.2 Bucketing — beating the 30k row ceiling
+### 8.2 Bucketing — beating the 30k row ceiling
 
 [⤴ Back to top](#top)
 
@@ -2168,7 +2529,7 @@ Manually guessing the right `BucketCount` for every query is brittle. The engine
 
 <a id="74-output-destinations"></a><a id="output-destinations"></a>
 
-### 7.3 Output destinations
+### 8.3 Output destinations
 
 [⤴ Back to top](#top)
 
@@ -2233,7 +2594,7 @@ Per-template override: see [§ 7.5](#per-template-mail-recipient-override-yaml).
 
 <a id="75-per-template-mail-recipient-override-yaml"></a><a id="per-template-mail-recipient-override-yaml"></a>
 
-### 7.4 Per-template mail recipient override (YAML)
+### 8.4 Per-template mail recipient override (YAML)
 
 [⤴ Back to top](#top)
 
@@ -2262,7 +2623,7 @@ When present on the chosen template, `Mail_To` overrides `$global:Report_To` and
 
 <a id="76-cross-subscription-workspace-support"></a><a id="cross-subscription-workspace-support"></a>
 
-### 7.5 Cross-subscription workspace support
+### 8.5 Cross-subscription workspace support
 
 [⤴ Back to top](#top)
 
@@ -2277,7 +2638,7 @@ The SPN still needs `Log Analytics Reader` on the cross-sub workspace — grante
 
 <a id="77-layered-config-flow"></a><a id="layered-config-flow"></a>
 
-### 7.6 Layered config flow
+### 8.6 Layered config flow
 
 [⤴ Back to top](#top)
 
@@ -2317,7 +2678,7 @@ Each layer only writes the values it cares about. If you don't set anything at L
 
 <a id="78-end-to-end-architecture"></a><a id="end-to-end-architecture"></a>
 
-### 7.7 End-to-end architecture
+### 8.7 End-to-end architecture
 
 [⤴ Back to top](#top)
 
@@ -2377,7 +2738,7 @@ flowchart LR
 <a id="locked-catalog-full-inventory"></a>
 
 <a id="locked-catalog"></a>
-### 7.8 Locked catalog — full query / rule inventory
+### 8.8 Locked catalog — full query / rule inventory
 
 Inventory snapshot (auto-derived from the current `risk-analysis-detection/`, `asset-profiling-enrichment/`, `asset-profiling-schema/`, and `privilege-tier-catalog/` trees):
 
@@ -2724,7 +3085,7 @@ Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` 
 <a id="video-walkthroughs"></a>
 
 <a id="8-support"></a><a id="support-chapter"></a>
-## 📺 8. Video walkthroughs
+## 📺 9. Video walkthroughs
 
 [⤴ Back to top](#top)
 
@@ -2743,7 +3104,7 @@ Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` 
 ---
 
 <a id="9-support"></a><a id="support"></a>
-## 💬 9. Support
+## 💬 10. Support
 
 [⤴ Back to top](#top)
 
@@ -2760,7 +3121,7 @@ Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` 
 ---
 
 <a id="5-whats-new-v21x-highlights"></a><a id="whats-new-v21x-highlights"></a><a id="whats-new"></a>
-## 🆕 10. What's New
+## 🆕 11. What's New
 
 [⤴ Back to top](#top)
 

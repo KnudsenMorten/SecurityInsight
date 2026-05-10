@@ -22,6 +22,14 @@
         'Start-PlatformTranscript'
         'Stop-PlatformTranscript'
         'Test-PlatformConnectivity'
+        'Connect-Platform'
+        'Connect-PlatformBootstrap'
+        'Connect-PlatformModern'
+        'Disconnect-Platform'
+        'Get-PlatformConfig'
+        'Set-PlatformConfig'
+        'Get-PlatformData'
+        'Set-PlatformData'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

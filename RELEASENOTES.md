@@ -1,9 +1,17 @@
 # Release notes for SecurityInsight
 
-## v2.2.173
+## v2.2.174
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.174 - README ch.5 'How to fine-tune reporting' + RA score recompute + AssetDetectedInReportName + v2.3 platform layer additive (5e1dd36d)
+- SI README: add chapter 5 'How to fine-tune reporting' (templates + queries + exclusions) (0e9d19e7)
+- RA: add AssetDetectedInReportName column (operator hunt-back) (67cef594)
+- RA bugfix: recompute RiskConsequence/Probability/Total scores AFTER token enrichment (dfe3e2c9)
+- v2.3: section 11 KV pulls soft-fail per-secret + Initialize-PlatformVm -PermissionsOnly (496c2c35)
+- v2.3 1E live-test fixes: 4 bugs found + fixed running Setup-Unattended end-to-end (10a9b6a6)
+- v2.3 Phase 1F: launcher Layer 1 = Connect-Platform (v2.2 fallback retained) (d1ce9d35)
+- v2.3 Phase 1E: drop Mode=Bridged from generator + Connect-Platform in Setup-Unattended (9c2dfbcc)
 - release: SecurityInsight v2.2.173 - Write-SICustomConfig emits SI_SPN_Secret + global SI_ForceFullRun (3fb9690d)
 - release: SecurityInsight v2.2.172 - re-auth secret-SPN before LA ingest in profilers + RA (29b6f92e)
 - release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
@@ -26,20 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.154 - Port-V1Platform + Test-PlatformConnect (bbc0e783)
 - release: SecurityInsight v2.2.153 - drop legacy AutomateIT_InstallUpdate refs (3cda6e1e)
 - release: SecurityInsight v2.2.152 - Update-SecurityInsight.ps1 one-liner updater (6624ab59)
-- release: SecurityInsight v2.2.151 - unattended setup + Internal/Community flavours (dae40cd9)
-- release: SecurityInsight v2.2.150 - install guides for git + Azure CLI (4914f51b)
-- release: SecurityInsight v2.2.149 - Bootstrap-ContainerAppJob.ps1 no longer hardcodes dev path (0c6be29a)
-- release: SecurityInsight v2.2.148 - schedule examples in US 12-hour format (4be7b06d)
-- release: SecurityInsight v2.2.147 - pre-flight: detect PS module presence + scope (8c065edc)
-- release: SecurityInsight v2.2.146 - pre-flight: Az PS + Mg + az CLI in ONE block (33ea07db)
-- release: SecurityInsight v2.2.145 - launch pre-flight: az CLI is a HARD block (d7ced97a)
-- release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.174 — README ch. 5 "How to fine-tune reporting" + RA score recompute + AssetDetectedInReportName + v2.3 platform layer (additive)
+
+**Operator-facing**:
+
+- **README — new chapter 5 "How to fine-tune reporting"** (370+ lines, 7 sub-sections, fully sample-driven). Documents every tuning surface RA exposes without touching shipped locked content:
+  - 5.1 Override the standard template (add/remove reports via `*_Custom.yaml`)
+  - 5.2 Override a query OR add a brand-new report
+  - 5.3 Exclude a configuration recommendation (`ExcludedConfigurationIds`)
+  - 5.4 Exclude a CVE (`ExcludedCves`)
+  - 5.5 Exclude an asset finding (`ExcludedAssetTags` + tenant-wide fallback)
+  - 5.6 Scalar overrides per report (`CveMinAgeDays`)
+  - 5.7 Weighted risk-factor rules (per-engine field-driven uplifts; `weightedRiskFactors` block)
+  - Old chapters 5–10 shifted to 6–11; anchor IDs preserved for external links.
+
+- **RA — `AssetDetectedInReportName` column** added to every Detailed/Summary row. Lets operators trace any finding back to the YAML report that produced it. Auto-emitted (no YAML change needed).
+
+- **RA bugfix — score recompute after token enrichment**. For Identity reports (and any whose KQL doesn't project `RiskFactor_*_Detailed` inline) the post-enrichment `RiskFactor_Probability` count was being computed but the corresponding `RiskConsequenceScore` × `RiskProbabilityScore` = `RiskScoreTotal` stayed frozen at the pre-enrichment 0. Engine now re-derives from post-enrichment counts and overwrites the stamps.
+
+- **Generator — single template** (no more `-Mode Bridged`/`Inline` split). Section 1 always emits resolved values; section 11 KV pulls gate at runtime on `$global:Context` presence (soft-fail per secret so a missing optional secret doesn't break engine startup).
+
+**Platform layer (additive — v2.2 hosts unchanged)**:
+
+- **`Connect-Platform` two-tier auth orchestrator** (`AutomateITPS\Public\Connect\`). Replaces `dot-source platform-defaults.ps1` for new deployments. Bootstrap auth is pluggable: Managed Identity (Azure VM / Container / Arc) or Certificate (anywhere incl. on-prem). `BootstrapAuth=Auto` probes IMDS+HIMDS at runtime.
+- **`Initialize-PlatformVm`** (`SOLUTIONS\PlatformConfiguration\INTERNAL\Provision\`) — single-command provisioner: cert + Connect SPN + MI + KV + HighPrivileged-Tier0 SPN + applied 156-perm bundle + emit configs + smoke test. Wall-clock ~5–10 min. New nomenclature: `AutomateIT-Connect-<host>` (KV-read SPN), `AutomateIT-HighPrivileged-Tier0-<host>` (full-priv SPN).
+- **`Convert-V1ToPlatform`** (`...\Migrate\`) — one-shot migrator: dot-source v1 chain, capture globals, emit `bootstrap\platform-config.json` + `platform-data.json`, seed KV with Modern-AppId + Modern-Secret + OpenAI/Shodan keys, smoke-test.
+- **Launcher Layer 1** swap: tries `Connect-Platform` if `bootstrap\platform-config.json` exists, otherwise falls back to v2.2 `platform-defaults.ps1` dot-source. v2.2 customers see no change after a sync.
+- **`Initialize-PlatformAutomationFramework` thin alias** for `Connect-Platform` with **back-compat soft-fail**: returns `$null` silently when `platform-config.json` is absent, so engines (`Invoke-PublicIpScanner`, `AssetTagging`, `PrivilegeTierClassifier`) that call it defensively don't blow up on v2.2 hosts that synced v2.3 code.
+- **Defensive shims at module load** for `New-Guid` + `ConvertTo-SecureString` — covers constrained PS 5.1 runspaces (SYSTEM scheduled tasks, `-NoProfile` shells) where `Microsoft.PowerShell.Utility` / `.Security` cmdlets don't auto-load. Az.Monitor (DCR autorest) + `Connect-MicrosoftGraphPS` work without extra imports.
+
+**Onboarding playbook** for fresh provisioning (Path A) and v1→v2.3 migration (Path B):
+`SOLUTIONS\PlatformConfiguration\INTERNAL\Onboarding-V2.3-Playbook.md`
+
+Live-tested end-to-end on `kv-2linkit-automateit-p` (Setup-SecurityInsight-Unattended green; 5/7 launchers GREEN, 2 CHAIN-OK with engine-specific deps).
+
+**No breaking changes for v2.2 customers** — sync v2.2.174, existing chains keep working unchanged. Migrate to v2.3 platform layer when ready via `Initialize-PlatformVm` or `Convert-V1ToPlatform`.
 
 ---
 

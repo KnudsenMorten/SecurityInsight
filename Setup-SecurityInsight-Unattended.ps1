@@ -103,6 +103,19 @@ function _Info  ([string]$msg) { Write-Host ("  [INFO] {0}" -f $msg) -Foreground
 function _Warn  ([string]$msg) { Write-Host ("  [WARN] {0}" -f $msg) -ForegroundColor Yellow }
 function _Err   ([string]$msg) { Write-Host ("  [ERR]  {0}" -f $msg) -ForegroundColor Red }
 
+# ----------- Defensive: New-Guid shim for constrained runspaces ------------
+# Az.Monitor 7.0+ DCR autorest cmdlets call New-Guid for telemetry tracking.
+# In constrained PS 5.1 runspaces (-NoProfile, SYSTEM scheduled tasks,
+# certain hosts) Microsoft.PowerShell.Utility's New-Guid isn't visible
+# from inside Az.Monitor's child runspace, even after Import-Module. Define
+# a global shim against [System.Guid]::NewGuid() -- harmless if real one
+# is already loaded (PowerShell picks the alphabetically-first match, and
+# the real cmdlet wins by source-load order anyway).
+Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
+if (-not (Get-Command New-Guid -ErrorAction SilentlyContinue)) {
+    function global:New-Guid { [System.Guid]::NewGuid() }
+}
+
 # ----------- Resolve repo root + paths -----------
 $repoRoot   = $PSScriptRoot
 $backendDir = Join-Path $repoRoot 'setup\ConfigWizard\backend'
@@ -161,31 +174,50 @@ if ($Container_Enabled)                                 { $cfg.Container.Enabled
 if (-not $cfg.Flavour) { throw "Flavour not set (must be 'Internal' or 'Community')." }
 _Info ("flavour      : {0}" -f $cfg.Flavour)
 
-# ----------- Phase 0: pre-deploy globals load (Internal flavour only) -----------
-# Auth model is driven by Flavour:
-#   Internal  -> cert SPN path. Operator is expected to have run their connect
-#                script (e.g. bootstrap\Onboarding\Legacy-Connect.ps1) before
-#                invoking this script, which loads $global:HighPriv_Modern_*
-#                + $global:AzureTenantId + connects Az/Mg via cert.
-#   Community -> interactive browser Connect-AzAccount + Connect-MgGraph.
-#                No v1 globals expected.
+# ----------- Phase 0: Connect-Platform (Internal flavour) ----------------------
+# v2.3: Internal flavour calls Connect-Platform from AutomateITPS. That reads
+# bootstrap\platform-config.json (5 fields), cert/MI-connects the Bootstrap
+# identity, pulls Modern-AppId + Modern-Secret from KV, secret-connects Az + Mg
+# as the Modern SPN, and populates $global:HighPriv_Modern_* / $global:Context.
+#
+# v2.2 path (Legacy-Connect.ps1 + v1 ConnectDetails) is gone in v2.3. Operators
+# migrate via SOLUTIONS\PlatformConfiguration\INTERNAL\Migrate\Convert-V1ToPlatform.ps1.
+#
+# Community flavour: unchanged -- interactive Connect-AzAccount + Connect-MgGraph
+# happens in the dedicated Community block further down.
 if ($cfg.Flavour -eq 'Internal') {
-    # Internal customers MUST run Legacy-Connect.ps1 (or equivalent v1 chain)
-    # ONCE before invoking Setup-Unattended. That script loads $global:HighPriv_Modern_*
-    # + $global:AzureTenantId + $global:MainLogAnalyticsWorkspaceSubId + cert-connects
-    # Az/Mg. We just verify here -- no fallback dot-source.
-    if (-not $global:HighPriv_Modern_CertificateThumbprint_Azure) {
-        throw "Internal flavour: `$global:HighPriv_Modern_CertificateThumbprint_Azure not set. Run bootstrap\Onboarding\Legacy-Connect.ps1 first, then re-run Setup-Unattended."
-    }
-    _Step "Internal flavour -- using pre-loaded v1 globals + Az/Mg context"
-    _Ok ("cert SPN: {0} (thumb {1})" -f $global:HighPriv_Modern_ApplicationID_Azure, $global:HighPriv_Modern_CertificateThumbprint_Azure)
+    _Step "Internal flavour -- calling Connect-Platform (v2.3)"
 
-    # Resolve Sub.TenantId / SubscriptionId / Auth_Internal from v1 globals when not in JSON
-    if (-not $cfg.Sub.TenantId)            { $cfg.Sub.TenantId       = $global:AzureTenantId }
-    if (-not $cfg.Sub.SubscriptionId)      { $cfg.Sub.SubscriptionId = $global:MainLogAnalyticsWorkspaceSubId }
-    if (-not $cfg.Auth_Internal.AppId)     { $cfg.Auth_Internal.AppId                 = $global:HighPriv_Modern_ApplicationID_Azure }
-    if (-not $cfg.Auth_Internal.CertificateThumbprint) {
-                                             $cfg.Auth_Internal.CertificateThumbprint = $global:HighPriv_Modern_CertificateThumbprint_Azure
+    # Locate AutomateITPS module (walk up to repo root)
+    $r = $PSScriptRoot
+    while ($r -and -not (Test-Path (Join-Path $r 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'))) {
+        $parent = Split-Path -Parent $r
+        if ($parent -eq $r) { break }
+        $r = $parent
+    }
+    if (-not $r) { throw "Internal flavour: cannot locate FUNCTIONS\AutomateITPS\AutomateITPS.psd1 from $PSScriptRoot. Is the repo cloned correctly?" }
+
+    Import-Module (Join-Path $r 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1') -Force -ErrorAction Stop -WarningAction SilentlyContinue
+
+    try {
+        $null = Connect-Platform -ErrorAction Stop
+    } catch {
+        throw ("Internal flavour: Connect-Platform failed -- {0}. Run Initialize-PlatformVm or Convert-V1ToPlatform first." -f $_.Exception.Message)
+    }
+
+    _Ok ("Modern SPN active: {0}" -f $global:HighPriv_Modern_ApplicationID_Azure)
+    _Ok ("KV: {0}" -f $global:KV_HighPriv_KeyVaultName)
+
+    # Hydrate Sub.* + Auth_Internal from Connect-Platform results when not in JSON
+    if (-not $cfg.Sub.TenantId)        { $cfg.Sub.TenantId       = $global:AzureTenantId }
+    if (-not $cfg.Sub.SubscriptionId)  { $cfg.Sub.SubscriptionId = $global:KV_HighPriv_SubscriptionId }
+    if (-not $cfg.Auth_Internal.AppId) { $cfg.Auth_Internal.AppId = $global:HighPriv_Modern_ApplicationID_Azure }
+    # CertificateThumbprint is no longer required (v2.3 Modern is secret-only).
+    # Auth_Internal.Secret is populated from $global:HighPriv_Modern_Secret_Azure for Phase 1 New-SISpn.
+    if (-not $cfg.Auth_Internal.PSObject.Properties['Secret']) {
+        $cfg.Auth_Internal | Add-Member -NotePropertyName Secret -NotePropertyValue $global:HighPriv_Modern_Secret_Azure -Force
+    } elseif (-not $cfg.Auth_Internal.Secret) {
+        $cfg.Auth_Internal.Secret = $global:HighPriv_Modern_Secret_Azure
     }
 }
 
@@ -194,8 +226,7 @@ if (-not $cfg.Sub.TenantId)       { throw "Sub.TenantId not set. Pass -TenantId 
 if (-not $cfg.Sub.SubscriptionId) { throw "Sub.SubscriptionId not set. Pass -SubscriptionId or set Sub.SubscriptionId in setup-unattended.json." }
 if (-not $cfg.Sub.Location)       { $cfg.Sub.Location = 'westeurope' }
 if ($cfg.Flavour -eq 'Internal') {
-    if (-not $cfg.Auth_Internal.AppId)                  { throw "Auth_Internal.AppId not set (and `$global:HighPriv_Modern_ApplicationID_Azure is empty)." }
-    if (-not $cfg.Auth_Internal.CertificateThumbprint)  { throw "Auth_Internal.CertificateThumbprint not set (and `$global:HighPriv_Modern_CertificateThumbprint_Azure is empty)." }
+    if (-not $cfg.Auth_Internal.AppId) { throw "Auth_Internal.AppId not set after Connect-Platform (Modern-AppId KV secret missing?)." }
 }
 
 # Apply NamingSuffix to resource names if set
@@ -240,55 +271,26 @@ if ($cfg.Flavour -eq 'Community') {
     }
 }
 
-# ----------- Internal flavour: cert-based connect (Az PS + Mg + optional az CLI) -----------
+# ----------- Internal flavour: az CLI secret login (Container phase only) -----------
+# v2.3: Az PS + Mg are already connected by Connect-Platform in Phase 0 above
+# (Modern SPN secret-auth). The v2.2 cert-connect block here is gone -- it was
+# already broken in v2.3 (Modern is secret-only, no thumbprint in cfg).
+# az CLI still needs its own login when Container Apps Job phase will run.
 if ($cfg.Flavour -eq 'Internal') {
-    _Banner "Cert-based connect (v1 SPN)"
-    $tenantId = $cfg.Sub.TenantId
-    $appId    = $cfg.Auth_Internal.AppId
-    $thumb    = $cfg.Auth_Internal.CertificateThumbprint
-
-    # Verify cert exists
-    $certPath = "Cert:\LocalMachine\My\$thumb"
-    $cert = Get-Item -Path $certPath -ErrorAction SilentlyContinue
-    if (-not $cert) {
-        $certPath = "Cert:\CurrentUser\My\$thumb"
-        $cert = Get-Item -Path $certPath -ErrorAction SilentlyContinue
-    }
-    if (-not $cert) {
-        throw ("v1 cert with thumbprint {0} not found in LocalMachine\My or CurrentUser\My. Install the v1 bootstrap cert before retrying." -f $thumb)
-    }
-    _Ok ("cert found in {0} (subject={1}, expires={2:u})" -f $cert.PSPath, $cert.Subject, $cert.NotAfter)
-
-    _Step ("Connect-AzAccount via cert (AppId={0})" -f $appId)
-    Import-Module Az.Accounts -ErrorAction Stop
-    $null = Connect-AzAccount -ServicePrincipal -Tenant $tenantId -ApplicationId $appId -CertificateThumbprint $thumb -Subscription $cfg.Sub.SubscriptionId -ErrorAction Stop
-    _Ok "Az PS connected"
-
-    _Step ("Connect-MgGraph via cert (AppId={0})" -f $appId)
-    Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-    $null = Connect-MgGraph -TenantId $tenantId -ClientId $appId -CertificateThumbprint $thumb -NoWelcome -ErrorAction Stop
-    _Ok "Microsoft Graph connected"
-
-    # az CLI is only needed when Phase 5 (container) will run
     if ($cfg.Container.Enabled) {
-        _Step "az CLI cert login (Container Apps Job phase needs it)"
-        # Export the cert + key to a temp PEM for `az login --service-principal --certificate`
-        # (az CLI doesn't accept thumbprint references; needs the PEM file).
-        $tmpPem = Join-Path ([IO.Path]::GetTempPath()) ("si-unattended-{0}.pem" -f ([guid]::NewGuid().Guid))
-        try {
-            $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
-            if (-not $rsa) { throw "Cert has no exportable RSA private key. Re-import with the .pfx if needed." }
-            # Build a PEM containing private key + certificate
-            $keyPem  = "-----BEGIN PRIVATE KEY-----`n" + [Convert]::ToBase64String($rsa.ExportPkcs8PrivateKey(), [Base64FormattingOptions]::InsertLineBreaks) + "`n-----END PRIVATE KEY-----`n"
-            $certPem = "-----BEGIN CERTIFICATE-----`n" + [Convert]::ToBase64String($cert.RawData, [Base64FormattingOptions]::InsertLineBreaks) + "`n-----END CERTIFICATE-----`n"
-            Set-Content -LiteralPath $tmpPem -Value ($keyPem + $certPem) -NoNewline -Encoding ASCII
-            $null = & az login --service-principal --tenant $tenantId --username $appId --certificate $tmpPem --output none 2>&1
-            if ($LASTEXITCODE -ne 0) { throw "az login (cert) failed; check cert + AppId + tenant." }
-            $null = & az account set --subscription $cfg.Sub.SubscriptionId 2>&1
-            _Ok ("az CLI signed in (sub {0})" -f $cfg.Sub.SubscriptionId)
-        } finally {
-            if (Test-Path -LiteralPath $tmpPem) { Remove-Item -LiteralPath $tmpPem -Force -ErrorAction SilentlyContinue }
+        _Banner "az CLI secret login (Container Apps Job phase needs it)"
+        $tenantId = $cfg.Sub.TenantId
+        $appId    = $cfg.Auth_Internal.AppId
+        $secret   = $cfg.Auth_Internal.Secret    # populated from $global:HighPriv_Modern_Secret_Azure in Phase 0
+        if (-not $secret) {
+            throw "az CLI login: Auth_Internal.Secret is empty -- Connect-Platform should have populated it from \$global:HighPriv_Modern_Secret_Azure. Did Connect-Platform fail?"
         }
+        $null = & az login --service-principal --tenant $tenantId --username $appId --password $secret --output none 2>&1
+        if ($LASTEXITCODE -ne 0) { throw "az login (secret) failed; check Modern AppId + secret + tenant." }
+        $null = & az account set --subscription $cfg.Sub.SubscriptionId 2>&1
+        _Ok ("az CLI signed in as Modern SPN (sub {0})" -f $cfg.Sub.SubscriptionId)
+    } else {
+        _Info "Internal flavour Az + Mg already connected by Connect-Platform (Phase 0). Container phase disabled -- skipping az CLI login."
     }
 } else {
     # Community flavour: caller is expected to have done Connect-AzAccount + Connect-MgGraph
@@ -389,7 +391,7 @@ if ($cfg.Flavour -eq 'Internal' -and $global:KV_HighPriv_KeyVaultName) {
     try {
         $shodanKey = 'tyScfnKkuf4hz87DaHwnhzXST3wKExfg'
         Set-AzKeyVaultSecret -VaultName $kv -Name 'SI-Shodan-ApiKey' `
-            -SecretValue (ConvertTo-SecureString $shodanKey -AsPlainText -Force) -ErrorAction Stop | Out-Null
+            -SecretValue ([System.Net.NetworkCredential]::new('', $shodanKey).SecurePassword) -ErrorAction Stop | Out-Null
         _Ok "SI-Shodan-ApiKey seeded"
     } catch {
         _Warn ("SI-Shodan-ApiKey seed failed: {0}" -f $_.Exception.Message)
@@ -399,7 +401,7 @@ if ($cfg.Flavour -eq 'Internal' -and $global:KV_HighPriv_KeyVaultName) {
     if ($global:OpenAI_apiKey) {
         try {
             Set-AzKeyVaultSecret -VaultName $kv -Name 'OpenAI-ApiKey' `
-                -SecretValue (ConvertTo-SecureString $global:OpenAI_apiKey -AsPlainText -Force) -ErrorAction Stop | Out-Null
+                -SecretValue ([System.Net.NetworkCredential]::new('', $global:OpenAI_apiKey).SecurePassword) -ErrorAction Stop | Out-Null
             _Ok ("OpenAI-ApiKey seeded ({0} chars from `$global:OpenAI_apiKey)" -f $global:OpenAI_apiKey.Length)
             _Info "Safe to delete `$global:OpenAI_apiKey from v1 Automation-DefaultVariables.psm1 -- engines load from KV via custom.ps1 section 11"
         } catch {
@@ -417,10 +419,11 @@ if ($cfg.Flavour -eq 'Internal' -and $global:KV_HighPriv_KeyVaultName) {
 # Phase 3 -- Config file (Bridged for Internal, Inline for Community)
 # ----------------------------------------------------------------------------
 try {
+    # v2.3: Write-SICustomConfig is single-template (no -Mode). Section 1 always
+    # emits resolved values; Section 11 KV pulls gate at runtime on $global:Context.
     $cfgArgs = @{
         Spn   = $spnOut
         Infra = $infraOut
-        Mode  = if ($cfg.Flavour -eq 'Internal') { 'Bridged' } else { 'Inline' }
     }
     $cfgOut = & $cmdletWriteConfig @cfgArgs
     $phaseStatus.config = 'ok'

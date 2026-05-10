@@ -2953,6 +2953,11 @@ function Calculate-RiskScore {
         [string] $RiskProbabilityScoreOutputName  = 'RiskProbablityScore_CriticialityTierLevel',
         [string] $RiskScoreOutputName             = 'RiskScore',
 
+        # ReportName from the YAML -- stamped into every row as
+        # AssetDetectedInReportName so operators can hunt back which report
+        # produced which finding. Auto-added (no need to list in OutputPropertyOrder).
+        [string] $ReportName,
+
         # Risk factor columns (KQL can output these; treat 0/1/true/false/yes/no)
         [string] $RiskFactorConsequenceInputName  = 'riskfactor_consequence',
         [string] $RiskFactorProbabilityInputName  = 'riskfactor_probability',
@@ -3267,6 +3272,30 @@ function Calculate-RiskScore {
             $tmp['RiskFactor_Consequence'] = $consTokens.Count
             $rfConsDetailedRaw = ($consTokens -join ';')   # downstream re-stamp uses this
             $rfCons = $consTokens.Count
+        }
+
+        # ---- BUGFIX 2026-05-10: recompute scores AFTER token enrichment ----
+        # The pre-enrichment computation at lines 3156-3158 / stamps at lines 3177-3179
+        # uses rfCons/rfProb counts BEFORE token enrichment fired. For Identity reports
+        # (and any report whose KQL doesn't project RiskFactor_Consequence_Detailed /
+        # RiskFactor_Probability_Detailed inline), enrichment populates the counts but
+        # the scores stayed frozen at the pre-enrichment 0 -> RiskScoreTotal=0 +
+        # RiskConsequenceScore/RiskProbabilityScore visually empty in Excel.
+        # Re-derive from the post-enrichment counts and overwrite the stamps.
+        $consAdj = ([double]$consBase.Score) + ([double]$rfCons)
+        $probAdj = ([double]$probBase.Score) + ([double]$rfProb)
+        $risk    = $consAdj * $probAdj
+        $riskWeighted = [double]$risk * [double]$rfWeightPct / 100.0
+        $tmp[$RiskConsequenceScoreOutputName] = [double]$consAdj
+        $tmp[$RiskProbabilityScoreOutputName] = [double]$probAdj
+        $tmp[$RiskScoreOutputName]            = [double]$risk
+        $tmp['RiskScoreTotal_Weighted']       = [int][math]::Floor([double]$riskWeighted)
+
+        # Provenance: stamp ReportName into every row so operators can hunt back
+        # which report produced which finding. Auto-added (no need to list in
+        # OutputPropertyOrder; engine appends to the column set).
+        if ($ReportName) {
+            $tmp['AssetDetectedInReportName'] = [string]$ReportName
         }
 
         # Always set the displayed RiskFactor_Consequence to the derived count AND
@@ -5862,7 +5891,8 @@ if ($ResultAll.Count -eq 0) {
       -SortBy @($SortBy) -Descending `
       -RiskConsequenceScoreOutputName $RiskConsequenceScoreOutputName `
       -RiskProbabilityScoreOutputName $RiskProbabilityScoreOutputName `
-      -RiskScoreOutputName $RiskScoreOutputName
+      -RiskScoreOutputName $RiskScoreOutputName `
+      -ReportName $ReportName
     Tick "risk scoring"
 
     # -------------------------------------------------------------------------
@@ -5924,8 +5954,9 @@ if ($ResultAll.Count -eq 0) {
         }
     } finally { if ($__sha) { $__sha.Dispose() } }
 
-    # Shape columns
-    $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName)
+    # Shape columns. AssetDetectedInReportName is auto-added so every Excel row
+    # carries the source ReportName (operator hunt-back column).
+    $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName, 'AssetDetectedInReportName')
     $TraceCols    = @('CollectionTime', 'SolutionVersion', 'TraceName', 'TraceID')    # always the LAST four columns -- not in any YAML OutputPropertyOrder on purpose
 
     $DesiredColumns = @()

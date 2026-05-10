@@ -1,0 +1,986 @@
+{
+    "$schema":  "AutomateIT.PermissionBundle/v2.3",
+    "GeneratedUtc":  "2026-05-10T02:27:21.8482778Z",
+    "GeneratedBy":  "2LINKIT\\MOK@MGMT1",
+    "SourceAppId":  "7602a1ec-6234-4275-ac96-ce5fa4589d1a",
+    "SourceDisplayName":  "2LINKIT - Automation - Azure",
+    "SourceTenantId":  "f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e",
+    "AzureRbac":  [
+                      {
+                          "RoleDefinitionName":  "Reader",
+                          "RoleDefinitionId":  "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+                          "ScopeRaw":  "/",
+                          "ScopeToken":  "/"
+                      },
+                      {
+                          "RoleDefinitionName":  "Owner",
+                          "RoleDefinitionId":  "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                          "ScopeRaw":  "/providers/Microsoft.Management/managementGroups/mg-lz-online",
+                          "ScopeToken":  "/providers/Microsoft.Management/managementGroups/\u003cRootMgId\u003e"
+                      },
+                      {
+                          "RoleDefinitionName":  "Owner",
+                          "RoleDefinitionId":  "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                          "ScopeRaw":  "/providers/Microsoft.Management/managementGroups/mg-landingzone",
+                          "ScopeToken":  "/providers/Microsoft.Management/managementGroups/\u003cRootMgId\u003e"
+                      },
+                      {
+                          "RoleDefinitionName":  "Owner",
+                          "RoleDefinitionId":  "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                          "ScopeRaw":  "/providers/Microsoft.Management/managementGroups/mg-2linkit",
+                          "ScopeToken":  "/providers/Microsoft.Management/managementGroups/\u003cRootMgId\u003e"
+                      },
+                      {
+                          "RoleDefinitionName":  "Owner",
+                          "RoleDefinitionId":  "8e3af657-a8ff-443c-a75c-2fe8c4bcb635",
+                          "ScopeRaw":  "/providers/Microsoft.Management/managementGroups/f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e",
+                          "ScopeToken":  "/providers/Microsoft.Management/managementGroups/\u003cRootMgId\u003e"
+                      },
+                      {
+                          "RoleDefinitionName":  "Cost Management Contributor",
+                          "RoleDefinitionId":  "434105ed-43f6-45c7-a02f-909b2ba83430",
+                          "ScopeRaw":  "/providers/Microsoft.Management/managementGroups/f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e",
+                          "ScopeToken":  "/providers/Microsoft.Management/managementGroups/\u003cRootMgId\u003e"
+                      }
+                  ],
+    "Graph":  {
+                  "AppRoles":  [
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "2dcf8603-09eb-4078-b1ec-d30a1a76b873",
+                                       "AppRoleValue":  "Policy.ReadWrite.IdentityProtection"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "ed4fca05-be46-441f-9803-1873825f8fdb",
+                                       "AppRoleValue":  "SecurityAlert.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "86ceff06-c822-49ff-989a-d912845ffe69",
+                                       "AppRoleValue":  "User-Phone.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "8b7e8c0a-7e9d-4049-97ec-04b5e1bcaf05",
+                                       "AppRoleValue":  "RoleManagement.ReadWrite.Defender"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "31e08e0a-d3f7-4ca2-ac39-7343fb83e8ad",
+                                       "AppRoleValue":  "RoleManagementPolicy.ReadWrite.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "90bbca0b-227c-4cdc-8083-1c6cfb95bac6",
+                                       "AppRoleValue":  "Policy.ReadWrite.FedTokenValidation"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "d3495511-98b7-4df3-b317-4e35c19f6129",
+                                       "AppRoleValue":  "RoleAssignmentSchedule.Remove.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "0e9eea12-4f01-45f6-9b8d-3ea4c8144158",
+                                       "AppRoleValue":  "DirectoryRecommendations.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "11059518-d6a6-4851-98ed-509268489c4a",
+                                       "AppRoleValue":  "RoleManagementAlert.ReadWrite.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "a402ca1c-2696-4531-972d-6e5ee4aa11ea",
+                                       "AppRoleValue":  "Policy.ReadWrite.PermissionGrant"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "7239b71d-b402-4150-b13d-78ecfe8df441",
+                                       "AppRoleValue":  "SchedulePermissions.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "abf6441f-0772-4932-96e7-0191478dd73a",
+                                       "AppRoleValue":  "DeviceTemplate.Create"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "618b6020-bca8-4de6-99f6-ef445fa4d857",
+                                       "AppRoleValue":  "PrivilegedEligibilitySchedule.ReadWrite.AzureADGroup"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "18228521-a591-40f1-b215-5fad4488c117",
+                                       "AppRoleValue":  "AccessReview.ReadWrite.Membership"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "01c0a623-fc9b-48e9-b794-0756f8e8f067",
+                                       "AppRoleValue":  "Policy.ReadWrite.ConditionalAccess"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "025d3225-3f02-4882-b4c0-cd5b541a4e80",
+                                       "AppRoleValue":  "RoleManagement.ReadWrite.Exchange"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "29c18626-4985-4dcd-85c0-193eef327366",
+                                       "AppRoleValue":  "Policy.ReadWrite.AuthenticationMethod"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "69e67828-780e-47fd-b28c-7b27d14864e6",
+                                       "AppRoleValue":  "RoleManagementPolicy.Read.AzureADGroup"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "fee28b28-e1f3-4841-818e-2704dc62245f",
+                                       "AppRoleValue":  "RoleEligibilitySchedule.ReadWrite.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "57f1cf28-c0c4-4ec3-9a30-19a2eaaf2f6e",
+                                       "AppRoleValue":  "BitlockerKey.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "3be0012a-cc4e-426b-895b-f9c836bf6381",
+                                       "AppRoleValue":  "Application-RemoteDesktopConfig.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "41202f2c-f7ab-45be-b001-85c9728b9d69",
+                                       "AppRoleValue":  "PrivilegedAssignmentSchedule.ReadWrite.AzureADGroup"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "8137102d-ec16-4191-aaf8-7aeda8026183",
+                                       "AppRoleValue":  "NetworkAccessBranch.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "77f3a031-c388-4f99-b373-dc68676a979e",
+                                       "AppRoleValue":  "User.RevokeSessions.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "280d0935-0796-47d1-8d26-273470a3f17a",
+                                       "AppRoleValue":  "User-Mail.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "1138cb37-bd11-4084-a2b7-9f71582aeddb",
+                                       "AppRoleValue":  "Device.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "741f803b-c850-494e-b5df-cde7c675a1ca",
+                                       "AppRoleValue":  "User.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "25f85f3c-f66c-4205-8cd5-de92dd7f0cec",
+                                       "AppRoleValue":  "Policy.ReadWrite.AuthenticationFlows"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "7e05723c-0bb0-42da-be95-ae9f08a6e53c",
+                                       "AppRoleValue":  "Domain.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "18a4783c-866b-4cc7-a460-3d5e5662c884",
+                                       "AppRoleValue":  "Application.ReadWrite.OwnedBy"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "eccc023d-eccf-4e7b-9683-8813ab36cecc",
+                                       "AppRoleValue":  "User.DeleteRestore.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "f2bf083f-0179-402a-bedb-b2784de8a49b",
+                                       "AppRoleValue":  "SecurityActions.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "50483e42-d915-4231-9639-7fdb7fd190e5",
+                                       "AppRoleValue":  "UserAuthenticationMethod.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "dc149144-f292-421e-b185-5953f2e98d7f",
+                                       "AppRoleValue":  "AppCatalog.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "925f1248-0f97-47b9-8ec8-538c54e01325",
+                                       "AppRoleValue":  "User-LifeCycleInfo.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "dd199f4a-f148-40a4-a2ec-f0069cc799ec",
+                                       "AppRoleValue":  "RoleAssignmentSchedule.ReadWrite.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "55d1104b-3821-413d-b3ca-e2393d333cd3",
+                                       "AppRoleValue":  "PrivilegedAssignmentSchedule.Remove.AzureADGroup"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "be74164b-cff1-491c-8741-e671cb536e13",
+                                       "AppRoleValue":  "Policy.ReadWrite.ApplicationConfiguration"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "b38dcc4d-a239-4ed6-aa84-6c65b284f97c",
+                                       "AppRoleValue":  "RoleManagementPolicy.ReadWrite.AzureADGroup"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "1bfefb4e-e0b5-418b-a88f-73c46d2cc8e9",
+                                       "AppRoleValue":  "Application.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "9e8be751-7eee-4c09-bcfd-d64f6b087fd8",
+                                       "AppRoleValue":  "BillingConfiguration.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "7dd1be58-6e76-4401-bf8d-31d1e8180d5b",
+                                       "AppRoleValue":  "WindowsUpdates.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "db51be59-e728-414b-b800-e0f010df1a79",
+                                       "AppRoleValue":  "DeviceLocalCredential.ReadBasic.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "ef5f7d5c-338f-44b0-86c3-351f46c8bb5f",
+                                       "AppRoleValue":  "AccessReview.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "19dbc75e-c2e2-444c-a770-ec69d8559fc7",
+                                       "AppRoleValue":  "Directory.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "55745561-7572-4314-a737-a2c2a1b0dd2e",
+                                       "AppRoleValue":  "PrivilegedEligibilitySchedule.Remove.AzureADGroup"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "656f6061-f9fe-4807-9708-6a2e0934df76",
+                                       "AppRoleValue":  "IdentityRiskyUser.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "5652f862-b626-407b-a3e6-248aeb95763c",
+                                       "AppRoleValue":  "User.ReadWrite.CrossCloud"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "999f8c63-0a38-4f1b-91fd-ed1947bdd1a9",
+                                       "AppRoleValue":  "Policy.ReadWrite.ConsentRequest"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "40f97065-369a-49f4-947c-6a255697ae91",
+                                       "AppRoleValue":  "MailboxSettings.Read"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "86632667-cd15-4845-ad89-48a88e8412e1",
+                                       "AppRoleValue":  "ThreatSubmission.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "21792b6c-c986-4ffc-85de-df9da54b52fa",
+                                       "AppRoleValue":  "ThreatIndicators.ReadWrite.OwnedBy"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "9fadb66e-6421-4744-aede-4ab6fb98a884",
+                                       "AppRoleValue":  "DeviceTemplate.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "5e1e9171-754d-478c-812c-f1755a9a4c2d",
+                                       "AppRoleValue":  "AuditLogsQuery.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "0400e371-7db1-4338-a269-96069eb65227",
+                                       "AppRoleValue":  "UserAuthMethod-Passkey.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "a88eef72-fed0-4bf7-a2a9-f19df33f8b83",
+                                       "AppRoleValue":  "AuthenticationContext.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "bf7b1a76-6e77-406b-b258-bf5c7720e98f",
+                                       "AppRoleValue":  "Group.Create"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "62a82d76-70ea-41e2-9197-370581804d09",
+                                       "AppRoleValue":  "Group.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "3011c876-62b7-4ada-afa2-506cbbecc68c",
+                                       "AppRoleValue":  "User.EnableDisableAccount.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "d903a879-88e0-4c09-b0c9-82f6a1333f84",
+                                       "AppRoleValue":  "SecurityEvents.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "09850681-111b-4a89-9bed-3f2cae46d706",
+                                       "AppRoleValue":  "User.Invite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "40049381-3cc1-42af-94ec-5ce755db4b0d",
+                                       "AppRoleValue":  "NetworkAccess-Reports.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "c7fbd983-d9aa-4fa7-84b8-17382c103bc4",
+                                       "AppRoleValue":  "RoleManagement.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "df021288-bdef-4463-88db-98f22de89214",
+                                       "AppRoleValue":  "User.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "ef31918f-2d50-4755-8943-b8638c0a077e",
+                                       "AppRoleValue":  "RoleManagementAlert.Read.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "274d0592-d1b6-44bd-af1d-26d259bcb43a",
+                                       "AppRoleValue":  "RoleManagement.ReadWrite.CloudPC"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "5ac13192-7ace-4fcf-b828-1a26f28068ee",
+                                       "AppRoleValue":  "DeviceManagementServiceConfig.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "4e774092-a092-48d1-90bd-baad67c7eb47",
+                                       "AppRoleValue":  "UserNotification.ReadWrite.CreatedByApp"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "03cc4f92-788e-4ede-b93f-199424d144a5",
+                                       "AppRoleValue":  "Policy.ReadWrite.ExternalIdentities"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "34bf0e97-1971-4929-b999-9e2442d941d7",
+                                       "AppRoleValue":  "SecurityIncident.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "fdc4c997-9942-4479-bfcb-75a36d1138df",
+                                       "AppRoleValue":  "RoleManagementPolicy.Read.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "926a6798-b100-4a20-a22f-a4918f13951d",
+                                       "AppRoleValue":  "ThreatSubmissionPolicy.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "4a771c9a-1cf2-4609-b88e-3d3e02d539cd",
+                                       "AppRoleValue":  "TrustFrameworkKeySet.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "79c7e69c-0d9f-4eff-97a8-49170a5a08ba",
+                                       "AppRoleValue":  "RoleEligibilitySchedule.Remove.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "9255e99d-faf5-445e-bbf7-cb71482737c4",
+                                       "AppRoleValue":  "DeviceManagementScripts.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "884b599e-4d48-43a5-ba94-15c414d00588",
+                                       "AppRoleValue":  "DeviceLocalCredential.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "0edf5e9e-4ce8-468a-8432-d08631d18c43",
+                                       "AppRoleValue":  "EventListener.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "9acd699f-1e81-4958-b001-93b1d2506e19",
+                                       "AppRoleValue":  "EntitlementManagement.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "292d869f-3427-49a8-9dab-8c70152b74e9",
+                                       "AppRoleValue":  "Organization.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "1c6e93a6-28e2-4cbb-9f64-1a46a821124d",
+                                       "AppRoleValue":  "Policy.ReadWrite.SecurityDefaults"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "06b708a9-e830-4db3-a914-8e69da51d44f",
+                                       "AppRoleValue":  "AppRoleAssignment.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "243333ab-4d21-40cb-a475-36241daa0842",
+                                       "AppRoleValue":  "DeviceManagementManagedDevices.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "b2620db1-3bf7-4c5b-9cb9-576d29eac736",
+                                       "AppRoleValue":  "eDiscovery.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "854d9ab1-6657-4ec8-be45-823027bcd009",
+                                       "AppRoleValue":  "PrivilegedAccess.ReadWrite.AzureAD"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "405a51b5-8d8d-430b-9842-8be4b0e9f324",
+                                       "AppRoleValue":  "User.Export.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "cc117bb9-00cf-4eb8-b580-ea2a878fe8f7",
+                                       "AppRoleValue":  "User-PasswordProfile.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "f15eb2ba-ef8a-4f70-991d-da5d045154e2",
+                                       "AppRoleValue":  "DeviceManagementCloudCA.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "f8f035bb-2cce-47fb-8bf5-7baf3ecbee48",
+                                       "AppRoleValue":  "ThreatAssessment.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "6f9d5abc-2db6-400b-a267-7de22a40fb87",
+                                       "AppRoleValue":  "PrivilegedAccess.ReadWrite.AzureResources"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "f0c341be-8348-4989-8e43-660324294538",
+                                       "AppRoleValue":  "NetworkAccessPolicy.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "5facf0c1-8979-4e95-abcf-ff3d079771c0",
+                                       "AppRoleValue":  "LicenseAssignment.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "c529cfca-c91b-489c-af2b-d92990b66ce6",
+                                       "AppRoleValue":  "User.ManageIdentities.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "6931bccd-447a-43d1-b442-00a195474933",
+                                       "AppRoleValue":  "MailboxSettings.ReadWrite"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "9e3f62cf-ca93-4989-b6ce-bf83c28f9fe8",
+                                       "AppRoleValue":  "RoleManagement.ReadWrite.Directory"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "dbaae8cf-10b5-4b86-a4a1-f871c94c6695",
+                                       "AppRoleValue":  "GroupMember.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "78bbf8cf-07d8-45ba-b0eb-1a7b48efbcf1",
+                                       "AppRoleValue":  "MutualTlsOauthConfiguration.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "5eb59dd3-1da2-4329-8733-9dabdc435916",
+                                       "AppRoleValue":  "AdministrativeUnit.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "b0afded3-3588-46d8-8b3d-9842eff778da",
+                                       "AppRoleValue":  "AuditLog.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "230fb2d5-aa21-49c1-bfa7-ae1be179d867",
+                                       "AppRoleValue":  "Policy.ReadWrite.DeviceConfiguration"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "246dd0d5-5bd0-4def-940b-0421030a5b68",
+                                       "AppRoleValue":  "Policy.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "338163d7-f101-4c92-94ba-ca46fe52447c",
+                                       "AppRoleValue":  "Policy.ReadWrite.CrossTenantAccess"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "658aa5d8-239f-45c4-aa12-864f4fc7e490",
+                                       "AppRoleValue":  "Member.Read.Hidden"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "9241abd9-d0e6-425a-bd4f-47ba86e767a4",
+                                       "AppRoleValue":  "DeviceManagementConfiguration.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "e0b77adb-e790-44a3-b0a0-257d06303687",
+                                       "AppRoleValue":  "ThreatIntelligence.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "5b07b0dd-2377-4e44-a38d-703f09a0dc3c",
+                                       "AppRoleValue":  "DeviceManagementManagedDevices.PrivilegedOperations.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "79c261e0-fe76-4144-aad5-bdc68fbe4037",
+                                       "AppRoleValue":  "ServiceHealth.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "3b4349e1-8cf5-45a3-95b7-69d1751d3e6a",
+                                       "AppRoleValue":  "CloudPC.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "fb221be6-99f2-473f-bd32-01c6a0e9ca3b",
+                                       "AppRoleValue":  "Policy.ReadWrite.Authorization"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "78145de6-330d-4800-a6ce-494ff2d33d07",
+                                       "AppRoleValue":  "DeviceManagementApps.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "a6325ae7-2b73-4dbd-abed-fbeacfbf8696",
+                                       "AppRoleValue":  "Policy.ReadWrite.CrossTenantCapability"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "197ee4e9-b993-4066-898f-d6aecc55125b",
+                                       "AppRoleValue":  "ThreatIndicators.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "2cb92fee-97a3-4034-8702-24a6f5d0d1e9",
+                                       "AppRoleValue":  "OrgSettings-Forms.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "e330c4f0-4170-414e-a55a-2f022ec2b57b",
+                                       "AppRoleValue":  "DeviceManagementRBAC.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "fff194f1-7dce-4428-8301-1badb5518201",
+                                       "AppRoleValue":  "TrustFrameworkKeySet.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "2044e4f1-e56c-435b-925c-44cd8f6ba89a",
+                                       "AppRoleValue":  "Policy.ReadWrite.FeatureRollout"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "d72bdbf4-a59b-405c-8b04-5995895819ac",
+                                       "AppRoleValue":  "ThreatSubmission.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "dd98c7f5-2d42-42d3-a0e4-633161547251",
+                                       "AppRoleValue":  "ThreatHunting.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "79a677f7-b79d-40d0-a36a-3e6f8688dd7a",
+                                       "AppRoleValue":  "Policy.ReadWrite.TrustFramework"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "2f6817f8-7b12-4f0f-bc18-eeaf60705a9e",
+                                       "AppRoleValue":  "PrivilegedAccess.ReadWrite.AzureADGroup"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "b10642fc-a6cf-4c46-87f9-e1f96c2a18aa",
+                                       "AppRoleValue":  "NetworkAccess.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "00000003-0000-0000-c000-000000000000",
+                                       "ResourceDisplayName":  "Microsoft Graph",
+                                       "AppRoleId":  "77c863fd-06c0-47ce-a7eb-49773e89d319",
+                                       "AppRoleValue":  "Policy.ReadWrite.AccessReview"
+                                   },
+                                   {
+                                       "ResourceAppId":  "8ee8fdad-f234-4243-8f3b-15c294843740",
+                                       "ResourceDisplayName":  "Microsoft Threat Protection",
+                                       "AppRoleId":  "8d90f441-09cf-4fdc-ab45-e874fa3a28e8",
+                                       "AppRoleValue":  "Incident.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "8ee8fdad-f234-4243-8f3b-15c294843740",
+                                       "ResourceDisplayName":  "Microsoft Threat Protection",
+                                       "AppRoleId":  "a7deff90-e2f5-4e4e-83a3-2c74e7002e28",
+                                       "AppRoleValue":  "CustomDetections.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "8ee8fdad-f234-4243-8f3b-15c294843740",
+                                       "ResourceDisplayName":  "Microsoft Threat Protection",
+                                       "AppRoleId":  "7734e8e5-8dde-42fc-b5ae-6eafea078693",
+                                       "AppRoleValue":  "AdvancedHunting.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "61ae9cd9-7bca-458c-affc-861e2f24ba3b",
+                                       "ResourceDisplayName":  "Windows Update for Business Deployment Service",
+                                       "AppRoleId":  "3fab587f-736d-457e-822a-b3f1427a1296",
+                                       "AppRoleValue":  "WindowsUpdates.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "61ae9cd9-7bca-458c-affc-861e2f24ba3b",
+                                       "ResourceDisplayName":  "Windows Update for Business Deployment Service",
+                                       "AppRoleId":  "f024c79d-b932-43eb-a013-ecb589ce3379",
+                                       "AppRoleValue":  "DeploymentConfiguration.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "7e4e1300-e1b9-4102-88ba-f0cb6e6d5974",
+                                       "AppRoleValue":  "Machine.Isolate"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "84ddd701-5fac-4c30-b0ad-aa73a67bea1a",
+                                       "AppRoleValue":  "Event.Write"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "e5e05709-32a3-4c85-89c8-67596eb94f24",
+                                       "AppRoleValue":  "SecurityConfiguration.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "7c6f6912-60e9-4fcd-bb2a-c25bc35e8c59",
+                                       "AppRoleValue":  "IntegrationConfiguration.ReadWrite"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "a86d9824-b2b6-45f8-b042-16bc4922ed4e",
+                                       "AppRoleValue":  "Machine.Scan"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "721af526-ffa8-42d7-9b84-1a56244dd99d",
+                                       "AppRoleValue":  "Url.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "47bf842d-354b-49ef-b741-3a6dd815bc13",
+                                       "AppRoleValue":  "Ip.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "a8bc2240-f96a-46a1-bad5-6a960b7327a1",
+                                       "AppRoleValue":  "Ti.ReadWrite"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "528ca142-c849-4a5b-935e-10b8b9c38a84",
+                                       "AppRoleValue":  "Ti.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "a833834a-4cf1-4732-8acf-bbcfa13fb610",
+                                       "AppRoleValue":  "User.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "aa027352-232b-4ed4-b963-a705fc4d6d2c",
+                                       "AppRoleValue":  "Machine.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "fc511a58-3adf-4d71-af24-00f13e35e479",
+                                       "AppRoleValue":  "Ti.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "1629b959-c0af-42a1-92f0-f6162060bdf1",
+                                       "AppRoleValue":  "Machine.LiveResponse"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "6443965c-7dd2-4cfd-b38f-bb7772bee163",
+                                       "AppRoleValue":  "SecurityRecommendation.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "96b6b35d-074d-4e2d-b167-8d68d9269648",
+                                       "AppRoleValue":  "Machine.RestrictExecution"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "96e72b5e-7e68-4171-aad1-3937599e4751",
+                                       "AppRoleValue":  "Machine.StopAndQuarantine"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "71fe6b80-7034-4028-9ed8-0f316df9c3ff",
+                                       "AppRoleValue":  "Alert.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "37f71c98-d198-41ae-964d-2c49aab74926",
+                                       "AppRoleValue":  "Software.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "227f2ea0-c2c2-4428-b7af-9ff40f1a720e",
+                                       "AppRoleValue":  "SecurityConfiguration.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "8788f1a9-beca-4e26-ba58-10513f3b896f",
+                                       "AppRoleValue":  "File.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "15405ab2-2103-4a3c-ad80-e829841cedcc",
+                                       "AppRoleValue":  "Machine.CollectForensics"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "594435bf-36dd-4548-83bd-1bdafe157d7a",
+                                       "AppRoleValue":  "Machine.Offboard"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "e870c0c1-c1a2-41ca-948e-a33912d2d3f0",
+                                       "AppRoleValue":  "SecurityBaselinesAssessment.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "41269fc5-d04d-4bfd-bce7-43a51cea049a",
+                                       "AppRoleValue":  "Vulnerability.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "41d209c7-2511-4fc9-b899-8008a3976f09",
+                                       "AppRoleValue":  "Library.Manage"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "ea8291d3-4b9a-44b5-bc3a-6cea3026dc79",
+                                       "AppRoleValue":  "Machine.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "02b005dd-f804-43b4-8fc7-078460413f74",
+                                       "AppRoleValue":  "Score.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "6a33eedf-ba73-4e5a-821b-f057ef63853a",
+                                       "AppRoleValue":  "RemediationTasks.Read.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "0f7000ec-157b-497f-b70e-ef0b0584f140",
+                                       "AppRoleValue":  "Alert.ReadWrite.All"
+                                   },
+                                   {
+                                       "ResourceAppId":  "fc780465-2017-40d4-a0c5-307022471b92",
+                                       "ResourceDisplayName":  "WindowsDefenderATP",
+                                       "AppRoleId":  "93489bf5-0fbc-4f2d-b901-33f2fe08ff05",
+                                       "AppRoleValue":  "AdvancedQuery.Read.All"
+                                   }
+                               ]
+              }
+}

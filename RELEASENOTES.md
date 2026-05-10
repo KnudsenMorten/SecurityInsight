@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.177
+## v2.2.178
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
 - release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
 - release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
 - release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
 - release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
 - release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
-- release: SecurityInsight v2.2.157 - v1->v2 bridge cert-auth + PS 5.1 unattended (d0f968da)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.178 — Doc count drift fix (post-v2.2.177 report deletions)
+
+- `README.md` mermaid diagram + risk-analysis inventory row updated to **126 reports** total (was 136) / **124 actual reports** (62 Summary + 62 Detailed) after the 5-report deletion in v2.2.177.
+- `docs/risk-analysis-detection.md` catalog summary updated to **124 reports** (matches `Reports.Count` from YAML, excludes the 2 bundle definitions).
+- Closes the pre-publish gate "DocConsistency" failures from v2.2.177 ship.
 
 ---
 

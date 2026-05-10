@@ -2,7 +2,7 @@
 
 > Auto-generated from `v2.2/risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml` by `v2.2/engine/risk-analysis/tools/Build-QueriesDoc.ps1`. Do not hand-edit. Re-run the generator after consolidation. Generated 2026-05-04 for SI 2.2.0-preview.196.
 
-Catalog summary: **134 reports** across **4 security domains**. Every report runs against the `SI_*_Profile_CL` Profile tables, with bucket placeholder `__BUCKET_FILTER__` so the engine can split queries that exceed Defender's 30k-row ceiling.
+Catalog summary: **124 reports** across **4 security domains**. Every report runs against the `SI_*_Profile_CL` Profile tables, with bucket placeholder `__BUCKET_FILTER__` so the engine can split queries that exceed Defender's 30k-row ceiling.
 
 ## Reports per domain
 

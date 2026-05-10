@@ -120,6 +120,9 @@ if ($Mode -eq 'Bridged') {
     $null = $sb.AppendLine("`$global:SI_SPN_TenantId          = `$global:AzureTenantId")
     $null = $sb.AppendLine("`$global:SI_SPN_AppId             = `$global:HighPriv_Modern_ApplicationID_Azure")
     $null = $sb.AppendLine("`$global:SI_SPN_CertThumbprint    = `$global:HighPriv_Modern_CertificateThumbprint_Azure")
+    $null = $sb.AppendLine("# Client secret needed by AzLogDcrIngestPS for LA Log Ingestion endpoint;")
+    $null = $sb.AppendLine("# v1 ConnectDetails sets `$global:HighPriv_Modern_Secret_Azure. Cert above stays primary for Az/Mg/KV.")
+    $null = $sb.AppendLine("`$global:SI_SPN_Secret            = `$global:HighPriv_Modern_Secret_Azure")
     $null = $sb.AppendLine("`$global:SI_SPN_ObjectId          = (Get-AzADServicePrincipal -ApplicationId `$global:SI_SPN_AppId -ErrorAction Stop).Id")
     $null = $sb.AppendLine("# Launcher auth surface (Method 3 -- SPN + cert in local store):")
     $null = $sb.AppendLine("`$global:SpnTenantId              = `$global:AzureTenantId")
@@ -260,6 +263,10 @@ foreach ($e in 'Endpoint','Identity','Azure','PublicIp') {
     $null = $sb.AppendLine("`$global:SI_ForceFullRun_$e = `$true")
 }
 $null = $sb.AppendLine("`$global:SI_ActiveStaleDays = 30")
+$null = $sb.AppendLine("# Global force-full-run override (per-engine SI_ForceFullRun_<E> above isn't honored")
+$null = $sb.AppendLine("# by every launcher's mode-resolver; this global one always wins). Flip to `$false")
+$null = $sb.AppendLine("# once first runs are complete + cadence cache has populated.")
+$null = $sb.AppendLine("`$global:SI_ForceFullRun = `$true")
 $null = $sb.AppendLine()
 $sectionsWritten += 'EngineTuning'
 

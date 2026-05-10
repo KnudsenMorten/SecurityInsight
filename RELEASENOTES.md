@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.180
+## v2.2.181
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
 - release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
 - release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
 - release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
 - release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
 - release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
-- release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.181 — SMTP dispatch diagnostic + richer error trapping
+
+Operator-facing improvement to RA mail-dispatch logging:
+
+- **Pre-send diagnostic block** logs the EXACT params the engine is about to use (`From`, `To`, `SmtpServer`, `SmtpPort`, `UseSSL`, `SmtpUser`, `Anonymous`) — so you can confirm the SMTP relay sees what you expect (most common failure: `From` address not verified at the relay, but engine reports `OK` because SMTP 250 OK is just acceptance, not delivery).
+- **Caveat in success message** reminds that `secure mail sent` only proves SMTP relay accepted the handoff — actual delivery must be verified in your SMTP provider's activity log + the recipient's junk folder.
+- **Richer catch block** now logs `InnerException.Message`, exception type FQN, and `ScriptStackTrace` when send fails — surfaces auth/TLS failures that were previously swallowed.
+
+No behavior change to send path itself.
 
 ---
 

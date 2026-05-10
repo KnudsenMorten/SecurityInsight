@@ -7706,6 +7706,19 @@ Refusing to prompt interactively -- unattended runs would hang.
         }
     }
 
+    # Diagnostic dump -- so the operator can see EXACTLY what the engine is
+    # about to use for this send (helps when "OK" but no email arrives = the
+    # From / Server / User the engine sees != the verified-sender at the relay).
+    $__userLabel = if ($global:SecureCredentialsSMTP) { $global:SecureCredentialsSMTP.UserName } else { '<none -- anonymous>' }
+    Write-Info ("MAIL DISPATCH PARAMS:")
+    Write-Info ("   From       : '{0}'" -f $from)
+    Write-Info ("   To         : '{0}'" -f ($to -join ', '))
+    Write-Info ("   SmtpServer : '{0}'" -f $global:SmtpServer)
+    Write-Info ("   SmtpPort   : '{0}'" -f $global:SMTPPort)
+    Write-Info ("   UseSSL     : '{0}'" -f $global:SMTP_UseSSL)
+    Write-Info ("   SmtpUser   : '{0}'" -f $__userLabel)
+    Write-Info ("   Anonymous  : '{0}'" -f ([bool]$global:Mail_SendAnonymous))
+
     try {
         if ([bool]$global:Mail_SendAnonymous) {
             Write-Step ("sending mail anonymously to: {0}" -f ($to -join ', '))
@@ -7717,11 +7730,20 @@ Refusing to prompt interactively -- unattended runs would hang.
             Write-Step ("sending mail using secure credentials to: {0}" -f ($to -join ', '))
             Send-MailSecure -SmtpServer $global:SmtpServer -Port $global:SMTPPort -UseSsl $global:SMTP_UseSSL `
                 -Credential $global:SecureCredentialsSMTP -From $from -To $to -Subject $subject -BodyHtml $bodyHtml -Attachments $attachments
-            Write-Ok "secure mail sent"
+            Write-Ok "secure mail sent (NOTE: SMTP 250 OK only proves the relay accepted the message -- verify actual delivery in your SMTP provider's activity log + the recipient's junk folder)"
         }
     }
     catch {
         Write-Err2 ("mail failed: {0}" -f $_.Exception.Message)
+        if ($_.Exception.InnerException) {
+            Write-Err2 ("   inner    : {0}" -f $_.Exception.InnerException.Message)
+        }
+        if ($_.Exception.GetType().FullName) {
+            Write-Err2 ("   type     : {0}" -f $_.Exception.GetType().FullName)
+        }
+        if ($_.ScriptStackTrace) {
+            Write-Err2 ("   stack    :`n{0}" -f $_.ScriptStackTrace)
+        }
     }
 }
 else {

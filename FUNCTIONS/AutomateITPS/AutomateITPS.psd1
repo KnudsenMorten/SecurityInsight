@@ -28,8 +28,6 @@
         'Disconnect-Platform'
         'Get-PlatformConfig'
         'Set-PlatformConfig'
-        'Get-PlatformData'
-        'Set-PlatformData'
     )
     CmdletsToExport   = @()
     VariablesToExport = @()

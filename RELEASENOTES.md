@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.176
+## v2.2.177
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
 - release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
 - release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
 - RA: column-shape ALL engine-set columns (was dropping Weighted/RfCons/RfProb on first-row miss) (a918c0a3)
@@ -33,13 +34,40 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
 - release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
 - release: SecurityInsight v2.2.157 - v1->v2 bridge cert-auth + PS 5.1 unattended (d0f968da)
-- release: SecurityInsight v2.2.156 - Port-V1Platform + Test-PlatformConnect auto-detect V2Root (7a3afd4f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.177 — 5 Identity reports removed + platform-data.json deprecated (single source of truth = platform-defaults.ps1)
+
+**Identity reports removed** (10 entries — 5 base × Sum + Det):
+
+- `Identity_PrivilegedUser_BruteForceSuccess` — covered better by Defender XDR alerts
+- `Identity_PrivilegedUser_ImpossibleTravel` — covered by AAD risky sign-in detection
+- `Identity_PrivilegedUser_SignIn_HighRiskCountry` — covered by CA location policies
+- `Identity_AdminAccount_HasMailbox` — operators considered noise; phishing risk has dedicated controls
+- `Identity_Identity_NoMfa_OnTier01_Resource` — duplicate of NoMFA + Tier-0 reports
+
+Total reports: 136 → **126**.
+
+**Platform layer cleanup** (`platform-data.json` removed):
+
+- Decision: cross-cutting platform values (Smtp/LA/AzMG/AD/Mail) now live in **ONE file** — `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1`. JSON layer deleted as redundant (engines were already projecting JSON values into `$global:*` PowerShell vars; the JSON intermediate added complexity without benefit).
+- Deleted: `bootstrap\platform-data.json` (per-host file), `Provision\platform-data.sample.json`, `Get-PlatformData.ps1`, `Set-PlatformData.ps1` cmdlets, module manifest exports for both.
+- Updated: `Initialize-PlatformVm.ps1` no longer emits `platform-data.json` (just `platform-config.json`); removed `-PlatformDataPath` parameter.
+- Updated: `Convert-V1ToPlatform.ps1` migration tool no longer emits `platform-data.json`.
+- Updated: `Onboarding-V2.3-Playbook.md` Step 4 now points operators at `platform-defaults.ps1` instead of JSON.
+- Operators on existing v2.3 hosts: delete the orphan `bootstrap\platform-data.json` (no longer read by anything).
+
+**Anonymous SMTP fallback**:
+
+- `platform-defaults.ps1` SMTP block documented with `$global:SMTPUser = $null` / `$global:SMTPPassword = $null` defaults — `Send-PlatformAlert` already auto-falls-back to anonymous when KV pull misses both, so internal relays without auth work out of the box.
+- Recommended pattern: secrets in KV (`Smtp-User`, `Smtp-Password`), pulled by the platform KV-pull block; plain-text values win if set (override-friendly for testing).
 
 ---
 

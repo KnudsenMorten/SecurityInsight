@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.179
+## v2.2.180
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
 - release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
 - release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
 - release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
 - release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
 - release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
-- release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.180 — NoMFA report consolidation (4 → 1 with tier-based severity) + doc count fix
+
+**Consolidated 4 NoMFA reports into 1 tier-driven report**:
+
+- **Renamed**: `Identity_AnyUser_NoMFA` → `Identity_NoMFA` (Sum + Det)
+- **New severity logic** in the consolidated report — `SecuritySeverity` now driven by the row's `CriticalityTier`:
+  ```kql
+  | extend SecuritySeverity = case(
+      CriticalityTier == 0, "Very High",
+      CriticalityTier == 1, "High",
+      CriticalityTier == 2, "Medium",
+      "Low")
+  ```
+- **Deleted as redundant** (now subsets of `Identity_NoMFA`):
+  - `Identity_PrivilegedUser_NoMFA` (Sum + Det)
+  - `Identity_PowerUser_NoMFA` (Sum + Det)
+  - `Identity_RegularUser_NoMFA` (Sum + Det)
+
+**Net effect**: 8 NoMFA report entries → 2 entries. Total reports: 126 → **120** (118 actual + 2 bundle defs). Operator gets ONE row per NoMFA user with severity correctly reflecting WHICH tier of asset that user has access to.
+
+**Doc count drift fix** (auto-recalculated from YAML per the standing rule):
+
+- README mermaid diagram: 126 → **120**
+- README inventory row: 124 reports / 62+62 → **118 / 59 + 59**
+- `docs/risk-analysis-detection.md` catalog summary: 124 → **118**
+- Closes pre-publish gate `DocConsistency` failures.
 
 ---
 

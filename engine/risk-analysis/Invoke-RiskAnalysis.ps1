@@ -2990,6 +2990,42 @@ function Calculate-RiskScore {
         0
     }
 
+    # ---- ONE safe-math helper for ALL profilers ----------------------------
+    # Single source of truth for: RiskConsequenceScore = consBase + rfCons,
+    # RiskProbabilityScore = probBase + rfProb, RiskScoreTotal = product,
+    # RiskScoreTotal_Weighted = product * weight/100. Defensive against null
+    # inputs (cast via _toDouble or default 0). Sets ALL 4 stamps atomically
+    # so rows can never be in a partial state. Called ONCE per row, after
+    # token enrichment has updated rfCons/rfProb. NO other code path stamps
+    # these columns.
+    function _setScores {
+        param(
+            [Parameter(Mandatory)] $tmp,
+            $ConsBase, $ProbBase, $RfCons, $RfProb, $WeightPct
+        )
+        # Normalize every input to a usable number. PS5.1 [double] cast on $null
+        # returns 0; on a string parses InvariantCulture. Belt-and-suspenders.
+        $cb = if ($null -eq $ConsBase) { 0.0 } elseif ($ConsBase -is [double]) { [double]$ConsBase } else { try { [double]$ConsBase } catch { 0.0 } }
+        $pb = if ($null -eq $ProbBase) { 0.0 } elseif ($ProbBase -is [double]) { [double]$ProbBase } else { try { [double]$ProbBase } catch { 0.0 } }
+        $rc = if ($null -eq $RfCons)   { 0.0 } else { try { [double]$RfCons } catch { 0.0 } }
+        $rp = if ($null -eq $RfProb)   { 0.0 } else { try { [double]$RfProb } catch { 0.0 } }
+        $wp = if ($null -eq $WeightPct -or [double]$WeightPct -le 0) { 100.0 } else { [double]$WeightPct }
+
+        $consAdj  = $cb + $rc
+        $probAdj  = $pb + $rp
+        $risk     = $consAdj * $probAdj
+        $weighted = $risk * $wp / 100.0
+
+        # HARDCODED canonical column names. Per-report YAML override fields
+        # (RiskConsequenceScoreOutputName etc.) are LEGACY -- always write to
+        # the same canonical columns so every domain (Endpoint / Identity /
+        # Azure / PublicIP) gets consistent column shape in Excel.
+        $tmp['RiskConsequenceScore']    = [double]$consAdj
+        $tmp['RiskProbabilityScore']    = [double]$probAdj
+        $tmp['RiskScoreTotal']          = [double]$risk
+        $tmp['RiskScoreTotal_Weighted'] = [int][math]::Floor([double]$weighted)
+    }
+
     function _toDouble([object]$v) {
         if ($null -eq $v) { return 0.0 }
         if ($v -is [double]) { return [double]$v }
@@ -3178,14 +3214,11 @@ function Calculate-RiskScore {
         $tmp = [ordered]@{}
         foreach ($p in $r.PSObject.Properties) { $tmp[$p.Name] = $p.Value }
 
-        $tmp[$SecurityDomainInputName]        = $domainValue
-        $tmp[$RiskConsequenceScoreOutputName] = [double]$consAdj
-        $tmp[$RiskProbabilityScoreOutputName] = [double]$probAdj
-        $tmp[$RiskScoreOutputName]            = [double]$risk
-        # Floor RiskScoreTotal_Weighted to int -- avoids da-DK / locale-dependent decimal
-        # comma showing in Excel ("123,4" vs "123.4") and matches the basis-100 multiplier
-        # convention where fractional cents add no business value.
-        $tmp['RiskScoreTotal_Weighted']       = [int][math]::Floor([double]$riskWeighted)
+        $tmp[$SecurityDomainInputName] = $domainValue
+        # Score stamping deferred to ONE call to _setScores after token enrichment
+        # below -- so per-report YAMLs that don't project RiskFactor_*_Detailed
+        # inline (Identity reports etc.) still get the post-enrichment counts
+        # reflected in the final score. NO other path stamps these columns.
 
         # Force-cast known numeric columns from string -> double using InvariantCulture.
         # Az.OperationalInsightsQuery returns every cell as string; Excel + ImportExcel
@@ -3262,34 +3295,46 @@ function Calculate-RiskScore {
         if ($isExch -eq $true -or $isExch -eq 1 -or [string]$isExch -eq 'true') { [void]$consTokens.Add('IsExchangeServer') }
         $isExo = _rowVal @('IsExchangeOnlineMailbox','EG_IsExchangeOnlineMailbox')
         if ($isExo -eq $true -or $isExo -eq 1 -or [string]$isExo -eq 'true') { [void]$consTokens.Add('IsExchangeOnlineMailbox') }
-        # Re-stamp the columns + recount the numeric pair (lock-step).
+        # Re-stamp the *_Detailed columns when post-enrichment found tokens.
         if ($probTokens.Count -gt 0) {
             $tmp['RiskFactor_Probability_Detailed'] = ($probTokens -join ';')
-            $tmp['RiskFactor_Probability'] = $probTokens.Count
         }
         if ($consTokens.Count -gt 0) {
             $tmp['RiskFactor_Consequence_Detailed'] = ($consTokens -join ';')
-            $tmp['RiskFactor_Consequence'] = $consTokens.Count
             $rfConsDetailedRaw = ($consTokens -join ';')   # downstream re-stamp uses this
-            $rfCons = $consTokens.Count
         }
+        # CANONICAL RULE: RiskFactor_{Consequence,Probability} is ALWAYS the count
+        # of ;-separated tokens in the *_Detailed column, otherwise 0. Engine
+        # ignores any YAML-emitted literal value (legacy `| extend RiskFactor_X = N`
+        # patterns in KQL) -- the count of tokens is the source of truth so the
+        # displayed number always matches the displayed token list.
+        $consDetailedNow = [string]$tmp['RiskFactor_Consequence_Detailed']
+        if ([string]::IsNullOrWhiteSpace($consDetailedNow)) {
+            $rfCons = 0
+        } else {
+            $rfCons = @($consDetailedNow -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+        }
+        $tmp['RiskFactor_Consequence'] = [int]$rfCons
 
-        # ---- BUGFIX 2026-05-10: recompute scores AFTER token enrichment ----
-        # The pre-enrichment computation at lines 3156-3158 / stamps at lines 3177-3179
-        # uses rfCons/rfProb counts BEFORE token enrichment fired. For Identity reports
-        # (and any report whose KQL doesn't project RiskFactor_Consequence_Detailed /
-        # RiskFactor_Probability_Detailed inline), enrichment populates the counts but
-        # the scores stayed frozen at the pre-enrichment 0 -> RiskScoreTotal=0 +
-        # RiskConsequenceScore/RiskProbabilityScore visually empty in Excel.
-        # Re-derive from the post-enrichment counts and overwrite the stamps.
-        $consAdj = ([double]$consBase.Score) + ([double]$rfCons)
-        $probAdj = ([double]$probBase.Score) + ([double]$rfProb)
-        $risk    = $consAdj * $probAdj
-        $riskWeighted = [double]$risk * [double]$rfWeightPct / 100.0
-        $tmp[$RiskConsequenceScoreOutputName] = [double]$consAdj
-        $tmp[$RiskProbabilityScoreOutputName] = [double]$probAdj
-        $tmp[$RiskScoreOutputName]            = [double]$risk
-        $tmp['RiskScoreTotal_Weighted']       = [int][math]::Floor([double]$riskWeighted)
+        $probDetailedNow = [string]$tmp['RiskFactor_Probability_Detailed']
+        if ([string]::IsNullOrWhiteSpace($probDetailedNow)) {
+            $rfProb = 0
+        } else {
+            $rfProb = @($probDetailedNow -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+        }
+        $tmp['RiskFactor_Probability'] = [int]$rfProb
+
+        # ---- ONE safe-math call -- stamps all 4 score columns atomically ----
+        # Uses post-enrichment rfCons/rfProb (lock-step with displayed
+        # RiskFactor_Consequence/Probability counts). Replaces the v2.2 dual-write
+        # path. Same call works for Endpoint / Identity / Azure / PublicIP --
+        # there is NO other code path that stamps these columns.
+        _setScores -tmp $tmp `
+            -ConsBase     $consBase.Score `
+            -ProbBase     $probBase.Score `
+            -RfCons       $rfCons `
+            -RfProb       $rfProb `
+            -WeightPct    $rfWeightPct
 
         # Provenance: stamp ReportName into every row so operators can hunt back
         # which report produced which finding. Auto-added (no need to list in
@@ -3445,10 +3490,12 @@ function Calculate-RiskScore {
 
     Write-Progress -Id 2 -Activity "Calculating Risk Scores" -Completed
 
-    # per-report aggregates + ImpactedAssets as ARRAY.
-    #   TotalIssues     = total rows in this report                          (int, scalar)
-    #   AssetCount      = distinct ConfigurationId in report                 (int, scalar)
-    #   ImpactedAssets  = distinct AssetName(s) across all rows in report    (array of string)
+    # per-report aggregates emitted under canonical OutputPropertyOrder names:
+    #   ImpactedAssetCount        = distinct ConfigurationId in report           (int, scalar)
+    #   UniqueIssues              = distinct ConfigurationName count             (int, scalar)
+    #   TotalIssuesImpactedAssets = total finding rows in report                 (int, scalar)
+    #   ImpactedAssetsList        = distinct AssetName(s) across all rows         (array of string)
+    #   IssueList                 = distinct ConfigurationName(s) across all rows (array of string)
     # Per user spec:
     #   - LA sink: emit as dynamic (JSON array of names)
     #   - Excel sink: flatten to comma-joined string downstream
@@ -3491,48 +3538,63 @@ function Calculate-RiskScore {
         $impactedAssets = @($assetNames | Sort-Object -Unique)
         $issuesDetails  = @($issueRefs  | Sort-Object -Unique)
 
+        # Aggregate counters apply ONLY to Summary reports (whole-report scalars
+        # don't make sense per-asset in Detailed reports). ReportName suffix
+        # `_Summary` is the canonical signal. Detailed reports leave these
+        # columns alone -- the YAML projects per-asset variants if needed.
+        $isSummaryReport = $ReportName -and ($ReportName.EndsWith('_Summary', [StringComparison]::OrdinalIgnoreCase))
+        $uniqueIssues   = $issueRefs.Count
+
         $reordered = New-Object System.Collections.Generic.List[object]
         foreach ($row in $out) {
             $tmp2 = [ordered]@{}
             foreach ($p in $row.PSObject.Properties) { $tmp2[$p.Name] = $p.Value }
-            # Preserve YAML-computed aggregates (Summary reports often summarize in KQL with
-            # the correct DisplayName/UserPrincipalName coalesce that the engine cannot
-            # reconstruct from post-summarize columns). Only inject engine values when YAML
-            # did not provide them.
-            if (-not $tmp2.Contains('AssetCount') -or [string]::IsNullOrWhiteSpace([string]$tmp2['AssetCount'])) {
-                $tmp2['AssetCount'] = [int]$assetCount
-            }
-            if (-not $tmp2.Contains('TotalIssues') -or [string]::IsNullOrWhiteSpace([string]$tmp2['TotalIssues'])) {
-                $tmp2['TotalIssues'] = [int]$totalIssues
-            }
-            $existingImpacted = $null
-            if ($tmp2.Contains('ImpactedAssetsList'))   { $existingImpacted = $tmp2['ImpactedAssetsList'] }
-            elseif ($tmp2.Contains('ImpactedAssets'))   { $existingImpacted = $tmp2['ImpactedAssets'] }
-            $hasYamlImpacted = $false
-            if ($existingImpacted -is [System.Collections.IEnumerable] -and -not ($existingImpacted -is [string])) {
-                foreach ($x in $existingImpacted) {
-                    if (-not [string]::IsNullOrWhiteSpace([string]$x)) { $hasYamlImpacted = $true; break }
+            # Preserve YAML-computed aggregates (Summary KQL often summarizes with the
+            # correct DisplayName/UserPrincipalName coalesce that engine cannot
+            # reconstruct from post-summarize columns). Only inject engine values when
+            # the YAML did not provide them, and ONLY for Summary reports.
+            if ($isSummaryReport) {
+                if (-not $tmp2.Contains('ImpactedAssetCount') -or [string]::IsNullOrWhiteSpace([string]$tmp2['ImpactedAssetCount'])) {
+                    $tmp2['ImpactedAssetCount'] = [int]$assetCount
                 }
-            } elseif (-not [string]::IsNullOrWhiteSpace([string]$existingImpacted)) {
-                $hasYamlImpacted = $true
-            }
-            if ($hasYamlImpacted) {
-                # YAML produces a semicolon-joined string via strcat_array (Identity/most
-                # reports) or a dynamic array via make_set (Endpoint reports). Normalize
-                # both to an ordered/unique array so LA gets dynamic and Excel gets a
-                # clean cell -- and unify both YAML names ('ImpactedAssets' from Identity
-                # KQL + 'ImpactedAssetsList' from Endpoint KQL) on the canonical
-                # 'ImpactedAssetsList' column so Excel renders one populated column for
-                # every report row instead of two half-filled columns.
-                if ($existingImpacted -is [string]) {
-                    $existingImpacted = @($existingImpacted -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+                if (-not $tmp2.Contains('UniqueIssues') -or [string]::IsNullOrWhiteSpace([string]$tmp2['UniqueIssues'])) {
+                    $tmp2['UniqueIssues'] = [int]$uniqueIssues
                 }
-            } else {
-                $existingImpacted = $impactedAssets
+                if (-not $tmp2.Contains('TotalIssuesImpactedAssets') -or [string]::IsNullOrWhiteSpace([string]$tmp2['TotalIssuesImpactedAssets'])) {
+                    $tmp2['TotalIssuesImpactedAssets'] = [int]$totalIssues
+                }
             }
-            $tmp2['ImpactedAssetsList'] = $existingImpacted
-            if ($tmp2.Contains('ImpactedAssets')) { $tmp2.Remove('ImpactedAssets') }
-            $tmp2['Issues_Details'] = $issuesDetails    # [string[]] -- ditto
+            # ImpactedAssetsList + IssueList: Summary-only aggregate lists. YAML
+            # may project them already (per-summary-group); otherwise engine fills
+            # with whole-report aggregates. For Detailed reports, leave alone --
+            # YAML projects per-asset variants if applicable.
+            if ($isSummaryReport) {
+                $existingImpacted = $null
+                if ($tmp2.Contains('ImpactedAssetsList'))   { $existingImpacted = $tmp2['ImpactedAssetsList'] }
+                elseif ($tmp2.Contains('ImpactedAssets'))   { $existingImpacted = $tmp2['ImpactedAssets'] }
+                $hasYamlImpacted = $false
+                if ($existingImpacted -is [System.Collections.IEnumerable] -and -not ($existingImpacted -is [string])) {
+                    foreach ($x in $existingImpacted) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$x)) { $hasYamlImpacted = $true; break }
+                    }
+                } elseif (-not [string]::IsNullOrWhiteSpace([string]$existingImpacted)) {
+                    $hasYamlImpacted = $true
+                }
+                if ($hasYamlImpacted) {
+                    # YAML projects either semicolon-joined string (strcat_array) or
+                    # dynamic array (make_set). Normalize to ordered/unique array.
+                    if ($existingImpacted -is [string]) {
+                        $existingImpacted = @($existingImpacted -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+                    }
+                } else {
+                    $existingImpacted = $impactedAssets
+                }
+                $tmp2['ImpactedAssetsList'] = $existingImpacted
+                if ($tmp2.Contains('ImpactedAssets')) { $tmp2.Remove('ImpactedAssets') }
+                if (-not $tmp2.Contains('IssueList') -or $null -eq $tmp2['IssueList']) {
+                    $tmp2['IssueList'] = $issuesDetails
+                }
+            }
 
             # Guarantee cross-cutting columns exist on every report (empty if the
             # per-report YAML didn't populate them) so downstream readers / dashboards
@@ -5954,9 +6016,26 @@ if ($ResultAll.Count -eq 0) {
         }
     } finally { if ($__sha) { $__sha.Dispose() } }
 
-    # Shape columns. AssetDetectedInReportName is auto-added so every Excel row
-    # carries the source ReportName (operator hunt-back column).
-    $ComputedCols = @($RiskConsequenceScoreOutputName, $RiskProbabilityScoreOutputName, $RiskScoreOutputName, 'AssetDetectedInReportName')
+    # Shape columns. ALL engine-set columns added to ComputedCols so they're
+    # guaranteed in DesiredColumns regardless of what the first $RiskScoreArray
+    # row happens to expose via Get-Member. Without this, reports whose first
+    # row lacks (e.g.) RiskScoreTotal_Weighted as a note-property silently lose
+    # the column for the WHOLE Excel sheet (the per-row write at _setScores
+    # succeeds but the Select-Object filter drops it). AssetDetectedInReportName
+    # is auto-added so every row carries the source ReportName (hunt-back).
+    $ComputedCols = @(
+        $RiskConsequenceScoreOutputName,
+        $RiskProbabilityScoreOutputName,
+        $RiskScoreOutputName,
+        'RiskScoreTotal_Weighted',
+        'RiskScore_Weight_Factor',
+        'RiskScore_Weight_Detailed',
+        'RiskFactor_Consequence',
+        'RiskFactor_Consequence_Detailed',
+        'RiskFactor_Probability',
+        'RiskFactor_Probability_Detailed',
+        'AssetDetectedInReportName'
+    )
     $TraceCols    = @('CollectionTime', 'SolutionVersion', 'TraceName', 'TraceID')    # always the LAST four columns -- not in any YAML OutputPropertyOrder on purpose
 
     $DesiredColumns = @()

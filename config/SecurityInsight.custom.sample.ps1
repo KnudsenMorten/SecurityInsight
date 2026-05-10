@@ -254,7 +254,9 @@ $global:SI_StorageKey     = '<storage-account-primary-key-base64>'
 # $global:SI_EnableSignInEnrich = $true
 # $global:SI_SignInBatchSize    = 100
 # $global:SI_SignInEnrichMax    = 10000
-# $global:SI_SignInLookbackDays = 30
+# $global:SI_SignInLookbackDays = 7
+# ^ default 7d. Drives all 3 sign-in/logon queries: EntraIdSignInEvents (per-user
+#   enrichment) + DeviceLogonEvents (per-user devices + per-device primary users).
 
 # Switch from EG bucket-paging to single-pass when bucket count exceeds N.
 # Default 30000 (matches Defender's per-query row ceiling).

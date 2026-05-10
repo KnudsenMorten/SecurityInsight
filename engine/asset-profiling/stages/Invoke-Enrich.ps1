@@ -412,14 +412,15 @@ SI_Identity_Profile_CL
 function Get-SIDeviceLogonsByUserObjectId {
     <#
         For every user ObjectId, returns the set of devices they signed into
-        in the last 30 days (interactive + remote interactive only -- noisy
-        network/service logons excluded).
+        within $global:SI_SignInLookbackDays (default 7d, interactive +
+        remote interactive only -- noisy network/service logons excluded).
     #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string[]]$UserObjectIds)
 
     if ($UserObjectIds.Count -eq 0) { return @{} }
     $idList = ($UserObjectIds | ForEach-Object { "'$($_.ToLowerInvariant())'" }) -join ','
+    $lookback = if ($global:SI_SignInLookbackDays) { [int]$global:SI_SignInLookbackDays } else { 7 }
     # DeviceLogonEvents in Defender XDR Adv Hunting has NO
     # AccountObjectId column. Join with IdentityInfo to translate ObjectId <->
     # SID before filtering DeviceLogonEvents.
@@ -433,7 +434,7 @@ let users = IdentityInfo
     | extend AccountSid = coalesce(column_ifexists("AccountSid", ""), column_ifexists("AccountSID", ""))
     | project AccountObjectId, AccountSid;
 DeviceLogonEvents
-| where Timestamp > ago(30d)
+| where Timestamp > ago(${lookback}d)
 | where LogonType in ('Interactive','RemoteInteractive')
 | where AccountSid != ''
 | join kind=inner users on AccountSid
@@ -725,7 +726,10 @@ function Get-SISignInsByUserObjectId {
         scaling + cascade hardening for very large tenants.
           - Escape hatch: $global:SI_EnableSignInEnrich = $false  -> skip entirely
             (Graph signInActivity still gives LastSignIn separately).
-          - Configurable lookback: $global:SI_SignInLookbackDays (default 30).
+          - Configurable lookback: $global:SI_SignInLookbackDays (default 7).
+            Same global also drives the two DeviceLogonEvents queries
+            (Get-SIDeviceLogonsByUserObjectId, Get-SILogonsByDeviceName) so
+            all sign-in/logon enrichment uses one consistent window.
           - IN-clause batched (default 200 IDs/batch via $global:SI_SignInBatchSize)
             to dodge per-query memory + 8MB body limits.
           - Project early so dcount/make_set don't carry full ~50-col rows.
@@ -879,6 +883,7 @@ function Get-SILogonsByDeviceName {
         }
     }
     $nameList = (@($variants) | ForEach-Object { "'$($_ -replace '''', '''''')'" }) -join ','
+    $lookback = if ($global:SI_SignInLookbackDays) { [int]$global:SI_SignInLookbackDays } else { 7 }
     # Interactive logon types ONLY (Interactive / RemoteInteractive /
     # CachedInteractive). Non-interactive logons (Network, Service, Batch,
     # Unlock, NetworkClearText, NewCredentials) don't represent a user
@@ -887,7 +892,7 @@ function Get-SILogonsByDeviceName {
     # device tier classification.
     $kql = @"
 DeviceLogonEvents
-| where Timestamp > ago(30d)
+| where Timestamp > ago(${lookback}d)
 | where tolower(DeviceName) in ($nameList)
 | where LogonType in ('Interactive','RemoteInteractive','CachedInteractive')
 | where ActionType == 'LogonSuccess'

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.170
+## v2.2.171
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
 - release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
 - release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
 - release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.144 - launch pre-flight surfaces az CLI status (076189c1)
 - release: SecurityInsight v2.2.143 - Phase 0 pre-flight: az CLI + login check before Phase 1 (a75f39f3)
 - release: SecurityInsight v2.2.142 - Step 8: Setup button to top + 'Apply' -> 'Setup Infrastructure' (9ebac462)
-- release: SecurityInsight v2.2.141 - wizard Phase 5 provisions Container Apps Job runtime (017afc75)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.171 — `Write-SICustomConfig.ps1`: drop `SI-StorageKey` KV pull (RBAC-only storage)
+
+Storage is hardcoded `SI_UseStorageOAuth=$true` (section 3) — SPN authenticates via OAuth using Storage Blob/Table/Queue Data Contributor RBAC. The `SI-StorageKey` was dead weight that triggered KV pull errors when the secret didn't exist (most customers don't seed it because they don't need it).
+
+Generator now emits only the 2 KV pulls that matter (`SI-Shodan-ApiKey`, `OpenAI-ApiKey`). Existing customer custom.ps1 files won't auto-update — re-run Setup-Unattended OR manually delete the `SI-StorageKey` line from section 11.
 
 ---
 

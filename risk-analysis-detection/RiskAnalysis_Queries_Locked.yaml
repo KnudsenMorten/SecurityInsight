@@ -1,4 +1,4 @@
-Reports:
+﻿Reports:
     - ReportName: Device_Missing_CVEs_Summary
       ReportPurpose: This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes
         them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most
@@ -33,9 +33,10 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -52,6 +53,7 @@ Reports:
       - ImpactedAssetsList
       - IssueList
       - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -304,32 +306,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
-      - AssetType
       - AssetName
       - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - HasExploit
-      - IsExploitVerified
-      - IsInExploitKit
-      - IsZeroDay
-      - CVELastModified
-      - CVSSDesc
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -576,26 +576,27 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - MITRE_Tactics
-      - MITRE_Techniques
-      - ComplianceTags
       - ImpactedAssetCount
       - UniqueIssues
       - TotalIssuesImpactedAssets
       - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -835,40 +836,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
-      - AssetType
       - AssetName
       - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - MITRE_Tactics
-      - MITRE_Techniques
-      - ComplianceTags
-      - OSPlatform
-      - IsCompliant
-      - IsApplicable
-      - RecommendedAction
-      - RiskDescription
-      - ConfigurationDescription
-      - RemediationOptions
-      - Benchmarks
-      - CategoryDescription
-      - SubCategoryDescription
-      - SecuritySeverityDescription
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -1118,14 +1109,15 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
@@ -1135,6 +1127,9 @@ Reports:
       - UniqueIssues
       - TotalIssuesImpactedAssets
       - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -1365,28 +1360,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
-      - AssetName
-      - AzureResourceId
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - EG_IsCustomerFacing
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -1597,22 +1594,27 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -2485,33 +2487,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
-      - AssetName
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AttackPath
-      - AttackPathDetailed
-      - AttackPathPriority
-      - AttackPathPriorityScore
-      - TierEscalation
-      - LateralMovementType
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -2865,7 +2864,7 @@ Reports:
                 FinalTargetLabel      = TargetNodeLabel
         ) on $left.IntermediateIdentityId == $right.Hop2_SourceIdentityId
 
-        // Optional avoid ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œGitHub sourceÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â == ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œtarget assetÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â scenarios (usually not needed but safe)
+        // Optional avoid ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“GitHub sourceÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â == ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“target assetÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â scenarios (usually not needed but safe)
         | where FirstGitHubSource != FinalTargetId
 
         // Step 6  De-duplicate to stable grain
@@ -3135,23 +3134,27 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -3960,32 +3963,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
-      - AssetName
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AttackPath
-      - AttackPathDetailed
-      - AttackPathPriority
-      - AttackPathPriorityScore
-      - LateralMovementType
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -4602,23 +4603,27 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -5345,33 +5350,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
-      - AssetName
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AttackPath
-      - AttackPathDetailed
-      - AttackPathPriority
-      - AttackPathPriorityScore
-      - TierEscalation
-      - LateralMovementType
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -5943,23 +5945,27 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -6643,33 +6649,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
-      - AssetName
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AttackPath
-      - AttackPathDetailed
-      - AttackPathPriority
-      - AttackPathPriorityScore
-      - TierEscalation
-      - LateralMovementType
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -7295,23 +7298,27 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -7927,23 +7934,27 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -8605,33 +8616,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
-      - AssetName
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AttackPath
-      - AttackPathDetailed
-      - AttackPathPriority
-      - AttackPathPriorityScore
-      - TierEscalation
-      - LateralMovementType
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -9204,23 +9212,23 @@ Reports:
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -9883,13 +9891,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -9900,9 +9909,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -10048,22 +10061,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - EntraRoles_Permanent
-      - MfaMethods
-      - LastSignInDateTime
-      - LastSignInDays
-      - CreatedDays
-      - HasPermanentPrivilegedRole
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -10071,6 +10079,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -10182,13 +10193,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -10199,9 +10211,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -10327,13 +10343,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -10344,9 +10361,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -10477,13 +10498,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -10494,9 +10516,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -10622,13 +10648,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -10639,9 +10666,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -10769,24 +10800,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - LastSignInDateTime
-      - LastSignInDays
-      - LastInteractiveSignInDays
-      - LastNonInteractiveSignInDays
-      - CreatedDays
-      - Tier
-      - IsPrivileged
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
       - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -10794,6 +10818,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -10907,13 +10934,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -10924,9 +10952,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -11048,13 +11080,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -11065,9 +11098,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -11191,25 +11228,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - LastSignInDateTime
-      - LastSignInDays
-      - CreatedDays
-      - Tier
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
       - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -11217,6 +11246,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -11324,13 +11356,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -11341,9 +11374,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -11470,13 +11507,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -11487,9 +11525,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -11611,13 +11653,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -11628,9 +11671,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -11748,13 +11795,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -11765,9 +11813,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -11887,13 +11939,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -11904,9 +11957,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -12025,13 +12082,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -12042,9 +12100,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -12165,13 +12227,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -12182,9 +12245,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -12304,13 +12371,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -12321,9 +12389,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -12442,13 +12514,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -12459,9 +12532,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -12586,13 +12663,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -12603,9 +12681,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -12730,13 +12812,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -12747,9 +12830,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -12905,22 +12992,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - NonTrustedSigninCount
-      - LastNonTrustedSignin
-      - UniqueIPs
-      - SampleIPs
-      - Countries
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
       - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -12928,6 +13010,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -13064,13 +13149,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -13081,9 +13167,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -13236,13 +13326,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -13253,9 +13344,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -13405,13 +13500,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -13422,9 +13518,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -13566,13 +13666,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -13583,9 +13684,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -13731,13 +13836,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -13748,9 +13854,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -13887,13 +13997,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -13904,9 +14015,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -14033,13 +14148,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -14050,9 +14166,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -14177,13 +14297,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -14194,9 +14315,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -14322,13 +14447,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -14339,9 +14465,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -14469,13 +14599,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -14486,9 +14617,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -14609,13 +14744,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -14626,9 +14762,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -14752,13 +14892,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -14769,9 +14910,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -14923,13 +15068,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -14940,9 +15086,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -15068,13 +15218,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -15085,9 +15236,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -15215,20 +15370,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - Mail
-      - PrimaryEntityId
-      - Tier
-      - EntraRoles_Permanent
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - LastSignInDays
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
       - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -15236,6 +15388,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -15341,13 +15496,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -15358,9 +15514,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -15483,13 +15643,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -15500,9 +15661,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -15626,13 +15791,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -15643,9 +15809,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -15739,13 +15909,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -15756,9 +15927,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -15883,13 +16058,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -15900,9 +16076,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -16028,13 +16208,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -16045,9 +16226,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -16171,13 +16356,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -16188,9 +16374,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -16312,13 +16502,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -16329,9 +16520,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -16473,21 +16668,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - UserDisplayName
-      - UserUPN
-      - UserObjectId
-      - Tier
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - DeviceName
-      - MaxCvssScore
-      - IsInternetFacing
-      - DeviceRiskScore
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
       - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -16495,6 +16686,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -16622,13 +16816,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -16639,9 +16834,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -16779,13 +16978,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -16796,9 +16996,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -16937,13 +17141,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -16954,9 +17159,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -17099,27 +17308,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -17127,6 +17326,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -17275,27 +17477,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -17303,6 +17495,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -17452,21 +17647,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - UserDisplayName
-      - UserUPN
-      - UserObjectId
-      - Tier
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - DeviceName
-      - DeviceRiskScore
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -17474,6 +17665,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -17604,21 +17798,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - UserDisplayName
-      - UserUPN
-      - UserObjectId
-      - Tier
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - DeviceName
-      - DeviceRiskScore
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -17626,6 +17816,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -17757,27 +17950,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -17785,6 +17968,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -17930,25 +18116,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - JobTitle
-      - Tier
-      - OnPremisesSyncEnabled
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -17956,6 +18134,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -18080,24 +18261,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - JobTitle
-      - Tier
-      - OnPremisesSyncEnabled
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -18105,6 +18279,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -18228,27 +18405,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -18256,6 +18423,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -18406,20 +18576,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - LastSignInDays
-      - EntraRoles_Permanent
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -18427,6 +18594,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -18538,27 +18708,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -18566,6 +18726,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -18714,21 +18877,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - UserDisplayName
-      - UserUPN
-      - UserObjectId
-      - Tier
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - DeviceName
-      - DeviceRiskScore
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -18736,6 +18895,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -18866,27 +19028,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -18894,6 +19046,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -19039,27 +19194,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -19067,6 +19212,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -19218,27 +19366,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -19246,6 +19384,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -19397,29 +19538,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -19427,6 +19556,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -19574,27 +19706,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -19602,6 +19724,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -19747,27 +19872,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -19775,6 +19890,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -19923,27 +20041,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -19951,6 +20059,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -20100,27 +20211,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -20128,6 +20229,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -20273,27 +20377,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -20301,6 +20395,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -20444,20 +20541,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - LastSignInDays
-      - EntraRoles_Permanent
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -20465,6 +20559,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -20577,20 +20674,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - LastSignInDays
-      - EntraRoles_Permanent
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -20598,6 +20692,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -20710,20 +20807,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - LastSignInDays
-      - EntraRoles_Permanent
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -20731,6 +20825,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -20844,27 +20941,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -20872,6 +20959,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -21017,29 +21107,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -21047,6 +21125,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -21199,29 +21280,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -21229,6 +21298,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -21384,29 +21456,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -21414,6 +21474,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -21565,29 +21628,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -21595,6 +21646,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -21744,29 +21798,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -21774,6 +21816,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -21923,29 +21968,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -21953,6 +21986,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -22106,29 +22142,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -22136,6 +22160,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -22290,29 +22317,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - AppId
-      - PrimaryEntityId
-      - ObjectType
-      - ServicePrincipalType
-      - Tier
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraAppPermissions_Application
-      - EntraRoles_Permanent
-      - CredentialExpiryDays
-      - IsOrphanSPN
-      - IsManagedIdentity
-      - IsMultiTenant
-      - PublisherVerified
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -22320,6 +22335,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -22474,20 +22492,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - LastSignInDays
-      - EntraRoles_Permanent
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -22495,6 +22510,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -22609,20 +22627,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Tier
-      - MfaIsRegistered
-      - HasPermanentPrivilegedRole
-      - LastSignInDays
-      - EntraRoles_Permanent
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -22630,6 +22645,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -22744,27 +22762,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -22772,6 +22780,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -22918,27 +22929,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -22946,6 +22947,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23092,27 +23096,17 @@ Reports:
       - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - DisplayName
-      - Upn
-      - PrimaryEntityId
-      - Department
-      - Tier
-      - IsPrivileged
-      - HasPermanentPrivilegedRole
-      - IsPrivilegedEligible
-      - MfaIsRegistered
-      - AccountEnabled
-      - LastSignInDays
-      - LastSignInDateTime
-      - CreatedDays
-      - EntraRoles_Permanent
-      - NestedGroups
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
@@ -23120,6 +23114,9 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23217,33 +23214,45 @@ Reports:
       CriticalityTierLevelScope:
       - Critical - tier 0
       - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
       SecuritySeverityScope:
       - Very High
       - High
       - Medium-High
       - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
+      - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
+      - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - RiskFactor_Consequence
-      - RiskFactor_Probability
-      - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23324,33 +23333,44 @@ Reports:
       CriticalityTierLevelScope:
       - Critical - tier 0
       - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
       SecuritySeverityScope:
       - Very High
       - High
       - Medium-High
       - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - AssetName
-      - AssetEngine
-      - IpAddress
-      - Port
+      - RiskFactor_Consequence_Detailed
+      - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
+      - RiskScoreTotal_Weighted
+      - cmdbId
       - cmdbName
       - cmdbCriticality
-      - Country
-      - Org
-      - ISP
-      - Hostnames
-      - LastShodanUpdate
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23413,31 +23433,45 @@ Reports:
       CriticalityTierLevelScope:
       - Critical - tier 0
       - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
+      - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
+      - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
+      - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - RiskFactor_Consequence
-      - RiskFactor_Probability
-      - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
-      - RiskScore_Weight_Detailed
-      - RiskScore_Weight_Factor
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23511,30 +23545,44 @@ Reports:
       CriticalityTierLevelScope:
       - Critical - tier 0
       - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
+      - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
       - AssetId
       - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - AssetName
-      - AssetEngine
-      - IpAddress
-      - Cve
+      - RiskFactor_Consequence_Detailed
+      - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
+      - RiskScoreTotal_Weighted
+      - cmdbId
       - cmdbName
       - cmdbCriticality
-      - Country
-      - Org
-      - ISP
-      - LastShodanUpdate
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23592,38 +23640,45 @@ Reports:
       CriticalityTierLevelScope:
       - Critical - tier 0
       - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
       SecuritySeverityScope:
       - Very High
       - High
       - Medium-High
+      - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - RiskFactor_Consequence
       - RiskFactor_Consequence_Detailed
-      - RiskFactor_Probability
+      - RiskFactor_Consequence
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
-      - RiskScore_Weight_Factor
       - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - MsCriticalityLevel
-      - MachineRiskState
       - ImpactedAssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23697,41 +23752,44 @@ Reports:
       CriticalityTierLevelScope:
       - Critical - tier 0
       - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
       SecuritySeverityScope:
       - Very High
       - High
       - Medium-High
+      - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
       - Subcategory
       - ConfigurationName
       - ConfigurationId
-      - AssetType
       - AssetName
       - AssetId
+      - AssetType
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
-      - RiskFactor_Consequence
       - RiskFactor_Consequence_Detailed
-      - RiskFactor_Probability
+      - RiskFactor_Consequence
       - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
-      - RiskScore_Weight_Factor
       - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - MsCriticalityLevel
-      - MachineRiskState
-      - HasInternetExposureSignal
-      - IsProductionEnvironment
-      - LastSeen
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -23795,6 +23853,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -23803,26 +23862,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - EmployeeLeaveDateTime
-      - DaysSinceLeave
-      - MoreInfoUrl
-      - Links
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -23869,6 +23932,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact=strcat("User departed ", DaysSinceLeave, " days ago, account still enabled"),
@@ -23895,6 +23963,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -23903,25 +23972,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - DisabledPrivilegedUser
-      - MoreInfoUrl
-      - Links
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -23963,6 +24037,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="Disabled account still has privileged role -- re-enable resurrects access",
@@ -23991,6 +24070,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -23999,22 +24079,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24056,6 +24144,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="Disabled account still has privileged group / role -- re-enable resurrects privilege", SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -24081,6 +24174,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24089,25 +24183,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - EntraRoles_Permanent
-      - MoreInfoUrl
-      - Links
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24151,6 +24250,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="External guest holds Entra role assignment",
@@ -24177,6 +24281,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24185,25 +24290,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - LinkedAzureResourceId
-      - MoreInfoUrl
-      - Links
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24212,6 +24322,11 @@ Reports:
         let _tier01Resources =
             SI_Azure_Profile_CL
             | where CollectionTime == _ta
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
             | project LinkedAzureResourceId=AzureResourceId, ResourceTier=Tier;
         SI_Identity_Profile_CL
         | where CollectionTime == _ti
@@ -24242,6 +24357,11 @@ Reports:
                     "")
                 | extend Subcategory = ""
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="Account without MFA has RBAC on a tier-0/1 azure resource",
@@ -24268,6 +24388,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24276,26 +24397,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - PermanentRoleCount
-      - EligibleRoleCount
-      - MoreInfoUrl
-      - Links
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24341,6 +24466,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn,AppId),
                   Impact=strcat(PermanentRoleCount, " always-on role(s) instead of PIM-eligible"),
@@ -24369,6 +24499,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24377,23 +24508,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - SignInCount
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24403,6 +24541,11 @@ Reports:
             | where CollectionTime == _t
             | where IdentityType == "User" and AccountEnabled == true
             | where (array_length(todynamic(EntraRoles_Permanent)) > 0) or (array_length(todynamic(EntraRoles_Eligible)) > 0)
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
             | project Upn = tostring(Upn), DisplayName, Tier;
         SigninLogs
         | where TimeGenerated > ago(30d)
@@ -24436,6 +24579,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact=strcat(SignInCount, " sign-ins (30d) where no Conditional Access policy applied"), SignInCount, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -24464,6 +24612,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24472,23 +24621,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - MailScopes
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24525,6 +24681,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=AppId,
                   Impact=strcat("SPN granted ", array_length(MailScopes), " mailbox-impersonation scopes"), MailScopes, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -24550,6 +24711,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24558,26 +24720,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - SpnOwner
-      - AppOwner
-      - MoreInfoUrl
-      - Links
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24625,6 +24791,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=AppId,
                   Impact="SPN ownership not aligned with app registration ownership", SpnOwner, AppOwner, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -24654,6 +24825,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24662,25 +24834,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - DaysInactive
-      - IsHighRiskPermissionGrant
-      - LinkedAzureResourceId
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24690,6 +24867,11 @@ Reports:
             SI_Azure_Profile_CL
             | where CollectionTime == _ta
             | where IsPubliclyExposed == true
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
             | project LinkedAzureResourceId=AzureResourceId, ResourceType, ResourceTier=Tier;
         SI_Identity_Profile_CL
         | where CollectionTime == _ti
@@ -24715,6 +24897,11 @@ Reports:
                     "")
                 | extend Subcategory = ""
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=AppId,
                   Impact=strcat("SPN owns public resource (", ResourceType, "); inactive ", DaysInactive, "d"),
@@ -24744,6 +24931,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24752,23 +24940,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - AdNestedCriticalGroups
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24811,6 +25006,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="User has on-prem AD critical-group membership but no Entra role -- privilege is invisible to Entra-only audits", AdNestedCriticalGroups, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -24836,6 +25036,7 @@ Reports:
       SecuritySeverityScope:
       - Very High
       - High
+      - Medium-High
       - Medium
       - Low
       OutputPropertyOrder:
@@ -24844,25 +25045,30 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
       - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Weight
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
-      - AssetCount
-      - TotalIssues
-      - Issues_Details
-      - ImpactedAssets
-      - RiskFactorCount
-      - MoreInfoUrl
-      - Links
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy: RiskScoreTotal
       ReportQuery:
       - |-
@@ -24906,6 +25112,11 @@ Reports:
                     isnotempty(tostring(column_ifexists("CreationType", ""))), tostring(column_ifexists("CreationType", "")),
                     "")
                 // __SI_CANONICAL__
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory=strcat(RiskFactorCount, " concurrent risk factors"),
                   ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn,AppId),
                   Impact=strcat("Identity hits ", RiskFactorCount, " risk-factor flags simultaneously"), RiskFactorCount, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -24942,13 +25153,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -24959,9 +25171,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25062,13 +25278,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25079,9 +25296,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25179,13 +25400,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25196,9 +25418,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25298,13 +25524,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25315,9 +25542,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25415,13 +25646,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25432,9 +25664,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25531,13 +25767,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25548,9 +25785,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25650,13 +25891,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25667,9 +25909,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25775,13 +26021,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25792,9 +26039,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -25893,13 +26144,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -25910,9 +26162,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -26014,13 +26270,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -26031,9 +26288,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -26130,13 +26391,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -26147,9 +26409,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -26250,13 +26516,14 @@ Reports:
       - Subcategory
       - ConfigurationName
       - ConfigurationId
+      - Impact
       - SecuritySeverity
       - CriticalityTier
       - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
       - RiskFactor_Consequence
-      - RiskFactor_Probability
       - RiskFactor_Probability_Detailed
-      - RiskFactor_Probability_DetailedScore
+      - RiskFactor_Probability
       - RiskConsequenceScore
       - RiskProbabilityScore
       - RiskScoreTotal
@@ -26267,9 +26534,13 @@ Reports:
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - AssetCount
-      - TotalIssues
-      - ImpactedAssets
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
       SortBy:
       - RiskScoreTotal_Weighted
       ReportQuery:
@@ -26343,8 +26614,6 @@ ReportTemplates:
     - ReportName: RiskAnalysis_Detailed
       ReportPurpose: Detailed
       ReportsIncluded:
-      - Name: PublicIP_OpenPorts_Detailed
-      - Name: PublicIP_Vulnerabilities_Detailed
       - Name: Device_Missing_CVEs_Detailed
       - Name: Device_Recommendations_Detailed
       - Name: Endpoint_ActiveCompromise_Detected_Detailed
@@ -26410,12 +26679,12 @@ ReportTemplates:
       - Name: Identity_SPN_OwnsResourcePublicAccess_Detailed
       - Name: Identity_AdNestedCriticalGroup_NoEntraRole_Detailed
       - Name: Identity_HighRiskFactorComposite4Plus_Detailed
+      - Name: PublicIP_OpenPorts_Detailed
+      - Name: PublicIP_Vulnerabilities_Detailed
 
     - ReportName: RiskAnalysis_Summary
       ReportPurpose: Overview
       ReportsIncluded:
-      - Name: PublicIP_OpenPorts_Summary
-      - Name: PublicIP_Vulnerabilities_Summary
       - Name: Device_Missing_CVEs_Summary
       - Name: Device_Recommendations_Summary
       - Name: Endpoint_ActiveCompromise_Detected_Summary
@@ -26481,3 +26750,5 @@ ReportTemplates:
       - Name: Identity_SPN_OwnsResourcePublicAccess_Summary
       - Name: Identity_AdNestedCriticalGroup_NoEntraRole_Summary
       - Name: Identity_HighRiskFactorComposite4Plus_Summary
+      - Name: PublicIP_OpenPorts_Summary
+      - Name: PublicIP_Vulnerabilities_Summary

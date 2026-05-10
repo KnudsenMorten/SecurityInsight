@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.2.174
+## v2.2.175
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
+- RA: column-shape ALL engine-set columns (was dropping Weighted/RfCons/RfProb on first-row miss) (a918c0a3)
+- RA: ONE safe-math score path (consolidate the two write blocks into _setScores helper) (be182aa9)
 - release: SecurityInsight v2.2.174 - README ch.5 'How to fine-tune reporting' + RA score recompute + AssetDetectedInReportName + v2.3 platform layer additive (5e1dd36d)
 - SI README: add chapter 5 'How to fine-tune reporting' (templates + queries + exclusions) (0e9d19e7)
 - RA: add AssetDetectedInReportName column (operator hunt-back) (67cef594)
@@ -31,15 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.157 - v1->v2 bridge cert-auth + PS 5.1 unattended (d0f968da)
 - release: SecurityInsight v2.2.156 - Port-V1Platform + Test-PlatformConnect auto-detect V2Root (7a3afd4f)
 - release: SecurityInsight v2.2.155 - Sync-AutomateIT-Engine auto-Unblock-File (c17fd9ee)
-- release: SecurityInsight v2.2.154 - Port-V1Platform + Test-PlatformConnect (bbc0e783)
-- release: SecurityInsight v2.2.153 - drop legacy AutomateIT_InstallUpdate refs (3cda6e1e)
-- release: SecurityInsight v2.2.152 - Update-SecurityInsight.ps1 one-liner updater (6624ab59)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.175 — RA structural fixes: canonical OutputPropertyOrder + engine recount + sign-in lookback unification
+
+**Score-bug class fix (structural, not a patch)**:
+
+- **Canonical `OutputPropertyOrder` across all 134 reports** (RiskAnalysis_Queries_Locked.yaml). Two shapes: 30-col Summary, 29-col Detailed. Eliminates per-report drift that was silently dropping `RiskConsequenceScore`/`RiskProbabilityScore`/`RiskScoreTotal` from any report whose hand-curated OPO list omitted them. Identity reports were the visible casualty (Cons/Prob columns null for 103 of 106 rows in v2.2.174). Endpoint + Azure listed them so worked; Identity + most others didn't. Now uniform.
+
+- **Full `CriticalityTierLevelScope` (4 tiers) + `SecuritySeverityScope` (5 levels) across all 134 reports**. Previously some reports listed partial scopes which silently filtered legitimate findings out of the result.
+
+- **Engine: `RiskFactor_Consequence` and `RiskFactor_Probability` ALWAYS recount from their `_Detailed` token list** (`Invoke-RiskAnalysis.ps1:3299`). Previous logic only recounted when post-enrichment fired tokens; legacy YAML literals (`| extend RiskFactor_Consequence = 3`) leaked through. Engine now: `count(split(*_Detailed, ';'))` if non-empty, else 0. YAML hardcodes are harmless — engine overrides them.
+
+- **Engine column renames** (replace legacy aggregate names with canonical Summary-only counters):
+  - `AssetCount` → `ImpactedAssetCount`
+  - `TotalIssues` → `TotalIssuesImpactedAssets`
+  - `Issues_Details` → `IssueList`
+  - **NEW**: `UniqueIssues` (distinct ConfigurationName count)
+  - These are now Summary-only — Detailed reports leave them alone (per-asset rows don't carry whole-report aggregates).
+
+- **Weighted-factors markers** (`//__WEIGHTED_FACTORS_BEGIN__/END__`) auto-injected into 12 reports that were missing them. Without markers those reports could never apply CMDB weighting (`RiskScore_Weight_Factor` stuck at default 100).
+
+- **PublicIP reports moved to bottom** of both `RiskAnalysis_Detailed` and `RiskAnalysis_Summary` template bundles. Run last so the rest of the report doesn't wait on Shodan-dependent paths.
+
+**Sign-in lookback unification**:
+
+- **`$global:SI_SignInLookbackDays`** (default 7) now drives all 3 sign-in/logon queries in `engine/asset-profiling/stages/Invoke-Enrich.ps1`:
+  - `EntraIdSignInEvents` per-user enrichment (was already wired)
+  - `DeviceLogonEvents` per-user device list (was hardcoded `30d`)
+  - `DeviceLogonEvents` per-device primary users (was hardcoded `30d`)
+- Sample custom file comment corrected (`= 30` → `= 7`, the actual default).
+- Profile-row freshness filters (`SI_*_Profile_CL | where TimeGenerated > ago(7d)`) intentionally NOT wired — different concept ("how stale a cached profile is OK").
+
+**Why this matters for operators**:
+
+- Identity Detailed/Summary reports now show populated `RiskConsequenceScore` × `RiskProbabilityScore` = `RiskScoreTotal` across every row instead of null/0 for the majority.
+- One canonical column shape across all 134 reports — Excel/LA/dashboards stop seeing schema drift between reports.
+- New columns (`UniqueIssues`, `ImpactedAssetCount`) give better Summary-row counters for dashboards.
 
 ---
 

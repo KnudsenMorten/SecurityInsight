@@ -3295,34 +3295,22 @@ function Calculate-RiskScore {
         if ($isExch -eq $true -or $isExch -eq 1 -or [string]$isExch -eq 'true') { [void]$consTokens.Add('IsExchangeServer') }
         $isExo = _rowVal @('IsExchangeOnlineMailbox','EG_IsExchangeOnlineMailbox')
         if ($isExo -eq $true -or $isExo -eq 1 -or [string]$isExo -eq 'true') { [void]$consTokens.Add('IsExchangeOnlineMailbox') }
-        # Re-stamp the *_Detailed columns when post-enrichment found tokens.
+        # Re-stamp the *_Detailed columns + recount the numeric pair (lock-step).
+        # CANONICAL RULE: RiskFactor_{Consequence,Probability} is ALWAYS the
+        # count of ;-separated tokens in the *_Detailed column, otherwise 0.
+        # The post-enrichment token block above merges YAML-emitted tokens with
+        # engine-derived ones; we recount from that merged set so any legacy
+        # YAML literal value is overridden. Final stamp into $tmp happens at
+        # the canonical re-stamp block further down (single write site).
         if ($probTokens.Count -gt 0) {
             $tmp['RiskFactor_Probability_Detailed'] = ($probTokens -join ';')
+            $rfProb = $probTokens.Count
         }
         if ($consTokens.Count -gt 0) {
             $tmp['RiskFactor_Consequence_Detailed'] = ($consTokens -join ';')
-            $rfConsDetailedRaw = ($consTokens -join ';')   # downstream re-stamp uses this
+            $rfConsDetailedRaw = ($consTokens -join ';')
+            $rfCons = $consTokens.Count
         }
-        # CANONICAL RULE: RiskFactor_{Consequence,Probability} is ALWAYS the count
-        # of ;-separated tokens in the *_Detailed column, otherwise 0. Engine
-        # ignores any YAML-emitted literal value (legacy `| extend RiskFactor_X = N`
-        # patterns in KQL) -- the count of tokens is the source of truth so the
-        # displayed number always matches the displayed token list.
-        $consDetailedNow = [string]$tmp['RiskFactor_Consequence_Detailed']
-        if ([string]::IsNullOrWhiteSpace($consDetailedNow)) {
-            $rfCons = 0
-        } else {
-            $rfCons = @($consDetailedNow -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
-        }
-        $tmp['RiskFactor_Consequence'] = [int]$rfCons
-
-        $probDetailedNow = [string]$tmp['RiskFactor_Probability_Detailed']
-        if ([string]::IsNullOrWhiteSpace($probDetailedNow)) {
-            $rfProb = 0
-        } else {
-            $rfProb = @($probDetailedNow -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
-        }
-        $tmp['RiskFactor_Probability'] = [int]$rfProb
 
         # ---- ONE safe-math call -- stamps all 4 score columns atomically ----
         # Uses post-enrichment rfCons/rfProb (lock-step with displayed
@@ -3343,11 +3331,15 @@ function Calculate-RiskScore {
             $tmp['AssetDetectedInReportName'] = [string]$ReportName
         }
 
-        # Always set the displayed RiskFactor_Consequence to the derived count AND
-        # stamp the (possibly engine-derived) RiskFactor_Consequence_Detailed back to
-        # the row so the displayed string matches what was counted.
+        # CANONICAL re-stamp -- RiskFactor_{Consequence,Probability} = count of
+        # tokens in *_Detailed (or 0). YAML-emitted literal values from KQL
+        # `| extend RiskFactor_X = N` are overridden here with the derived count
+        # so the displayed number ALWAYS matches the displayed token list.
         $tmp['RiskFactor_Consequence']          = [int]$rfCons
         $tmp['RiskFactor_Consequence_Detailed'] = $rfConsDetailedRaw
+        $tmp['RiskFactor_Probability']          = [int]$rfProb
+        # _Probability_Detailed already stamped above when probTokens fired;
+        # otherwise the source row's value (or empty) survives.
 
         # MoreDetails: collect raw URLs (one per line, no labels) so the cell
         # renders as a stacked clickable list in Excel + a readable list in LA.
@@ -3469,19 +3461,9 @@ function Calculate-RiskScore {
                 if ($tmp.Contains($name)) { $h[$name] = $tmp[$name] }
             }
             foreach ($k in $tmp.Keys) { if (-not $h.Contains($k)) { $h[$k] = $tmp[$k] } }
-            # Post-hoc reorder: place RiskFactor_Consequence_Detailed immediately after
-            # RiskFactor_Consequence (Cause -> Detail). Operates on $h's final keys.
-            if ($h.Contains('RiskFactor_Consequence') -and $h.Contains('RiskFactor_Consequence_Detailed')) {
-                $reord = [ordered]@{}
-                foreach ($k in @($h.Keys)) {
-                    if ($k -eq 'RiskFactor_Consequence_Detailed') { continue }
-                    $reord[$k] = $h[$k]
-                    if ($k -eq 'RiskFactor_Consequence') {
-                        $reord['RiskFactor_Consequence_Detailed'] = $h['RiskFactor_Consequence_Detailed']
-                    }
-                }
-                $h = $reord
-            }
+            # YAML's OutputPropertyOrder is the SINGLE source of truth for column
+            # order (canonical Detailed/Summary shape standardized v2.2.175). No
+            # engine post-hoc reorder -- it would override YAML curation.
             $out.Add([pscustomobject]$h) | Out-Null
         } else {
             $out.Add([pscustomobject]$tmp) | Out-Null
@@ -3593,6 +3575,20 @@ function Calculate-RiskScore {
                 if ($tmp2.Contains('ImpactedAssets')) { $tmp2.Remove('ImpactedAssets') }
                 if (-not $tmp2.Contains('IssueList') -or $null -eq $tmp2['IssueList']) {
                     $tmp2['IssueList'] = $issuesDetails
+                }
+            } else {
+                # Detailed report: IssueList = single ConfigurationName for THIS row's
+                # asset. Per-asset list (one finding per row), not a whole-report
+                # aggregate. Keeps the Detailed canonical OPO column populated
+                # (operators expect to see WHICH issue this row represents).
+                if (-not $tmp2.Contains('IssueList') -or $null -eq $tmp2['IssueList']) {
+                    $cfgName = if ($tmp2.Contains('ConfigurationName')) { [string]$tmp2['ConfigurationName'] } else { '' }
+                    if (-not [string]::IsNullOrWhiteSpace($cfgName)) {
+                        $tmp2['IssueList'] = @($cfgName)
+                    } else {
+                        $cfgId = if ($tmp2.Contains('ConfigurationId')) { [string]$tmp2['ConfigurationId'] } else { '' }
+                        $tmp2['IssueList'] = if ([string]::IsNullOrWhiteSpace($cfgId)) { @() } else { @($cfgId) }
+                    }
                 }
             }
 
@@ -3883,20 +3879,9 @@ function Calculate-RiskScore {
                 foreach ($forceCol in 'RiskFactor_Consequence_Detailed','MITRE_Tactics','MITRE_Techniques','ComplianceTags','MoreDetails','RiskScoreDomainKPI','RiskScoreKPI') {
                     if (-not $h2.Contains($forceCol)) { $h2[$forceCol] = $tmp2[$forceCol] }
                 }
-                # Post-hoc reorder: place RiskFactor_Consequence_Detailed immediately
-                # after RiskFactor_Consequence (Cause -> Detail). Bulletproof because
-                # it operates on $h2's final keys, not on YAML's possibly-incomplete order.
-                if ($h2.Contains('RiskFactor_Consequence') -and $h2.Contains('RiskFactor_Consequence_Detailed')) {
-                    $reord = [ordered]@{}
-                    foreach ($k in @($h2.Keys)) {
-                        if ($k -eq 'RiskFactor_Consequence_Detailed') { continue }
-                        $reord[$k] = $h2[$k]
-                        if ($k -eq 'RiskFactor_Consequence') {
-                            $reord['RiskFactor_Consequence_Detailed'] = $h2['RiskFactor_Consequence_Detailed']
-                        }
-                    }
-                    $h2 = $reord
-                }
+                # YAML OutputPropertyOrder is the SOLE column-order authority
+                # (canonical shape places _Detailed BEFORE the count). No engine
+                # reorder.
                 [void]$reordered.Add([pscustomobject]$h2)
             } else {
                 [void]$reordered.Add([pscustomobject]$tmp2)
@@ -6057,20 +6042,9 @@ if ($ResultAll.Count -eq 0) {
       }
     }
 
-    # Re-position RiskFactor_Consequence_Detailed immediately AFTER RiskFactor_Consequence
-    # in the final column list. Without this, the column lands at the END (because YAML's
-    # OutputPropertyOrder doesn't list it; the foreach above appends remaining row props
-    # at the tail). Cause -> Detail pair convention: Consequence/Consequence_Detailed
-    # mirrors Probability/Probability_Detailed.
-    if (($DesiredColumns -contains 'RiskFactor_Consequence') -and ($DesiredColumns -contains 'RiskFactor_Consequence_Detailed')) {
-        $rebuilt = New-Object System.Collections.Generic.List[string]
-        foreach ($c in $DesiredColumns) {
-            if ($c -eq 'RiskFactor_Consequence_Detailed') { continue }
-            [void]$rebuilt.Add($c)
-            if ($c -eq 'RiskFactor_Consequence') { [void]$rebuilt.Add('RiskFactor_Consequence_Detailed') }
-        }
-        $DesiredColumns = $rebuilt.ToArray()
-    }
+    # No engine post-hoc reorder of RiskFactor_Consequence_Detailed -- YAML's
+    # OutputPropertyOrder is the single source of truth (canonical Detailed/
+    # Summary shape standardized v2.2.175 places _Detailed BEFORE the count).
 
     # Re-position weight-score columns immediately AFTER RiskScoreTotal so the four
     # related columns sit together in this order:

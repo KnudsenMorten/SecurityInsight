@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.175
+## v2.2.176
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
 - release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
 - RA: column-shape ALL engine-set columns (was dropping Weighted/RfCons/RfProb on first-row miss) (a918c0a3)
 - RA: ONE safe-math score path (consolidate the two write blocks into _setScores helper) (be182aa9)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
 - release: SecurityInsight v2.2.157 - v1->v2 bridge cert-auth + PS 5.1 unattended (d0f968da)
 - release: SecurityInsight v2.2.156 - Port-V1Platform + Test-PlatformConnect auto-detect V2Root (7a3afd4f)
-- release: SecurityInsight v2.2.155 - Sync-AutomateIT-Engine auto-Unblock-File (c17fd9ee)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.176 — Identity severity re-rating + CMDB provider config + engine reorder removal + IssueList for Detailed
+
+**Identity severity re-rating** (resolves "overall identity score is too low because too many findings inflate-rated as Very High"):
+
+- **18 base Identity reports** (× Sum + Det = **36 entries**) re-rated to a more realistic ladder — every customer's tenant will see a notable lift in `RiskScoreKPI` and overall Identity domain score.
+- Severity ladder is consistent: **Very High > High > Medium-High > Medium > Low** (no "Critical" — engine treats Critical = Very High anyway, so we standardize on Very High to avoid label drift).
+
+**Reports kept at `Very High`** (genuinely indicate active compromise):
+- `Identity_BreakGlass_SignIn_Detected` — break-glass should never sign in
+- `Identity_NewAccount_ImmediateTier0Role` — privilege escalation pattern
+- `Identity_PrivilegedUser_BruteForceSuccess` — successful brute force = compromise
+
+**Reports downgraded `Very High → High`** (strong indicator, not confirmed compromise):
+- `Identity_PrivilegedUser_ImpossibleTravel`
+- `Identity_PrivilegedUser_SignIn_NonTrustedLocation`
+- `Identity_PrivilegedUser_SignIn_HighRiskCountry`
+- `Identity_BreakGlass_Anomaly`
+- `Identity_EligibleAdmin_LogonTo_ExploitableDevice`
+- `Identity_AdminAccount_OnPremSynced` (architectural, not active threat)
+- `Identity_SPN_PrivilegedAccessWrite` / `_AppRoleAssignmentWrite` / `_RoleManagementWrite` (sensitive perm; misuse is separate)
+
+**Reports converted from `case() → literal` (uniform per report) at the priority ladder:**
+- **High**: `Identity_ExternalUser_PrivilegedRole`, `Identity_HighValueTarget_MDIRisk`, `Identity_MultiTenant_HighPermission_SPN`, `Identity_PasswordNeverExpires_Privileged`, `Identity_PermanentPrivilegedRole`, `Identity_PrivilegedSPN_NoLogin180Days`, `Identity_PrivilegedUser_NoMFA`
+- **Medium-High**: `Identity_Admin_LogonTo_VulnerableDevice`, `Identity_AdminAccount_HasMailbox`, `Identity_DisabledAccount_ActivePIMAssignment`, `Identity_ServiceAccount_InteractiveSignIn`
+- **Medium**: `Identity_AnyUser_NoMFA`, `Identity_PrivilegedUser_StalePassword`, `Identity_ShadowAdmin`, `Identity_SPN_ExpiringCredentials`, `Identity_AdminAccount_NeverUsed`, `Identity_TooManyGlobalAdmins`, `Identity_Admin_LogonTo_LowTierDevice`
+- **Low**: `Identity_SPN_MailboxAccess`, `Identity_SPN_Orphan_NoOwner`, `Identity_StaleGuest_NoLogin90Days`, `Identity_StaleUser_NoLogin180Days`
+
+**Engine fixes (RA)**:
+
+- **Removed two post-hoc column reorders** that forced `RiskFactor_Consequence_Detailed` after `RiskFactor_Consequence` (count-then-detail). Canonical OPO has Detail-then-Count; engine now respects YAML order as the single source of truth.
+- **`IssueList` populated on Detailed rows too** — single-element list of the row's `ConfigurationName`. Was Summary-only; now matches canonical Detailed OPO.
+- **Recount path simplified** — no more downstream-overwrite race on `RiskFactor_Consequence` value.
+
+**CMDB integration documentation**:
+
+- Sample custom config (`config/SecurityInsight.custom.sample.ps1`) — `$global:SI_EnableCmdbProvider`, `$global:SI_CmdbRefreshIntervalHours`, `$global:SI_CmdbCsvPath` clearly documented (block was previously prone to wizard regen-drop).
+
+**PublicIP placement**: PublicIP reports moved to bottom of both bundles (already in v2.2.175).
 
 ---
 

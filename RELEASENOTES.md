@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.178
+## v2.2.179
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
 - release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
 - release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
 - release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
@@ -33,13 +34,23 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
 - release: SecurityInsight v2.2.160 - Port-V1Platform ACL self-repair (1060e3f4)
 - release: SecurityInsight v2.2.159 - Setup-Unattended -SkipPlatformDefaults switch (67eb293a)
-- release: SecurityInsight v2.2.158 - Port-V1Platform.ps1 always overwrites (0a169aaa)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.179 — Annotate `RiskFactor_*` schema-scaffolding literals (docs-only)
+
+Cosmetic clarification — no behavior change:
+
+- **93 `\| extend RiskFactor_Consequence = N` literals** annotated with KQL `//` comment: `engine overrides this from RiskFactor_Consequence_Detailed token count (or 0 if empty) -- schema scaffolding only`.
+- **31 `\| extend RiskFactor_Probability = N + ...` literals** annotated similarly.
+- **Why the literals exist** (not removable): they declare the column so downstream `\| project` references compile in KQL. Engine then unconditionally overrides the value PowerShell-side from `*_Detailed` token count (`Invoke-RiskAnalysis.ps1:3175-3191` + restamp at `:3337`).
+- **Operator effect**: reading the YAML now makes clear the literal is placeholder; the displayed value is always engine-derived.
 
 ---
 

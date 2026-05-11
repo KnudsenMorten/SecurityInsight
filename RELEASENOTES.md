@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.184
+## v2.2.185
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
 - release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
 - docs: SecurityInsight v2.2.183 - drop customer name from release notes (07d3e72e)
 - release: SecurityInsight v2.2.183 - Layer 1 loads BOTH Connect-Platform + platform-defaults.ps1 (41918b5d)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
 - release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
 - release: SecurityInsight v2.2.166 - Phase 2.5 seed v1 KV with SI secrets (6fcaf56d)
-- release: SecurityInsight v2.2.165 - Flavour-driven auth model in Setup-Unattended (f77a4cce)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.185 — Tune Azure profile-row JSON depth to 15 (was 100 in v2.2.184)
+
+Tightened the bump from v2.2.184: depth 100 was overkill and risked emitting overly-large `Properties` payloads on resources with weird recursive ARM shapes. Depth 15 covers all observed Azure resource graphs (VM extensionProfile, NIC ipConfigurations, publicIPAddress chains all top out at 12–14) with headroom, while keeping the `Dynamic` column payload bounded.
 
 ---
 

@@ -505,7 +505,7 @@ function Build-SIAzureProfileRow {
             cmdb = $collectCmdb
         }
     }
-    $row['Properties'] = try { $propertiesObj | ConvertTo-Json -Depth 100 -Compress -WarningAction SilentlyContinue } catch { '{}' }
+    $row['Properties'] = try { $propertiesObj | ConvertTo-Json -Depth 15 -Compress -WarningAction SilentlyContinue } catch { '{}' }
 
     # ---- EntityIds (cross-engine correlation handles) ----
     # Always emit AzureResourceId (when known) + EG NodeId (when known). Then

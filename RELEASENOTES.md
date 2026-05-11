@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.181
+## v2.2.182
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.182 - CRITICAL provisioning fix: Modern SPN KV read grant (b097be6a)
 - release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
 - release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
 - release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
@@ -33,13 +34,42 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.164 - dual-path KV pulls (v2 Context + v1 fallback) (d1626a0e)
 - release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
 - release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
-- release: SecurityInsight v2.2.161 - fix end-of-run Write-Host format parse bug (16e56a9a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.182 — Provisioning bug fix: grant Modern SPN `Key Vault Secrets User` on platform KV
+
+**Critical orchestrator gap closed.**
+
+`Initialize-PlatformVm.ps1` previously granted `Key Vault Secrets User` only to:
+- Bootstrap SPN (so `Connect-Platform` can read `Modern-AppId` / `Modern-Secret`)
+- Managed Identity (alternate bootstrap path)
+- Operator (`Secrets Officer` for upload + rotation)
+
+But **NOT to the Modern SPN itself**. After `Connect-Platform` completes, the runtime Az session is the Modern SPN. Solution custom files' `Get-PlatformSecret` calls (e.g., `Smtp-User`, `Smtp-Password`, `OpenAI-ApiKey`, `SI-Shodan-ApiKey`) all run as the Modern SPN → 403 Forbidden on every additional KV-stored secret.
+
+Symptom on the affected host:
+```
+WARNING: Failed to retrieve secret 'SI-Shodan-ApiKey' from Key Vault: Forbidden
+Caller: appid=<modern-spn-app-id>
+Action: 'Microsoft.KeyVault/vaults/secrets/getSecret/action'
+```
+
+**Fix**: orchestrator now grants Modern SPN `Key Vault Secrets User` on the platform KV after step 5 (Modern SPN creation). Idempotent — re-running on a host that already has the assignment is a no-op.
+
+**For existing v2.3 hosts** (provisioned before v2.2.182), apply the grant manually one time:
+```powershell
+$kv = Get-AzKeyVault -VaultName '<your-platform-kv>'
+New-AzRoleAssignment -ObjectId <ModernSPN-ObjectId> -RoleDefinitionName 'Key Vault Secrets User' -Scope $kv.ResourceId
+```
+
+(`<ModernSPN-ObjectId>` = principal ObjectId of `AutomateIT-HighPrivileged-Tier0-<host>`. Find it via `Get-AzADServicePrincipal -Filter "displayName eq 'AutomateIT-HighPrivileged-Tier0-<host>'"`.)
 
 ---
 

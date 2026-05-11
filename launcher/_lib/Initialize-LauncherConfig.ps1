@@ -439,6 +439,17 @@ function Initialize-LauncherConfig {
                     $null = Connect-Platform -ErrorAction Stop
                     _CfgOk ("Connect-Platform succeeded (Modern AppId {0}, KV {1})" -f $global:HighPriv_Modern_ApplicationID_Azure, $global:KV_HighPriv_KeyVaultName)
                     _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $true
+                    # ALSO dot-source platform-defaults.ps1 if it exists -- it
+                    # holds cross-cutting $global:* (SMTP / Mail / AD / LA)
+                    # which Connect-Platform does NOT set. v2.2.183: previously
+                    # we treated Connect-Platform + platform-defaults.ps1 as
+                    # mutually exclusive, leaving SMTPFrom etc. unset in v2.3
+                    # mode. They must both load.
+                    if (Test-Path -LiteralPath $platformDefaultsPath) {
+                        . $platformDefaultsPath
+                        _CfgOk "also loaded platform-defaults.ps1 ($platformDefaultsPath) for cross-cutting `$global:* (SMTP / Mail / AD / LA)"
+                        _CfgRecordLayer 'Layer 1b - platform-defaults (cross-cutting)' $platformDefaultsPath $true
+                    }
                 } catch {
                     _CfgInfo ("Connect-Platform failed: {0}. Falling back to v2.2 platform-defaults.ps1 if present." -f $_.Exception.Message)
                     if (Test-Path -LiteralPath $platformDefaultsPath) {

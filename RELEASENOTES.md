@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.183
+## v2.2.184
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
+- docs: SecurityInsight v2.2.183 - drop customer name from release notes (07d3e72e)
 - release: SecurityInsight v2.2.183 - Layer 1 loads BOTH Connect-Platform + platform-defaults.ps1 (41918b5d)
 - release: SecurityInsight v2.2.182 - CRITICAL provisioning fix: Modern SPN KV read grant (b097be6a)
 - release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
@@ -32,14 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
 - release: SecurityInsight v2.2.166 - Phase 2.5 seed v1 KV with SI secrets (6fcaf56d)
 - release: SecurityInsight v2.2.165 - Flavour-driven auth model in Setup-Unattended (f77a4cce)
-- release: SecurityInsight v2.2.164 - dual-path KV pulls (v2 Context + v1 fallback) (d1626a0e)
-- release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.184 — Azure profile-row JSON depth bump (10 → 100) + silence depth-overflow warnings
+
+`Build-AzureProfileRow.ps1` serialised the per-asset `Properties` column with `ConvertTo-Json -Depth 10`. Azure resource graphs are commonly deeper than that — VMs with extension profiles, NICs with IP configs, ARM `properties.networkProfile.networkInterfaces[].properties.ipConfigurations[].properties.publicIPAddress.properties.*` chains routinely hit 12–18 levels. Result: visible `WARNING: Resulting JSON is truncated as serialization has exceeded the set depth of 10` every few hundred rows and silent data loss past depth 10 in the `Properties` dynamic.
+
+**Fix**: raised `-Depth` from `10` to `100` (PowerShell max) and added `-WarningAction SilentlyContinue` since deep-but-bounded Azure shapes don't need to spam the run log. Output size on the LA wire stays bounded by `Properties` being a `Dynamic` column with the usual ingest limits.
 
 ---
 
@@ -54,11 +62,11 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - `$global:OnPremADConnect` / on-prem AD globals
 - `$global:LogAnalyticsWorkspaceId` / DCR globals (when not pulled from KV by the solution layer)
 
-Result on Nunagreen (and any v2.3 host): `[WARN] Mail enabled but no From address configured` — even though `platform-defaults.ps1` had a perfectly valid SMTP block.
+Result on any v2.3 host: `[WARN] Mail enabled but no From address configured` — even though `platform-defaults.ps1` had a perfectly valid SMTP block.
 
 **Fix**: after `Connect-Platform` succeeds, the launcher now also dot-sources `platform-defaults.ps1` (when present) as a new pseudo-layer **Layer 1b — platform-defaults (cross-cutting)**. The two are complementary, not alternatives. Idempotent — `Connect-Platform` writes the auth contract, `platform-defaults.ps1` writes everything else, and the layered customs (Layer 3 / Layer 5) still override on top.
 
-For Nunagreen: pull v2.2.183, rerun Risk Analysis, mail dispatch should now resolve `From` from the platform `SMTPFrom`.
+After upgrading to v2.2.183, rerun Risk Analysis — mail dispatch should now resolve `From` from the platform `SMTPFrom`.
 
 ---
 

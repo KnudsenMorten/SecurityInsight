@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.182
+## v2.2.183
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.183 - Layer 1 loads BOTH Connect-Platform + platform-defaults.ps1 (41918b5d)
 - release: SecurityInsight v2.2.182 - CRITICAL provisioning fix: Modern SPN KV read grant (b097be6a)
 - release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
 - release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.165 - Flavour-driven auth model in Setup-Unattended (f77a4cce)
 - release: SecurityInsight v2.2.164 - dual-path KV pulls (v2 Context + v1 fallback) (d1626a0e)
 - release: SecurityInsight v2.2.163 - re-ship v2.2.162 KV-pull guard (actual code) (a87afa6a)
-- release: SecurityInsight v2.2.162 - guard KV pulls in generated custom.ps1 (7516288a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.183 — Launcher Layer 1 fix: load `platform-defaults.ps1` even when `Connect-Platform` succeeds
+
+**v2.3 mode was silently dropping cross-cutting `$global:*` (SMTP / Mail / AD / LA).**
+
+`Initialize-LauncherConfig.ps1` Layer 1 used to treat `Connect-Platform` (v2.3) and `platform-defaults.ps1` (v2.2 fallback) as **mutually exclusive** — when `Connect-Platform` succeeded, `platform-defaults.ps1` was never dot-sourced. But `Connect-Platform` only sets the auth-related contract (`HighPriv_Modern_*`, `KV_HighPriv_*`, etc.); it does **not** set:
+
+- `$global:SMTPFrom` / `$global:SMTPTo` / `$global:SmtpServer` / `$global:SmtpPort` / `$global:UseSSL`
+- `$global:SendMail`
+- `$global:OnPremADConnect` / on-prem AD globals
+- `$global:LogAnalyticsWorkspaceId` / DCR globals (when not pulled from KV by the solution layer)
+
+Result on Nunagreen (and any v2.3 host): `[WARN] Mail enabled but no From address configured` — even though `platform-defaults.ps1` had a perfectly valid SMTP block.
+
+**Fix**: after `Connect-Platform` succeeds, the launcher now also dot-sources `platform-defaults.ps1` (when present) as a new pseudo-layer **Layer 1b — platform-defaults (cross-cutting)**. The two are complementary, not alternatives. Idempotent — `Connect-Platform` writes the auth contract, `platform-defaults.ps1` writes everything else, and the layered customs (Layer 3 / Layer 5) still override on top.
+
+For Nunagreen: pull v2.2.183, rerun Risk Analysis, mail dispatch should now resolve `From` from the platform `SMTPFrom`.
 
 ---
 

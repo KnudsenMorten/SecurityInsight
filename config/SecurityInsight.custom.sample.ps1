@@ -328,7 +328,7 @@ $global:SI_StorageKey     = '<storage-account-primary-key-base64>'
 # $global:SI_Shodan_LookbackDays           = 30
 # $global:SI_Shodan_FreshScanIntervalHours = 24
 # $global:SI_Shodan_ForceFreshScan         = $true
-# $global:SI_Shodan_TierMax                = 1     # tiers > TierMax skip Shodan (T0/T1 only by default)
+# $global:SI_Shodan_TierMax                = 3     # default 3 = scan all tiers (T0-T3). Lower to 1 for T0/T1 only (Shodan cost control).
 # $global:SI_Shodan_AssetLimit             = 0
 # $global:SI_Shodan_ThrottleMs             = 1100  # 1 req/sec (Shodan free-tier rate)
 # $global:SI_Shodan_TimeoutSec             = 30

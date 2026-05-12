@@ -2242,6 +2242,93 @@ function Resolve-ScalarPlaceholders {
 }
 
 # ----------------------------------------------------------------------------
+# CVE source-side filter block. Portal-safe substitution like __BUCKET_FILTER__.
+#
+# YAML block:
+#     //__CVE_FILTER_BEGIN__
+#     | where 1 == 1
+#     //__CVE_FILTER_END__
+#
+# Engine rewrites the body from these globals (all OFF by default):
+#   $global:SI_CVE_MinSeverity         = 'Critical' | 'High' | 'Medium' | $null
+#   $global:SI_CVE_MinCvssScore        = 0..10 (0 = off)
+#   $global:SI_CVE_RequireExploit      = $true | $false (false = off)
+#   $global:SI_CVE_MaxPublishedAgeDays = N (0 = off)
+#
+# When any are set, the block fills with WHERE clauses against
+# NodeProperties.rawData fields (severity / cvssScore / hasExploit /
+# publishedDate) so the CVE-finding set is cut at source BEFORE the
+# expensive join with edges and assets.
+# ----------------------------------------------------------------------------
+$script:_CveFilterBeginMark = '//__CVE_FILTER_BEGIN__'
+$script:_CveFilterEndMark   = '//__CVE_FILTER_END__'
+
+function Resolve-CveFilterBlock {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        [Parameter(Mandatory)][string]$ReportName
+    )
+
+    $blockRx   = [regex]::Escape($script:_CveFilterBeginMark) + '(?<body>.*?)' + [regex]::Escape($script:_CveFilterEndMark)
+    $bodyMatch = [regex]::Match($Query, $blockRx, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $bodyMatch.Success) { return $Query }
+
+    $clauses = New-Object System.Collections.Generic.List[string]
+    $applied = New-Object System.Collections.Generic.List[string]
+    $indent  = '              '   # match YAML let-body indent
+
+    # MinSeverity: include this severity AND everything more severe.
+    $sev = [string]$global:SI_CVE_MinSeverity
+    if (-not [string]::IsNullOrWhiteSpace($sev)) {
+        $sevSet = switch ($sev.Trim().ToLowerInvariant()) {
+            'critical' { @('Critical') }
+            'high'     { @('Critical','High') }
+            'medium'   { @('Critical','High','Medium') }
+            default    { @() }
+        }
+        if ($sevSet.Count -gt 0) {
+            $sevList = ($sevSet | ForEach-Object { '"{0}"' -f $_ }) -join ', '
+            [void]$clauses.Add(('{0}| where tostring(NodeProperties.rawData.severity) in~ ({1})' -f $indent, $sevList))
+            [void]$applied.Add(("MinSeverity={0}" -f $sev))
+        }
+    }
+
+    # MinCvssScore: 0 = no filter.
+    $cvss = $global:SI_CVE_MinCvssScore
+    if ($null -ne $cvss -and [double]$cvss -gt 0) {
+        [void]$clauses.Add(('{0}| where toreal(NodeProperties.rawData.cvssScore) >= {1}' -f $indent, [double]$cvss))
+        [void]$applied.Add(("MinCvssScore={0}" -f $cvss))
+    }
+
+    # RequireExploit: $true = only CVEs with a known exploit.
+    if ([bool]$global:SI_CVE_RequireExploit) {
+        [void]$clauses.Add(('{0}| where tobool(NodeProperties.rawData.hasExploit) == true' -f $indent))
+        [void]$applied.Add('RequireExploit=true')
+    }
+
+    # MaxPublishedAgeDays: 0 = no filter.
+    $days = $global:SI_CVE_MaxPublishedAgeDays
+    if ($null -ne $days -and [int]$days -gt 0) {
+        [void]$clauses.Add(('{0}| where todatetime(NodeProperties.rawData.publishedDate) > ago({1}d)' -f $indent, [int]$days))
+        [void]$applied.Add(("MaxPublishedAgeDays={0}" -f $days))
+    }
+
+    if ($clauses.Count -eq 0) {
+        # No filter requested -- leave the no-op `| where 1 == 1` block in place.
+        return $Query
+    }
+
+    $newBody = ([Environment]::NewLine +
+                ($clauses -join [Environment]::NewLine) +
+                [Environment]::NewLine + $indent)
+    $newBlock = ($script:_CveFilterBeginMark + $newBody + $script:_CveFilterEndMark)
+    $result   = $Query.Replace($bodyMatch.Value, $newBlock)
+    Write-Info ("[cve-filter] {0}: applied {1}" -f $ReportName, ($applied -join ', '))
+    return $result
+}
+
+# ----------------------------------------------------------------------------
 # Bucket-filter block helpers -- portal-safe substitution.
 #
 # Source query must wrap a no-op `| where 1 == 1` default between begin/end
@@ -5624,6 +5711,11 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     # substitute __CVE_MIN_AGE_DAYS__ scalar placeholder from <ReportName>.exclude.custom.json
     # (CveMinAgeDays property; default 0 = no age filter). See $script:_ScalarTokenMap.
     $Query = Resolve-ScalarPlaceholders -Query $Query -ReportName $ReportName
+
+    # v2.2.203 -- substitute __CVE_FILTER__ block from $global:SI_CVE_* globals.
+    # Cuts the CVE-finding set at source (severity / cvssScore / hasExploit /
+    # publishedDate) BEFORE the EG join expands rows by edges and assets.
+    $Query = Resolve-CveFilterBlock -Query $Query -ReportName $ReportName
 
     # substitute __WEIGHTED_FACTORS__ block from
     # riskscore_weighted.schema.custom.json -> weightedRiskFactors.<engine>.fields.

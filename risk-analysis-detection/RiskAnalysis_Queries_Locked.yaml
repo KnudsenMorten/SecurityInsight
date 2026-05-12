@@ -120,9 +120,11 @@
 
           let _Findings =
               ExposureGraphNodes
-              | mv-expand Category = Categories
-              | where tostring(Category) contains "finding"
               | where NodeLabel startswith "cve"
+              | where Categories has_any ("vulnerability_finding")
+              //__CVE_FILTER_BEGIN__
+              | where 1 == 1
+              //__CVE_FILTER_END__
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 
@@ -398,9 +400,11 @@
 
           let _Findings =
               ExposureGraphNodes
-              | mv-expand Category = Categories
-              | where tostring(Category) contains "finding"
               | where NodeLabel startswith "cve"
+              | where Categories has_any ("vulnerability_finding")
+              //__CVE_FILTER_BEGIN__
+              | where 1 == 1
+              //__CVE_FILTER_END__
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 

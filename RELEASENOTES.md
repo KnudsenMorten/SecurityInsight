@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.202
+## v2.2.203
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
 - release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
 - release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
 - release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
 - release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
 - release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
-- RA: column-shape ALL engine-set columns (was dropping Weighted/RfCons/RfProb on first-row miss) (a918c0a3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.203 — Risk Analysis: CVE source-side filter knobs + drop mv-expand redundancy
+
+Two compounding fixes to the `Device_Missing_CVEs_*` `_Findings` let block, targeting the join blow-up on large tenants (FVF: 350K CVE catalog entries × edges × asset union).
+
+**1. Dropped `mv-expand Categories` redundancy.** The old block had:
+```kql
+let _Findings = ExposureGraphNodes
+    | mv-expand Category = Categories
+    | where tostring(Category) contains "finding"
+    | where NodeLabel startswith "cve"
+```
+EG CVE nodes have `Categories = ["finding","vulnerability_finding"]` (2 elements). The `mv-expand` created 2 rows per finding, and the `contains "finding"` filter kept BOTH (both strings contain "finding"). Result: every CVE finding entered the downstream join twice. Replaced with `| where Categories has_any ("vulnerability_finding")` — one row per finding, immediate 2x reduction.
+
+**2. New `__CVE_FILTER__` block-marker substitution with 4 opt-in globals.** Inspecting EG CVE finding nodes reveals rich `NodeProperties.rawData` fields:
+- `severity` (Critical/High/Medium/Low)
+- `cvssScore` (numeric)
+- `hasExploit` / `isExploitVerified` / `isInExploitKit` / `isZeroDay` (bool)
+- `publishedDate` / `lastModifiedDate` (datetime)
+
+Filtering at the source (before the edge join) is far cheaper than carrying low-value CVEs through the cartesian explosion. Four new knobs in `SecurityInsight.custom.ps1` (all OFF by default — no behaviour change for existing customers):
+
+```powershell
+$global:SI_CVE_MinSeverity         = 'High'    # 'Critical' | 'High' | 'Medium' | $null
+$global:SI_CVE_MinCvssScore        = 7.0       # 0 = off
+$global:SI_CVE_RequireExploit      = $true     # $false = off
+$global:SI_CVE_MaxPublishedAgeDays = 720       # 0 = off
+```
+
+Engine reads these and substitutes the YAML's `//__CVE_FILTER_BEGIN__ ... //__CVE_FILTER_END__` block at run time with the appropriate `| where tostring(NodeProperties.rawData.severity) in~ (...) | where toreal(...cvssScore) >= ... | ...` clauses. Portal-paste-safe: with no engine substitution, the block stays as `| where 1 == 1` (no-op).
+
+Log line on each report: `[cve-filter] Device_Missing_CVEs_Detailed: applied MinSeverity=High, RequireExploit=true`.
+
+Recommended starter for big estates:
+```powershell
+$global:SI_CVE_MinSeverity    = 'High'
+$global:SI_CVE_RequireExploit = $true
+```
+Drops typical 350K → ~5-20K findings. AutoBucket converges at 1-2 buckets. CVE Detailed finishes in under a minute on a 1700-device tenant.
 
 ---
 

@@ -95,16 +95,24 @@
               // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
               // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
               // (b) drop CL enrichment for every server / Linux / IoT device.
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) failed semantic resolution on profile
+              // tables that don't carry the column (e.g. SI_Azure_Profile_CL --
+              // Azure resources have no AAD device id). With the wrapper, those
+              // tables fall through to AssetName -> PrimaryEntityId without erroring.
               | extend EpJoinKey = case(
-                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
-                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AadDeviceId",""))), tostring(column_ifexists("AadDeviceId","")),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),   tostring(column_ifexists("AssetName","")),
                   tostring(PrimaryEntityId)
               )
               | where isnotempty(EpJoinKey)
               | summarize arg_max(CollectionTime, *) by EpJoinKey
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) in project step failed semantic resolution
+              // on profile tables that don't carry the column (SI_Azure_Profile_CL).
               | project
                   EpJoinKey,
-                  AadDeviceId            = tostring(AadDeviceId),
+                  AadDeviceId            = tostring(column_ifexists("AadDeviceId", "")),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", "")),
@@ -483,16 +491,24 @@
               // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
               // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
               // (b) drop CL enrichment for every server / Linux / IoT device.
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) failed semantic resolution on profile
+              // tables that don't carry the column (e.g. SI_Azure_Profile_CL --
+              // Azure resources have no AAD device id). With the wrapper, those
+              // tables fall through to AssetName -> PrimaryEntityId without erroring.
               | extend EpJoinKey = case(
-                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
-                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AadDeviceId",""))), tostring(column_ifexists("AadDeviceId","")),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),   tostring(column_ifexists("AssetName","")),
                   tostring(PrimaryEntityId)
               )
               | where isnotempty(EpJoinKey)
               | summarize arg_max(CollectionTime, *) by EpJoinKey
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) in project step failed semantic resolution
+              // on profile tables that don't carry the column (SI_Azure_Profile_CL).
               | project
                   EpJoinKey,
-                  AadDeviceId            = tostring(AadDeviceId),
+                  AadDeviceId            = tostring(column_ifexists("AadDeviceId", "")),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", "")),
@@ -865,16 +881,24 @@
               // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
               // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
               // (b) drop CL enrichment for every server / Linux / IoT device.
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) failed semantic resolution on profile
+              // tables that don't carry the column (e.g. SI_Azure_Profile_CL --
+              // Azure resources have no AAD device id). With the wrapper, those
+              // tables fall through to AssetName -> PrimaryEntityId without erroring.
               | extend EpJoinKey = case(
-                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
-                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AadDeviceId",""))), tostring(column_ifexists("AadDeviceId","")),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),   tostring(column_ifexists("AssetName","")),
                   tostring(PrimaryEntityId)
               )
               | where isnotempty(EpJoinKey)
               | summarize arg_max(CollectionTime, *) by EpJoinKey
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) in project step failed semantic resolution
+              // on profile tables that don't carry the column (SI_Azure_Profile_CL).
               | project
                   EpJoinKey,
-                  AadDeviceId            = tostring(AadDeviceId),
+                  AadDeviceId            = tostring(column_ifexists("AadDeviceId", "")),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", "")),
@@ -1171,16 +1195,24 @@
               // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
               // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
               // (b) drop CL enrichment for every server / Linux / IoT device.
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) failed semantic resolution on profile
+              // tables that don't carry the column (e.g. SI_Azure_Profile_CL --
+              // Azure resources have no AAD device id). With the wrapper, those
+              // tables fall through to AssetName -> PrimaryEntityId without erroring.
               | extend EpJoinKey = case(
-                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
-                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AadDeviceId",""))), tostring(column_ifexists("AadDeviceId","")),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),   tostring(column_ifexists("AssetName","")),
                   tostring(PrimaryEntityId)
               )
               | where isnotempty(EpJoinKey)
               | summarize arg_max(CollectionTime, *) by EpJoinKey
+              // v2.2.221 -- AadDeviceId access wrapped in column_ifexists. v2.2.217's
+              // bare tostring(AadDeviceId) in project step failed semantic resolution
+              // on profile tables that don't carry the column (SI_Azure_Profile_CL).
               | project
                   EpJoinKey,
-                  AadDeviceId            = tostring(AadDeviceId),
+                  AadDeviceId            = tostring(column_ifexists("AadDeviceId", "")),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", "")),
@@ -1481,18 +1513,18 @@
               SI_Azure_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
-              // v2.2.217 -- second dedup pass on AadDeviceId. PrimaryEntityId dedup
-              // above can leave multiple CL rows per logical device when the device
-              // has multiple PrimaryEntityIds (renamed host, dual-onboard, stale +
-              // fresh records). The leftouter join below uses AadDeviceId as the
-              // key, so duplicates would multi-match and inflate the join. Filter
-              // empty AadDeviceId first since they're not join-meaningful and would
-              // otherwise collapse to one row, then cartesian-explode against every
-              // empty-AadDeviceId row in the join target. Memory-exceeded fix.
-              | extend _AadDevId = tostring(AadDeviceId)
-              | where isnotempty(_AadDevId)
-              | summarize arg_max(CollectionTime, *) by _AadDevId
-              | project-away _AadDevId
+              // v2.2.221 (parity fix) -- second dedup on a stable EpJoinKey: prefer
+              // AAD device GUID, fall back to AssetName, finally to PrimaryEntityId.
+              // AadDeviceId wrapped in column_ifexists so non-Endpoint profile tables
+              // (e.g. SI_Azure_Profile_CL has no AadDeviceId) degrade gracefully
+              // instead of failing semantic resolution.
+              | extend EpJoinKey = case(
+                  isnotempty(tostring(column_ifexists("AadDeviceId",""))), tostring(column_ifexists("AadDeviceId","")),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),   tostring(column_ifexists("AssetName","")),
+                  tostring(PrimaryEntityId)
+              )
+              | where isnotempty(EpJoinKey)
+              | summarize arg_max(CollectionTime, *) by EpJoinKey
               | project
                   AzureResourceId_Guid   = tostring(column_ifexists("AzureResourceId_Guid", "")),
                   AzureResourceId        = tostring(column_ifexists("AzureResourceId", "")),
@@ -1749,18 +1781,18 @@
               SI_Azure_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
-              // v2.2.217 -- second dedup pass on AadDeviceId. PrimaryEntityId dedup
-              // above can leave multiple CL rows per logical device when the device
-              // has multiple PrimaryEntityIds (renamed host, dual-onboard, stale +
-              // fresh records). The leftouter join below uses AadDeviceId as the
-              // key, so duplicates would multi-match and inflate the join. Filter
-              // empty AadDeviceId first since they're not join-meaningful and would
-              // otherwise collapse to one row, then cartesian-explode against every
-              // empty-AadDeviceId row in the join target. Memory-exceeded fix.
-              | extend _AadDevId = tostring(AadDeviceId)
-              | where isnotempty(_AadDevId)
-              | summarize arg_max(CollectionTime, *) by _AadDevId
-              | project-away _AadDevId
+              // v2.2.221 (parity fix) -- second dedup on a stable EpJoinKey: prefer
+              // AAD device GUID, fall back to AssetName, finally to PrimaryEntityId.
+              // AadDeviceId wrapped in column_ifexists so non-Endpoint profile tables
+              // (e.g. SI_Azure_Profile_CL has no AadDeviceId) degrade gracefully
+              // instead of failing semantic resolution.
+              | extend EpJoinKey = case(
+                  isnotempty(tostring(column_ifexists("AadDeviceId",""))), tostring(column_ifexists("AadDeviceId","")),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),   tostring(column_ifexists("AssetName","")),
+                  tostring(PrimaryEntityId)
+              )
+              | where isnotempty(EpJoinKey)
+              | summarize arg_max(CollectionTime, *) by EpJoinKey
               | project
                   AzureResourceId_Guid   = tostring(column_ifexists("AzureResourceId_Guid", "")),
                   AzureResourceId        = tostring(column_ifexists("AzureResourceId", "")),

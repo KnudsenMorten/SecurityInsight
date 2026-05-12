@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.220
+## v2.2.221
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.221 - comprehensive AadDeviceId column_ifexists sweep (3d08309a)
 - release: SecurityInsight v2.2.220 - Device_Recommendations regression fix (column_ifexists wrapper restored) (31ebbe30)
 - release: SecurityInsight v2.2.219 - CVE Summary/Detailed: AssetTags exclusion filter actually fires (9f486787)
 - release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
 - release: SecurityInsight v2.2.193 - provisioning helpers self-heal on already-exists (92842167)
 - release: SecurityInsight v2.2.192 - Set-PlatformDefaultsSmtp creates file if missing (ae1d6e27)
-- release: SecurityInsight v2.2.191 - auto-detect stale SPN Az context at orchestrator start (28e3dd7b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.221 — Risk Analysis: Comprehensive AadDeviceId column_ifexists sweep (Azure_Recommendations_Detailed _ap BadRequest fix + audit)
+
+`Azure_Recommendations_Detailed` regressed at LA pre-fetch with:
+
+```
+'extend' operator: Failed to resolve scalar expression named 'AadDeviceId'
+```
+
+`SI_Azure_Profile_CL` doesn't have an `AadDeviceId` column -- Azure resources don't have AAD device IDs. Bare `tostring(AadDeviceId)` references introduced by v2.2.217's EpJoinKey dedup hit that table via replace_all matching all `summarize arg_max(CollectionTime, *) by PrimaryEntityId` sites, not just `_ep` (Endpoint).
+
+### Three locations to fix (full audit pass)
+
+| Location | Sites | Status |
+|---|---|---|
+| EpJoinKey `case()` expression | 6 | First wrapped via Edit on the v2.2.217-revised pattern |
+| Older `_AadDevId` form (not converted by the v2.2.217 revise replace_all) | 2 | Now converted to EpJoinKey form + wrapped (lines ~1512 + ~1780) |
+| Project step `AadDeviceId = tostring(AadDeviceId)` | 6 | Wrapped in `column_ifexists("AadDeviceId","")` |
+
+After the sweep, the only bare `tostring(AadDeviceId)` references left in the YAML are in `DeviceInfoLatest` queries (MDE `DeviceInfo` table, which natively carries `AadDeviceId` -- safe).
+
+### Behavior
+
+For Endpoint tables (`_ep`, `_ip`, etc.) where AadDeviceId is real: unchanged.
+
+For Azure tables (`_ap`): column_ifexists returns `""`, case() falls through to AssetName (also empty), finally to PrimaryEntityId. Dedup collapses by PrimaryEntityId -- same as the pre-v2.2.217 baseline.
+
+For any future CL profile table that gets added without AadDeviceId: same graceful fallback. No semantic error.
+
+### Lesson learned (added to authoring guide TODO)
+
+A replace_all that targets a templated section (`_ep`-style let-binding) must use a pattern unique to the intended table. The v2.2.217 pattern `summarize arg_max(CollectionTime, *) by PrimaryEntityId` was too generic -- it appears in every CL profile table's dedup step. Future templated edits should use either:
+- A wider surrounding context that's unique to the intended table (e.g., includes `SI_Endpoint_Profile_CL` table name), OR
+- Defensive `column_ifexists` from the start when referencing optional columns
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.189
+## v2.2.190
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.190 - restore operator Az context after smoke test (b29e07f3)
 - release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
 - release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
 - release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.173 - Write-SICustomConfig emits SI_SPN_Secret + global SI_ForceFullRun (3fb9690d)
 - release: SecurityInsight v2.2.172 - re-auth secret-SPN before LA ingest in profilers + RA (29b6f92e)
 - release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
-- release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.190 — Restore operator Az context after smoke test (Steps 8–10 auth fix)
+
+The smoke test runs `Connect-Platform`, which switches the Az context to the **Modern SPN**. The Modern SPN only has `Key Vault Secrets User` (read-only) — not `Secrets Officer` — so any subsequent `Set-AzKeyVaultSecret` from Steps 8–10 (`Deploy-PlatformAI` etc.) eventually fails with `ClientSecretCredential authentication failed`. Sometimes the first few writes succeed before the operator's cached token expires and the SPN takes over; then later writes fail mid-batch.
+
+Fix: after smoke test, if any of Steps 8/9/10 will run, disconnect the SPN and re-attach the operator via `Connect-AzAccount -Tenant ... -Subscription ...` (uses the cached operator token; no prompt). Steps 8–10 then run with full Secrets Officer + RG-create rights.
 
 ---
 

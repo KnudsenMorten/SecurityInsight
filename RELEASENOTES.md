@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.204
+## v2.2.205
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
 - release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
 - release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
 - release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
 - release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
 - release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
-- release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.205 — Risk Analysis: pre-filter `_Edges` to edges touching our endpoints (no output change)
+
+v2.2.204 narrowed `_Findings` from the 350K CVE catalog to ~10K CVEs that have any "affecting" edge anywhere. But `_Edges` was still the unfiltered `ExposureGraphEdges | where EdgeLabel contains "affecting"` — which in a large tenant is millions of edges pointing at assets the tenant doesn't own. The downstream join with `_Assets` (1700 endpoints) eventually narrowed it, but only after materialising the full edge set.
+
+Fix: pre-filter `_Edges` to only those touching one of the tenant's endpoint `AssetNodeId`s before any join. Computed via `let _AssetNodeIdSet = _Assets | distinct AssetNodeId;` then `| where SourceNodeId in (_AssetNodeIdSet) or TargetNodeId in (_AssetNodeIdSet)`.
+
+Combined with v2.2.204:
+- `_Findings`: 350K → ~10K
+- `_Edges`: millions → ~30K-100K (only edges touching one of 1712 endpoints)
+- Asset/finding join: same final output, dramatically smaller intermediate
+
+**Output is identical.** The current query's inner join with `_Assets` already dropped any edge not connecting to one of our assets — just much later in the pipeline. We're doing the filter at the source where it's cheap.
+
+Applied to both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` reports unchanged (they currently work fine in 1 bucket and have a different edge profile).
+
+Expected on FVF tenant: AutoBucket should converge under 8 buckets, each finishing in ~30s. Total CVE Detailed runtime: minutes vs hours.
 
 ---
 

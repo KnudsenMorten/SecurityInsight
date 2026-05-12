@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.187
+## v2.2.188
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
 - release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
 - release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
 - release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
 - release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
 - release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
-- release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.188 — Deploy-PlatformAI auto-creates the resource group if missing
+
+Re-running Step 8 on a fresh tenant blew up because `New-AzCognitiveServicesAccount` requires the RG to exist (`Resource group 'rg-securityinsight' could not be found`). Added an idempotent `New-AzResourceGroup` ahead of the OpenAI provisioning so the script no longer assumes RG presence. No-op when the RG already exists.
 
 ---
 

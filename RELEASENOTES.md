@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.206
+## v2.2.207
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
 - release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
 - release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
 - release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
 - release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
 - release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
-- release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.207 — Risk Analysis: tenant-specific CVE narrowing + materialise filtered edges
+
+Even after v2.2.204-206 the AutoBucket probes were still preempting at low bucket counts. Hypothesis: the KQL optimizer wasn't aggressively pushing the global `_AffectingNodeIds` filter down into the edge scan. Two structural changes:
+
+**1. Narrow `_AffectingNodeIds` to OUR endpoints, not global.** The previous `_AffectingNodeIds = ExposureGraphEdges | where affecting | union <source><target> | distinct NodeId` captured ~10K CVEs that have an `affecting` edge to *anything* in EG. Replaced with `_RelevantFindingIds = <filtered-edges> | distinct SourceNodeId` — only CVEs connected to one of the tenant's 1700 endpoints. Typically reduces 10K → 1K-5K.
+
+**2. Materialise `_OurAffectingEdges` once and reuse.** The filtered edge set (`ExposureGraphEdges | where affecting | where TargetNodeId in (_AssetNodeIdSet)`) is now wrapped in `materialize()` and consumed by both `_RelevantFindingIds` AND `_Edges`. `ExposureGraphEdges` is scanned **exactly once per query execution** (vs three times in v2.2.206: once each for `_AffectingNodeIds` union, `_Edges`, and any internal optimiser passes).
+
+Net effect: smaller `_Findings` (1-5K vs 10K), smaller intermediate join, one fewer scan of the largest EG table. Same output rows.
+
+Applied to both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` untouched.
 
 ---
 

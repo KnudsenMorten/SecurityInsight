@@ -118,54 +118,34 @@
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
 
-          // v2.2.204 -- pre-compute the set of NodeIds that have at least one
-          // "affecting" edge. Used to narrow _Findings to only CVEs actually
-          // connected to anything in this tenant (typically ~10K-50K vs the
-          // ~350K full CVE catalog). Identical OUTPUT to before -- CVEs with
-          // no affecting edge to any device produced zero rows downstream
-          // anyway because the inner join with _Assets dropped them -- just
-          // a dramatically smaller intermediate scan and faster join.
-          let _AffectingNodeIds =
+          // v2.2.207 -- tightened CVE narrowing + single-scan materialise.
+          // Previous _AffectingNodeIds captured CVEs connected to anything in EG
+          // globally (~10K on FVF). _RelevantFindingIds now narrows further to CVEs
+          // connected to OUR endpoints only (~1K-5K). The filtered edge set is
+          // materialised once and reused for both _RelevantFindingIds AND _Edges
+          // -- ExposureGraphEdges scanned EXACTLY ONCE per query execution (vs
+          // three times in v2.2.206). EG "affecting" edges go finding -> asset
+          // (Source = finding NodeId, Target = asset NodeId), confirmed in v2.2.206.
+          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
+          let _OurAffectingEdges = materialize(
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
-              | project NodeId = SourceNodeId
-              | union (
-                  ExposureGraphEdges
-                  | where tostring(EdgeLabel) contains "affecting"
-                  | project NodeId = TargetNodeId
-                )
-              | distinct NodeId;
+              | where TargetNodeId in (_AssetNodeIdSet)
+          );
+          let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
           let _Findings =
               ExposureGraphNodes
               | where NodeLabel startswith "cve"
               | where Categories has_any ("vulnerability_finding")
-              | where NodeId in (_AffectingNodeIds)
+              | where NodeId in (_RelevantFindingIds)
               //__CVE_FILTER_BEGIN__
               | where 1 == 1
               //__CVE_FILTER_END__
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 
-          // v2.2.205 -- pre-filter _Edges to those touching one of our endpoints.
-          // ExposureGraphEdges holds every "affecting" edge in EG (millions of them),
-          // most pointing at assets the tenant doesn't own. Pre-filtering by asset
-          // membership cuts the edge-join intermediate massively without changing
-          // output -- the existing inner join with _Assets dropped non-tenant rows
-          // anyway, just much later in the pipeline.
-          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
-          // v2.2.206 -- diagnostic on FVF (1712 endpoints, 350K CVE catalog)
-          // confirmed `affecting` edges in EG are exclusively finding -> asset
-          // (Source = finding, Target = asset): asset_is_source = 0,
-          // asset_is_target = 141464 on a sample of 175235 affecting edges.
-          // Dropped the dead `_AssetFindingEdges_oneway` join branch and the
-          // union (oneway produced zero rows on every run). Single canonical
-          // join now -- ~half the intermediate join cost, identical output.
-          // Edge filter tightened to TargetNodeId-only since asset never appears
-          // on the Source side.
           let _Edges =
-              ExposureGraphEdges
-              | where tostring(EdgeLabel) contains "affecting"
-              | where TargetNodeId in (_AssetNodeIdSet)
+              _OurAffectingEdges
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 
@@ -423,54 +403,34 @@
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
 
-          // v2.2.204 -- pre-compute the set of NodeIds that have at least one
-          // "affecting" edge. Used to narrow _Findings to only CVEs actually
-          // connected to anything in this tenant (typically ~10K-50K vs the
-          // ~350K full CVE catalog). Identical OUTPUT to before -- CVEs with
-          // no affecting edge to any device produced zero rows downstream
-          // anyway because the inner join with _Assets dropped them -- just
-          // a dramatically smaller intermediate scan and faster join.
-          let _AffectingNodeIds =
+          // v2.2.207 -- tightened CVE narrowing + single-scan materialise.
+          // Previous _AffectingNodeIds captured CVEs connected to anything in EG
+          // globally (~10K on FVF). _RelevantFindingIds now narrows further to CVEs
+          // connected to OUR endpoints only (~1K-5K). The filtered edge set is
+          // materialised once and reused for both _RelevantFindingIds AND _Edges
+          // -- ExposureGraphEdges scanned EXACTLY ONCE per query execution (vs
+          // three times in v2.2.206). EG "affecting" edges go finding -> asset
+          // (Source = finding NodeId, Target = asset NodeId), confirmed in v2.2.206.
+          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
+          let _OurAffectingEdges = materialize(
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
-              | project NodeId = SourceNodeId
-              | union (
-                  ExposureGraphEdges
-                  | where tostring(EdgeLabel) contains "affecting"
-                  | project NodeId = TargetNodeId
-                )
-              | distinct NodeId;
+              | where TargetNodeId in (_AssetNodeIdSet)
+          );
+          let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
           let _Findings =
               ExposureGraphNodes
               | where NodeLabel startswith "cve"
               | where Categories has_any ("vulnerability_finding")
-              | where NodeId in (_AffectingNodeIds)
+              | where NodeId in (_RelevantFindingIds)
               //__CVE_FILTER_BEGIN__
               | where 1 == 1
               //__CVE_FILTER_END__
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 
-          // v2.2.205 -- pre-filter _Edges to those touching one of our endpoints.
-          // ExposureGraphEdges holds every "affecting" edge in EG (millions of them),
-          // most pointing at assets the tenant doesn't own. Pre-filtering by asset
-          // membership cuts the edge-join intermediate massively without changing
-          // output -- the existing inner join with _Assets dropped non-tenant rows
-          // anyway, just much later in the pipeline.
-          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
-          // v2.2.206 -- diagnostic on FVF (1712 endpoints, 350K CVE catalog)
-          // confirmed `affecting` edges in EG are exclusively finding -> asset
-          // (Source = finding, Target = asset): asset_is_source = 0,
-          // asset_is_target = 141464 on a sample of 175235 affecting edges.
-          // Dropped the dead `_AssetFindingEdges_oneway` join branch and the
-          // union (oneway produced zero rows on every run). Single canonical
-          // join now -- ~half the intermediate join cost, identical output.
-          // Edge filter tightened to TargetNodeId-only since asset never appears
-          // on the Source side.
           let _Edges =
-              ExposureGraphEdges
-              | where tostring(EdgeLabel) contains "affecting"
-              | where TargetNodeId in (_AssetNodeIdSet)
+              _OurAffectingEdges
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 

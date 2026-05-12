@@ -788,16 +788,32 @@ function Resolve-ProfileCLLetBlocks {
         $bodyKql = $origMatch.Groups['body'].Value
         $fullBlock = $origMatch.Value
 
-        Write-Info ("[hybrid] pre-fetching CL snapshot for let-binding '{0}' from LA workspace ..." -f $varName)
-        try {
-            $clRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $WorkspaceResourceId -Query $bodyKql
-        } catch {
-            Write-Err2 ("[hybrid] CL snapshot fetch failed for '{0}': {1}" -f $varName, $_.Exception.Message)
-            throw
+        # Snapshot cache keyed on let-var name + hash of body KQL. v2.2.183 had
+        # NO cache here -- a single report with 960 AutoBucket buckets fetched
+        # the same 176KB _ep snapshot 960 times in a row (~3 hours of wasted LA
+        # round-trips per report). The body never changes across buckets within
+        # one report, AND most reports use the same _ep / _TargetCmdb let-binding
+        # bodies, so a run-wide cache eliminates the duplication entirely.
+        if (-not $script:_HybridSnapshotCache) { $script:_HybridSnapshotCache = @{} }
+        $bodyHash = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash(
+                        [System.Text.Encoding]::UTF8.GetBytes($bodyKql))).Replace('-','')
+        $cacheKey = $varName + '|' + $bodyHash
+        if ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
+            $datatableLet = $script:_HybridSnapshotCache[$cacheKey]
+            Write-Info ("[hybrid] '{0}' snapshot reused from cache ({1} bytes)" -f $varName, $datatableLet.Length)
+        } else {
+            Write-Info ("[hybrid] pre-fetching CL snapshot for let-binding '{0}' from LA workspace ..." -f $varName)
+            try {
+                $clRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $WorkspaceResourceId -Query $bodyKql
+            } catch {
+                Write-Err2 ("[hybrid] CL snapshot fetch failed for '{0}': {1}" -f $varName, $_.Exception.Message)
+                throw
+            }
+            $rowCount = if ($clRows) { @($clRows).Count } else { 0 }
+            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows)
+            Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, $rowCount, $datatableLet.Length)
+            $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
         }
-        $rowCount = if ($clRows) { @($clRows).Count } else { 0 }
-        $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows)
-        Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, $rowCount, $datatableLet.Length)
         $modified = $modified.Replace($fullBlock, $datatableLet)
     }
     return $modified
@@ -1650,6 +1666,15 @@ function Invoke-GraphHuntingQuery {
         }
     }
 
+    # v2.2.198 -- track whether every retry attempt on this submission ended in
+    # TaskCanceledException (= 900s HttpClient timeout). If so, outer AutoBucket
+    # loop treats it as a DETERMINISTIC failure (the query genuinely can't run
+    # within 900s on this tenant's Graph hunting backend) and skips remaining
+    # buckets instead of paying another 5+ hours of identical timeouts. Reset
+    # to true before each call; flipped false in the catch on ANY non-timeout
+    # exception OR on success below.
+    $script:_LastGraphHuntingAllTimedOut = $true
+
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         Ensure-GraphAuth -MaxAgeMinutes $ReconnectMaxAgeMinutes
 
@@ -1684,6 +1709,10 @@ function Invoke-GraphHuntingQuery {
             $msg = $_.Exception.Message
 
             $isTaskCanceled = ($_.Exception -is [System.Threading.Tasks.TaskCanceledException]) -or ($msg -match 'A task was canceled')
+            # v2.2.198 -- any non-timeout failure means this call is NOT a clean
+            # deterministic-timeout pattern, so the outer AutoBucket loop should
+            # treat subsequent buckets as still worth trying.
+            if (-not $isTaskCanceled) { $script:_LastGraphHuntingAllTimedOut = $false }
             $looksAuth      = ($msg -match 'InvalidAuthenticationToken|Access token|Authentication|Unauthorized|401')
             $looksThrottle  = ($msg -match 'Too Many Requests|429|throttl|temporar')
 
@@ -5640,6 +5669,12 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
 $bucketRunSucceeded = $false
 $lastBucketRunError = $null
 
+# v2.2.198 -- per-report flag: once a bucket exhausts ALL inner+outer retries
+# with TaskCanceledException only (deterministic 900s timeout), skip remaining
+# buckets in this report rather than burn another 6 hours on each. Reset per
+# report run so other reports start clean.
+$script:_AutoBucketSkipRemainingBuckets = $false
+
 while (-not $bucketRunSucceeded) {
 
   # Reset results on each (re)run so we don't keep partial data from a failing bucket count
@@ -5650,6 +5685,11 @@ while (-not $bucketRunSucceeded) {
   $needEscalation = $false
 
   for ($b = 0; $b -lt $bucketCountToUse; $b++) {
+
+      if ($script:_AutoBucketSkipRemainingBuckets) {
+          Write-Warn2 ("bucket {0}/{1}: skipping (prior bucket deterministically timed out at 900s on every attempt -- remaining buckets would do the same)." -f ($b + 1), $bucketCountToUse)
+          continue
+      }
 
       $bucketNo = $b + 1
       $bucketFilter = New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $b
@@ -5694,7 +5734,20 @@ while (-not $bucketRunSucceeded) {
               }
               # 2) Transient platform error -> re-auth (Az + Graph) and retry SAME bucket.
               elseif (Test-IsTransientPlatformError $_) {
-                  if ($bucketAttempt -ge $bucketTransientRetries) {
+                  # v2.2.198 -- if the inner function reports every attempt timed out
+                  # at the 900s HttpClient ceiling, this isn't transient -- the query
+                  # genuinely can't run within Graph's deadline on this tenant. One
+                  # full inner-retry exhaustion (4 x 900s = 1h) is enough evidence;
+                  # don't pay another 3 outer x 4 inner x 900s = 12 hours per bucket
+                  # x N remaining buckets. Skip bucket, set per-report skip flag.
+                  if ($script:_LastGraphHuntingAllTimedOut) {
+                      Write-Err2 ("bucket {0}/{1}: query timed out at 900s on every attempt -- deterministic Graph-side timeout, not transient. Skipping this bucket AND remaining buckets in this report. Error: {2}" -f `
+                        $bucketNo, $bucketCountToUse, $errMsg)
+                      $bucketAttemptDone                          = $true
+                      $resp                                       = $null
+                      $script:_AutoBucketSkipRemainingBuckets     = $true
+                  }
+                  elseif ($bucketAttempt -ge $bucketTransientRetries) {
                       Write-Err2 ("bucket {0}/{1}: transient platform error after {2} retry attempt(s) -- skipping bucket and continuing. Error: {3}" -f `
                         $bucketNo, $bucketCountToUse, $bucketTransientRetries, $errMsg)
                       $bucketAttemptDone = $true

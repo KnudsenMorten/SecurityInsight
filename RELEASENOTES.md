@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.197
+## v2.2.198
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
 - release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
 - release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
 - release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.174 - README ch.5 'How to fine-tune reporting' + RA score recompute + AssetDetectedInReportName + v2.3 platform layer additive (5e1dd36d)
 - SI README: add chapter 5 'How to fine-tune reporting' (templates + queries + exclusions) (0e9d19e7)
 - RA: add AssetDetectedInReportName column (operator hunt-back) (67cef594)
-- RA bugfix: recompute RiskConsequence/Probability/Total scores AFTER token enrichment (dfe3e2c9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.198 — Risk Analysis: cache CL snapshots + short-circuit Graph 900s deathloops
+
+Two compounding inefficiencies in the hybrid let-block bridge made long RA runs unnecessarily painful, especially on customers whose Graph hunting backend deterministically times out on heavy attack-path queries:
+
+**1. CL snapshot cache for inline let-bindings.** Every bucket of every report independently re-fetched the same `SI_*_Profile_CL` snapshot from Log Analytics and re-inlined it as a `datatable()`. On a real run with `Device_Missing_CVEs_Summary` at AutoBucket=960, the `_ep` snapshot (176 KB, 1712 rows) was fetched **960 times in a row** — roughly 3 hours of pure LA round-trip waste per report. Since the snapshot body is identical across buckets of the same report (and often across reports that share the same `_TargetCmdb` or `_ep` definition), we now keep a script-scoped cache keyed on `<let-var-name>|<MD5(body)>`. First bucket fetches; every subsequent bucket gets `[hybrid] '_ep' snapshot reused from cache (176063 bytes)` instantly. Cache is reset per RA invocation, so live edits to the Profile table or to the let-binding body still take effect on the next run.
+
+**2. Deterministic 900s timeout short-circuit.** When the Graph hunting backend can't complete a query within its 900s HttpClient ceiling (heavy `Attack_Paths_Summary_*` queries on large tenants), the engine treated every `TaskCanceledException` as transient and retried: 4 inner attempts × 3 outer "re-auth + retry" passes × 900s = **3 hours per bucket**, then moved to the next bucket and did it again. Observed on a real run: one Attack_Paths report ate over 6 hours of pure timeouts before the engine gave up on the second of its 2 buckets. Now: if every inner-retry attempt for a single bucket hit `TaskCanceledException` (no auth/throttle/network mix-in), the outer loop treats it as deterministic, skips the bucket, AND sets a per-report flag so remaining buckets in the same report are skipped immediately. One bucket × 4 retries × 900s = 1h of evidence is enough; we don't pay another 5h to confirm Graph still can't run the query.
+
+Net effect on a problematic report: 6+ hours of dead timeouts → ~1 hour with a clear warning, then the engine continues to the next report. Combined with the snapshot cache, a 1700-asset tenant running the full RiskAnalysis_Summary template should finish 2–4× faster on the hybrid path even when Graph behaves.
 
 ---
 

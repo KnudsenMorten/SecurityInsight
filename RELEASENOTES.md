@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.214
+## v2.2.215
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
 - release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
 - release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
 - release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
@@ -33,13 +34,62 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
 - release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
 - release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
-- release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.215 — Risk Analysis: CVE Detailed -- pre-collapse multi-NodeId at the EDGE layer
+
+v2.2.214's by-clause collapse fired POST-bucket-filter, so each bucket query still saw the full multi-NodeId fanout pre-summarize (~552K rows on FVF when the 434-NodeId outlier device was in the bucket). Engine still preempted at bucket=1..8.
+
+Portal bisect (Test 1, run by operator) confirmed the bare join + DeviceKey-keyed summarize returns **115,825 rows** cleanly in seconds. So the cost lives **between the join and the summarize**, in the bucket-partitioned pre-summarize work.
+
+### Architectural change
+
+Inserted a new `_DeviceMap` + `_DeviceFindingEdges` pair of let-blocks that pre-collapse the multi-NodeId fanout at the **edge** layer, before the second join with `_Findings`:
+
+```kql
+let _DeviceMap = _Assets
+    | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+    | project AssetNodeId, DeviceKey, AssetName, AssetLabel, AadDeviceId,
+              EG_IsCustomerFacing, EG_IsExcluded;
+
+let _DeviceFindingEdges = _OurAffectingEdges
+    | join kind=inner (_DeviceMap) on $left.TargetNodeId == $right.AssetNodeId
+    | summarize
+        EdgeLabels          = make_set(EdgeLabel),
+        AssetName           = any(AssetName),
+        AssetLabel          = any(AssetLabel),
+        AadDeviceId         = any(AadDeviceId),
+        EG_IsCustomerFacing = any(EG_IsCustomerFacing),
+        EG_IsExcluded       = any(EG_IsExcluded)
+        by DeviceKey, SourceNodeId;       // <-- collapses 434-NodeId outlier here
+
+let _AssetFindingEdges = _DeviceFindingEdges
+    | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
+    | project DeviceKey, AssetName, AssetLabel, AadDeviceId, ..., EdgeLabels, ...;
+```
+
+Net effect: every later stage (tag filters, age filter, bucket filter, post-summarize) sees ~115K rows. The downstream `summarize ... by DeviceKey, FindingName` becomes a near-no-op since rows are already 1-per-pair.
+
+### Other touch-ups
+
+- Dropped the redundant `| extend DeviceKey = ...` after `_AssetFindingEdges` (now sourced upstream in `_DeviceMap`).
+- Changed `EdgeLabels = make_set(EdgeLabel)` -> `EdgeLabels = take_any(EdgeLabels)` in the post-bucket-filter summarize because EdgeLabels is now already a set column from upstream.
+
+### Expected behavior
+
+- AutoBucket converges at 1-2 buckets (115K rows fits comfortably under Defender's response cap).
+- CVE Detailed end-to-end runtime: 1-2 minutes, matching Summary.
+
+### Operator guidance
+
+For any future EG-primary report that needs per-row detail across (asset, finding) tuples: collapse multi-NodeId fanout at the edge layer (this same `_DeviceMap` + `_DeviceFindingEdges` pattern), not at the post-summarize layer. Bucket-filter cost depends on pre-summarize row count, not post-summarize logical count.
 
 ---
 

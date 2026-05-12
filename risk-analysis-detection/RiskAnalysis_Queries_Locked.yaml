@@ -153,24 +153,45 @@
                         FindingDescription       = tostring(NodeProperties.rawData.description),
                         FindingReferenceUrl      = tostring(coalesce(NodeProperties.rawData.referenceUrl, NodeProperties.rawData.url));
 
-          let _Edges =
+          // v2.2.215 -- pre-collapse multi-NodeId fanout BEFORE the second join.
+          // ExposureGraph assigns the same logical device multiple NodeIds (FVF
+          // had a 434-NodeId outlier). Each NodeId has its own affecting-edges
+          // to the same CVE, and the v2.2.214 by-clause collapse only fired
+          // POST-bucket-filter -- so each bucket still saw the full multi-NodeId
+          // fanout (552K+ pre-summarize rows). Pre-collapsing here at the edge
+          // level keeps the bucket filter and everything downstream operating on
+          // ~115K rows total.
+          let _DeviceMap =
+              _Assets
+              | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              | project AssetNodeId, DeviceKey, AssetName, AssetLabel, AadDeviceId,
+                        EG_IsCustomerFacing, EG_IsExcluded;
+
+          let _DeviceFindingEdges =
               _OurAffectingEdges
-              | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
-              | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
+              | join kind=inner (_DeviceMap) on $left.TargetNodeId == $right.AssetNodeId
+              | summarize
+                  EdgeLabels          = make_set(EdgeLabel),
+                  AssetName           = any(AssetName),
+                  AssetLabel          = any(AssetLabel),
+                  AadDeviceId         = any(AadDeviceId),
+                  EG_IsCustomerFacing = any(EG_IsCustomerFacing),
+                  EG_IsExcluded       = any(EG_IsExcluded)
+                  by DeviceKey, SourceNodeId;
 
           let _AssetFindingEdges =
-              _Edges
-              | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
+              _DeviceFindingEdges
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
-              | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+              | project DeviceKey, AssetName, AssetLabel, AadDeviceId,
+                        EG_IsCustomerFacing, EG_IsExcluded, EdgeLabels,
                         FindingName, FindingLabel, FindingCategories,
                         FindingSeverity, FindingCvssScore,
                         FindingHasExploit, FindingIsExploitVerified, FindingIsInExploitKit, FindingIsZeroDay,
-                        CVELastModified, FindingDescription, FindingReferenceUrl,
-                        EdgeLabel, EdgeProps;
+                        CVELastModified, FindingDescription, FindingReferenceUrl;
 
           _AssetFindingEdges
-              | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              // v2.2.215 -- DeviceKey is now sourced upstream in _DeviceMap, no need
+              // to recompute it here.
               // Drop assets matching engine-substituted _excludedAssetTags + MDE IsExcluded flag. AssetTags is a flat column (built in Build-EndpointProfileRow.ps1 from MachineTags+DeviceManualTags+DeviceDynamicTags); kept inside column_ifexists here because this filter runs over a join shape that may not always carry the column. IsExcluded is MDE-side and not on every join arm.
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
               | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
@@ -201,7 +222,7 @@
                   AssetName                = any(AssetName),
                   AssetLabel               = any(AssetLabel),
                   AadDeviceId              = any(AadDeviceId),
-                  EdgeLabels               = make_set(EdgeLabel),
+                  EdgeLabels               = take_any(EdgeLabels),
                   FindingLabel             = any(FindingLabel),
                   FindingCategories        = any(FindingCategories),
                   FindingSeverity          = any(FindingSeverity),
@@ -481,24 +502,45 @@
                         FindingDescription       = tostring(NodeProperties.rawData.description),
                         FindingReferenceUrl      = tostring(coalesce(NodeProperties.rawData.referenceUrl, NodeProperties.rawData.url));
 
-          let _Edges =
+          // v2.2.215 -- pre-collapse multi-NodeId fanout BEFORE the second join.
+          // ExposureGraph assigns the same logical device multiple NodeIds (FVF
+          // had a 434-NodeId outlier). Each NodeId has its own affecting-edges
+          // to the same CVE, and the v2.2.214 by-clause collapse only fired
+          // POST-bucket-filter -- so each bucket still saw the full multi-NodeId
+          // fanout (552K+ pre-summarize rows). Pre-collapsing here at the edge
+          // level keeps the bucket filter and everything downstream operating on
+          // ~115K rows total.
+          let _DeviceMap =
+              _Assets
+              | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              | project AssetNodeId, DeviceKey, AssetName, AssetLabel, AadDeviceId,
+                        EG_IsCustomerFacing, EG_IsExcluded;
+
+          let _DeviceFindingEdges =
               _OurAffectingEdges
-              | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
-              | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
+              | join kind=inner (_DeviceMap) on $left.TargetNodeId == $right.AssetNodeId
+              | summarize
+                  EdgeLabels          = make_set(EdgeLabel),
+                  AssetName           = any(AssetName),
+                  AssetLabel          = any(AssetLabel),
+                  AadDeviceId         = any(AadDeviceId),
+                  EG_IsCustomerFacing = any(EG_IsCustomerFacing),
+                  EG_IsExcluded       = any(EG_IsExcluded)
+                  by DeviceKey, SourceNodeId;
 
           let _AssetFindingEdges =
-              _Edges
-              | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
+              _DeviceFindingEdges
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
-              | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
+              | project DeviceKey, AssetName, AssetLabel, AadDeviceId,
+                        EG_IsCustomerFacing, EG_IsExcluded, EdgeLabels,
                         FindingName, FindingLabel, FindingCategories,
                         FindingSeverity, FindingCvssScore,
                         FindingHasExploit, FindingIsExploitVerified, FindingIsInExploitKit, FindingIsZeroDay,
-                        CVELastModified, FindingDescription, FindingReferenceUrl,
-                        EdgeLabel, EdgeProps;
+                        CVELastModified, FindingDescription, FindingReferenceUrl;
 
           _AssetFindingEdges
-              | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              // v2.2.215 -- DeviceKey is now sourced upstream in _DeviceMap, no need
+              // to recompute it here.
               // Drop assets matching engine-substituted _excludedAssetTags + MDE IsExcluded flag. AssetTags is a flat column (built in Build-EndpointProfileRow.ps1 from MachineTags+DeviceManualTags+DeviceDynamicTags); kept inside column_ifexists here because this filter runs over a join shape that may not always carry the column. IsExcluded is MDE-side and not on every join arm.
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
               | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
@@ -529,7 +571,7 @@
                   AssetName                = any(AssetName),
                   AssetLabel               = any(AssetLabel),
                   AadDeviceId              = any(AadDeviceId),
-                  EdgeLabels               = make_set(EdgeLabel),
+                  EdgeLabels               = take_any(EdgeLabels),
                   FindingLabel             = any(FindingLabel),
                   FindingCategories        = any(FindingCategories),
                   FindingSeverity          = any(FindingSeverity),

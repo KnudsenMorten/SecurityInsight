@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.195
+## v2.2.196
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
 - release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
 - release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
 - release: SecurityInsight v2.2.193 - provisioning helpers self-heal on already-exists (92842167)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - RA: add AssetDetectedInReportName column (operator hunt-back) (67cef594)
 - RA bugfix: recompute RiskConsequence/Probability/Total scores AFTER token enrichment (dfe3e2c9)
 - v2.3: section 11 KV pulls soft-fail per-secret + Initialize-PlatformVm -PermissionsOnly (496c2c35)
-- v2.3 1E live-test fixes: 4 bugs found + fixed running Setup-Unattended end-to-end (10a9b6a6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.196 — CLI `-Detailed` / `-Summary` flag now wins over `RiskAnalysis_*_Override` globals
+
+Running `launcher.internal-vm.ps1 -Detailed` against a config that sets `RiskAnalysis_Summary_Override = $true` (the default the generator emits) threw `Invalid parameters: Use only one of -Detailed or -Summary.` mid-engine. Both modes were turning true: the CLI flag set `$global:Detailed = $true`, then the override at engine line 105 unconditionally also set `$global:Summary = $true`.
+
+Fix: the override now skips if the *other* mode is already explicitly true. Equivalent to "CLI flag wins". Each override is still a no-op when its mode is already true (so config alone behaves identically).
+
+Truth table after the fix:
+
+| CLI flag | Detailed_Override | Summary_Override | Result |
+|---|---|---|---|
+| (none) | — | — | engine default |
+| (none) | true | — | Detailed |
+| (none) | — | true | Summary |
+| -Detailed | — | true | **Detailed** (was: throw) |
+| -Summary | true | — | **Summary** (was: throw) |
+| (none) | true | true | (throws as before — both overrides on is a config error) |
 
 ---
 

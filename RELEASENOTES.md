@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.203
+## v2.2.204
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
 - release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
 - release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
 - release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
 - release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
 - release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
-- release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.204 — Risk Analysis: pre-filter `_Findings` to CVEs connected to anything (no output change)
+
+ExposureGraph's `ExposureGraphNodes` table holds the **full NVD-ish CVE catalog** (~350K entries on FVF), not just CVEs that match your tenant's assets. The previous `_Findings` let pulled all 350K catalog entries into the pipeline, then relied on the downstream inner-join with `_Assets` to drop CVEs that didn't connect to any of the tenant's devices. The drop happened, but only AFTER the giant catalog had been carried through the join expansion.
+
+Fix: pre-compute `_AffectingNodeIds` as a set of NodeIds that appear on either end of an `EdgeLabel contains "affecting"` edge, then narrow `_Findings` to CVEs in that set BEFORE the asset/edge join. On FVF: catalog 350K -> ~10K relevant CVEs (33x reduction at source).
+
+**Output is identical.** CVEs without an affecting edge to anything produced zero rows under the old query because the inner join with `_Assets` required a matching edge anyway. The only thing that changes is the intermediate row count and the join cost.
+
+Applied to both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` reports unchanged (their `!contains "cve"` filter operates on a different node set).
+
+Expected effect on a 1700-device tenant: AutoBucket converges at 4-16 (vs 448-896 before this series of fixes). CVE Detailed finishes in minutes vs hours.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.191
+## v2.2.192
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.192 - Set-PlatformDefaultsSmtp creates file if missing (ae1d6e27)
 - release: SecurityInsight v2.2.191 - auto-detect stale SPN Az context at orchestrator start (28e3dd7b)
 - release: SecurityInsight v2.2.190 - restore operator Az context after smoke test (b29e07f3)
 - release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - v2.3 Phase 1F: launcher Layer 1 = Connect-Platform (v2.2 fallback retained) (d1ce9d35)
 - v2.3 Phase 1E: drop Mode=Bridged from generator + Connect-Platform in Setup-Unattended (9c2dfbcc)
 - release: SecurityInsight v2.2.173 - Write-SICustomConfig emits SI_SPN_Secret + global SI_ForceFullRun (3fb9690d)
-- release: SecurityInsight v2.2.172 - re-auth secret-SPN before LA ingest in profilers + RA (29b6f92e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.192 — `Set-PlatformDefaultsSmtp.ps1` creates the file if missing instead of throwing
+
+On a fresh tenant where `SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1` doesn't exist yet, Step 9 hard-crashed with "platform-defaults.ps1 not found at ...". Now the script auto-creates `config/` if missing, starts from an empty body, and emits just the SMTP block. Existing-file behaviour unchanged (back up, strip old SMTP block, append fresh).
+
+(`New-SISolutionConfig.ps1` already had this behaviour — no change needed.)
 
 ---
 

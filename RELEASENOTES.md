@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.211
+## v2.2.212
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
 - release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
 - release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
 - release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
 - release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
 - docs: SecurityInsight v2.2.183 - drop customer name from release notes (07d3e72e)
-- release: SecurityInsight v2.2.183 - Layer 1 loads BOTH Connect-Platform + platform-defaults.ps1 (41918b5d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.212 — Risk Analysis: revert v2.2.210 architecture collapse, keep scalar extraction
+
+v2.2.210 collapsed the 3-let architecture (`_OurAffectingEdges` materialised + `_RelevantFindingIds` narrowing via `in (subquery)` + separate `_Findings`) into a single chained join. Hypothesis at the time was that `materialize()` might be a no-op in Defender XDR Advanced Hunting and `in (subquery)` might be planned poorly -- so simpler structure should win.
+
+The hypothesis was wrong on FVF. v2.2.209 (3-let with materialize + in-subquery) converged AutoBucket at 8 buckets. v2.2.210/211 (single chained join) preempts at all bucket counts 1 -> 1024. The materialize was load-bearing.
+
+v2.2.212 restores the v2.2.209 architecture: `_AssetNodeIdSet`, `materialize(_OurAffectingEdges)`, `_RelevantFindingIds`, `_Findings | where NodeId in (_RelevantFindingIds)`, separate `_Edges`, final `_AssetFindingEdges` joins all three. **Keeps** the scalar extraction from v2.2.210 (`FindingSeverity`, `FindingCvssScore`, `FindingHasExploit`, etc.) -- that's an independent per-row win that doesn't depend on the join shape.
+
+Net structure: v2.2.207 join architecture + v2.2.210 scalar extraction. Expected to restore the 8-bucket convergence and ~2 minute CVE Detailed runtime.
 
 ---
 

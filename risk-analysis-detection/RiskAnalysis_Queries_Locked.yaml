@@ -269,9 +269,29 @@
               // "" silently when X is empty. Use iff(isnotempty()) for the first
               // candidate, then plain coalesce for the rest (the _From_CL columns
               // are real columns post-leftouter-join; no column_ifexists needed).
-              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
-              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
-              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
+              // v2.2.220 -- column_ifexists wrappers restored. v2.2.216 stripped them
+              // for empty-string-safety using bare column references, but bare refs
+              // FAIL with "Failed to resolve scalar expression" when the column
+              // doesn't exist on the upstream shape. The CVE_* reports always
+              // project AssetName/AssetType/AssetLabel through _DeviceMap so they
+              // worked, but Device_Recommendations_* reports key on DI_DeviceName /
+              // DI_AadDeviceId (DeviceInfo-sourced) and don't carry those columns
+              // -- they regressed at runtime. case() keeps the empty-string-safe
+              // semantics (column_ifexists returning "" doesn't short-circuit
+              // coalesce); column_ifexists keeps the column-missing safety.
+              | extend AssetName = case(
+                  isnotempty(tostring(column_ifexists("AssetName",""))),         tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AssetName_From_CL",""))), tostring(column_ifexists("AssetName_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetId = case(
+                  isnotempty(tostring(column_ifexists("AssetId",""))),           tostring(column_ifexists("AssetId","")),
+                  isnotempty(tostring(column_ifexists("AssetId_From_CL",""))),   tostring(column_ifexists("AssetId_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetType = case(
+                  isnotempty(tostring(column_ifexists("AssetType",""))),         tostring(column_ifexists("AssetType","")),
+                  isnotempty(tostring(column_ifexists("AssetType_From_CL",""))), tostring(column_ifexists("AssetType_From_CL","")),
+                  isnotempty(tostring(column_ifexists("AssetLabel",""))),        tostring(column_ifexists("AssetLabel","")),
+                  "Endpoint")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=1.0 so you see real per-row signals without engine substitution.
@@ -635,9 +655,29 @@
               // "" silently when X is empty. Use iff(isnotempty()) for the first
               // candidate, then plain coalesce for the rest (the _From_CL columns
               // are real columns post-leftouter-join; no column_ifexists needed).
-              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
-              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
-              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
+              // v2.2.220 -- column_ifexists wrappers restored. v2.2.216 stripped them
+              // for empty-string-safety using bare column references, but bare refs
+              // FAIL with "Failed to resolve scalar expression" when the column
+              // doesn't exist on the upstream shape. The CVE_* reports always
+              // project AssetName/AssetType/AssetLabel through _DeviceMap so they
+              // worked, but Device_Recommendations_* reports key on DI_DeviceName /
+              // DI_AadDeviceId (DeviceInfo-sourced) and don't carry those columns
+              // -- they regressed at runtime. case() keeps the empty-string-safe
+              // semantics (column_ifexists returning "" doesn't short-circuit
+              // coalesce); column_ifexists keeps the column-missing safety.
+              | extend AssetName = case(
+                  isnotempty(tostring(column_ifexists("AssetName",""))),         tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AssetName_From_CL",""))), tostring(column_ifexists("AssetName_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetId = case(
+                  isnotempty(tostring(column_ifexists("AssetId",""))),           tostring(column_ifexists("AssetId","")),
+                  isnotempty(tostring(column_ifexists("AssetId_From_CL",""))),   tostring(column_ifexists("AssetId_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetType = case(
+                  isnotempty(tostring(column_ifexists("AssetType",""))),         tostring(column_ifexists("AssetType","")),
+                  isnotempty(tostring(column_ifexists("AssetType_From_CL",""))), tostring(column_ifexists("AssetType_From_CL","")),
+                  isnotempty(tostring(column_ifexists("AssetLabel",""))),        tostring(column_ifexists("AssetLabel","")),
+                  "Endpoint")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
@@ -962,9 +1002,29 @@
               // "" silently when X is empty. Use iff(isnotempty()) for the first
               // candidate, then plain coalesce for the rest (the _From_CL columns
               // are real columns post-leftouter-join; no column_ifexists needed).
-              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
-              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
-              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
+              // v2.2.220 -- column_ifexists wrappers restored. v2.2.216 stripped them
+              // for empty-string-safety using bare column references, but bare refs
+              // FAIL with "Failed to resolve scalar expression" when the column
+              // doesn't exist on the upstream shape. The CVE_* reports always
+              // project AssetName/AssetType/AssetLabel through _DeviceMap so they
+              // worked, but Device_Recommendations_* reports key on DI_DeviceName /
+              // DI_AadDeviceId (DeviceInfo-sourced) and don't carry those columns
+              // -- they regressed at runtime. case() keeps the empty-string-safe
+              // semantics (column_ifexists returning "" doesn't short-circuit
+              // coalesce); column_ifexists keeps the column-missing safety.
+              | extend AssetName = case(
+                  isnotempty(tostring(column_ifexists("AssetName",""))),         tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AssetName_From_CL",""))), tostring(column_ifexists("AssetName_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetId = case(
+                  isnotempty(tostring(column_ifexists("AssetId",""))),           tostring(column_ifexists("AssetId","")),
+                  isnotempty(tostring(column_ifexists("AssetId_From_CL",""))),   tostring(column_ifexists("AssetId_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetType = case(
+                  isnotempty(tostring(column_ifexists("AssetType",""))),         tostring(column_ifexists("AssetType","")),
+                  isnotempty(tostring(column_ifexists("AssetType_From_CL",""))), tostring(column_ifexists("AssetType_From_CL","")),
+                  isnotempty(tostring(column_ifexists("AssetLabel",""))),        tostring(column_ifexists("AssetLabel","")),
+                  "Endpoint")
               | extend DeviceKey = iif(isnotempty(DI_AadDeviceId), DI_AadDeviceId, coalesce(DI_DeviceName, DeviceName))
               // Drop assets matching engine-substituted _excludedAssetTags + MDE IsExcluded flag. AssetTags is a flat column on SI_Endpoint_Profile_CL (built in Build-EndpointProfileRow.ps1 from MachineTags+DeviceManualTags+DeviceDynamicTags) and is brought in via the leftouter join with _ep above. IsExcluded stays wrapped in column_ifexists since it's MDE-side.
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
@@ -1264,9 +1324,29 @@
               // "" silently when X is empty. Use iff(isnotempty()) for the first
               // candidate, then plain coalesce for the rest (the _From_CL columns
               // are real columns post-leftouter-join; no column_ifexists needed).
-              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
-              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
-              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
+              // v2.2.220 -- column_ifexists wrappers restored. v2.2.216 stripped them
+              // for empty-string-safety using bare column references, but bare refs
+              // FAIL with "Failed to resolve scalar expression" when the column
+              // doesn't exist on the upstream shape. The CVE_* reports always
+              // project AssetName/AssetType/AssetLabel through _DeviceMap so they
+              // worked, but Device_Recommendations_* reports key on DI_DeviceName /
+              // DI_AadDeviceId (DeviceInfo-sourced) and don't carry those columns
+              // -- they regressed at runtime. case() keeps the empty-string-safe
+              // semantics (column_ifexists returning "" doesn't short-circuit
+              // coalesce); column_ifexists keeps the column-missing safety.
+              | extend AssetName = case(
+                  isnotempty(tostring(column_ifexists("AssetName",""))),         tostring(column_ifexists("AssetName","")),
+                  isnotempty(tostring(column_ifexists("AssetName_From_CL",""))), tostring(column_ifexists("AssetName_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetId = case(
+                  isnotempty(tostring(column_ifexists("AssetId",""))),           tostring(column_ifexists("AssetId","")),
+                  isnotempty(tostring(column_ifexists("AssetId_From_CL",""))),   tostring(column_ifexists("AssetId_From_CL","")),
+                  tostring(column_ifexists("AadDeviceId","")))
+              | extend AssetType = case(
+                  isnotempty(tostring(column_ifexists("AssetType",""))),         tostring(column_ifexists("AssetType","")),
+                  isnotempty(tostring(column_ifexists("AssetType_From_CL",""))), tostring(column_ifexists("AssetType_From_CL","")),
+                  isnotempty(tostring(column_ifexists("AssetLabel",""))),        tostring(column_ifexists("AssetLabel","")),
+                  "Endpoint")
               | extend AssetName  = coalesce(column_ifexists("DI_DeviceName", ""), column_ifexists("DeviceName", ""), AssetName)
               | extend AssetLabel = EG_AssetLabel
               | extend DeviceKey  = iif(isnotempty(DI_AadDeviceId), DI_AadDeviceId, AssetName)

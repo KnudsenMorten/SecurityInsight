@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.219
+## v2.2.220
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.220 - Device_Recommendations regression fix (column_ifexists wrapper restored) (31ebbe30)
 - release: SecurityInsight v2.2.219 - CVE Summary/Detailed: AssetTags exclusion filter actually fires (9f486787)
 - release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
 - release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
@@ -33,13 +34,60 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.193 - provisioning helpers self-heal on already-exists (92842167)
 - release: SecurityInsight v2.2.192 - Set-PlatformDefaultsSmtp creates file if missing (ae1d6e27)
 - release: SecurityInsight v2.2.191 - auto-detect stale SPN Az context at orchestrator start (28e3dd7b)
-- release: SecurityInsight v2.2.190 - restore operator Az context after smoke test (b29e07f3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.220 — Risk Analysis: AssetName/AssetId/AssetType column_ifexists wrapper restored (Device_Recommendations_* regression fix)
+
+`Device_Recommendations_Detailed` (and `_Summary`) regressed at runtime with `'extend' operator: Failed to resolve scalar expression named 'AssetName'`. Same class of bug for `AssetId` and `AssetType` is also live but didn't surface yet.
+
+### Root cause
+
+v2.2.216 stripped `column_ifexists` wrappers from these three extends, replacing:
+
+```kql
+| extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
+| extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""), column_ifexists("AadDeviceId", ""))
+| extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
+```
+
+with bare-column references to fix the empty-string-as-real-value trap:
+
+```kql
+| extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
+| extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
+| extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
+```
+
+CVE Detailed/Summary worked because `_DeviceMap` always projects `AssetName / AssetLabel / AadDeviceId` through. **Device_Recommendations_*** uses a different upstream shape -- keys on `DI_DeviceName` / `DI_AadDeviceId` / `DI_OSPlatform` from `DeviceInfo` and never carries `AssetName` / `AssetId` / `AssetType` / `AssetLabel` as columns. Bare references in the `iff` failed semantic resolution.
+
+### Fix -- case() with column_ifexists
+
+Restore the column_ifexists protection AND keep the empty-string-safety. KQL `case()` short-circuits per arm so a missing-column-returning-`""` doesn't poison downstream candidates the way `coalesce` does:
+
+```kql
+| extend AssetName = case(
+    isnotempty(tostring(column_ifexists("AssetName",""))),         tostring(column_ifexists("AssetName","")),
+    isnotempty(tostring(column_ifexists("AssetName_From_CL",""))), tostring(column_ifexists("AssetName_From_CL","")),
+    tostring(column_ifexists("AadDeviceId","")))
+| extend AssetId = case(
+    isnotempty(tostring(column_ifexists("AssetId",""))),           tostring(column_ifexists("AssetId","")),
+    isnotempty(tostring(column_ifexists("AssetId_From_CL",""))),   tostring(column_ifexists("AssetId_From_CL","")),
+    tostring(column_ifexists("AadDeviceId","")))
+| extend AssetType = case(
+    isnotempty(tostring(column_ifexists("AssetType",""))),         tostring(column_ifexists("AssetType","")),
+    isnotempty(tostring(column_ifexists("AssetType_From_CL",""))), tostring(column_ifexists("AssetType_From_CL","")),
+    isnotempty(tostring(column_ifexists("AssetLabel",""))),        tostring(column_ifexists("AssetLabel","")),
+    "Endpoint")
+```
+
+Applied to all 4 sites (CVE Detailed, CVE Summary, Device_Recommendations Detailed, Device_Recommendations Summary). Empty-string trap remains fixed; column-missing semantic-error is now also fixed.
 
 ---
 

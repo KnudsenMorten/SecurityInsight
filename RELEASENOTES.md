@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.210
+## v2.2.211
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
 - release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
 - release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
 - release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
 - docs: SecurityInsight v2.2.183 - drop customer name from release notes (07d3e72e)
 - release: SecurityInsight v2.2.183 - Layer 1 loads BOTH Connect-Platform + platform-defaults.ps1 (41918b5d)
-- release: SecurityInsight v2.2.182 - CRITICAL provisioning fix: Modern SPN KV read grant (b097be6a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.211 — Risk Analysis: hotfix for v2.2.210 -- Detailed `Properties` bag block was missed
+
+v2.2.210's edit used a multi-line `replace_all` to swap the `Properties = bag_merge(...)` block + downstream `Properties.x.y.z` reads for typed scalar reads. The Summary version of the block matched cleanly. The Detailed version had an **extra v2.2.208 comment block** (history about the dropped hardcoded 40d filter) between `where not (FindingName in (_excludedCves))` and `extend HasExploit` -- so the multi-line match didn't fit, and the Detailed block was left untouched.
+
+Result on the v2.2.210 run: `'extend' operator: Failed to resolve scalar expression named 'FindingProps'.` -- the Detailed bag_merge still referenced FindingProps which was no longer projected from `_Findings`.
+
+Fix: applied the same Properties-bag → scalar-columns rewrite to the Detailed block. CVE Summary was already correct in v2.2.210.
 
 ---
 

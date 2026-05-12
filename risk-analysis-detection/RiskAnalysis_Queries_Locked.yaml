@@ -88,7 +88,22 @@
               SI_Endpoint_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+              // v2.2.217 (revised) -- second dedup on a stable EpJoinKey: prefer the
+              // AAD device GUID, fall back to AssetName for devices without an
+              // AadDeviceId in CL (servers, Linux hosts, IoT, hashed identifiers),
+              // final fallback to PrimaryEntityId. Without this the leftouter join
+              // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
+              // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
+              // (b) drop CL enrichment for every server / Linux / IoT device.
+              | extend EpJoinKey = case(
+                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  tostring(PrimaryEntityId)
+              )
+              | where isnotempty(EpJoinKey)
+              | summarize arg_max(CollectionTime, *) by EpJoinKey
               | project
+                  EpJoinKey,
                   AadDeviceId            = tostring(AadDeviceId),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
@@ -210,60 +225,24 @@
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
               //__BUCKET_FILTER_END__
-              // v2.2.208 fixes to this summarize:
-              //  - Include AadDeviceId in the by-clause (was missing). Without it,
-              //    two endpoints sharing an AssetName -- renamed hosts, stale CL
-              //    records, dual-onboarded devices -- collapsed into one group
-              //    and any(AadDeviceId) picked one nondeterministically. The
-              //    downstream leftouter join with _ep then attached the wrong CL
-              //    profile (Tier, cmdb*, UnsupportedOSDetected) to that row.
-              //  - Dropped EdgePropsAll = make_bag(EdgeProps). The only consumer
-              //    was Properties.edge in the bag_merge below, but no extend or
-              //    coalesce in the output projection ever reads Properties.edge.
-              //  - Preserve CVELastModified through summarize (any). Lets the
-              //    Detailed report's final project carry CVELastModified without
-              //    needing a post-summarize re-extract.
-              // v2.2.210 -- replaced FindingProps = any(FindingProps) with typed
-              // scalar aggregates. Each (asset, finding, AadDeviceId) group has
-              // one row pre-summarize so any() picks the same scalar each time.
-              | summarize
-                  AssetName                = any(AssetName),
-                  AssetLabel               = any(AssetLabel),
-                  AadDeviceId              = any(AadDeviceId),
-                  EdgeLabels               = take_any(EdgeLabels),
-                  FindingLabel             = any(FindingLabel),
-                  FindingCategories        = any(FindingCategories),
-                  FindingSeverity          = any(FindingSeverity),
-                  FindingCvssScore         = any(FindingCvssScore),
-                  FindingHasExploit        = any(FindingHasExploit),
-                  FindingIsExploitVerified = any(FindingIsExploitVerified),
-                  FindingIsInExploitKit    = any(FindingIsInExploitKit),
-                  FindingIsZeroDay         = any(FindingIsZeroDay),
-                  FindingDescription       = any(FindingDescription),
-                  FindingReferenceUrl      = any(FindingReferenceUrl),
-                  EG_IsCustomerFacing      = any(EG_IsCustomerFacing),
-                  EG_IsExcluded            = any(EG_IsExcluded),
-                  CVELastModified          = any(CVELastModified),
-            MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
-            EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
-            AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
-            AssetId                = any(tostring(column_ifexists("AssetId",""))),
-            MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
-            MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
-            ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
-                // v2.2.214 -- key on DeviceKey (canonical device = AadDeviceId when
-                // present, else AssetName) and FindingName ONLY. Previously the
-                // by-clause included AssetName + AssetLabel, which kept the 434
-                // distinct NodeId-views of the same logical device as separate groups
-                // (their NodeNames/NodeLabels differ across the EG-side aggregator
-                // views). One outlier device with 434 NodeIds was projecting up to
-                // 434 output rows per (device, CVE) pair, yielding ~42M post-summarize
-                // rows. With DeviceKey-only keying, all 434 NodeIds collapse to one
-                // logical row per (device, CVE).
-                by DeviceKey, FindingName
+              // v2.2.217 -- post-bucket summarize removed (parity fix for Summary;
+              // v2.2.216 only applied to Detailed because the comment context differed
+              // and the replace_all didn't match here). _AssetFindingEdges is already
+              // 1 row per (DeviceKey, FindingName) from v2.2.215's edge-level
+              // pre-collapse, so the summarize was a 1:1 no-op that (a) silently
+              // discarded the EdgeLabels set via take_any if multiplicity ever broke,
+              // (b) carried EG_IsExcluded for no consumer (already filtered to false
+              // in _Assets), and (c) emitted empty strings for column_ifexists on
+              // IDs (MdeDeviceId / EntraAccountObjectId / Azure*) that don't exist
+              // pre-_ep-join. Bucket filter still partitions per-row above; downstream
+              // extends operate per-row below.
               // Bring in CL fields (Tier + UnsupportedOSDetected + IsExcludedByTag + cmdbCriticality)
-              | join kind=leftouter _ep on AadDeviceId
-              | project-away AadDeviceId1
+              // v2.2.217 -- join on EpJoinKey (DeviceKey on this side; EpJoinKey on
+              // _ep side, both = AadDeviceId-or-AssetName-or-PrimaryEntityId). Lets
+              // servers / Linux / IoT (no AadDeviceId in EG) still pick up CL
+              // enrichment via AssetName matching against the CL profile row.
+              | join kind=leftouter _ep on $left.DeviceKey == $right.EpJoinKey
+              | project-away AadDeviceId1, EpJoinKey
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.
@@ -319,7 +298,11 @@
                   iff(RF_P_ExploitSignals  == 1, dynamic(["ExploitSignals"]),     dynamic([])),
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]),   dynamic([])),
                   iff(RF_P_LegacyEoS       == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))), ";")
-              | extend CriticalityTier = toint(coalesce(Tier_From_SI_CL, 3))
+              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
+              // through to the case() default below, surfacing as "Unknown - unmapped"
+              // instead of silently downgrading to Low (Tier 3). Same data-quality-
+              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
+              | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
@@ -455,7 +438,22 @@
               SI_Endpoint_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+              // v2.2.217 (revised) -- second dedup on a stable EpJoinKey: prefer the
+              // AAD device GUID, fall back to AssetName for devices without an
+              // AadDeviceId in CL (servers, Linux hosts, IoT, hashed identifiers),
+              // final fallback to PrimaryEntityId. Without this the leftouter join
+              // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
+              // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
+              // (b) drop CL enrichment for every server / Linux / IoT device.
+              | extend EpJoinKey = case(
+                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  tostring(PrimaryEntityId)
+              )
+              | where isnotempty(EpJoinKey)
+              | summarize arg_max(CollectionTime, *) by EpJoinKey
               | project
+                  EpJoinKey,
                   AadDeviceId            = tostring(AadDeviceId),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
@@ -587,8 +585,12 @@
               // pre-_ep-join. Bucket filter still partitions per-row above; downstream
               // extends operate per-row below.
               // Bring in CL fields (Tier + UnsupportedOSDetected + IsExcludedByTag + cmdb*)
-              | join kind=leftouter _ep on AadDeviceId
-              | project-away AadDeviceId1
+              // v2.2.217 -- join on EpJoinKey (DeviceKey on this side; EpJoinKey on
+              // _ep side, both = AadDeviceId-or-AssetName-or-PrimaryEntityId). Lets
+              // servers / Linux / IoT (no AadDeviceId in EG) still pick up CL
+              // enrichment via AssetName matching against the CL profile row.
+              | join kind=leftouter _ep on $left.DeviceKey == $right.EpJoinKey
+              | project-away AadDeviceId1, EpJoinKey
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.
@@ -645,7 +647,11 @@
                   iff(RF_P_ExploitSignals  == 1, dynamic(["ExploitSignals"]),     dynamic([])),
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]),   dynamic([])),
                   iff(RF_P_LegacyEoS       == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))), ";")
-              | extend CriticalityTier = toint(coalesce(Tier_From_SI_CL, 3))
+              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
+              // through to the case() default below, surfacing as "Unknown - unmapped"
+              // instead of silently downgrading to Low (Tier 3). Same data-quality-
+              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
+              | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
@@ -659,7 +665,13 @@
               | extend ConfigurationId   = FindingName
               | extend Category          = "Vulnerabilities"
               | extend Subcategory       = "CVEs (Missing Updates)"
-              | extend AssetName = iif(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId))
+              // v2.2.217 -- removed duplicate late `extend AssetName = iif(...)`.
+              // The earlier post-leftouter `extend AssetName = iff(isnotempty(AssetName),
+              // AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))` is empty-
+              // string-safe and runs before all the risk-factor extends, so by the
+              // time we reach this projection AssetName is already resolved. The
+              // late iif could only ever fire on rows the earlier iff couldn't fix,
+              // and it uses identical sources -- pure dead code.
               | project
                   SecurityDomain, Category, Subcategory,
                   ConfigurationName, ConfigurationId,
@@ -754,7 +766,22 @@
               SI_Endpoint_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+              // v2.2.217 (revised) -- second dedup on a stable EpJoinKey: prefer the
+              // AAD device GUID, fall back to AssetName for devices without an
+              // AadDeviceId in CL (servers, Linux hosts, IoT, hashed identifiers),
+              // final fallback to PrimaryEntityId. Without this the leftouter join
+              // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
+              // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
+              // (b) drop CL enrichment for every server / Linux / IoT device.
+              | extend EpJoinKey = case(
+                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  tostring(PrimaryEntityId)
+              )
+              | where isnotempty(EpJoinKey)
+              | summarize arg_max(CollectionTime, *) by EpJoinKey
               | project
+                  EpJoinKey,
                   AadDeviceId            = tostring(AadDeviceId),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
@@ -902,7 +929,11 @@
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
-              | extend CriticalityTier = toint(coalesce(Tier_From_SI_CL, 3))
+              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
+              // through to the case() default below, surfacing as "Unknown - unmapped"
+              // instead of silently downgrading to Low (Tier 3). Same data-quality-
+              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
+              | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
@@ -1021,7 +1052,22 @@
               SI_Endpoint_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+              // v2.2.217 (revised) -- second dedup on a stable EpJoinKey: prefer the
+              // AAD device GUID, fall back to AssetName for devices without an
+              // AadDeviceId in CL (servers, Linux hosts, IoT, hashed identifiers),
+              // final fallback to PrimaryEntityId. Without this the leftouter join
+              // below (downstream, joined on EpJoinKey) would (a) cartesian-explode
+              // on empty-AadDeviceId rows -- the original memory-exceeded bug -- and
+              // (b) drop CL enrichment for every server / Linux / IoT device.
+              | extend EpJoinKey = case(
+                  isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
+                  isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+                  tostring(PrimaryEntityId)
+              )
+              | where isnotempty(EpJoinKey)
+              | summarize arg_max(CollectionTime, *) by EpJoinKey
               | project
+                  EpJoinKey,
                   AadDeviceId            = tostring(AadDeviceId),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
@@ -1187,7 +1233,11 @@
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
-              | extend CriticalityTier = toint(coalesce(Tier_From_SI_CL, 3))
+              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
+              // through to the case() default below, surfacing as "Unknown - unmapped"
+              // instead of silently downgrading to Low (Tier 3). Same data-quality-
+              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
+              | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
@@ -1299,6 +1349,18 @@
               SI_Azure_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+              // v2.2.217 -- second dedup pass on AadDeviceId. PrimaryEntityId dedup
+              // above can leave multiple CL rows per logical device when the device
+              // has multiple PrimaryEntityIds (renamed host, dual-onboard, stale +
+              // fresh records). The leftouter join below uses AadDeviceId as the
+              // key, so duplicates would multi-match and inflate the join. Filter
+              // empty AadDeviceId first since they're not join-meaningful and would
+              // otherwise collapse to one row, then cartesian-explode against every
+              // empty-AadDeviceId row in the join target. Memory-exceeded fix.
+              | extend _AadDevId = tostring(AadDeviceId)
+              | where isnotempty(_AadDevId)
+              | summarize arg_max(CollectionTime, *) by _AadDevId
+              | project-away _AadDevId
               | project
                   AzureResourceId_Guid   = tostring(column_ifexists("AzureResourceId_Guid", "")),
                   AzureResourceId        = tostring(column_ifexists("AzureResourceId", "")),
@@ -1438,7 +1500,11 @@
                   tolower(Severity) == "medium",   7.0,
                   tolower(Severity) == "low",      3.0,
                   0.0)
-              | extend CriticalityTier = toint(coalesce(Tier_From_SI_CL, 3))
+              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
+              // through to the case() default below, surfacing as "Unknown - unmapped"
+              // instead of silently downgrading to Low (Tier 3). Same data-quality-
+              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
+              | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
@@ -1551,6 +1617,18 @@
               SI_Azure_Profile_CL
               | where TimeGenerated > ago(8d)
               | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+              // v2.2.217 -- second dedup pass on AadDeviceId. PrimaryEntityId dedup
+              // above can leave multiple CL rows per logical device when the device
+              // has multiple PrimaryEntityIds (renamed host, dual-onboard, stale +
+              // fresh records). The leftouter join below uses AadDeviceId as the
+              // key, so duplicates would multi-match and inflate the join. Filter
+              // empty AadDeviceId first since they're not join-meaningful and would
+              // otherwise collapse to one row, then cartesian-explode against every
+              // empty-AadDeviceId row in the join target. Memory-exceeded fix.
+              | extend _AadDevId = tostring(AadDeviceId)
+              | where isnotempty(_AadDevId)
+              | summarize arg_max(CollectionTime, *) by _AadDevId
+              | project-away _AadDevId
               | project
                   AzureResourceId_Guid   = tostring(column_ifexists("AzureResourceId_Guid", "")),
                   AzureResourceId        = tostring(column_ifexists("AzureResourceId", "")),
@@ -1684,7 +1762,11 @@
                   tolower(Severity) == "medium",   7.0,
                   tolower(Severity) == "low",      3.0,
                   0.0)
-              | extend CriticalityTier = toint(coalesce(Tier_From_SI_CL, 3))
+              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
+              // through to the case() default below, surfacing as "Unknown - unmapped"
+              // instead of silently downgrading to Low (Tier 3). Same data-quality-
+              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
+              | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",

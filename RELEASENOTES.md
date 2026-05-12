@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.216
+## v2.2.217
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
 - release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
 - release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
 - release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
@@ -33,13 +34,73 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.190 - restore operator Az context after smoke test (b29e07f3)
 - release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
 - release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
-- release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.217 — Risk Analysis: _ep EpJoinKey dedup (memory-exceeded fix + server/IoT support) + Summary cleanup parity + Tier null-flow
+
+Operator hit `Memory consumption exceeded` running CVE Summary on FVF after v2.2.216 ship. Two contributing bugs and three follow-up items from the second code-review round, plus an explicit operator requirement to keep server / Linux / IoT devices joinable to their CL profile.
+
+### Critical: `_ep` AadDeviceId multi-match -> memory blow-up + lost server/IoT enrichment
+
+`_ep` deduplicates by `PrimaryEntityId`, not `AadDeviceId`. For tenants with renamed hosts, dual-onboard, or stale + fresh CL records, multiple PrimaryEntityIds can share the same AadDeviceId. The `leftouter _ep on AadDeviceId` join then multi-matches: every result row with empty AadDeviceId cartesians against every `_ep` row with empty AadDeviceId. The FVF inline `_ep` datatable has ~200 rows with empty AadDeviceId (servers, Linux hosts, IoT, hashed identifiers), which combined with ~50K result rows that also have empty AadDeviceId yields ~10M join rows -> memory exceeded.
+
+Two design choices for the fix:
+
+- **Naive**: drop empty-AadDeviceId rows from `_ep` and join only on AadDeviceId. Memory bug gone, but every server / Linux host / IoT device loses its CL enrichment (no join match -> Tier_From_SI_CL = null, cmdb* = null).
+- **What we actually shipped**: introduce `EpJoinKey` (a stable per-row identifier that prefers AadDeviceId, falls back to AssetName, finally to PrimaryEntityId), dedup `_ep` by `EpJoinKey`, and join `on $left.DeviceKey == $right.EpJoinKey`. `DeviceKey` on the report side is already AadDeviceId-or-AssetName, so the join keys naturally align and servers / IoT pick up CL enrichment via AssetName.
+
+```kql
+let _ep =
+    SI_Endpoint_Profile_CL
+    | where TimeGenerated > ago(8d)
+    | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+    | extend EpJoinKey = case(
+        isnotempty(tostring(AadDeviceId)),                      tostring(AadDeviceId),
+        isnotempty(tostring(column_ifexists("AssetName",""))),  tostring(column_ifexists("AssetName","")),
+        tostring(PrimaryEntityId)
+    )
+    | where isnotempty(EpJoinKey)
+    | summarize arg_max(CollectionTime, *) by EpJoinKey
+    | project EpJoinKey, AadDeviceId = tostring(AadDeviceId), AssetName_From_CL = ..., ...;
+...
+| join kind=leftouter _ep on $left.DeviceKey == $right.EpJoinKey
+| project-away AadDeviceId1, EpJoinKey
+```
+
+Applied to the 6 `_ep` sites that surfaced the v2.2.217 dedup pattern (the rest of the YAML's `_ep` blocks don't use the leftouter-on-AadDeviceId pattern). The 2 leftouter-join sites (CVE Detailed + CVE Summary) get the join-key swap.
+
+### Parity: Summary's post-bucket summarize cleanup
+
+v2.2.216's `replace_all` for the post-bucket summarize removal only matched Detailed because Summary's surrounding comment context differed (mentioned `cmdbCriticality` not `cmdb*`). Summary still had:
+
+- `take_any(EdgeLabels)` (silent set-discard if 1:1 ever broke)
+- `EG_IsExcluded = any(EG_IsExcluded)` (no consumer; already filtered to false in `_Assets`)
+- `MdeDeviceId / EntraAccountObjectId / Azure* / MITRE_* / ComplianceTags = any(tostring(column_ifexists(...)))` -- columns don't exist pre-`_ep`-join, all silently aggregate `""`.
+
+v2.2.217 applies the same removal to Summary. (Summary's *second* summarize -- the one that produces the final ~50-row output -- still has a dead `MdeDeviceId` column_ifexists; that's a much smaller cost since it runs once per output group, not per bucket-input row, and is left for a future cleanup.)
+
+### Tier `coalesce(..., 3)` -> let nulls flow to "Unknown - unmapped"
+
+`coalesce(Tier_From_SI_CL, 3)` defaults unmapped devices to Tier 3 (Low). The downstream `case()` already has an `"Unknown - unmapped"` arm but it was unreachable because the coalesce forced a value. Same data-quality-gap pattern as the v2.2.216 `SecuritySeverity` Low -> Unknown fix.
+
+Now: `extend CriticalityTier = Tier_From_SI_CL` (no fallback). Null flows through `case()` to the `"Unknown - unmapped"` default. Applied to all 6 sites that compute `CriticalityTier`.
+
+### Detailed: dropped duplicate late `extend AssetName = iif(...)`
+
+The earlier post-leftouter `extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))` is empty-string-safe and runs before all the risk-factor extends. The duplicate iif near the bottom of Detailed's projection used identical sources -- pure dead code, removed.
+
+### What this release intentionally does NOT touch
+
+- The engine's `_DeviceMap` DeviceKey rewriter (the multi-coalesce shape that appeared in the operator's rendered query). v2.2.215 wrote a clean `iff(isnotempty(AadDeviceId), AadDeviceId, AssetName)`. The rendered query showed a multi-coalesce that's structurally similar to `New-BucketFilterKql`'s output. Investigation pending; YAML is correct, engine substitution layer needs an audit.
+- The `__bucket_key` empty-string-coalesce same-trap that depends on the engine's bucket-filter substitution being unchanged. Both DeviceKey and FindingName are non-empty for in-scope rows so it works in practice, but the column_ifexists fallback chain is decorative -- only the first arm could ever fire.
+- Summary's second summarize (the final ~50-row collapse). Still has a dead `MdeDeviceId` column_ifexists aggregate. Tiny cost (runs per output group, not per input row); deferred.
 
 ---
 

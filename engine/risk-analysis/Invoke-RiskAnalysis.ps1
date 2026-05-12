@@ -1911,8 +1911,56 @@ function Ensure-QueryIsAssetNameSafe {
 }
 
 function New-BucketFilterKql {
-  param([int]$BucketCount,[int]$BucketIndex)
+  param(
+    [int]$BucketCount,
+    [int]$BucketIndex,
+    [string]$ReportName = ''
+  )
 
+  # v2.2.200 -- composite bucket key for *_Detailed reports.
+  #
+  # Default (Summary + everything else): hash on the FIRST non-empty device-
+  # level identifier. All rows for the same device land in the same bucket,
+  # so any downstream `summarize by <device>` rolls up correctly.
+  #
+  # *_Detailed reports emit one row per (asset, finding) tuple -- a hot device
+  # with 10K findings dumps 10K join-explosion rows into a single bucket and
+  # the XDR backend preempts no matter how high we escalate the bucket count
+  # (the device is deterministic-bucketed; doubling N just moves the whole
+  # device to a different bucket, never splits it). Composite key strcat's
+  # the asset key AND the finding key, so the SAME asset's findings hash to
+  # DIFFERENT buckets -- the hot device gets split across N buckets naturally.
+  # Per-(asset, finding) rows are unique to a bucket, so the downstream
+  # `summarize by AssetName, FindingName` still works -- each tuple lives in
+  # one bucket only, and across-bucket concatenation gives the full result.
+  $isDetailed = $ReportName -like '*_Detailed'
+
+  if ($isDetailed) {
+@"
+| extend __bucket_key = strcat(
+    coalesce(tostring(column_ifexists('DeviceKey','')),
+             tostring(column_ifexists('NodeId','')),
+             tostring(column_ifexists('DeviceNodeId','')),
+             tostring(column_ifexists('AadDeviceId','')),
+             tostring(column_ifexists('DeviceId','')),
+             tostring(column_ifexists('MachineId','')),
+             tostring(column_ifexists('Id','')),
+             tostring(column_ifexists('SourceNodeId','')),
+             tostring(column_ifexists('TargetNodeId',''))),
+    '|',
+    coalesce(tostring(column_ifexists('FindingNodeId','')),
+             tostring(column_ifexists('FindingName','')),
+             tostring(column_ifexists('CVE','')),
+             tostring(column_ifexists('CveId','')),
+             tostring(column_ifexists('ConfigurationId','')),
+             tostring(column_ifexists('RecommendationId','')),
+             '')
+)
+| where isnotempty(__bucket_key)
+| extend __bucket = abs(hash(__bucket_key)) % $BucketCount
+| where __bucket == $BucketIndex
+"@
+  } else {
 @"
 | extend __bucket_key = coalesce(
     tostring(column_ifexists('DeviceKey','')),
@@ -1929,6 +1977,7 @@ function New-BucketFilterKql {
 | extend __bucket = abs(hash(__bucket_key)) % $BucketCount
 | where __bucket == $BucketIndex
 "@
+  }
 }
 
 # ----------------------------------------------------------------------------
@@ -5640,7 +5689,7 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
             param([int]$BucketCount)
 
             # Probe only bucket 0. If this bucket still exceeds limits, smaller buckets are needed.
-            $bucketFilter = New-BucketFilterKql -BucketCount $BucketCount -BucketIndex 0
+            $bucketFilter = New-BucketFilterKql -BucketCount $BucketCount -BucketIndex 0 -ReportName $ReportName
             $probeQuery   = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $bucketFilter
 
             $null = Invoke-GraphHuntingQuery -Query $probeQuery `
@@ -5692,7 +5741,7 @@ while (-not $bucketRunSucceeded) {
       }
 
       $bucketNo = $b + 1
-      $bucketFilter = New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $b
+      $bucketFilter = New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $b -ReportName $ReportName
       $thisQuery    = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $bucketFilter
 
       Write-Info ("bucket {0}/{1}: running query (auto-routed: LA-direct or XDR Advanced Hunting based on table mix)" -f $bucketNo, $bucketCountToUse)

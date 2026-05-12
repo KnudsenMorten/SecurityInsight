@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.198
+## v2.2.199
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
 - release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
 - release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
 - release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - RA: ONE safe-math score path (consolidate the two write blocks into _setScores helper) (be182aa9)
 - release: SecurityInsight v2.2.174 - README ch.5 'How to fine-tune reporting' + RA score recompute + AssetDetectedInReportName + v2.3 platform layer additive (5e1dd36d)
 - SI README: add chapter 5 'How to fine-tune reporting' (templates + queries + exclusions) (0e9d19e7)
-- RA: add AssetDetectedInReportName column (operator hunt-back) (67cef594)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.199 — Risk Analysis: retry overflow/preempted buckets before escalating
+
+The XDR backend's `BadRequest: Query execution has exceeded the allowed limits ... preempted ... possibly due to high CPU and/or memory resource consumption` error reads like a hard overflow, but in practice it's often **transient backend pressure** -- run the same bucket 30 seconds later and it completes fine. v2.2.198 treated the first occurrence as a definitive "your data is too big, double the buckets and restart from scratch" signal, which had two bad consequences:
+
+1. **Wasted work.** On a 63-bucket run, buckets 1 and 2 had already returned ~30K rows before bucket 3 preempted -- but escalating to 126 buckets meant restarting from bucket 1/126 (the bucket filter ranges differ between counts, so completed results can't be reused).
+
+2. **Cascading escalation.** Real-world example: 63 -> 126 -> 252 -> 504 -> ... each escalation triggered by ONE preempted bucket. If the preempts were transient, doubling forever just burned more time.
+
+Fix: when a bucket hits an overflow/preempted error, retry that SAME bucket up to 3 times with backoff (30s, 60s, 120s) BEFORE escalating. If any retry succeeds, the report continues at the current bucket count with no thrown-away work. Only after 3 consecutive overflows on the same bucket do we conclude it's genuine data overflow and escalate the bucket count.
+
+Tunable via `$global:SI_BucketOverflowRetries = N` in `LauncherConfig.custom.ps1` (default 3, set 0 to restore the immediate-escalation behaviour).
 
 ---
 

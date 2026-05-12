@@ -5710,7 +5710,20 @@ while (-not $bucketRunSucceeded) {
       $bucketTransientRetries = if ($null -ne $global:SI_BucketTransientRetries) {
           [int]$global:SI_BucketTransientRetries
       } else { 3 }
+      # v2.2.199 -- the XDR backend's "Query execution has exceeded the allowed
+      # limits ... preempted ... possibly due to high CPU and/or memory resource
+      # consumption" error is OFTEN transient backend pressure, not real data
+      # overflow. Treating the first occurrence as a hard "double the buckets
+      # and restart" signal threw away already-successful buckets (e.g. on a
+      # 63-bucket run, buckets 1-2 returned 30K rows before bucket 3 preempted
+      # -- restarting at 126 buckets ran from scratch). Retry the SAME bucket
+      # up to N times with backoff before escalating; if real overflow, all
+      # retries will also overflow and escalation still happens.
+      $bucketOverflowRetries  = if ($null -ne $global:SI_BucketOverflowRetries) {
+          [int]$global:SI_BucketOverflowRetries
+      } else { 3 }
       $bucketAttempt          = 0
+      $bucketOverflowAttempt  = 0
       $bucketAttemptDone      = $false
       $resp                   = $null
 
@@ -5723,14 +5736,26 @@ while (-not $bucketRunSucceeded) {
           } catch {
               $errMsg = $_.Exception.Message
 
-              # 1) TRUE overflow -> escalate bucket count (existing behaviour).
+              # 1) Overflow -> retry SAME bucket N times before escalating. The XDR
+              # backend's "preempted ... high CPU/memory" is often transient load,
+              # not real data overflow. Only escalate when we've seen the overflow
+              # repeatedly for THIS bucket.
               if (Test-IsBucketOverflowError $_) {
-                  $lastBucketRunError = $errMsg
-                  Write-Warn2 ("bucket {0}/{1} exceeded result-size limits. Escalating bucket count and restarting this report. Error: {2}" -f `
-                    $bucketNo, $bucketCountToUse, $errMsg)
-                  $needEscalation    = $true
-                  $bucketAttemptDone = $true
-                  $resp              = $null
+                  $bucketOverflowAttempt++
+                  if ($bucketOverflowAttempt -lt $bucketOverflowRetries) {
+                      $sleepSec = [Math]::Min(180, 30 * [Math]::Pow(2, ($bucketOverflowAttempt - 1)))   # 30s, 60s, 120s
+                      Write-Warn2 ("bucket {0}/{1}: overflow/preempted (often transient XDR backend load). Retry attempt {2}/{3} after {4}s before escalating. Error: {5}" -f `
+                        $bucketNo, $bucketCountToUse, $bucketOverflowAttempt, $bucketOverflowRetries, $sleepSec, $errMsg)
+                      Start-Sleep -Seconds $sleepSec
+                      # Loop continues; same bucket retried at same bucketCountToUse.
+                  } else {
+                      $lastBucketRunError = $errMsg
+                      Write-Warn2 ("bucket {0}/{1} overflowed on {2} consecutive attempts -- treating as genuine data overflow. Escalating bucket count and restarting this report. Error: {3}" -f `
+                        $bucketNo, $bucketCountToUse, $bucketOverflowRetries, $errMsg)
+                      $needEscalation    = $true
+                      $bucketAttemptDone = $true
+                      $resp              = $null
+                  }
               }
               # 2) Transient platform error -> re-auth (Az + Graph) and retry SAME bucket.
               elseif (Test-IsTransientPlatformError $_) {

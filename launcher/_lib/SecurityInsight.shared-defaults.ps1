@@ -55,3 +55,27 @@ $global:Location               = 'westeurope'
 # eager assignment below is just a safety hint -- it's a no-op at Layer 0.
 # COMMUNITY mode: customer sets $global:SubscriptionId directly in LauncherConfig.custom.ps1.
 $global:SubscriptionId         = $global:MainLogAnalyticsWorkspaceSubId
+
+# --- SPN bridge: v2.3 -> v2.2 SI engine contract -----------------------------
+# 16 engine sites (Invoke-RiskAnalysis, Invoke-SIEngineRun, Send-SIRunHealthRow,
+# Build-IdentityProfileRow, Invoke-Output) still read $global:SI_SPN_*. v2.3
+# Connect-Platform sets $global:HighPriv_Modern_* + $global:AzureTenantId.
+# Bridge here so customer custom files don't need to repeat the mapping. All
+# four assignments are conditional ("if not already set") so a customer can
+# still override any of them later in custom.ps1 if needed.
+if (-not $global:SI_SPN_TenantId -and $global:AzureTenantId) {
+    $global:SI_SPN_TenantId = $global:AzureTenantId
+}
+if (-not $global:SI_SPN_AppId -and $global:HighPriv_Modern_ApplicationID_Azure) {
+    $global:SI_SPN_AppId = $global:HighPriv_Modern_ApplicationID_Azure
+}
+if (-not $global:SI_SPN_Secret -and $global:HighPriv_Modern_Secret_Azure) {
+    $global:SI_SPN_Secret = $global:HighPriv_Modern_Secret_Azure
+}
+if (-not $global:SI_SPN_ObjectId -and $global:SI_SPN_AppId) {
+    try {
+        $global:SI_SPN_ObjectId = (Get-AzADServicePrincipal -ApplicationId $global:SI_SPN_AppId -ErrorAction Stop).Id
+    } catch {
+        Write-Verbose ("SI shared-defaults: SPN ObjectId lookup failed -- engines that need it will retry: $($_.Exception.Message)")
+    }
+}

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.193
+## v2.2.194
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
 - release: SecurityInsight v2.2.193 - provisioning helpers self-heal on already-exists (92842167)
 - release: SecurityInsight v2.2.192 - Set-PlatformDefaultsSmtp creates file if missing (ae1d6e27)
 - release: SecurityInsight v2.2.191 - auto-detect stale SPN Az context at orchestrator start (28e3dd7b)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - v2.3: section 11 KV pulls soft-fail per-secret + Initialize-PlatformVm -PermissionsOnly (496c2c35)
 - v2.3 1E live-test fixes: 4 bugs found + fixed running Setup-Unattended end-to-end (10a9b6a6)
 - v2.3 Phase 1F: launcher Layer 1 = Connect-Platform (v2.2 fallback retained) (d1ce9d35)
-- v2.3 Phase 1E: drop Mode=Bridged from generator + Connect-Platform in Setup-Unattended (9c2dfbcc)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.194 — Move `SI_SPN_*` bridge from per-customer custom into solution shared-defaults
+
+The 4 v2.3 → v2.2 bridge lines (`SI_SPN_TenantId`, `SI_SPN_AppId`, `SI_SPN_Secret`, `SI_SPN_ObjectId`) are still needed — 16 engine sites read them. But every customer's `SecurityInsight.custom.ps1` was repeating them verbatim. Moved to `SecurityInsight.shared-defaults.ps1` (Layer 2) so the customer custom file gets simpler.
+
+Bridge logic is conditional (`if (-not $global:SI_SPN_X -and $source)`) — a customer can still override any of the four downstream in their `custom.ps1` if needed.
+
+`New-SISolutionConfig.ps1` no longer emits the bridge block in generated customs. Existing custom files with the redundant block keep working (they just re-assign the same values).
+
+This is the first step toward fully deprecating the SI_SPN_* contract — future task: refactor the 16 engine sites to read `$global:Context` directly, then drop the bridge altogether.
 
 ---
 

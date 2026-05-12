@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.212
+## v2.2.213
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
 - release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
 - release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
 - release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
@@ -33,13 +34,75 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
 - release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
 - release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
-- docs: SecurityInsight v2.2.183 - drop customer name from release notes (07d3e72e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.213 — Risk Analysis: snapshot-dedup on ExposureGraphNodes/Edges (the real CVE Detailed fix)
+
+The root cause of the CVE Detailed report **never running end-to-end at FVF scale** -- six previous releases of bucket-tuning, materialize/in-subquery rewrites, and scalar extraction were chasing a symptom. The actual bug:
+
+**`ExposureGraphNodes` and `ExposureGraphEdges` are snapshot tables.** Each refresh writes a new row per node/edge (Defender retains ~7 days at hourly cadence -> ~7 snapshots per entity). The deployed query had **no `arg_max(TimeGenerated, *)` dedup** on `_Assets`, `_OurAffectingEdges`, or `_Findings`.
+
+The two inner joins then multiplied snapshots together. At FVF the actual numbers were:
+
+| Stage | Real entities | With S=7 snapshots |
+|---|---:|---:|
+| `_Assets` | 1,700 | ~11,900 rows |
+| `_Findings` | 9,968 | ~70,000 rows |
+| `_OurAffectingEdges` | ~117K unique pairs | ~820K rows |
+| Post 2x inner join | 117K | **~40M rows** |
+
+That's the 357x multiplier. The post-join `summarize by AssetName, AssetLabel, FindingName, AadDeviceId` *should* have collapsed back to ~117K rows, but **one of those by-clause fields drifts across snapshots** (re-onboarded device, AAD-join state change, casing change), so groups never fully merged. AutoBucket then forced bucket-count up to 796 just to slice the bloated dataset under the response cap, projecting a 37-hour runtime.
+
+### Why Summary "worked" the whole time
+
+Summary has a **second** `summarize by SecuritySeverity, CriticalityTier, cmdb*` that collapses to ~50-100 rows regardless of upstream fanout. Detailed has no such second collapse -- every group survived to the response.
+
+### The fix
+
+Three `arg_max(TimeGenerated, *)` clauses added to both Summary and Detailed:
+
+```kql
+let _Assets =
+    ExposureGraphNodes
+    | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+    | summarize arg_max(TimeGenerated, *) by NodeId          // NEW
+    | ...
+
+let _OurAffectingEdges = materialize(
+    ExposureGraphEdges
+    | where tostring(EdgeLabel) contains "affecting"
+    | where TargetNodeId in (_AssetNodeIdSet)
+    | summarize arg_max(TimeGenerated, *) by SourceNodeId, TargetNodeId, EdgeLabel  // NEW
+);
+
+let _Findings =
+    ExposureGraphNodes
+    | where NodeLabel startswith "cve"
+    | where Categories has_any ("vulnerability_finding")
+    | where NodeId in (_RelevantFindingIds)
+    | summarize arg_max(TimeGenerated, *) by NodeId          // NEW
+    | ...
+```
+
+### Projected runtime after fix
+
+- `_Assets` -> 1,700 rows, `_Findings` -> 9,968 rows, `_OurAffectingEdges` -> ~117K rows
+- Post-join total: ~117K rows (matches the 54s portal diagnostic)
+- AutoBucket should converge at 4-8 buckets (not 796)
+- End-to-end CVE Detailed runtime: minutes, not hours
+
+Summary is also faster as a side-effect (less intermediate work pre-final-summarize) but functionally unchanged because its second summarize was already collapsing the fanout.
+
+### Operator guidance
+
+This is the right baseline for **every** EG-primary RA report. Any new report that joins `ExposureGraphEdges` to `ExposureGraphNodes` should dedup with `arg_max(TimeGenerated, *) by NodeId` (or `by SourceNodeId, TargetNodeId, EdgeLabel` for edges) immediately after the initial `where` filters. Document this in the report-authoring guide for v2.3.
 
 ---
 

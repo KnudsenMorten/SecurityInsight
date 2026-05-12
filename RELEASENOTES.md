@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.190
+## v2.2.191
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.191 - auto-detect stale SPN Az context at orchestrator start (28e3dd7b)
 - release: SecurityInsight v2.2.190 - restore operator Az context after smoke test (b29e07f3)
 - release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
 - release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - v2.3 Phase 1E: drop Mode=Bridged from generator + Connect-Platform in Setup-Unattended (9c2dfbcc)
 - release: SecurityInsight v2.2.173 - Write-SICustomConfig emits SI_SPN_Secret + global SI_ForceFullRun (3fb9690d)
 - release: SecurityInsight v2.2.172 - re-auth secret-SPN before LA ingest in profilers + RA (29b6f92e)
-- release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.191 — Auto-detect stale SPN Az context at orchestrator start
+
+If a previous Initialize-PlatformVm run left the Az context as the Modern SPN (smoke test does this), and you re-ran the orchestrator in the same shell, the early context check only validated tenant/sub — not account *type* — so it accepted the SPN as "the operator" and immediately failed at Step 2 with `New-AzADServicePrincipal: ClientSecretCredential authentication failed` (the rotated secret invalidated the cached SPN credential).
+
+Fix: the early check now also rejects any non-`User` account type. When a `ServicePrincipal` or `ManagedService` context is detected from a previous run, it silently `Disconnect-AzAccount` + `Connect-AzAccount` as the operator (uses cached token; no prompt). Console line `Az operator context:` now also prints the account *type* for diagnosis.
 
 ---
 

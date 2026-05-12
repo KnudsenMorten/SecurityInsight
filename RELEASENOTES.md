@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.213
+## v2.2.214
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
 - release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
 - release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
 - release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
@@ -33,13 +34,73 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
 - release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
 - release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
-- release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.214 — Risk Analysis: CVE Detailed -- collapse by DeviceKey, not by AssetName
+
+The v2.2.213 snapshot-dedup theory was wrong. ExposureGraphNodes/Edges aren't hourly-snapshot tables; they hold the latest state of each entity. The `arg_max(TimeGenerated, *)` adds cost without benefit, and v2.2.213 made no observable improvement on FVF -- still preempting at bucket=1..8.
+
+Two portal diagnostics located the real fanout:
+
+```kql
+ExposureGraphNodes
+| where deviceCategory == "Endpoint"
+| extend AadDeviceId = ...
+| summarize NodeIds = dcount(NodeId) by AadDeviceId
+| summarize Devices = count(),
+            AvgNodeIdsPerDevice = avg(NodeIds),       // = 1.876
+            MaxNodeIdsPerDevice = max(NodeIds),       // = 434
+            DevicesWithMultipleNodeIds = countif(NodeIds > 1)   // = 14
+```
+
+```kql
+ExposureGraphEdges
+| where tostring(EdgeLabel) contains "affecting"
+| summarize EdgeLabels = make_set(EdgeLabel), Cnt = count()
+// Result: EdgeLabels = ["affecting"], Cnt = 175,234
+```
+
+### Root cause: multi-NodeId fanout
+
+ExposureGraph assigns the same physical device multiple `NodeId`s (different telemetry sources / different views: host name + IP + domain + workgroup + ...). One aggregator/virtual device at FVF has **434 NodeIds** under a single `AadDeviceId`. Each NodeId has its own `affecting` edges to the same CVE.
+
+The deployed summarize keyed on `(AssetName, AssetLabel, FindingName, AadDeviceId)`. AssetName/AssetLabel **differ across the 434 NodeIds** (each carries its NodeName/NodeLabel), so the summarize keeps them as 434 separate groups. For a device with N CVEs that's 434xN output rows. Across the few outlier devices the total balloons to ~42M post-summarize rows.
+
+### The fix -- key the collapse on canonical device identity
+
+```kql
+| extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+...
+| summarize
+    AssetName  = any(AssetName),       // moved from by-clause to aggregate
+    AssetLabel = any(AssetLabel),      // same
+    AadDeviceId = any(AadDeviceId),    // same
+    ...
+  by DeviceKey, FindingName            // canonical (device, CVE) tuple
+```
+
+For the 434-NodeId outlier device, all 434 NodeIds share `AadDeviceId` -> share `DeviceKey` -> collapse to ONE row per CVE. Per-device fanout becomes 1x regardless of how many NodeId-views the EG carries.
+
+### Reverts vs v2.2.213
+
+- Removed the three `arg_max(TimeGenerated, *)` lines (on `_Assets`, `_OurAffectingEdges`, `_Findings`) -- they added cost without benefit since EG tables are latest-state, not hourly snapshots.
+
+### Expected behavior after fix
+
+- AutoBucket converges at 1-4 buckets (down from 796).
+- Detailed output: ~50K-200K rows depending on average CVE count per device.
+- Runtime: minutes, matching Summary's per-bucket cost.
+
+### Operator guidance for new EG-primary RA reports
+
+When emitting per-row detail from `ExposureGraphEdges`-driven queries, **always collapse on the canonical device key**, never on NodeName/NodeLabel. EG may carry the same logical entity under many NodeIds; keying the output summarize on `AssetName` will silently fanout when an aggregator-style NodeId set exists.
 
 ---
 

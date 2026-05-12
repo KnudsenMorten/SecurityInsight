@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.186
+## v2.2.187
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
 - release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
 - release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
 - release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
 - release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
 - release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
-- release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.187 — Drop redundant `internal/` gitignore so Sync-AutomateIT-Engine pulls it to internal hosts
+
+`Sync-AutomateIT-Engine.ps1` pulls a GitHub zipball of the private monorepo's main branch; anything `.gitignore`d is never in the zip, so it can't sync to other internal hosts. The old `SOLUTIONS/SecurityInsight/internal/*` gitignore was redundant with the publish workflow's strip logic (`publish.yml` lines 159 + 473 already remove both `internal/` and `INTERNAL/` directories from public mirrors) — and it was actively blocking internal-to-internal sync. Removed.
+
+**Now tracked** (newly visible to `Sync-AutomateIT-Engine`):
+- `SOLUTIONS/SecurityInsight/internal/Migrate-FromV1.ps1`
+- `SOLUTIONS/SecurityInsight/internal/onboard-internal-AutomateIT.md`
+- `SOLUTIONS/SecurityInsight/internal/side-by-side-install-from-v1.md`
+- `SOLUTIONS/SecurityInsight/internal/README.md` (was previously an explicit `!` exception; now ordinary tracked file)
+
+Public mirrors stay unaffected — the publish workflow continues to strip the folder before pushing.
 
 ---
 

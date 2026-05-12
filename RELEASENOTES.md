@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.200
+## v2.2.201
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
 - release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
 - release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
 - release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
 - RA: column-shape ALL engine-set columns (was dropping Weighted/RfCons/RfProb on first-row miss) (a918c0a3)
 - RA: ONE safe-math score path (consolidate the two write blocks into _setScores helper) (be182aa9)
-- release: SecurityInsight v2.2.174 - README ch.5 'How to fine-tune reporting' + RA score recompute + AssetDetectedInReportName + v2.3 platform layer additive (5e1dd36d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.201 — Risk Analysis: AutoBucketMax cap raised from 1024 → 131072 for 1M+ asset tenants
+
+Four binding caps on AutoBucket's safety ceiling were all set at 1024 (some as low as 64), which is fine for small/mid tenants but blocks 100K+ asset estates from ever finding a working bucket count. Raising the entire stack to **131072** (2^17 — 17 exponential probes worst-case, still ~10 min to converge even at the ceiling):
+
+- Engine fallback in `Invoke-RiskAnalysis.ps1`: 64 -> 131072
+- LauncherConfig.defaults.ps1: 1024 -> 131072
+- launcher.internal-vm.ps1 + launcher.community-vm.ps1 CLI `[ValidateRange(1,2048)]` -> `[ValidateRange(1,131072)]`
+- launcher.internal-vm.ps1 + launcher.community-vm.ps1 `$AutoBucketMax_Default`: 1024 -> 131072
+
+No downside for small tenants -- AutoBucket only escalates as needed, so a 100-device estate still probes at counts <= 8. The cap only matters when a query actually preempts at all lower counts. Combined with v2.2.200's composite-key bucketing for `*_Detailed` reports, a 1M-device tenant with hot assets should now converge in the 10K-65K bucket range without hitting the ceiling.
+
+Customers can still override per-launcher via the 5-layer config or CLI `-AutoBucketMax N`.
 
 ---
 

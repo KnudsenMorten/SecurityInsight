@@ -34,7 +34,7 @@ param(
     # Adaptive bucketing
     [switch]$AutoBucketCount,
     [switch]$AutoBucketCache,
-    [ValidateRange(1,2048)][int]$AutoBucketMax,
+    [ValidateRange(1,131072)][int]$AutoBucketMax,
     [Alias('ResetCache')][switch]$ResetCacheSwitch,
 
     # Other engine knobs
@@ -100,7 +100,7 @@ $ReportTemplate_Default_Detailed = 'RiskAnalysis_Detailed'
 # Adaptive bucketing baseline (engine reads these globals).
 $AutoBucketCount_Default = $true
 $AutoBucketCache_Default = $true
-$AutoBucketMax_Default   = 1024
+$AutoBucketMax_Default   = 131072
 
 # Cache + diagnostics
 $ResetCache_Default      = $false

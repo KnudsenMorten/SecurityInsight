@@ -185,7 +185,7 @@ function Show-ResolvedConfig {
 # longer need to set UseQueryBucketing/DefaultBucketCount per ReportTemplate; those
 # fields are vestigial -- the engine's hardcoded base + AutoBucket replaces them.
 if ($null -eq $global:AutoBucketCount) { $global:AutoBucketCount = $true }    # adaptive on by default
-if ($null -eq $global:AutoBucketMax)   { $global:AutoBucketMax = 64 }         # safety cap for probing
+if ($null -eq $global:AutoBucketMax)   { $global:AutoBucketMax = 131072 }     # safety cap for probing (1M+ asset tenants)
 if ($null -eq $global:AutoBucketCache) { $global:AutoBucketCache = $true }    # persist chosen counts to disk
 
 # Optional: force rebuild of AutoBucket cache file

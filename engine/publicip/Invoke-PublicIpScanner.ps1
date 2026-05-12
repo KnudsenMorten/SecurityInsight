@@ -49,7 +49,7 @@ if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $fals
 # Knobs (silent defaults so the per-call loop doesn't WARN every iteration).
 if (-not $global:SI_Shodan_ThrottleMs)         { $global:SI_Shodan_ThrottleMs         = 1100 }   # 1 call/sec + headroom
 if (-not $global:SI_Shodan_TimeoutSec)         { $global:SI_Shodan_TimeoutSec         = 15 }
-if (-not $global:SI_Shodan_TierMax)            { $global:SI_Shodan_TierMax            = 1 }     # default scan Tier 0+1 only
+if (-not $global:SI_Shodan_TierMax)            { $global:SI_Shodan_TierMax            = 3 }     # default scan all tiers (T0-T3); tighten via custom for cost control
 if (-not $global:SI_Shodan_AssetLimit)         { $global:SI_Shodan_AssetLimit         = 0 }     # 0 = no cap
 if ($null -eq $global:SI_Shodan_LookbackDays)  { $global:SI_Shodan_LookbackDays       = 8 }     # how far back to look in Profile_CL
 if ($null -eq $global:SI_Shodan_SkipLA_Ingest) { $global:SI_Shodan_SkipLA_Ingest      = $false }
@@ -173,6 +173,11 @@ union isfuzzy=true
     | where TimeGenerated > ago(${lookbackDays}d)
     | summarize arg_max(CollectionTime, *) by PrimaryEntityId
     | where toint(coalesce(Tier, 99)) <= $tierMax
+    // Servers only -- workstation PublicIp is the user's current ISP egress NAT
+    // (home, coffee shop, cellular). Scanning it = scanning a random consumer
+    // ISP, not anything the customer owns. DeviceType == "Server" covers both
+    // Windows + Linux server roles in the SI endpoint schema.
+    | where tostring(column_ifexists("DeviceType", "")) =~ "Server"
     | extend _ip = tostring(coalesce(
                        column_ifexists("PublicIp", ""),
                        column_ifexists("PublicIpAddress", ""),
@@ -190,11 +195,14 @@ union isfuzzy=true
     | where TimeGenerated > ago(${lookbackDays}d)
     | summarize arg_max(CollectionTime, *) by PrimaryEntityId
     | where toint(coalesce(Tier, 99)) <= $tierMax
-    | where tobool(column_ifexists("IsPubliclyExposed", false)) == true
+    // Read PipAddress (the actual SI schema column for microsoft.network/publicipaddresses
+    // resources) FIRST, then legacy fallbacks. Do NOT filter on IsPubliclyExposed --
+    // PIP resources often have it null/false because they ARE the public IP, not
+    // something exposed behind one. The IP-regex filter below gates non-IP values.
     | extend _ip = tostring(coalesce(
+                       column_ifexists("PipAddress", ""),
                        column_ifexists("PublicIpAddress", ""),
-                       column_ifexists("IpAddress", ""),
-                       column_ifexists("AssetName", "")))
+                       column_ifexists("IpAddress", "")))
     | where isnotempty(_ip)
     | project AssetName, AssetEngine = "azure", AssetTier = toint(coalesce(Tier, 99)),
               cmdbId              = tostring(column_ifexists("cmdbId", "")),

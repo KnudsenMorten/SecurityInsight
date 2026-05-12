@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.194
+## v2.2.195
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
 - release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
 - release: SecurityInsight v2.2.193 - provisioning helpers self-heal on already-exists (92842167)
 - release: SecurityInsight v2.2.192 - Set-PlatformDefaultsSmtp creates file if missing (ae1d6e27)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - RA bugfix: recompute RiskConsequence/Probability/Total scores AFTER token enrichment (dfe3e2c9)
 - v2.3: section 11 KV pulls soft-fail per-secret + Initialize-PlatformVm -PermissionsOnly (496c2c35)
 - v2.3 1E live-test fixes: 4 bugs found + fixed running Setup-Unattended end-to-end (10a9b6a6)
-- v2.3 Phase 1F: launcher Layer 1 = Connect-Platform (v2.2 fallback retained) (d1ce9d35)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.195 — PublicIP scanner discovery fixes: TierMax default, Azure column name, workstation NAT-IPs
+
+Audit against a real tenant CSV dump found the scanner discovering 0 IPs from Azure and only the wrong subset of endpoint IPs. Three fixes:
+
+1. **`SI_Shodan_TierMax` default `1` → `3`** — covers all tiers (T0–T3) by default. Most public-facing Azure PIPs in customer estates classify as Tier 3 (network gear, not "business critical"). Tightening back to 1 stays a one-line opt-in for Shodan cost control.
+
+2. **Azure side column name fix** — KQL was reading `column_ifexists("PublicIpAddress")` and `column_ifexists("IpAddress")`. The actual SI Azure schema column for `microsoft.network/publicipaddresses` resources is `PipAddress`. Now reads `PipAddress` first, with the old names as legacy fallbacks. Also dropped the `IsPubliclyExposed == true` filter — PIP resources have that flag null/false because they ARE the public IP, not something behind one. The terminal `IP-regex` filter still gates non-IP values.
+
+3. **Endpoint side now servers-only** — `SI_Endpoint_Profile_CL.PublicIp` is MDE-reported egress NAT, which for **workstations** is the user's current ISP egress (home WiFi, cafe, cellular). Scanning that = scanning a random consumer ISP, generating false-positive findings against IPs the customer doesn't own. Added `where DeviceType =~ "Server"` to the endpoint union — covers both Windows + Linux servers; drops workstations entirely.
+
+Audit on a 1 001-row Azure profile + 431-row endpoint profile snapshot:
+- Pre-fix: scanner saw 0 IPs (everything filtered by tier + wrong column + IsPubliclyExposed).
+- Post-fix: 10 Azure PIPs + 11 Windows servers' egress IPs = real, customer-owned surface.
 
 ---
 

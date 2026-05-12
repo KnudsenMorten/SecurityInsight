@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.201
+## v2.2.202
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
 - release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
 - release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
 - release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.176 - Identity severity re-rating + engine reorder removal (71ff5f00)
 - release: SecurityInsight v2.2.175 - canonical OPO + engine recount + sign-in lookback unified (a25a5bd5)
 - RA: column-shape ALL engine-set columns (was dropping Weighted/RfCons/RfProb on first-row miss) (a918c0a3)
-- RA: ONE safe-math score path (consolidate the two write blocks into _setScores helper) (be182aa9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.202 — Risk Analysis: filter `_Findings` to CVE-only in `Device_Missing_CVEs_*` reports
+
+Bug: both `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed` defined `_Findings` as **all** ExposureGraph nodes with any "finding" category — which includes CVEs, SCID recommendations, misconfigurations, network exposures, baseline failures, and every other EG-tracked finding type. The query then carried this entire mixed set through the asset × edge × finding join (in both directions, via the union), and only filtered to CVE rows much later via the `_cveMinAgeDays` lens. Result: the join's intermediate row count was easily 10x larger than necessary, and the XDR backend preempted on devices with otherwise modest CVE backlogs.
+
+Why the Recommendations reports weren't affected: their `_Findings` already includes `| where NodeLabel !contains "cve"`, which correctly excludes CVE nodes from the recommendation-focused join.
+
+Fix: add `| where NodeLabel startswith "cve"` to the `_Findings` let in both CVE reports (lines 121 + 398 in `RiskAnalysis_Queries_Locked.yaml`). The CVE and Recommendation reports now use **mutually exclusive** finding filters (`startswith "cve"` vs `!contains "cve"`), so each report only carries its relevant finding type through the join expansion.
+
+Expected impact on a tenant with ~850 endpoints + modest CVE backlog: AutoBucket convergence for `Device_Missing_CVEs_Detailed` drops from ~32 buckets at ~122s/bucket to ~4-8 buckets at ~30s/bucket. Combined with v2.2.200 composite-key bucketing, this should be the structural fix that gets the Detailed CVE report finishing in under 5 minutes on a 1700-device estate.
 
 ---
 

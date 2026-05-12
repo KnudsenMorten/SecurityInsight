@@ -553,36 +553,25 @@
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
-              // v2.2.208 -- dropped bag_pack("edge", EdgePropsAll). No downstream
-              // extend or coalesce reads Properties.edge in this report.
-              | extend Properties =
-                  bag_merge(
-                      bag_pack("finding", FindingProps),
-                      bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData))
-                  )
-              | extend Impact = todouble(coalesce(Properties.raw.cvssScore, Properties.finding.raw.cvssScore, Properties.raw.cvss.cvssScore))
+              // v2.2.210 -- Properties bag eliminated. All Properties.x.y.z reads
+              // below replaced with the scalar columns extracted up-front in
+              // _Findings (Finding{Severity,CvssScore,HasExploit,IsExploitVerified,
+              // IsInExploitKit,IsZeroDay,Description,ReferenceUrl}). Per-row
+              // bag_merge + ~10 dynamic-property lookups -> ~10 typed column reads.
+              | extend Impact = FindingCvssScore
               | extend SecuritySeverity = case(
-                  tolower(tostring(Properties.raw.severity)) == "critical", "Very High",
-                  tolower(tostring(Properties.raw.severity)) == "high",     "High",
-                  tolower(tostring(Properties.raw.severity)) == "medium",   "Medium",
-                  tolower(tostring(Properties.raw.severity)) == "low",      "Low",
+                  tolower(FindingSeverity) == "critical", "Very High",
+                  tolower(FindingSeverity) == "high",     "High",
+                  tolower(FindingSeverity) == "medium",   "Medium",
+                  tolower(FindingSeverity) == "low",      "Low",
                   "Low")
               | where FindingLabel contains "CVE"
               | where not (FindingName in (_excludedCves))
-              // v2.2.208 -- removed redundant `extend CVELastModified` + hardcoded
-              // `where CVELastModified < ago(40d)`. The hardcoded filter ignored
-              // _cveMinAgeDays / $global:SI_CVE_MinAgeDays AND silently dropped
-              // CVEs with null lastModifiedDate. CVELastModified now flows through
-              // summarize from the canonical parameterised filter above; the only
-              // CVE-age control is _cveMinAgeDays.
-              | extend HasExploit        = tobool(coalesce(Properties.finding.rawData.hasExploit,        Properties.raw.hasExploit,        Properties.finding.raw.hasExploit))
-              | extend IsExploitVerified = tobool(coalesce(Properties.finding.rawData.isExploitVerified, Properties.raw.isExploitVerified, Properties.finding.raw.isExploitVerified))
-              | extend IsInExploitKit    = tobool(coalesce(Properties.finding.rawData.isInExploitKit,    Properties.raw.isInExploitKit,    Properties.finding.raw.isInExploitKit))
-              | extend IsZeroDay         = tobool(coalesce(Properties.finding.rawData.isZeroDay,         Properties.raw.isZeroDay,         Properties.finding.raw.isZeroDay))
-              | extend CveUrl = tostring(coalesce(
-                  Properties.raw.referenceUrl, Properties.raw.url, Properties.raw.detailsUrl, Properties.raw.vendorAdvisoryUrl,
-                  Properties.finding.rawData.referenceUrl, Properties.finding.rawData.url, Properties.finding.raw.url,
-                  strcat("https://nvd.nist.gov/vuln/detail/", FindingName)))
+              | extend HasExploit        = FindingHasExploit
+              | extend IsExploitVerified = FindingIsExploitVerified
+              | extend IsInExploitKit    = FindingIsInExploitKit
+              | extend IsZeroDay         = FindingIsZeroDay
+              | extend CveUrl = iif(isempty(FindingReferenceUrl), strcat("https://nvd.nist.gov/vuln/detail/", FindingName), FindingReferenceUrl)
               | extend CVSSDesc = FindingDescription
               | extend RF_P_ExploitSignals  = iff(HasExploit == true or IsExploitVerified == true or IsInExploitKit == true or IsZeroDay == true, 1, 0)
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)

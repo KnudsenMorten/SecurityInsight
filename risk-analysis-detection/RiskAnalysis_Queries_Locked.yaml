@@ -118,10 +118,28 @@
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
 
+          // v2.2.204 -- pre-compute the set of NodeIds that have at least one
+          // "affecting" edge. Used to narrow _Findings to only CVEs actually
+          // connected to anything in this tenant (typically ~10K-50K vs the
+          // ~350K full CVE catalog). Identical OUTPUT to before -- CVEs with
+          // no affecting edge to any device produced zero rows downstream
+          // anyway because the inner join with _Assets dropped them -- just
+          // a dramatically smaller intermediate scan and faster join.
+          let _AffectingNodeIds =
+              ExposureGraphEdges
+              | where tostring(EdgeLabel) contains "affecting"
+              | project NodeId = SourceNodeId
+              | union (
+                  ExposureGraphEdges
+                  | where tostring(EdgeLabel) contains "affecting"
+                  | project NodeId = TargetNodeId
+                )
+              | distinct NodeId;
           let _Findings =
               ExposureGraphNodes
               | where NodeLabel startswith "cve"
               | where Categories has_any ("vulnerability_finding")
+              | where NodeId in (_AffectingNodeIds)
               //__CVE_FILTER_BEGIN__
               | where 1 == 1
               //__CVE_FILTER_END__
@@ -398,10 +416,28 @@
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
 
+          // v2.2.204 -- pre-compute the set of NodeIds that have at least one
+          // "affecting" edge. Used to narrow _Findings to only CVEs actually
+          // connected to anything in this tenant (typically ~10K-50K vs the
+          // ~350K full CVE catalog). Identical OUTPUT to before -- CVEs with
+          // no affecting edge to any device produced zero rows downstream
+          // anyway because the inner join with _Assets dropped them -- just
+          // a dramatically smaller intermediate scan and faster join.
+          let _AffectingNodeIds =
+              ExposureGraphEdges
+              | where tostring(EdgeLabel) contains "affecting"
+              | project NodeId = SourceNodeId
+              | union (
+                  ExposureGraphEdges
+                  | where tostring(EdgeLabel) contains "affecting"
+                  | project NodeId = TargetNodeId
+                )
+              | distinct NodeId;
           let _Findings =
               ExposureGraphNodes
               | where NodeLabel startswith "cve"
               | where Categories has_any ("vulnerability_finding")
+              | where NodeId in (_AffectingNodeIds)
               //__CVE_FILTER_BEGIN__
               | where 1 == 1
               //__CVE_FILTER_END__

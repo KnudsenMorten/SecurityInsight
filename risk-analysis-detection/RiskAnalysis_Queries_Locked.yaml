@@ -113,7 +113,6 @@
                   AssetNodeId = NodeId,
                   AssetName   = NodeName,
                   AssetLabel  = NodeLabel,
-                  AssetProps  = NodeProperties,
                   AadDeviceId,
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
@@ -149,13 +148,18 @@
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 
+          // v2.2.209 -- dropped AssetProps from the join projection. The full EG
+          // endpoint NodeProperties bag (typically 5-20 KB per row) was carried
+          // through 141K joined rows on FVF -- gigabytes of intermediate -- and
+          // never read by any downstream extend/coalesce. AssetProps removal is
+          // the long-suspected cause of the AutoBucket preempt at low N values.
           let _AssetFindingEdges =
               _Edges
               | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
               | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
                         FindingName, FindingLabel, FindingCategories, FindingProps,
-                        EdgeLabel, EdgeProps, AssetProps;
+                        EdgeLabel, EdgeProps;
 
           _AssetFindingEdges
               | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
@@ -192,7 +196,6 @@
                   FindingLabel          = any(FindingLabel),
                   FindingCategories     = any(FindingCategories),
                   FindingProps          = any(FindingProps),
-                  AssetProps            = any(AssetProps),
                   EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
                   EG_IsExcluded         = any(EG_IsExcluded),
                   CVELastModified       = any(CVELastModified),
@@ -418,7 +421,6 @@
                   AssetNodeId = NodeId,
                   AssetName   = NodeName,
                   AssetLabel  = NodeLabel,
-                  AssetProps  = NodeProperties,
                   AadDeviceId,
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
@@ -454,13 +456,18 @@
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 
+          // v2.2.209 -- dropped AssetProps from the join projection. The full EG
+          // endpoint NodeProperties bag (typically 5-20 KB per row) was carried
+          // through 141K joined rows on FVF -- gigabytes of intermediate -- and
+          // never read by any downstream extend/coalesce. AssetProps removal is
+          // the long-suspected cause of the AutoBucket preempt at low N values.
           let _AssetFindingEdges =
               _Edges
               | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
               | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
                         FindingName, FindingLabel, FindingCategories, FindingProps,
-                        EdgeLabel, EdgeProps, AssetProps;
+                        EdgeLabel, EdgeProps;
 
           _AssetFindingEdges
               | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
@@ -497,7 +504,6 @@
                   FindingLabel          = any(FindingLabel),
                   FindingCategories     = any(FindingCategories),
                   FindingProps          = any(FindingProps),
-                  AssetProps            = any(AssetProps),
                   EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
                   EG_IsExcluded         = any(EG_IsExcluded),
                   CVELastModified       = any(CVELastModified),
@@ -1293,7 +1299,6 @@
                   FindingLabel          = any(FindingLabel),
                   FindingCategories     = any(FindingCategories),
                   FindingProps          = any(FindingProps),
-                  AssetProps            = any(AssetProps),
                   EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
                   EG_IsExcluded         = any(EG_IsExcluded),
             MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
@@ -1544,7 +1549,6 @@
                   FindingLabel          = any(FindingLabel),
                   FindingCategories     = any(FindingCategories),
                   FindingProps          = any(FindingProps),
-                  AssetProps            = any(AssetProps),
                   EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
                   EG_IsExcluded         = any(EG_IsExcluded),
             MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),

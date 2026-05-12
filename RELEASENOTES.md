@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.205
+## v2.2.206
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
 - release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
 - release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
 - release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
 - release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
 - release: SecurityInsight v2.2.178 - doc count drift fix post v2.2.177 (527e490f)
-- release: SecurityInsight v2.2.177 - drop 5 noisy Identity reports + remove platform-data.json layer (a65c4e3f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.206 — Risk Analysis: drop dead `_AssetFindingEdges_oneway` join branch
+
+Tenant diagnostic (FVF, 1712 endpoints, 175,235 affecting edges) proved the `oneway` join branch always returns zero rows:
+
+| edges_total | asset_is_source | asset_is_target | asset_on_both |
+|---:|---:|---:|---:|
+| 175,235 | **0** | 141,464 | 0 |
+
+In ExposureGraph, `affecting` edges are exclusively directional `finding → asset` (Source = finding NodeId, Target = asset NodeId). The previous YAML hedged with a `_AssetFindingEdges_oneway` branch that matched edges where Source = asset and Target = finding, then `union`'d both directions. The hedge produced no output (zero edges have asset on the Source side) but cost the engine a full second join + union materialisation on every run.
+
+Fix: dropped `_AssetFindingEdges_oneway` and the surrounding union. The canonical `_AssetFindingEdges` is now a single inner join in the right direction. Also tightened the `_Edges` pre-filter (v2.2.205) from `SourceNodeId in (set) or TargetNodeId in (set)` to just `TargetNodeId in (set)` since asset never appears on the Source side — eliminates 33,771 spurious edges (asset_is_source = 0 means the OR was matching only via TargetNodeId anyway, but the predicate cost was real).
+
+Identical output. ~½ the join cost. Applied to `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` reports retain the union (their edge profile may differ — diagnose before changing).
+
+Combined effect of v2.2.197 → v2.2.206 on a 1700-device tenant with no other knobs touched: AutoBucket should converge in single digits (vs the 448-896 we saw before the series).
 
 ---
 

@@ -153,30 +153,29 @@
           // output -- the existing inner join with _Assets dropped non-tenant rows
           // anyway, just much later in the pipeline.
           let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
+          // v2.2.206 -- diagnostic on FVF (1712 endpoints, 350K CVE catalog)
+          // confirmed `affecting` edges in EG are exclusively finding -> asset
+          // (Source = finding, Target = asset): asset_is_source = 0,
+          // asset_is_target = 141464 on a sample of 175235 affecting edges.
+          // Dropped the dead `_AssetFindingEdges_oneway` join branch and the
+          // union (oneway produced zero rows on every run). Single canonical
+          // join now -- ~half the intermediate join cost, identical output.
+          // Edge filter tightened to TargetNodeId-only since asset never appears
+          // on the Source side.
           let _Edges =
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
-              | where SourceNodeId in (_AssetNodeIdSet) or TargetNodeId in (_AssetNodeIdSet)
+              | where TargetNodeId in (_AssetNodeIdSet)
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 
-          let _AssetFindingEdges_oneway =
-              _Edges
-              | join kind=inner (_Assets)   on $left.SourceNodeId == $right.AssetNodeId
-              | join kind=inner (_Findings) on $left.TargetNodeId == $right.FindingNodeId
-              | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
-                        FindingName, FindingLabel, FindingCategories, FindingProps,
-                        EdgeLabel, EdgeProps, AssetProps;
-
-          let _AssetFindingEdges_otherway =
+          let _AssetFindingEdges =
               _Edges
               | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
               | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
                         FindingName, FindingLabel, FindingCategories, FindingProps,
                         EdgeLabel, EdgeProps, AssetProps;
-
-          let _AssetFindingEdges = union _AssetFindingEdges_oneway, _AssetFindingEdges_otherway;
 
           _AssetFindingEdges
               | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
@@ -459,30 +458,29 @@
           // output -- the existing inner join with _Assets dropped non-tenant rows
           // anyway, just much later in the pipeline.
           let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
+          // v2.2.206 -- diagnostic on FVF (1712 endpoints, 350K CVE catalog)
+          // confirmed `affecting` edges in EG are exclusively finding -> asset
+          // (Source = finding, Target = asset): asset_is_source = 0,
+          // asset_is_target = 141464 on a sample of 175235 affecting edges.
+          // Dropped the dead `_AssetFindingEdges_oneway` join branch and the
+          // union (oneway produced zero rows on every run). Single canonical
+          // join now -- ~half the intermediate join cost, identical output.
+          // Edge filter tightened to TargetNodeId-only since asset never appears
+          // on the Source side.
           let _Edges =
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
-              | where SourceNodeId in (_AssetNodeIdSet) or TargetNodeId in (_AssetNodeIdSet)
+              | where TargetNodeId in (_AssetNodeIdSet)
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 
-          let _AssetFindingEdges_oneway =
-              _Edges
-              | join kind=inner (_Assets)   on $left.SourceNodeId == $right.AssetNodeId
-              | join kind=inner (_Findings) on $left.TargetNodeId == $right.FindingNodeId
-              | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
-                        FindingName, FindingLabel, FindingCategories, FindingProps,
-                        EdgeLabel, EdgeProps, AssetProps;
-
-          let _AssetFindingEdges_otherway =
+          let _AssetFindingEdges =
               _Edges
               | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
               | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
                         FindingName, FindingLabel, FindingCategories, FindingProps,
                         EdgeLabel, EdgeProps, AssetProps;
-
-          let _AssetFindingEdges = union _AssetFindingEdges_oneway, _AssetFindingEdges_otherway;
 
           _AssetFindingEdges
               | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)

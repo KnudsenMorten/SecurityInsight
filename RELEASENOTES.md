@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.196
+## v2.2.197
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
 - release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
 - release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
 - release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - SI README: add chapter 5 'How to fine-tune reporting' (templates + queries + exclusions) (0e9d19e7)
 - RA: add AssetDetectedInReportName column (operator hunt-back) (67cef594)
 - RA bugfix: recompute RiskConsequence/Probability/Total scores AFTER token enrichment (dfe3e2c9)
-- v2.3: section 11 KV pulls soft-fail per-secret + Initialize-PlatformVm -PermissionsOnly (496c2c35)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.197 — Risk Analysis: short-circuit lake probes after first permanent failure
+
+RA's per-query lake-vs-hybrid retry was only flipping the `_SentinelLakeUnavailable` short-circuit on RBAC errors (`InvalidDatabaseInQuery` / `403` / `401` / "not available for current user"). Tenants where the Sentinel data lake feature simply isn't enabled return `TenantNotFound` / `404` / "Tenant not registered" instead — those weren't matched, so every subsequent query re-probed the dead lake endpoint, paying the same multi-second 404 timeout dozens of times per report (and worse, multiple times per AutoBucket retry iteration).
+
+Fix: broadened the pattern match in the lake-catch block to include `TenantNotFound|404|Not Found|Tenant not registered`, and now ANY lake failure (matched or unknown) flips the run-wide flag. Within a single RA run the lake is either available or it isn't — there's no value in re-probing once it's failed once. The flag still resets per RA invocation, so a tenant that gets data-lake enabled mid-day will start using it on the next launcher run.
+
+Net effect on a tenant without data lake enabled: lake endpoint is probed exactly once at run start, then hybrid mode (Invoke-AzOperationalInsightsQuery) is used for every subsequent query in the run. Before this fix, a single AutoBucket loop with 7 retries × 25 reports = ~175 wasted lake probes per run.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.208
+## v2.2.209
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
 - release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
 - release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
 - release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.183 - Layer 1 loads BOTH Connect-Platform + platform-defaults.ps1 (41918b5d)
 - release: SecurityInsight v2.2.182 - CRITICAL provisioning fix: Modern SPN KV read grant (b097be6a)
 - release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
-- release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.209 — Risk Analysis: drop `AssetProps` dead-weight bag from CVE join
+
+The smoking gun for AutoBucket still preempting at 128 buckets on v2.2.208 — `AssetProps` was being carried through the entire pipeline for nothing.
+
+`AssetProps = NodeProperties` was projected in `_Assets` (full EG endpoint node bag — typically 5-20 KB of dynamic JSON per row), carried through `_AssetFindingEdges` (141K joined rows × ~10 KB = **1.4 GB of intermediate** dynamic data on FVF), preserved via `any(AssetProps)` in the summarize... and then **never read by any downstream `extend` / `coalesce` / `project`**. Pure dead weight, but the EG backend's query engine still had to materialise and shuffle it through every join + summarize stage.
+
+Fix: dropped `AssetProps` from the `_Assets` projection, the `_AssetFindingEdges` projection, and the summarize aggregate. Three lines deleted total. Identical output rows. The intermediate join + summarize should drop ~1.4 GB on FVF.
+
+Applied to `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` still have `AssetProps` -- they currently work in 1 bucket so the cleanup isn't urgent there.
+
+This is the change most likely to actually unblock AutoBucket convergence at single-digit bucket counts. If v2.2.209 still preempts, the bottleneck is upstream of this YAML (EG backend pricing on the join itself) and worth tracing in the AH portal with a manual bucket=1 run + execution stats.
 
 ---
 

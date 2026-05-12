@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.185
+## v2.2.186
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
 - release: SecurityInsight v2.2.185 - tune Properties JSON depth to 15 (was 100) (148eb83b)
 - release: SecurityInsight v2.2.184 - bump Properties JSON depth 10->100 in Build-AzureProfileRow (4a7de991)
 - docs: SecurityInsight v2.2.183 - drop customer name from release notes (07d3e72e)
@@ -33,13 +34,36 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
 - release: SecurityInsight v2.2.168 - Initialize-PlatformAutomationFramework short-circuit (5510403a)
 - release: SecurityInsight v2.2.167 - Port-V1Platform generates platform-defaults.ps1 as v1 shim (f1657b5b)
-- release: SecurityInsight v2.2.166 - Phase 2.5 seed v1 KV with SI secrets (6fcaf56d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.186 — One-shot tenant provisioning: orchestrator now wires Azure OpenAI + SMTP block + SI custom config
+
+`Initialize-PlatformVm.ps1` gains three optional steps so a single command can produce a fully-ready host. All conditional — pass the relevant params and they fire; omit and the script behaves exactly like before.
+
+**New helper scripts** (also runnable stand-alone):
+
+- `SOLUTIONS\PlatformConfiguration\INTERNAL\Provision\Deploy-PlatformAI.ps1` — provisions an Azure OpenAI account + a model deployment (default `gpt-4.1-mini@2025-04-14` — 4o family is deprecated), then uploads `OpenAI-ApiKey` / `OpenAI-Endpoint` / `OpenAI-Deployment` to the platform KV. Idempotent. Also accepts `-ShodanApiKey`, `-SmtpUser`, `-SmtpPassword` so all per-tenant secrets land in KV in one call.
+- `SOLUTIONS\PlatformConfiguration\INTERNAL\Provision\Set-PlatformDefaultsSmtp.ps1` — replaces the SMTP block at the bottom of `platform-defaults.ps1` with a parameterised version. Server / port / from / SSL are written inline; user + password are pulled from KV at runtime (`Smtp-User`, `Smtp-Password`) so credentials never get committed.
+- `SOLUTIONS\SecurityInsight\INTERNAL\New-SISolutionConfig.ps1` — emits `SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1` from a small set of per-tenant params (workspace name + RG, storage account, mail recipients, optional OpenAI account, optional Defender workspace ResourceId). Subscription is auto-derived from the current Az context; workspace ResourceId and DCE ingestion URI are auto-resolved.
+
+**New optional params on `Initialize-PlatformVm.ps1`** (omit any to skip that step):
+
+| Step | Params |
+|---|---|
+| 8 — Deploy AI | `-OpenAIAccountName -OpenAIResourceGroup -OpenAILocation -OpenAIModelName -OpenAIModelVersion -OpenAICapacityTpm -ShodanApiKey -SmtpUser -SmtpPassword` |
+| 9 — SMTP block | `-SmtpServer -SmtpPort -SmtpFrom -SmtpUseSSL` |
+| 10 — SI custom | `-SIWorkspaceName -SIWorkspaceResourceGroup -SIStorageAccount -SIMailTo -SIDefenderWorkspaceResourceId` |
+
+Final "DONE" message now prints a sender-verification reminder if `-SmtpFrom` was supplied.
+
+PS 5.1 compatible (no ternary, no `??`).
 
 ---
 

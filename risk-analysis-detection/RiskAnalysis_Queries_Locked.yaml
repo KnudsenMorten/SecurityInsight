@@ -58,7 +58,12 @@
       - RiskScoreTotal_Weighted
       ReportQuery:
       - |-
-          // CVE max-age filter. Engine substitutes _cveMinAgeDays from per-report exclude.custom.json (CveMinAgeDays). 0 = no age filter (default).
+          // CVE MIN-age filter (only show CVEs older than _cveMinAgeDays). Engine
+          // substitutes _cveMinAgeDays from per-report exclude.custom.json
+          // (CveMinAgeDays). 0 = no age filter (default; show all).
+          // The keep-set explicitly includes isnull(CVELastModified) -- DELIBERATE:
+          // don't drop a CVE just because the lastModifiedDate metadata is missing
+          // from EG. Those rows might still be live exploit-paths.
           //__CVE_MIN_AGE_DAYS_BEGIN__
           let _cveMinAgeDays = 0;
           //__CVE_MIN_AGE_DAYS_END__
@@ -127,7 +132,7 @@
           let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
           let _OurAffectingEdges = materialize(
               ExposureGraphEdges
-              | where tostring(EdgeLabel) contains "affecting"
+              | where EdgeLabel has "affecting"
               | where TargetNodeId in (_AssetNodeIdSet)
           );
           let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
@@ -164,8 +169,12 @@
           let _DeviceMap =
               _Assets
               | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              // v2.2.216 -- EG_IsExcluded dropped from the carry. Already filtered
+              // to false in _Assets above; no row downstream has IsExcluded == true,
+              // and no extend or filter reads it after the post-bucket summarize was
+              // removed in v2.2.216.
               | project AssetNodeId, DeviceKey, AssetName, AssetLabel, AadDeviceId,
-                        EG_IsCustomerFacing, EG_IsExcluded;
+                        EG_IsCustomerFacing;
 
           let _DeviceFindingEdges =
               _OurAffectingEdges
@@ -175,15 +184,14 @@
                   AssetName           = any(AssetName),
                   AssetLabel          = any(AssetLabel),
                   AadDeviceId         = any(AadDeviceId),
-                  EG_IsCustomerFacing = any(EG_IsCustomerFacing),
-                  EG_IsExcluded       = any(EG_IsExcluded)
+                  EG_IsCustomerFacing = any(EG_IsCustomerFacing)
                   by DeviceKey, SourceNodeId;
 
           let _AssetFindingEdges =
               _DeviceFindingEdges
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
               | project DeviceKey, AssetName, AssetLabel, AadDeviceId,
-                        EG_IsCustomerFacing, EG_IsExcluded, EdgeLabels,
+                        EG_IsCustomerFacing, EdgeLabels,
                         FindingName, FindingLabel, FindingCategories,
                         FindingSeverity, FindingCvssScore,
                         FindingHasExploit, FindingIsExploitVerified, FindingIsInExploitKit, FindingIsZeroDay,
@@ -259,9 +267,14 @@
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
-              | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
-              | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
+              // v2.2.216 -- empty-string-safe coalesce. KQL's coalesce() treats
+              // "" as a real value, so coalesce(column_ifexists("X",""), ...) returns
+              // "" silently when X is empty. Use iff(isnotempty()) for the first
+              // candidate, then plain coalesce for the rest (the _From_CL columns
+              // are real columns post-leftouter-join; no column_ifexists needed).
+              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
+              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
+              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=1.0 so you see real per-row signals without engine substitution.
@@ -276,13 +289,18 @@
               // IsInExploitKit,IsZeroDay,Description,ReferenceUrl}). Per-row
               // bag_merge + ~10 dynamic-property lookups -> ~10 typed column reads.
               | extend Impact = FindingCvssScore
+              // v2.2.216 -- default "Unknown" instead of "Low". A null/empty
+              // FindingSeverity should NOT be silently downgraded to Low; surface it
+              // as Unknown so operators can see the data-quality gap.
               | extend SecuritySeverity = case(
                   tolower(FindingSeverity) == "critical", "Very High",
                   tolower(FindingSeverity) == "high",     "High",
                   tolower(FindingSeverity) == "medium",   "Medium",
                   tolower(FindingSeverity) == "low",      "Low",
-                  "Low")
-              | where FindingLabel contains "CVE"
+                  "Unknown")
+              // v2.2.216 -- dropped `where FindingLabel contains "CVE"`. _Findings
+              // already filters NodeLabel startswith "cve" + Categories has_any
+              // ("vulnerability_finding"), so every row entering this stage matches.
               | where not (FindingName in (_excludedCves))
               | extend HasExploit        = FindingHasExploit
               | extend IsExploitVerified = FindingIsExploitVerified
@@ -406,7 +424,12 @@
       - RiskScoreTotal_Weighted
       ReportQuery:
       - |-
-          // CVE max-age filter. Engine substitutes _cveMinAgeDays from per-report exclude.custom.json (CveMinAgeDays). 0 = no age filter (default).
+          // CVE MIN-age filter (only show CVEs older than _cveMinAgeDays). Engine
+          // substitutes _cveMinAgeDays from per-report exclude.custom.json
+          // (CveMinAgeDays). 0 = no age filter (default; show all).
+          // The keep-set explicitly includes isnull(CVELastModified) -- DELIBERATE:
+          // don't drop a CVE just because the lastModifiedDate metadata is missing
+          // from EG. Those rows might still be live exploit-paths.
           //__CVE_MIN_AGE_DAYS_BEGIN__
           let _cveMinAgeDays = 0;
           //__CVE_MIN_AGE_DAYS_END__
@@ -476,7 +499,7 @@
           let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
           let _OurAffectingEdges = materialize(
               ExposureGraphEdges
-              | where tostring(EdgeLabel) contains "affecting"
+              | where EdgeLabel has "affecting"
               | where TargetNodeId in (_AssetNodeIdSet)
           );
           let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
@@ -513,8 +536,12 @@
           let _DeviceMap =
               _Assets
               | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              // v2.2.216 -- EG_IsExcluded dropped from the carry. Already filtered
+              // to false in _Assets above; no row downstream has IsExcluded == true,
+              // and no extend or filter reads it after the post-bucket summarize was
+              // removed in v2.2.216.
               | project AssetNodeId, DeviceKey, AssetName, AssetLabel, AadDeviceId,
-                        EG_IsCustomerFacing, EG_IsExcluded;
+                        EG_IsCustomerFacing;
 
           let _DeviceFindingEdges =
               _OurAffectingEdges
@@ -524,15 +551,14 @@
                   AssetName           = any(AssetName),
                   AssetLabel          = any(AssetLabel),
                   AadDeviceId         = any(AadDeviceId),
-                  EG_IsCustomerFacing = any(EG_IsCustomerFacing),
-                  EG_IsExcluded       = any(EG_IsExcluded)
+                  EG_IsCustomerFacing = any(EG_IsCustomerFacing)
                   by DeviceKey, SourceNodeId;
 
           let _AssetFindingEdges =
               _DeviceFindingEdges
               | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
               | project DeviceKey, AssetName, AssetLabel, AadDeviceId,
-                        EG_IsCustomerFacing, EG_IsExcluded, EdgeLabels,
+                        EG_IsCustomerFacing, EdgeLabels,
                         FindingName, FindingLabel, FindingCategories,
                         FindingSeverity, FindingCvssScore,
                         FindingHasExploit, FindingIsExploitVerified, FindingIsInExploitKit, FindingIsZeroDay,
@@ -551,66 +577,29 @@
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
               //__BUCKET_FILTER_END__
-              // v2.2.208 fixes to this summarize:
-              //  - Include AadDeviceId in the by-clause (was missing). Without it,
-              //    two endpoints sharing an AssetName -- renamed hosts, stale CL
-              //    records, dual-onboarded devices -- collapsed into one group
-              //    and any(AadDeviceId) picked one nondeterministically. The
-              //    downstream leftouter join with _ep then attached the wrong CL
-              //    profile (Tier, cmdb*, UnsupportedOSDetected) to that row.
-              //  - Dropped EdgePropsAll = make_bag(EdgeProps). The only consumer
-              //    was Properties.edge in the bag_merge below, but no extend or
-              //    coalesce in the output projection ever reads Properties.edge.
-              //  - Preserve CVELastModified through summarize (any). Lets the
-              //    Detailed report's final project carry CVELastModified without
-              //    needing a post-summarize re-extract.
-              // v2.2.210 -- replaced FindingProps = any(FindingProps) with typed
-              // scalar aggregates. Each (asset, finding, AadDeviceId) group has
-              // one row pre-summarize so any() picks the same scalar each time.
-              | summarize
-                  AssetName                = any(AssetName),
-                  AssetLabel               = any(AssetLabel),
-                  AadDeviceId              = any(AadDeviceId),
-                  EdgeLabels               = take_any(EdgeLabels),
-                  FindingLabel             = any(FindingLabel),
-                  FindingCategories        = any(FindingCategories),
-                  FindingSeverity          = any(FindingSeverity),
-                  FindingCvssScore         = any(FindingCvssScore),
-                  FindingHasExploit        = any(FindingHasExploit),
-                  FindingIsExploitVerified = any(FindingIsExploitVerified),
-                  FindingIsInExploitKit    = any(FindingIsInExploitKit),
-                  FindingIsZeroDay         = any(FindingIsZeroDay),
-                  FindingDescription       = any(FindingDescription),
-                  FindingReferenceUrl      = any(FindingReferenceUrl),
-                  EG_IsCustomerFacing      = any(EG_IsCustomerFacing),
-                  EG_IsExcluded            = any(EG_IsExcluded),
-                  CVELastModified          = any(CVELastModified),
-            MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
-            EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
-            AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
-            AssetId                = any(tostring(column_ifexists("AssetId",""))),
-            MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
-            MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
-            ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
-                // v2.2.214 -- key on DeviceKey (canonical device = AadDeviceId when
-                // present, else AssetName) and FindingName ONLY. Previously the
-                // by-clause included AssetName + AssetLabel, which kept the 434
-                // distinct NodeId-views of the same logical device as separate groups
-                // (their NodeNames/NodeLabels differ across the EG-side aggregator
-                // views). One outlier device with 434 NodeIds was projecting up to
-                // 434 output rows per (device, CVE) pair, yielding ~42M post-summarize
-                // rows. With DeviceKey-only keying, all 434 NodeIds collapse to one
-                // logical row per (device, CVE).
-                by DeviceKey, FindingName
+              // v2.2.216 -- post-bucket summarize removed. _AssetFindingEdges is
+              // already 1 row per (DeviceKey, FindingName) from v2.2.215's edge-level
+              // pre-collapse, so the summarize was a 1:1 no-op that (a) silently
+              // discarded the EdgeLabels set via take_any if multiplicity ever broke,
+              // (b) carried EG_IsExcluded for no consumer (already filtered to false
+              // in _Assets), and (c) emitted empty strings for column_ifexists on
+              // IDs (MdeDeviceId / EntraAccountObjectId / Azure*) that don't exist
+              // pre-_ep-join. Bucket filter still partitions per-row above; downstream
+              // extends operate per-row below.
               // Bring in CL fields (Tier + UnsupportedOSDetected + IsExcludedByTag + cmdb*)
               | join kind=leftouter _ep on AadDeviceId
               | project-away AadDeviceId1
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
-              | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
-              | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
+              // v2.2.216 -- empty-string-safe coalesce. KQL's coalesce() treats
+              // "" as a real value, so coalesce(column_ifexists("X",""), ...) returns
+              // "" silently when X is empty. Use iff(isnotempty()) for the first
+              // candidate, then plain coalesce for the rest (the _From_CL columns
+              // are real columns post-leftouter-join; no column_ifexists needed).
+              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
+              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
+              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
@@ -625,13 +614,18 @@
               // IsInExploitKit,IsZeroDay,Description,ReferenceUrl}). Per-row
               // bag_merge + ~10 dynamic-property lookups -> ~10 typed column reads.
               | extend Impact = FindingCvssScore
+              // v2.2.216 -- default "Unknown" instead of "Low". A null/empty
+              // FindingSeverity should NOT be silently downgraded to Low; surface it
+              // as Unknown so operators can see the data-quality gap.
               | extend SecuritySeverity = case(
                   tolower(FindingSeverity) == "critical", "Very High",
                   tolower(FindingSeverity) == "high",     "High",
                   tolower(FindingSeverity) == "medium",   "Medium",
                   tolower(FindingSeverity) == "low",      "Low",
-                  "Low")
-              | where FindingLabel contains "CVE"
+                  "Unknown")
+              // v2.2.216 -- dropped `where FindingLabel contains "CVE"`. _Findings
+              // already filters NodeLabel startswith "cve" + Categories has_any
+              // ("vulnerability_finding"), so every row entering this stage matches.
               | where not (FindingName in (_excludedCves))
               | extend HasExploit        = FindingHasExploit
               | extend IsExploitVerified = FindingIsExploitVerified
@@ -884,9 +878,14 @@
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
-              | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
-              | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
+              // v2.2.216 -- empty-string-safe coalesce. KQL's coalesce() treats
+              // "" as a real value, so coalesce(column_ifexists("X",""), ...) returns
+              // "" silently when X is empty. Use iff(isnotempty()) for the first
+              // candidate, then plain coalesce for the rest (the _From_CL columns
+              // are real columns post-leftouter-join; no column_ifexists needed).
+              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
+              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
+              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
               | extend DeviceKey = iif(isnotempty(DI_AadDeviceId), DI_AadDeviceId, coalesce(DI_DeviceName, DeviceName))
               // Drop assets matching engine-substituted _excludedAssetTags + MDE IsExcluded flag. AssetTags is a flat column on SI_Endpoint_Profile_CL (built in Build-EndpointProfileRow.ps1 from MachineTags+DeviceManualTags+DeviceDynamicTags) and is brought in via the leftouter join with _ep above. IsExcluded stays wrapped in column_ifexists since it's MDE-side.
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
@@ -1162,9 +1161,14 @@
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
-              | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
-              | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
+              // v2.2.216 -- empty-string-safe coalesce. KQL's coalesce() treats
+              // "" as a real value, so coalesce(column_ifexists("X",""), ...) returns
+              // "" silently when X is empty. Use iff(isnotempty()) for the first
+              // candidate, then plain coalesce for the rest (the _From_CL columns
+              // are real columns post-leftouter-join; no column_ifexists needed).
+              | extend AssetName = iff(isnotempty(AssetName), AssetName, coalesce(AssetName_From_CL, AadDeviceId, ""))
+              | extend AssetId   = coalesce(AssetId_From_CL, AadDeviceId, "")
+              | extend AssetType = coalesce(AssetType_From_CL, AssetLabel, "Endpoint")
               | extend AssetName  = coalesce(column_ifexists("DI_DeviceName", ""), column_ifexists("DeviceName", ""), AssetName)
               | extend AssetLabel = EG_AssetLabel
               | extend DeviceKey  = iif(isnotempty(DI_AadDeviceId), DI_AadDeviceId, AssetName)
@@ -1339,7 +1343,7 @@
 
           let _Edges =
               ExposureGraphEdges
-              | where tostring(EdgeLabel) contains "affecting"
+              | where EdgeLabel has "affecting"
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 
@@ -1590,7 +1594,7 @@
 
           let _Edges =
               ExposureGraphEdges
-              | where tostring(EdgeLabel) contains "affecting"
+              | where EdgeLabel has "affecting"
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 

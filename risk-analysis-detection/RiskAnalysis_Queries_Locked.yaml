@@ -105,11 +105,6 @@
           let _Assets =
               ExposureGraphNodes
               | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
-              // v2.2.213 -- dedup to latest snapshot per node. ExposureGraphNodes is a
-              // snapshot table (~7-day retention, hourly). Without arg_max, downstream
-              // joins multiply by S snapshots-per-node and the (asset, finding) tuple
-              // count explodes (~350x on FVF). by NodeId is the stable graph identity.
-              | summarize arg_max(TimeGenerated, *) by NodeId
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
               | where EG_IsExcluded == false
@@ -134,11 +129,6 @@
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
               | where TargetNodeId in (_AssetNodeIdSet)
-              // v2.2.213 -- dedup to latest snapshot per (source, target, label).
-              // ExposureGraphEdges has the same hourly-snapshot retention as
-              // ExposureGraphNodes; without this dedup the inner-join arm multiplies
-              // by ~S edges per logical pair.
-              | summarize arg_max(TimeGenerated, *) by SourceNodeId, TargetNodeId, EdgeLabel
           );
           let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
           let _Findings =
@@ -149,9 +139,6 @@
               //__CVE_FILTER_BEGIN__
               | where 1 == 1
               //__CVE_FILTER_END__
-              // v2.2.213 -- dedup to latest snapshot per CVE node. Same rationale as
-              // _Assets: kills the snapshot-multiplier on the second join arm.
-              | summarize arg_max(TimeGenerated, *) by NodeId
               | project FindingNodeId            = NodeId,
                         FindingName              = NodeName,
                         FindingLabel             = NodeLabel,
@@ -211,7 +198,9 @@
               // scalar aggregates. Each (asset, finding, AadDeviceId) group has
               // one row pre-summarize so any() picks the same scalar each time.
               | summarize
-                  DeviceKey                = any(DeviceKey),
+                  AssetName                = any(AssetName),
+                  AssetLabel               = any(AssetLabel),
+                  AadDeviceId              = any(AadDeviceId),
                   EdgeLabels               = make_set(EdgeLabel),
                   FindingLabel             = any(FindingLabel),
                   FindingCategories        = any(FindingCategories),
@@ -233,7 +222,16 @@
             MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
             MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
             ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
-                by AssetName, AssetLabel, FindingName, AadDeviceId
+                // v2.2.214 -- key on DeviceKey (canonical device = AadDeviceId when
+                // present, else AssetName) and FindingName ONLY. Previously the
+                // by-clause included AssetName + AssetLabel, which kept the 434
+                // distinct NodeId-views of the same logical device as separate groups
+                // (their NodeNames/NodeLabels differ across the EG-side aggregator
+                // views). One outlier device with 434 NodeIds was projecting up to
+                // 434 output rows per (device, CVE) pair, yielding ~42M post-summarize
+                // rows. With DeviceKey-only keying, all 434 NodeIds collapse to one
+                // logical row per (device, CVE).
+                by DeviceKey, FindingName
               // Bring in CL fields (Tier + UnsupportedOSDetected + IsExcludedByTag + cmdbCriticality)
               | join kind=leftouter _ep on AadDeviceId
               | project-away AadDeviceId1
@@ -435,11 +433,6 @@
           let _Assets =
               ExposureGraphNodes
               | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
-              // v2.2.213 -- dedup to latest snapshot per node. ExposureGraphNodes is a
-              // snapshot table (~7-day retention, hourly). Without arg_max, downstream
-              // joins multiply by S snapshots-per-node and the (asset, finding) tuple
-              // count explodes (~350x on FVF). by NodeId is the stable graph identity.
-              | summarize arg_max(TimeGenerated, *) by NodeId
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
               | where EG_IsExcluded == false
@@ -464,11 +457,6 @@
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
               | where TargetNodeId in (_AssetNodeIdSet)
-              // v2.2.213 -- dedup to latest snapshot per (source, target, label).
-              // ExposureGraphEdges has the same hourly-snapshot retention as
-              // ExposureGraphNodes; without this dedup the inner-join arm multiplies
-              // by ~S edges per logical pair.
-              | summarize arg_max(TimeGenerated, *) by SourceNodeId, TargetNodeId, EdgeLabel
           );
           let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
           let _Findings =
@@ -479,9 +467,6 @@
               //__CVE_FILTER_BEGIN__
               | where 1 == 1
               //__CVE_FILTER_END__
-              // v2.2.213 -- dedup to latest snapshot per CVE node. Same rationale as
-              // _Assets: kills the snapshot-multiplier on the second join arm.
-              | summarize arg_max(TimeGenerated, *) by NodeId
               | project FindingNodeId            = NodeId,
                         FindingName              = NodeName,
                         FindingLabel             = NodeLabel,
@@ -541,7 +526,9 @@
               // scalar aggregates. Each (asset, finding, AadDeviceId) group has
               // one row pre-summarize so any() picks the same scalar each time.
               | summarize
-                  DeviceKey                = any(DeviceKey),
+                  AssetName                = any(AssetName),
+                  AssetLabel               = any(AssetLabel),
+                  AadDeviceId              = any(AadDeviceId),
                   EdgeLabels               = make_set(EdgeLabel),
                   FindingLabel             = any(FindingLabel),
                   FindingCategories        = any(FindingCategories),
@@ -563,7 +550,16 @@
             MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
             MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
             ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
-                by AssetName, AssetLabel, FindingName, AadDeviceId
+                // v2.2.214 -- key on DeviceKey (canonical device = AadDeviceId when
+                // present, else AssetName) and FindingName ONLY. Previously the
+                // by-clause included AssetName + AssetLabel, which kept the 434
+                // distinct NodeId-views of the same logical device as separate groups
+                // (their NodeNames/NodeLabels differ across the EG-side aggregator
+                // views). One outlier device with 434 NodeIds was projecting up to
+                // 434 output rows per (device, CVE) pair, yielding ~42M post-summarize
+                // rows. With DeviceKey-only keying, all 434 NodeIds collapse to one
+                // logical row per (device, CVE).
+                by DeviceKey, FindingName
               // Bring in CL fields (Tier + UnsupportedOSDetected + IsExcludedByTag + cmdb*)
               | join kind=leftouter _ep on AadDeviceId
               | project-away AadDeviceId1

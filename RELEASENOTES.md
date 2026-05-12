@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.218
+## v2.2.219
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.219 - CVE Summary/Detailed: AssetTags exclusion filter actually fires (9f486787)
 - release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
 - release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
 - release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
@@ -33,13 +34,62 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.192 - Set-PlatformDefaultsSmtp creates file if missing (ae1d6e27)
 - release: SecurityInsight v2.2.191 - auto-detect stale SPN Az context at orchestrator start (28e3dd7b)
 - release: SecurityInsight v2.2.190 - restore operator Az context after smoke test (b29e07f3)
-- release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.219 — Risk Analysis: CVE Summary/Detailed -- AssetTags exclusion filter actually fires
+
+Operator created `RiskAnalysisGlobalExclusions.custom.json` with `ExcludedAssetTags: ["--Excluded--SI"]`. Engine read it (`substituted block EXCLUDED_ASSET_TAGS with 1 item(s)`), but tagged devices still appeared in the report output. Bug confirmed.
+
+### Root cause -- filter positioned before the column it depends on existed
+
+`AssetTags` is a flat string column on `_ep`, built in `Build-EndpointProfileRow.ps1` from `MachineTags + DeviceManualTags + DeviceDynamicTags` joined with `;`. It only exists on a row AFTER the `leftouter _ep` join.
+
+The filter was positioned BEFORE the leftouter:
+
+```kql
+_AssetFindingEdges                                                     ← AssetTags NOT here
+| where IsExcluded == false
+| extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))   ← always ""
+| where not(_AssetTagsLower has_any (_excludedAssetTags))                          ← always passes
+| where _cveMinAgeDays ...
+| __BUCKET_FILTER__
+| (post-bucket summarize)
+| join kind=leftouter _ep on $left.DeviceKey == $right.EpJoinKey                   ← AssetTags arrives HERE
+```
+
+Defensive `column_ifexists("AssetTags","")` returned `""` for every row, so `has_any` had nothing to match against and `not(false)` kept every row. Silent no-op since the v2.2.x `_ep` join pattern was introduced. The YAML comment even acknowledged the issue ("runs over a join shape that may not always carry the column") but nobody flagged that the filter therefore did nothing.
+
+### Fix -- move the filter to AFTER the leftouter
+
+```kql
+| join kind=leftouter _ep on $left.DeviceKey == $right.EpJoinKey
+| project-away AadDeviceId1, EpJoinKey
+| extend _AssetTagsLower = tolower(coalesce(AssetTags, ""))                        ← real column from _ep
+| where array_length(_excludedAssetTags) == 0
+     or not(_AssetTagsLower has_any (_excludedAssetTags))                          ← actually fires
+```
+
+- Dropped `column_ifexists` -- `_ep` always projects `AssetTags` (defaults to `""` when absent on the underlying CL row), so the column is guaranteed present even for unmatched leftouter rows
+- Added explicit `array_length(_excludedAssetTags) == 0` short-circuit so empty exclusion lists still keep all rows (no behavioral change for tenants without the JSON file)
+- Applied to both Summary and Detailed (same broken positioning in both)
+
+### Verification path
+
+After the next run, the operator's tagged devices should drop out. Confirm:
+1. Log line still reads `substituted block EXCLUDED_ASSET_TAGS with 1 item(s)` (engine still picks up the JSON)
+2. Output row count drops by the number of rows that previously belonged to `--Excluded--SI`-tagged devices
+3. `Temp-Client-Devices--Excluded--SI` and similar `--Excluded--SI`-suffixed tagged devices are absent
+
+### Same class of bug to audit
+
+The `IsExcluded` MDE-side flag check (immediately preceding the AssetTags filter line) uses the same defensive `column_ifexists` pattern and is ALSO a silent no-op. `IsExcluded` is an MDE column that doesn't exist on `_AssetFindingEdges` either. Left as-is in this release because (a) `EG_IsExcluded` is already filtered to false in `_Assets`, so the redundant check is safe even when no-op, and (b) every device that survived `_Assets` has the EG-side IsExcluded flag honored. Future cleanup item: drop the line entirely.
 
 ---
 

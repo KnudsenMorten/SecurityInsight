@@ -217,10 +217,16 @@
               // to recompute it here.
               // Drop assets matching engine-substituted _excludedAssetTags + MDE IsExcluded flag. AssetTags is a flat column (built in Build-EndpointProfileRow.ps1 from MachineTags+DeviceManualTags+DeviceDynamicTags); kept inside column_ifexists here because this filter runs over a join shape that may not always carry the column. IsExcluded is MDE-side and not on every join arm.
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
-              | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
-              | where not(_AssetTagsLower has_any (_excludedAssetTags))
-              // v2.2.210 -- CVELastModified is now a typed scalar column carried
-              // through _AssetFindingEdges, no per-row extend needed here.
+              // v2.2.219 -- AssetTags filter MOVED to after the leftouter _ep join
+              // (further down). At this point AssetTags doesn't exist on
+              // _AssetFindingEdges (it's CL-sourced, only joined in via _ep below)
+              // so the previous column_ifexists("AssetTags","") resolved to "" for
+              // every row, making `has_any (_excludedAssetTags)` always false and
+              // the exclusion filter a silent no-op. Operators with the global
+              // RiskAnalysisGlobalExclusions.custom.json populated would still see
+              // tagged devices in output -- bug since v2.2.x introduced the _ep
+              // join pattern. CVELastModified age filter stays here (CVELastModified
+              // is a typed scalar already on _AssetFindingEdges, no join needed).
               | where (_cveMinAgeDays == 0) or (isnull(CVELastModified)) or (CVELastModified < ago(_cveMinAgeDays * 1d))
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
@@ -243,6 +249,18 @@
               // enrichment via AssetName matching against the CL profile row.
               | join kind=leftouter _ep on $left.DeviceKey == $right.EpJoinKey
               | project-away AadDeviceId1, EpJoinKey
+              // v2.2.219 -- AssetTags exclusion filter, MOVED from pre-bucket-filter
+              // to here (post-leftouter). AssetTags is a flat string column on _ep
+              // (built in Build-EndpointProfileRow.ps1 from MachineTags +
+               // DeviceManualTags + DeviceDynamicTags joined with ";") and is only
+               // available after the leftouter join above. Pre-leftouter, the column
+               // didn't exist on _AssetFindingEdges so the filter never matched.
+               // No column_ifexists wrapper here -- _ep always projects AssetTags
+               // (defaults to "" when absent on the underlying CL row), so the
+               // column is guaranteed present even for rows that don't match _ep.
+              | extend _AssetTagsLower = tolower(coalesce(AssetTags, ""))
+              | where array_length(_excludedAssetTags) == 0
+                   or not(_AssetTagsLower has_any (_excludedAssetTags))
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.
@@ -567,10 +585,16 @@
               // to recompute it here.
               // Drop assets matching engine-substituted _excludedAssetTags + MDE IsExcluded flag. AssetTags is a flat column (built in Build-EndpointProfileRow.ps1 from MachineTags+DeviceManualTags+DeviceDynamicTags); kept inside column_ifexists here because this filter runs over a join shape that may not always carry the column. IsExcluded is MDE-side and not on every join arm.
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
-              | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
-              | where not(_AssetTagsLower has_any (_excludedAssetTags))
-              // v2.2.210 -- CVELastModified is now a typed scalar column carried
-              // through _AssetFindingEdges, no per-row extend needed here.
+              // v2.2.219 -- AssetTags filter MOVED to after the leftouter _ep join
+              // (further down). At this point AssetTags doesn't exist on
+              // _AssetFindingEdges (it's CL-sourced, only joined in via _ep below)
+              // so the previous column_ifexists("AssetTags","") resolved to "" for
+              // every row, making `has_any (_excludedAssetTags)` always false and
+              // the exclusion filter a silent no-op. Operators with the global
+              // RiskAnalysisGlobalExclusions.custom.json populated would still see
+              // tagged devices in output -- bug since v2.2.x introduced the _ep
+              // join pattern. CVELastModified age filter stays here (CVELastModified
+              // is a typed scalar already on _AssetFindingEdges, no join needed).
               | where (_cveMinAgeDays == 0) or (isnull(CVELastModified)) or (CVELastModified < ago(_cveMinAgeDays * 1d))
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
@@ -591,6 +615,18 @@
               // enrichment via AssetName matching against the CL profile row.
               | join kind=leftouter _ep on $left.DeviceKey == $right.EpJoinKey
               | project-away AadDeviceId1, EpJoinKey
+              // v2.2.219 -- AssetTags exclusion filter, MOVED from pre-bucket-filter
+              // to here (post-leftouter). AssetTags is a flat string column on _ep
+              // (built in Build-EndpointProfileRow.ps1 from MachineTags +
+               // DeviceManualTags + DeviceDynamicTags joined with ";") and is only
+               // available after the leftouter join above. Pre-leftouter, the column
+               // didn't exist on _AssetFindingEdges so the filter never matched.
+               // No column_ifexists wrapper here -- _ep always projects AssetTags
+               // (defaults to "" when absent on the underlying CL row), so the
+               // column is guaranteed present even for rows that don't match _ep.
+              | extend _AssetTagsLower = tolower(coalesce(AssetTags, ""))
+              | where array_length(_excludedAssetTags) == 0
+                   or not(_AssetTagsLower has_any (_excludedAssetTags))
               // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
               // TargetAssets_Path / ImpactedAssets were copy-pasted from an
               // Attack_Paths report and never exist on this CVE shape.

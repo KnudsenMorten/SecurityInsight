@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.199
+## v2.2.200
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
 - release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
 - release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
 - release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - RA: column-shape ALL engine-set columns (was dropping Weighted/RfCons/RfProb on first-row miss) (a918c0a3)
 - RA: ONE safe-math score path (consolidate the two write blocks into _setScores helper) (be182aa9)
 - release: SecurityInsight v2.2.174 - README ch.5 'How to fine-tune reporting' + RA score recompute + AssetDetectedInReportName + v2.3 platform layer additive (5e1dd36d)
-- SI README: add chapter 5 'How to fine-tune reporting' (templates + queries + exclusions) (0e9d19e7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.200 — Risk Analysis: composite-key bucketing for `*_Detailed` reports
+
+Bucketing has always hashed on a device-level key (`DeviceKey` / `NodeId` / `AadDeviceId` / etc), which means **every row for the same device lands in the same bucket** -- correct for Summary reports where the downstream `summarize by AssetName` rolls findings up per asset, but a structural dead-end for `*_Detailed` reports.
+
+The Detailed reports emit one row per `(asset, finding)` tuple after a join between `ExposureGraphNodes` (assets), `ExposureGraphNodes` (findings), and `ExposureGraphEdges` (the connecting "affecting" edges). On a 1700-asset tenant, the cartesian explosion lands at millions of rows, with a long tail of "hot" devices (one device with 10K+ overdue CVEs). With device-only bucketing, that hot device's 10K join-explosion rows all hash to ONE bucket no matter how high you escalate. Doubling the bucket count just moves the device to a different bucket -- it never splits the hot device across buckets. Result: bucket 3/63 preempts, escalate to 126, bucket 3/126 preempts (same hot device, different bucket index), escalate to 252, repeat -- the engine cascade-doubles for hours and never succeeds.
+
+Fix: when `ReportName -like '*_Detailed'`, `New-BucketFilterKql` now hashes on a **composite key** -- `strcat(<device-key>, '|', <finding-key>)` where the finding side coalesces `FindingNodeId` / `FindingName` / `CVE` / `CveId` / `ConfigurationId` / `RecommendationId`. The same device's findings now hash to DIFFERENT buckets, so a hot device's row count is divided by N across all buckets. Each `(asset, finding)` tuple lives in exactly one bucket (the per-row key is unique), so the downstream `summarize by AssetName, FindingName` still works -- each tuple emits exactly one row, and across-bucket concatenation gives the full result with no double-counting or missed rollups.
+
+Summary reports (and every other report that doesn't match `*_Detailed`) keep the original device-only bucketing, so per-device rollups stay intact.
+
+No YAML edits required. Existing AutoBucket caches are still valid because the cache key includes the rendered query body which doesn't change between v2.2.199 and v2.2.200 (the bucket filter is substituted at execution time). On the first re-run after upgrade, AutoBucket will re-probe and may converge at a lower bucket count than before now that data distributes more evenly.
 
 ---
 

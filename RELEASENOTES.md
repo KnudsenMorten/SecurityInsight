@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.188
+## v2.2.189
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
 - release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
 - release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
 - release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.172 - re-auth secret-SPN before LA ingest in profilers + RA (29b6f92e)
 - release: SecurityInsight v2.2.171 - drop SI-StorageKey KV pull (RBAC-only storage) (9211471a)
 - release: SecurityInsight v2.2.170 - Get-PlatformSecret tolerates both Context shapes (c149d88f)
-- release: SecurityInsight v2.2.169 - short-circuit returns proper PlatformContext (ba957186)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.189 — `-SkipPermissionAdd` switch on Initialize-PlatformVm + New-PlatformModernSpn
+
+Re-running the orchestrator on a tenant that already has the Modern SPN's role + Graph app-roles applied previously was forced to spend 30–90s replaying the bundle. New switch skips just that step while keeping everything else (cert, SPN, KV, secret rotation, KV upload, optional Steps 8–10). Inverse of the existing `-PermissionsOnly` (which does ONLY the bundle).
+
+Use when:
+- You only want to rotate the Modern SPN secret + re-upload to KV.
+- You only want to add/refresh OpenAI / SMTP / SI custom config (Steps 8/9/10) without disturbing the permission grants.
+- You're iterating quickly during onboarding.
+
+```powershell
+.\Initialize-PlatformVm.ps1 -TenantId ... -SubscriptionId ... `
+    -KeyVaultName ... -ResourceGroup ... `
+    -SkipPermissionAdd `
+    -OpenAIAccountName oai-ns-securityinsight -OpenAILocation swedencentral
+```
 
 ---
 

@@ -143,7 +143,7 @@ if (-not (Test-Path variable:global:OpenAI_MaxTokensPerRequest)) { $global:OpenA
 #   - The discovered count is cached per report so subsequent runs skip
 #     the probe; ResetCache forces a fresh probe.
 $global:AutoBucketCount        = $true    # probe 1/2/4/8/16/... up to AutoBucketMax
-$global:AutoBucketMax          = 1024     # safety cap. Large estates need high counts to
+$global:AutoBucketMax          = 131072   # safety cap. Sized for 1M+ asset estates;
                                           # stay under the 30k-row ceiling per query.
                                           # AutoBucket only escalates as needed -- small
                                           # tenants still run at low counts.

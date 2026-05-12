@@ -101,8 +101,13 @@ if ($null -eq $global:Detailed)              { $global:Detailed = $false }
 # without editing $global:ReportTemplate directly. Explicit $global:Summary /
 # $global:Detailed still win (set above or by the launcher). These only bump
 # the mode to $true; they never force it to $false.
-if ([bool]$global:RiskAnalysis_Detailed_Override) { $global:Detailed = $true }
-if ([bool]$global:RiskAnalysis_Summary_Override)  { $global:Summary  = $true }
+#
+# CLI flag wins over config override: if the user passed -Detailed on the
+# launcher (so $global:Detailed already true), don't let a config-side
+# RiskAnalysis_Summary_Override also flip Summary on (and vice versa) -- that
+# combination would trip the "use only one" guard later in the engine.
+if ([bool]$global:RiskAnalysis_Detailed_Override -and -not [bool]$global:Summary)  { $global:Detailed = $true }
+if ([bool]$global:RiskAnalysis_Summary_Override  -and -not [bool]$global:Detailed) { $global:Summary  = $true }
 
 # Resolve $global:ReportTemplate. Precedence:
 #   1. Explicit $global:ReportTemplate (launcher wins per-run)

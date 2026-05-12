@@ -146,9 +146,17 @@
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 
+          // v2.2.205 -- pre-filter _Edges to those touching one of our endpoints.
+          // ExposureGraphEdges holds every "affecting" edge in EG (millions of them),
+          // most pointing at assets the tenant doesn't own. Pre-filtering by asset
+          // membership cuts the edge-join intermediate massively without changing
+          // output -- the existing inner join with _Assets dropped non-tenant rows
+          // anyway, just much later in the pipeline.
+          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
           let _Edges =
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
+              | where SourceNodeId in (_AssetNodeIdSet) or TargetNodeId in (_AssetNodeIdSet)
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 
@@ -444,9 +452,17 @@
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 
+          // v2.2.205 -- pre-filter _Edges to those touching one of our endpoints.
+          // ExposureGraphEdges holds every "affecting" edge in EG (millions of them),
+          // most pointing at assets the tenant doesn't own. Pre-filtering by asset
+          // membership cuts the edge-join intermediate massively without changing
+          // output -- the existing inner join with _Assets dropped non-tenant rows
+          // anyway, just much later in the pipeline.
+          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
           let _Edges =
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
+              | where SourceNodeId in (_AssetNodeIdSet) or TargetNodeId in (_AssetNodeIdSet)
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
               | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
 

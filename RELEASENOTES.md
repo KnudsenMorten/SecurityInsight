@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.215
+## v2.2.216
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
 - release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
 - release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
 - release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
 - release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
 - release: SecurityInsight v2.2.187 - drop redundant internal/ gitignore so sync engine pulls it (018bfac8)
-- release: SecurityInsight v2.2.186 - orchestrator wires AI + SMTP + SI custom config (e3fba8c9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.216 — Risk Analysis: CVE Detailed/Summary -- code-review cleanup pass
+
+Operator code review of v2.2.215 surfaced several correctness, performance, and noise items that all stack on top of the working architecture. None of them changes the logical result; together they remove silent failure modes and dead work.
+
+### Correctness
+
+- **Removed the post-bucket summarize entirely.** It was a 1:1 no-op (`_AssetFindingEdges` is already 1 row per `(DeviceKey, FindingName)` from v2.2.215's edge-level pre-collapse). The summarize was silently dropping `EdgeLabels` via `take_any` if the 1:1 invariant ever broke, and emitting empty strings for `column_ifexists` calls on IDs (`MdeDeviceId`, `EntraAccountObjectId`, `AzureResourceId`, `MITRE_*`, `ComplianceTags`) that don't exist pre-`_ep`-join. Bucket filter still runs above; downstream extends still operate per-row below.
+- **Fixed the empty-string trap on `AssetName` / `AssetId` / `AssetType`.** KQL's `coalesce()` treats `""` as a real value, so `coalesce(column_ifexists("X", ""), column_ifexists("Y", ""))` returns `""` silently when X is empty. Replaced with `iff(isnotempty(...))` for the first candidate and plain coalesce for the rest (the `_From_CL` columns are real columns post-leftouter; no `column_ifexists` needed).
+- **`SecuritySeverity` default `"Low"` -> `"Unknown"`.** A null/empty `FindingSeverity` should NOT silently downgrade to Low; surface as Unknown so operators can spot the data-quality gap.
+
+### Performance
+
+- **`tostring(EdgeLabel) contains "affecting"` -> `EdgeLabel has "affecting"`.** `EdgeLabel` is already a string; the `tostring` blocks the optimizer from using a term index. `has` is token-indexed, `contains` is a scan.
+- **Dropped the dead `where FindingLabel contains "CVE"`.** `_Findings` already filters `NodeLabel startswith "cve"` and `Categories has_any ("vulnerability_finding")`, so every row entering this stage already matched.
+
+### Noise / docs
+
+- **Dropped `EG_IsExcluded` from the carry chain** (`_DeviceMap`, `_DeviceFindingEdges`, `_AssetFindingEdges`). Already filtered to `false` in `_Assets`; no consumer downstream after the post-bucket summarize was removed.
+- **Fixed the `_cveMinAgeDays` comment.** Said "max-age filter"; the predicate `CVELastModified < ago(N*1d)` is a *min-age* filter (only show CVEs older than N days). Variable name was correct, comment was inverted.
+- **Documented the `isnull(CVELastModified)` keep as deliberate.** Don't drop a CVE just because the lastModifiedDate metadata is missing -- those rows might still be live exploit-paths.
+
+### Verification context
+
+Operator-run portal verification of v2.2.215's architecture (the new `_DeviceMap` + `_DeviceFindingEdges` shape) returned 115,825 unique (DeviceKey, FindingName) pairs in seconds -- matching the Test 1 baseline. v2.2.216 changes do not touch that architecture; only cleanup on top.
+
+### Skipped from the review
+
+- Three-way `coalesce(NodeProperties.rawData.X, NodeProperties.raw.X, NodeProperties.X)` -- conservative leave-as-is. Some tenants may rely on the `.raw` path; needs per-tenant data before culling.
+- Inlining `_AssetNodeIdSet` into the `materialize(...)` -- style nit, no behavior delta.
 
 ---
 

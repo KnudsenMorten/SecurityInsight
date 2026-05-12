@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.207
+## v2.2.208
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
 - release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
 - release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
 - release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.182 - CRITICAL provisioning fix: Modern SPN KV read grant (b097be6a)
 - release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
 - release: SecurityInsight v2.2.180 - NoMFA consolidation (4 reports -> 1 tier-driven) (d4dab05e)
-- release: SecurityInsight v2.2.179 - annotate RiskFactor_* schema-scaffolding literals (docs-only) (d2269cda)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.208 — Risk Analysis: four correctness + cleanup fixes in CVE reports
+
+Structural review of the CVE Summary and Detailed pipelines surfaced four issues. All fixed in both reports.
+
+**1. Wrong CMDB profile attached to devices sharing an AssetName** (correctness bug). The `summarize ... by AssetName, AssetLabel, FindingName` clause was missing AadDeviceId. When two endpoints had the same AssetName -- renamed hosts, stale CL records, dual-onboarded devices -- they collapsed into one group, and `any(AadDeviceId)` nondeterministically picked one. The downstream `leftouter` join with `_ep` then attached the wrong CL profile (Tier, cmdbId / cmdbCriticality / cmdbDataSensitivity, UnsupportedOSDetected) to that row, so risk scoring used the wrong device's tier/criticality. Fix: added `AadDeviceId` to the by-clause and removed the now-redundant `AadDeviceId = any(AadDeviceId)` aggregate.
+
+**2. CVE-age filter dead in both reports + a hardcoded 40d filter in Detailed** (correctness bug). The parameterised filter `| where (_cveMinAgeDays == 0) or ... | extend CVELastModified = todatetime(coalesce(column_ifexists("CVELastModifiedDate", ...), ...))` was reading from a column that never existed on the `_AssetFindingEdges` join shape -- so `CVELastModified` was always null and the filter was a silent no-op regardless of `_cveMinAgeDays` setting. **Plus** the Detailed report had a second, hardcoded `| where CVELastModified < ago(40d)` further down that DID filter (using a re-extract from `Properties.finding.raw.lastModifiedDate`), ignored the parameterised knob, AND dropped CVEs with null lastModifiedDate. Fix: pull `CVELastModified` from `FindingProps.rawData.lastModifiedDate` (where it actually exists) so the parameterised filter works; preserve through `summarize` (`CVELastModified = any(CVELastModified)`); delete the hardcoded 40d filter and its redundant re-extract.
+
+**3. `bag_pack("edge", EdgePropsAll)` was dead code** (cleanup). The summarize built `EdgePropsAll = make_bag(EdgeProps)` (over a column often null) and then `extend Properties = bag_merge(..., bag_pack("edge", EdgePropsAll))`. But no downstream `extend` or `coalesce` ever reads `Properties.edge`. Dropped both the make_bag aggregate and the bag_pack — saves per-row dynamic-bag aggregation.
+
+**4. Dead coalesce sources in AssetName resolution** (cleanup). The post-summarize `| extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""), strcat_array(column_ifexists("SourceAssets_Path", dynamic([])), "; "), strcat_array(column_ifexists("TargetAssets_Path", dynamic([])), "; "), column_ifexists("ImpactedAssets", ""))` referenced `SourceAssets_Path` / `TargetAssets_Path` / `ImpactedAssets` -- all copy-pasted from an Attack_Paths report, none exist on this CVE shape. Trimmed to just the two real sources.
+
+Applied to `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` retain their structure -- they have a different join shape and weren't reviewed for #1.
+
+#1 and #2 are real correctness fixes affecting today's report output. #3 and #4 are cleanup.
 
 ---
 

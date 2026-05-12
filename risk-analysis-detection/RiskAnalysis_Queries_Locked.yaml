@@ -117,48 +117,55 @@
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
 
-          // v2.2.207 -- tightened CVE narrowing + single-scan materialise.
-          // Previous _AffectingNodeIds captured CVEs connected to anything in EG
-          // globally (~10K on FVF). _RelevantFindingIds now narrows further to CVEs
-          // connected to OUR endpoints only (~1K-5K). The filtered edge set is
-          // materialised once and reused for both _RelevantFindingIds AND _Edges
-          // -- ExposureGraphEdges scanned EXACTLY ONCE per query execution (vs
-          // three times in v2.2.206). EG "affecting" edges go finding -> asset
-          // (Source = finding NodeId, Target = asset NodeId), confirmed in v2.2.206.
-          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
-          let _OurAffectingEdges = materialize(
+          // v2.2.210 -- removed two patterns EG AH may not plan well:
+          //   (a) materialize() -- may be a no-op in Defender XDR AH, silently
+          //       causing the same let-binding to be re-evaluated 2-3 times
+          //       per query
+          //   (b) `where NodeId in (subquery)` -- often planned poorly at scale
+          //       compared to an explicit `join` with the same semantic
+          // Also collapsed the two separate joins with _Assets (one inside _Edges
+          // pre-filter via _AssetNodeIdSet, one in _AssetFindingEdges to attach
+          // AssetName/AadDeviceId). Single chain: edges -> join with _Assets ->
+          // join with CVE-filtered catalog. EG's planner sees the whole shape
+          // up-front.
+          // v2.2.210 -- second restructure (after the diagnostic-confirmed bottleneck
+          // was the post-join dynamic-property pipeline, NOT the join itself):
+          // extract scalar fields from NodeProperties.rawData up-front so the
+          // downstream `Properties = bag_merge(...)` per-row construction and the
+          // ~10 `Properties.x.y.z` dynamic lookups per row become a single typed
+          // column read each. The CVE diagnostic showed 118K rows post-join is
+          // healthy; the cost was 118K bag_merge calls + ~1.18M dynamic lookups.
+          let _AssetFindingEdges =
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
-              | where TargetNodeId in (_AssetNodeIdSet)
-          );
-          let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
-          let _Findings =
-              ExposureGraphNodes
-              | where NodeLabel startswith "cve"
-              | where Categories has_any ("vulnerability_finding")
-              | where NodeId in (_RelevantFindingIds)
-              //__CVE_FILTER_BEGIN__
-              | where 1 == 1
-              //__CVE_FILTER_END__
-              | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
-                        FindingCategories = Categories, FindingProps = NodeProperties;
-
-          let _Edges =
-              _OurAffectingEdges
+              | join kind=inner (_Assets) on $left.TargetNodeId == $right.AssetNodeId
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
-              | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
-
-          // v2.2.209 -- dropped AssetProps from the join projection. The full EG
-          // endpoint NodeProperties bag (typically 5-20 KB per row) was carried
-          // through 141K joined rows on FVF -- gigabytes of intermediate -- and
-          // never read by any downstream extend/coalesce. AssetProps removal is
-          // the long-suspected cause of the AutoBucket preempt at low N values.
-          let _AssetFindingEdges =
-              _Edges
-              | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
-              | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
+              | join kind=inner (
+                  ExposureGraphNodes
+                  | where NodeLabel startswith "cve"
+                  | where Categories has_any ("vulnerability_finding")
+                  //__CVE_FILTER_BEGIN__
+                  | where 1 == 1
+                  //__CVE_FILTER_END__
+                  | project FindingNodeId            = NodeId,
+                            FindingName              = NodeName,
+                            FindingLabel             = NodeLabel,
+                            FindingCategories        = Categories,
+                            FindingSeverity          = tostring(NodeProperties.rawData.severity),
+                            FindingCvssScore         = todouble(NodeProperties.rawData.cvssScore),
+                            FindingHasExploit        = tobool(NodeProperties.rawData.hasExploit),
+                            FindingIsExploitVerified = tobool(NodeProperties.rawData.isExploitVerified),
+                            FindingIsInExploitKit    = tobool(NodeProperties.rawData.isInExploitKit),
+                            FindingIsZeroDay         = tobool(NodeProperties.rawData.isZeroDay),
+                            CVELastModified          = todatetime(NodeProperties.rawData.lastModifiedDate),
+                            FindingDescription       = tostring(NodeProperties.rawData.description),
+                            FindingReferenceUrl      = tostring(coalesce(NodeProperties.rawData.referenceUrl, NodeProperties.rawData.url))
+              ) on $left.SourceNodeId == $right.FindingNodeId
               | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
-                        FindingName, FindingLabel, FindingCategories, FindingProps,
+                        FindingName, FindingLabel, FindingCategories,
+                        FindingSeverity, FindingCvssScore,
+                        FindingHasExploit, FindingIsExploitVerified, FindingIsInExploitKit, FindingIsZeroDay,
+                        CVELastModified, FindingDescription, FindingReferenceUrl,
                         EdgeLabel, EdgeProps;
 
           _AssetFindingEdges
@@ -167,12 +174,8 @@
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
               | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
               | where not(_AssetTagsLower has_any (_excludedAssetTags))
-              // Apply optional CVE-age filter. CVELastModified = best-effort coalesce of EG finding lastModifiedDate. _cveMinAgeDays==0 means no filter; >0 keeps ONLY CVEs with lastModifiedDate older than N days (overdue lens; skips noise from new CVEs in the active patch window).
-              // v2.2.208 -- pull CVELastModified from FindingProps directly. The
-              // previous column_ifexists("CVELastModifiedDate") always returned null
-              // on this join shape (that column was never projected through), making
-              // the parameterised filter a silent no-op regardless of _cveMinAgeDays.
-              | extend CVELastModified = todatetime(coalesce(FindingProps.rawData.lastModifiedDate, FindingProps.raw.lastModifiedDate))
+              // v2.2.210 -- CVELastModified is now a typed scalar column carried
+              // through _AssetFindingEdges, no per-row extend needed here.
               | where (_cveMinAgeDays == 0) or (isnull(CVELastModified)) or (CVELastModified < ago(_cveMinAgeDays * 1d))
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
@@ -190,15 +193,25 @@
               //  - Preserve CVELastModified through summarize (any). Lets the
               //    Detailed report's final project carry CVELastModified without
               //    needing a post-summarize re-extract.
+              // v2.2.210 -- replaced FindingProps = any(FindingProps) with typed
+              // scalar aggregates. Each (asset, finding, AadDeviceId) group has
+              // one row pre-summarize so any() picks the same scalar each time.
               | summarize
-                  DeviceKey             = any(DeviceKey),
-                  EdgeLabels            = make_set(EdgeLabel),
-                  FindingLabel          = any(FindingLabel),
-                  FindingCategories     = any(FindingCategories),
-                  FindingProps          = any(FindingProps),
-                  EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
-                  EG_IsExcluded         = any(EG_IsExcluded),
-                  CVELastModified       = any(CVELastModified),
+                  DeviceKey                = any(DeviceKey),
+                  EdgeLabels               = make_set(EdgeLabel),
+                  FindingLabel             = any(FindingLabel),
+                  FindingCategories        = any(FindingCategories),
+                  FindingSeverity          = any(FindingSeverity),
+                  FindingCvssScore         = any(FindingCvssScore),
+                  FindingHasExploit        = any(FindingHasExploit),
+                  FindingIsExploitVerified = any(FindingIsExploitVerified),
+                  FindingIsInExploitKit    = any(FindingIsInExploitKit),
+                  FindingIsZeroDay         = any(FindingIsZeroDay),
+                  FindingDescription       = any(FindingDescription),
+                  FindingReferenceUrl      = any(FindingReferenceUrl),
+                  EG_IsCustomerFacing      = any(EG_IsCustomerFacing),
+                  EG_IsExcluded            = any(EG_IsExcluded),
+                  CVELastModified          = any(CVELastModified),
             MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
             EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
             AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
@@ -224,30 +237,25 @@
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
-              // v2.2.208 -- dropped bag_pack("edge", EdgePropsAll). No downstream
-              // extend or coalesce reads Properties.edge in this report.
-              | extend Properties =
-                  bag_merge(
-                      bag_pack("finding", FindingProps),
-                      bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData))
-                  )
-              | extend Impact = todouble(coalesce(Properties.raw.cvssScore, Properties.finding.raw.cvssScore, Properties.raw.cvss.cvssScore))
+              // v2.2.210 -- Properties bag eliminated. All Properties.x.y.z reads
+              // below replaced with the scalar columns extracted up-front in
+              // _Findings (Finding{Severity,CvssScore,HasExploit,IsExploitVerified,
+              // IsInExploitKit,IsZeroDay,Description,ReferenceUrl}). Per-row
+              // bag_merge + ~10 dynamic-property lookups -> ~10 typed column reads.
+              | extend Impact = FindingCvssScore
               | extend SecuritySeverity = case(
-                  tolower(tostring(Properties.raw.severity)) == "critical", "Very High",
-                  tolower(tostring(Properties.raw.severity)) == "high",     "High",
-                  tolower(tostring(Properties.raw.severity)) == "medium",   "Medium",
-                  tolower(tostring(Properties.raw.severity)) == "low",      "Low",
+                  tolower(FindingSeverity) == "critical", "Very High",
+                  tolower(FindingSeverity) == "high",     "High",
+                  tolower(FindingSeverity) == "medium",   "Medium",
+                  tolower(FindingSeverity) == "low",      "Low",
                   "Low")
               | where FindingLabel contains "CVE"
               | where not (FindingName in (_excludedCves))
-              | extend HasExploit        = tobool(coalesce(Properties.finding.rawData.hasExploit,        Properties.raw.hasExploit,        Properties.finding.raw.hasExploit))
-              | extend IsExploitVerified = tobool(coalesce(Properties.finding.rawData.isExploitVerified, Properties.raw.isExploitVerified, Properties.finding.raw.isExploitVerified))
-              | extend IsInExploitKit    = tobool(coalesce(Properties.finding.rawData.isInExploitKit,    Properties.raw.isInExploitKit,    Properties.finding.raw.isInExploitKit))
-              | extend IsZeroDay         = tobool(coalesce(Properties.finding.rawData.isZeroDay,         Properties.raw.isZeroDay,         Properties.finding.raw.isZeroDay))
-              | extend CveUrl = tostring(coalesce(
-                  Properties.raw.referenceUrl, Properties.raw.url, Properties.raw.detailsUrl, Properties.raw.vendorAdvisoryUrl,
-                  Properties.finding.rawData.referenceUrl, Properties.finding.rawData.url, Properties.finding.raw.url,
-                  strcat("https://nvd.nist.gov/vuln/detail/", FindingName)))
+              | extend HasExploit        = FindingHasExploit
+              | extend IsExploitVerified = FindingIsExploitVerified
+              | extend IsInExploitKit    = FindingIsInExploitKit
+              | extend IsZeroDay         = FindingIsZeroDay
+              | extend CveUrl = iif(isempty(FindingReferenceUrl), strcat("https://nvd.nist.gov/vuln/detail/", FindingName), FindingReferenceUrl)
               | extend RF_P_ExploitSignals  = iff(HasExploit == true or IsExploitVerified == true or IsInExploitKit == true or IsZeroDay == true, 1, 0)
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RF_P_LegacyEoS       = iff(UnsupportedOSDetected == true, 1, 0)
@@ -425,48 +433,55 @@
                   EG_IsCustomerFacing,
                   EG_IsExcluded;
 
-          // v2.2.207 -- tightened CVE narrowing + single-scan materialise.
-          // Previous _AffectingNodeIds captured CVEs connected to anything in EG
-          // globally (~10K on FVF). _RelevantFindingIds now narrows further to CVEs
-          // connected to OUR endpoints only (~1K-5K). The filtered edge set is
-          // materialised once and reused for both _RelevantFindingIds AND _Edges
-          // -- ExposureGraphEdges scanned EXACTLY ONCE per query execution (vs
-          // three times in v2.2.206). EG "affecting" edges go finding -> asset
-          // (Source = finding NodeId, Target = asset NodeId), confirmed in v2.2.206.
-          let _AssetNodeIdSet = _Assets | distinct AssetNodeId;
-          let _OurAffectingEdges = materialize(
+          // v2.2.210 -- removed two patterns EG AH may not plan well:
+          //   (a) materialize() -- may be a no-op in Defender XDR AH, silently
+          //       causing the same let-binding to be re-evaluated 2-3 times
+          //       per query
+          //   (b) `where NodeId in (subquery)` -- often planned poorly at scale
+          //       compared to an explicit `join` with the same semantic
+          // Also collapsed the two separate joins with _Assets (one inside _Edges
+          // pre-filter via _AssetNodeIdSet, one in _AssetFindingEdges to attach
+          // AssetName/AadDeviceId). Single chain: edges -> join with _Assets ->
+          // join with CVE-filtered catalog. EG's planner sees the whole shape
+          // up-front.
+          // v2.2.210 -- second restructure (after the diagnostic-confirmed bottleneck
+          // was the post-join dynamic-property pipeline, NOT the join itself):
+          // extract scalar fields from NodeProperties.rawData up-front so the
+          // downstream `Properties = bag_merge(...)` per-row construction and the
+          // ~10 `Properties.x.y.z` dynamic lookups per row become a single typed
+          // column read each. The CVE diagnostic showed 118K rows post-join is
+          // healthy; the cost was 118K bag_merge calls + ~1.18M dynamic lookups.
+          let _AssetFindingEdges =
               ExposureGraphEdges
               | where tostring(EdgeLabel) contains "affecting"
-              | where TargetNodeId in (_AssetNodeIdSet)
-          );
-          let _RelevantFindingIds = _OurAffectingEdges | distinct SourceNodeId;
-          let _Findings =
-              ExposureGraphNodes
-              | where NodeLabel startswith "cve"
-              | where Categories has_any ("vulnerability_finding")
-              | where NodeId in (_RelevantFindingIds)
-              //__CVE_FILTER_BEGIN__
-              | where 1 == 1
-              //__CVE_FILTER_END__
-              | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
-                        FindingCategories = Categories, FindingProps = NodeProperties;
-
-          let _Edges =
-              _OurAffectingEdges
+              | join kind=inner (_Assets) on $left.TargetNodeId == $right.AssetNodeId
               | extend EdgeProps = column_ifexists("EdgeProperties", dynamic({}))
-              | project SourceNodeId, TargetNodeId, EdgeLabel, EdgeProps;
-
-          // v2.2.209 -- dropped AssetProps from the join projection. The full EG
-          // endpoint NodeProperties bag (typically 5-20 KB per row) was carried
-          // through 141K joined rows on FVF -- gigabytes of intermediate -- and
-          // never read by any downstream extend/coalesce. AssetProps removal is
-          // the long-suspected cause of the AutoBucket preempt at low N values.
-          let _AssetFindingEdges =
-              _Edges
-              | join kind=inner (_Assets)   on $left.TargetNodeId == $right.AssetNodeId
-              | join kind=inner (_Findings) on $left.SourceNodeId == $right.FindingNodeId
+              | join kind=inner (
+                  ExposureGraphNodes
+                  | where NodeLabel startswith "cve"
+                  | where Categories has_any ("vulnerability_finding")
+                  //__CVE_FILTER_BEGIN__
+                  | where 1 == 1
+                  //__CVE_FILTER_END__
+                  | project FindingNodeId            = NodeId,
+                            FindingName              = NodeName,
+                            FindingLabel             = NodeLabel,
+                            FindingCategories        = Categories,
+                            FindingSeverity          = tostring(NodeProperties.rawData.severity),
+                            FindingCvssScore         = todouble(NodeProperties.rawData.cvssScore),
+                            FindingHasExploit        = tobool(NodeProperties.rawData.hasExploit),
+                            FindingIsExploitVerified = tobool(NodeProperties.rawData.isExploitVerified),
+                            FindingIsInExploitKit    = tobool(NodeProperties.rawData.isInExploitKit),
+                            FindingIsZeroDay         = tobool(NodeProperties.rawData.isZeroDay),
+                            CVELastModified          = todatetime(NodeProperties.rawData.lastModifiedDate),
+                            FindingDescription       = tostring(NodeProperties.rawData.description),
+                            FindingReferenceUrl      = tostring(coalesce(NodeProperties.rawData.referenceUrl, NodeProperties.rawData.url))
+              ) on $left.SourceNodeId == $right.FindingNodeId
               | project AssetName, AssetLabel, AadDeviceId, EG_IsCustomerFacing, EG_IsExcluded,
-                        FindingName, FindingLabel, FindingCategories, FindingProps,
+                        FindingName, FindingLabel, FindingCategories,
+                        FindingSeverity, FindingCvssScore,
+                        FindingHasExploit, FindingIsExploitVerified, FindingIsInExploitKit, FindingIsZeroDay,
+                        CVELastModified, FindingDescription, FindingReferenceUrl,
                         EdgeLabel, EdgeProps;
 
           _AssetFindingEdges
@@ -475,12 +490,8 @@
               | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
               | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
               | where not(_AssetTagsLower has_any (_excludedAssetTags))
-              // Apply optional CVE-age filter. CVELastModified = best-effort coalesce of EG finding lastModifiedDate. _cveMinAgeDays==0 means no filter; >0 keeps ONLY CVEs with lastModifiedDate older than N days (overdue lens; skips noise from new CVEs in the active patch window).
-              // v2.2.208 -- pull CVELastModified from FindingProps directly. The
-              // previous column_ifexists("CVELastModifiedDate") always returned null
-              // on this join shape (that column was never projected through), making
-              // the parameterised filter a silent no-op regardless of _cveMinAgeDays.
-              | extend CVELastModified = todatetime(coalesce(FindingProps.rawData.lastModifiedDate, FindingProps.raw.lastModifiedDate))
+              // v2.2.210 -- CVELastModified is now a typed scalar column carried
+              // through _AssetFindingEdges, no per-row extend needed here.
               | where (_cveMinAgeDays == 0) or (isnull(CVELastModified)) or (CVELastModified < ago(_cveMinAgeDays * 1d))
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
@@ -498,15 +509,25 @@
               //  - Preserve CVELastModified through summarize (any). Lets the
               //    Detailed report's final project carry CVELastModified without
               //    needing a post-summarize re-extract.
+              // v2.2.210 -- replaced FindingProps = any(FindingProps) with typed
+              // scalar aggregates. Each (asset, finding, AadDeviceId) group has
+              // one row pre-summarize so any() picks the same scalar each time.
               | summarize
-                  DeviceKey             = any(DeviceKey),
-                  EdgeLabels            = make_set(EdgeLabel),
-                  FindingLabel          = any(FindingLabel),
-                  FindingCategories     = any(FindingCategories),
-                  FindingProps          = any(FindingProps),
-                  EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
-                  EG_IsExcluded         = any(EG_IsExcluded),
-                  CVELastModified       = any(CVELastModified),
+                  DeviceKey                = any(DeviceKey),
+                  EdgeLabels               = make_set(EdgeLabel),
+                  FindingLabel             = any(FindingLabel),
+                  FindingCategories        = any(FindingCategories),
+                  FindingSeverity          = any(FindingSeverity),
+                  FindingCvssScore         = any(FindingCvssScore),
+                  FindingHasExploit        = any(FindingHasExploit),
+                  FindingIsExploitVerified = any(FindingIsExploitVerified),
+                  FindingIsInExploitKit    = any(FindingIsInExploitKit),
+                  FindingIsZeroDay         = any(FindingIsZeroDay),
+                  FindingDescription       = any(FindingDescription),
+                  FindingReferenceUrl      = any(FindingReferenceUrl),
+                  EG_IsCustomerFacing      = any(EG_IsCustomerFacing),
+                  EG_IsExcluded            = any(EG_IsExcluded),
+                  CVELastModified          = any(CVELastModified),
             MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
             EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
             AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
@@ -562,8 +583,7 @@
                   Properties.raw.referenceUrl, Properties.raw.url, Properties.raw.detailsUrl, Properties.raw.vendorAdvisoryUrl,
                   Properties.finding.rawData.referenceUrl, Properties.finding.rawData.url, Properties.finding.raw.url,
                   strcat("https://nvd.nist.gov/vuln/detail/", FindingName)))
-              | extend CVSSDesc = tostring(coalesce(
-                  Properties.finding.rawData.description, Properties.raw.description, Properties.finding.raw.description))
+              | extend CVSSDesc = FindingDescription
               | extend RF_P_ExploitSignals  = iff(HasExploit == true or IsExploitVerified == true or IsInExploitKit == true or IsZeroDay == true, 1, 0)
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RF_P_LegacyEoS       = iff(UnsupportedOSDetected == true, 1, 0)

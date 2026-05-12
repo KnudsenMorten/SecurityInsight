@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.209
+## v2.2.210
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
 - release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
 - release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
 - release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
@@ -33,13 +34,59 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs: SecurityInsight v2.2.183 - drop customer name from release notes (07d3e72e)
 - release: SecurityInsight v2.2.183 - Layer 1 loads BOTH Connect-Platform + platform-defaults.ps1 (41918b5d)
 - release: SecurityInsight v2.2.182 - CRITICAL provisioning fix: Modern SPN KV read grant (b097be6a)
-- release: SecurityInsight v2.2.181 - SMTP dispatch diagnostic + richer error trapping (43bca9c5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.210 — Risk Analysis: eliminate `Properties` bag, extract CVE scalars up-front
+
+Diagnostic finding from a stripped-down portal run of the CVE join chain at FVF:
+
+| Metric | Value |
+|---|---:|
+| Time | 54 seconds |
+| Rows post-join | 118,076 |
+| Unique (asset, CVE) pairs | 117,601 |
+
+So the join itself is healthy. **The preempt is downstream**, in the post-summarize pipeline:
+
+1. Per-row `Properties = bag_merge(bag_pack("finding", FindingProps), bag_pack("raw", FindingProps.rawData))` -- 118K bag constructions per query
+2. Multiple `Properties.x.y.z` dynamic-property reads per row (severity, cvssScore, hasExploit, isExploitVerified, isInExploitKit, isZeroDay, description, referenceUrl/url/detailsUrl/...) -- roughly 10 per row, ~1.18M dynamic lookups total
+3. Each lookup is unboxed at runtime from a dynamic bag, not a typed column
+
+This release replaces all of that with a **single up-front scalar extraction** in the `_Findings` inner subquery:
+
+```kql
+| project FindingNodeId  = NodeId,
+          FindingName    = NodeName,
+          FindingLabel   = NodeLabel,
+          FindingCategories       = Categories,
+          FindingSeverity         = tostring(NodeProperties.rawData.severity),
+          FindingCvssScore        = todouble(NodeProperties.rawData.cvssScore),
+          FindingHasExploit       = tobool(NodeProperties.rawData.hasExploit),
+          FindingIsExploitVerified= tobool(NodeProperties.rawData.isExploitVerified),
+          FindingIsInExploitKit   = tobool(NodeProperties.rawData.isInExploitKit),
+          FindingIsZeroDay        = tobool(NodeProperties.rawData.isZeroDay),
+          CVELastModified         = todatetime(NodeProperties.rawData.lastModifiedDate),
+          FindingDescription      = tostring(NodeProperties.rawData.description),
+          FindingReferenceUrl     = tostring(coalesce(NodeProperties.rawData.referenceUrl, NodeProperties.rawData.url))
+```
+
+`FindingProps` (the dynamic NodeProperties bag) is no longer carried through the join. The `Properties = bag_merge(...)` block is gone. All downstream `Properties.x.y.z` reads collapsed to typed scalar column references (`FindingSeverity`, `FindingCvssScore`, etc).
+
+**Also in this release** (after the diagnostic showed they weren't the bottleneck but were still cleanup wins):
+- Removed `materialize()` -- may be a no-op in Defender XDR AH causing the let-binding to be silently re-evaluated multiple times per query
+- Removed `where NodeId in (_RelevantFindingIds)` subquery membership in favour of a single join chain that the EG planner sees all at once
+- Collapsed the two separate joins with `_Assets` (one inside `_Edges` pre-filter, one in `_AssetFindingEdges`) into a single join chain
+
+Applied to `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`. `Device_Recommendations_*` untouched.
+
+Expected effect: AutoBucket should now converge in single digits for the CVE Detailed report, and per-bucket execution time drop substantially. The 1.18M dynamic-property reads are gone.
 
 ---
 

@@ -1361,14 +1361,19 @@ function Invoke-GraphHuntingQuery {
                     return [pscustomobject]@{ _SIDirectRows = @($lakeRows) }
                 } catch {
                     $lakeMsg = $_.Exception.Message
-                    if ($lakeMsg -match 'InvalidDatabaseInQuery|not available for current user|Forbidden|403|Unauthorized|401') {
-                        # Silent fallback: lake RBAC not granted is a known-state opt-in.
-                        # The hybrid path is the supported alternative; no point alarming
-                        # operators on every run. Set $global:SI_Verbose=$true to see why.
-                        Write-Diag "[lake] unavailable for SPN -- workspace RBAC not granted. Using hybrid fallback for this run."
+                    # All known "lake just won't work for this run" patterns:
+                    # - InvalidDatabaseInQuery / not available / 403 / 401  : RBAC not granted
+                    # - TenantNotFound / 404 / "Tenant not registered"      : Sentinel data lake feature not enabled on this workspace
+                    # All of these are PERMANENT within a single run, so flip the
+                    # short-circuit flag and stop probing every subsequent query.
+                    if ($lakeMsg -match 'InvalidDatabaseInQuery|not available for current user|Forbidden|403|Unauthorized|401|TenantNotFound|Tenant not registered|404|Not Found') {
+                        Write-Diag ("[lake] unavailable for this run ({0}). Using hybrid fallback for ALL subsequent queries." -f ($lakeMsg -split "`n" | Select-Object -First 1))
                         $script:_SentinelLakeUnavailable = $true
                     } else {
-                        Write-Warn2 ("[lake] failed: {0}. Falling back to hybrid for this query." -f ($lakeMsg -split "`n" | Select-Object -First 1))
+                        # Unknown failure mode -- still log loudly + still flip the flag
+                        # so we don't spam the same error on every query.
+                        Write-Warn2 ("[lake] failed: {0}. Falling back to hybrid for this query and disabling lake for the rest of the run." -f ($lakeMsg -split "`n" | Select-Object -First 1))
+                        $script:_SentinelLakeUnavailable = $true
                     }
                 }
             }

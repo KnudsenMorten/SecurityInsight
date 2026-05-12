@@ -652,6 +652,22 @@
               // instead of silently downgrading to Low (Tier 3). Same data-quality-
               // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
               | extend CriticalityTier = Tier_From_SI_CL
+              // v2.2.218 -- asset tier filter (Detailed only). Drops endpoint-level
+              // CVE rows whose owning device's CL-computed Tier is outside the filter
+              // list. Default [0, 1, 2] keeps Critical / High / Medium tiers and
+              // drops Tier 3 (Low) workstations / IoT, which are the typical noise
+              // floor for per-CVE remediation. Null tier (no CL profile match) is
+              // INTENTIONALLY KEPT so operators still see data-quality gaps. To
+              // restore the full backlog change dynamic([0,1,2]) to dynamic([]).
+              // To make Critical-only use dynamic([0]). To include Tier 3 use
+              // dynamic([0,1,2,3]). Operator-edit in YAML for now; per-report
+              // exclude.custom.json substitution is a follow-up if needed.
+              //__ASSET_TIER_FILTER_BEGIN__
+              | extend _AssetTierFilter = dynamic([0, 1, 2])
+              | where array_length(_AssetTierFilter) == 0
+                   or isnull(CriticalityTier)
+                   or toint(CriticalityTier) in (_AssetTierFilter)
+              //__ASSET_TIER_FILTER_END__
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",

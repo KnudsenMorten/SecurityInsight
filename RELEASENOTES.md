@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.217
+## v2.2.218
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
 - release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
 - release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
 - release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
@@ -33,13 +34,59 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.191 - auto-detect stale SPN Az context at orchestrator start (28e3dd7b)
 - release: SecurityInsight v2.2.190 - restore operator Az context after smoke test (b29e07f3)
 - release: SecurityInsight v2.2.189 - -SkipPermissionAdd switch on Initialize-PlatformVm (82bec318)
-- release: SecurityInsight v2.2.188 - Deploy-PlatformAI auto-creates RG if missing (829fe9aa)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.218 — Risk Analysis: CVE Detailed -- asset tier filter (default [0, 1, 2])
+
+Operator-driven volume cut on top of v2.2.217's memory fix. CVE Detailed at FVF still emits ~115K (Asset x CVE) pairs after EpJoinKey-fixes the memory crash; that's a lot of rows for a deliverable when most operators only act on CVEs that affect the more critical assets.
+
+### What landed
+
+New `__ASSET_TIER_FILTER_BEGIN__/END__` block-marker on Detailed only (Summary already collapses to ~50 rows post-second-summarize and doesn't need the trim):
+
+```kql
+| extend CriticalityTier = Tier_From_SI_CL
+//__ASSET_TIER_FILTER_BEGIN__
+| extend _AssetTierFilter = dynamic([0, 1, 2])
+| where array_length(_AssetTierFilter) == 0
+     or isnull(CriticalityTier)
+     or toint(CriticalityTier) in (_AssetTierFilter)
+//__ASSET_TIER_FILTER_END__
+```
+
+Default `[0, 1, 2]` keeps Critical / High / Medium tiers and drops Tier 3 (Low) workstations / IoT -- typical noise floor for per-CVE remediation. **Null tier (no CL profile match) is intentionally kept** so operators still see data-quality gaps surfaced as `Unknown - unmapped` in the output.
+
+### Operator overrides (edit YAML for now)
+
+| Want | Change `dynamic([0, 1, 2])` to |
+|---|---|
+| Critical only | `dynamic([0])` |
+| Critical + High | `dynamic([0, 1])` |
+| Critical + High + Medium **(default)** | `dynamic([0, 1, 2])` |
+| Include Tier 3 too | `dynamic([0, 1, 2, 3])` |
+| No filter (full backlog) | `dynamic([])` |
+
+### Volume estimate (FVF)
+
+- v2.2.217 baseline: ~115K (Asset x CVE) pairs
+- v2.2.218 default `[0, 1, 2]`: ~5-15K rows (90%+ cut for tenants with typical Tier-3-heavy workstation populations)
+- One-bucket comfortable, runs in seconds
+
+### Apply scope
+
+- Detailed only. Summary unchanged.
+- PS-side enrichment refactor (the cleaner architectural alternative discussed) **explicitly skipped** per operator -- staying on the inline-datatable + EpJoinKey path for now.
+
+### Follow-up potential
+
+Per-report `exclude.custom.json` substitution for `AssetTierFilter` would let operators override per tenant without YAML edits. Not wired in this release; YAML edit is fine for the moment.
 
 ---
 

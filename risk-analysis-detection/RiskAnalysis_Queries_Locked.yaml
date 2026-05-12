@@ -122,6 +122,7 @@
               ExposureGraphNodes
               | mv-expand Category = Categories
               | where tostring(Category) contains "finding"
+              | where NodeLabel startswith "cve"
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 
@@ -399,6 +400,7 @@
               ExposureGraphNodes
               | mv-expand Category = Categories
               | where tostring(Category) contains "finding"
+              | where NodeLabel startswith "cve"
               | project FindingNodeId = NodeId, FindingName = NodeName, FindingLabel = NodeLabel,
                         FindingCategories = Categories, FindingProps = NodeProperties;
 

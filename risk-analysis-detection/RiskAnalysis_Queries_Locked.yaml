@@ -164,22 +164,38 @@
               | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
               | where not(_AssetTagsLower has_any (_excludedAssetTags))
               // Apply optional CVE-age filter. CVELastModified = best-effort coalesce of EG finding lastModifiedDate. _cveMinAgeDays==0 means no filter; >0 keeps ONLY CVEs with lastModifiedDate older than N days (overdue lens; skips noise from new CVEs in the active patch window).
-              | extend CVELastModified = todatetime(coalesce(column_ifexists("CVELastModifiedDate", datetime(null)), datetime(null)))
+              // v2.2.208 -- pull CVELastModified from FindingProps directly. The
+              // previous column_ifexists("CVELastModifiedDate") always returned null
+              // on this join shape (that column was never projected through), making
+              // the parameterised filter a silent no-op regardless of _cveMinAgeDays.
+              | extend CVELastModified = todatetime(coalesce(FindingProps.rawData.lastModifiedDate, FindingProps.raw.lastModifiedDate))
               | where (_cveMinAgeDays == 0) or (isnull(CVELastModified)) or (CVELastModified < ago(_cveMinAgeDays * 1d))
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
               //__BUCKET_FILTER_END__
+              // v2.2.208 fixes to this summarize:
+              //  - Include AadDeviceId in the by-clause (was missing). Without it,
+              //    two endpoints sharing an AssetName -- renamed hosts, stale CL
+              //    records, dual-onboarded devices -- collapsed into one group
+              //    and any(AadDeviceId) picked one nondeterministically. The
+              //    downstream leftouter join with _ep then attached the wrong CL
+              //    profile (Tier, cmdb*, UnsupportedOSDetected) to that row.
+              //  - Dropped EdgePropsAll = make_bag(EdgeProps). The only consumer
+              //    was Properties.edge in the bag_merge below, but no extend or
+              //    coalesce in the output projection ever reads Properties.edge.
+              //  - Preserve CVELastModified through summarize (any). Lets the
+              //    Detailed report's final project carry CVELastModified without
+              //    needing a post-summarize re-extract.
               | summarize
                   DeviceKey             = any(DeviceKey),
                   EdgeLabels            = make_set(EdgeLabel),
-                  EdgePropsAll          = make_bag(EdgeProps),
                   FindingLabel          = any(FindingLabel),
                   FindingCategories     = any(FindingCategories),
                   FindingProps          = any(FindingProps),
                   AssetProps            = any(AssetProps),
-                  AadDeviceId           = any(AadDeviceId),
                   EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
                   EG_IsExcluded         = any(EG_IsExcluded),
+                  CVELastModified       = any(CVELastModified),
             MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
             EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
             AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
@@ -187,11 +203,14 @@
             MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
             MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
             ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
-                by AssetName, AssetLabel, FindingName
+                by AssetName, AssetLabel, FindingName, AadDeviceId
               // Bring in CL fields (Tier + UnsupportedOSDetected + IsExcludedByTag + cmdbCriticality)
               | join kind=leftouter _ep on AadDeviceId
               | project-away AadDeviceId1
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""), strcat_array(column_ifexists("SourceAssets_Path", dynamic([])), "; "), strcat_array(column_ifexists("TargetAssets_Path", dynamic([])), "; "), column_ifexists("ImpactedAssets", ""))
+              // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
+              // TargetAssets_Path / ImpactedAssets were copy-pasted from an
+              // Attack_Paths report and never exist on this CVE shape.
+              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
@@ -202,11 +221,12 @@
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
+              // v2.2.208 -- dropped bag_pack("edge", EdgePropsAll). No downstream
+              // extend or coalesce reads Properties.edge in this report.
               | extend Properties =
                   bag_merge(
                       bag_pack("finding", FindingProps),
-                      bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData)),
-                      bag_pack("edge", EdgePropsAll)
+                      bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData))
                   )
               | extend Impact = todouble(coalesce(Properties.raw.cvssScore, Properties.finding.raw.cvssScore, Properties.raw.cvss.cvssScore))
               | extend SecuritySeverity = case(
@@ -449,22 +469,38 @@
               | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
               | where not(_AssetTagsLower has_any (_excludedAssetTags))
               // Apply optional CVE-age filter. CVELastModified = best-effort coalesce of EG finding lastModifiedDate. _cveMinAgeDays==0 means no filter; >0 keeps ONLY CVEs with lastModifiedDate older than N days (overdue lens; skips noise from new CVEs in the active patch window).
-              | extend CVELastModified = todatetime(coalesce(column_ifexists("CVELastModifiedDate", datetime(null)), datetime(null)))
+              // v2.2.208 -- pull CVELastModified from FindingProps directly. The
+              // previous column_ifexists("CVELastModifiedDate") always returned null
+              // on this join shape (that column was never projected through), making
+              // the parameterised filter a silent no-op regardless of _cveMinAgeDays.
+              | extend CVELastModified = todatetime(coalesce(FindingProps.rawData.lastModifiedDate, FindingProps.raw.lastModifiedDate))
               | where (_cveMinAgeDays == 0) or (isnull(CVELastModified)) or (CVELastModified < ago(_cveMinAgeDays * 1d))
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
               //__BUCKET_FILTER_END__
+              // v2.2.208 fixes to this summarize:
+              //  - Include AadDeviceId in the by-clause (was missing). Without it,
+              //    two endpoints sharing an AssetName -- renamed hosts, stale CL
+              //    records, dual-onboarded devices -- collapsed into one group
+              //    and any(AadDeviceId) picked one nondeterministically. The
+              //    downstream leftouter join with _ep then attached the wrong CL
+              //    profile (Tier, cmdb*, UnsupportedOSDetected) to that row.
+              //  - Dropped EdgePropsAll = make_bag(EdgeProps). The only consumer
+              //    was Properties.edge in the bag_merge below, but no extend or
+              //    coalesce in the output projection ever reads Properties.edge.
+              //  - Preserve CVELastModified through summarize (any). Lets the
+              //    Detailed report's final project carry CVELastModified without
+              //    needing a post-summarize re-extract.
               | summarize
                   DeviceKey             = any(DeviceKey),
                   EdgeLabels            = make_set(EdgeLabel),
-                  EdgePropsAll          = make_bag(EdgeProps),
                   FindingLabel          = any(FindingLabel),
                   FindingCategories     = any(FindingCategories),
                   FindingProps          = any(FindingProps),
                   AssetProps            = any(AssetProps),
-                  AadDeviceId           = any(AadDeviceId),
                   EG_IsCustomerFacing   = any(EG_IsCustomerFacing),
                   EG_IsExcluded         = any(EG_IsExcluded),
+                  CVELastModified       = any(CVELastModified),
             MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
             EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
             AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
@@ -472,11 +508,14 @@
             MITRE_Tactics          = any(tostring(column_ifexists("MITRE_Tactics",""))),
             MITRE_Techniques       = any(tostring(column_ifexists("MITRE_Techniques",""))),
             ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
-                by AssetName, AssetLabel, FindingName
+                by AssetName, AssetLabel, FindingName, AadDeviceId
               // Bring in CL fields (Tier + UnsupportedOSDetected + IsExcludedByTag + cmdb*)
               | join kind=leftouter _ep on AadDeviceId
               | project-away AadDeviceId1
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""), strcat_array(column_ifexists("SourceAssets_Path", dynamic([])), "; "), strcat_array(column_ifexists("TargetAssets_Path", dynamic([])), "; "), column_ifexists("ImpactedAssets", ""))
+              // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
+              // TargetAssets_Path / ImpactedAssets were copy-pasted from an
+              // Attack_Paths report and never exist on this CVE shape.
+              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
@@ -487,11 +526,12 @@
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
+              // v2.2.208 -- dropped bag_pack("edge", EdgePropsAll). No downstream
+              // extend or coalesce reads Properties.edge in this report.
               | extend Properties =
                   bag_merge(
                       bag_pack("finding", FindingProps),
-                      bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData)),
-                      bag_pack("edge", EdgePropsAll)
+                      bag_pack("raw", iif(isnull(FindingProps.rawData), dynamic({}), FindingProps.rawData))
                   )
               | extend Impact = todouble(coalesce(Properties.raw.cvssScore, Properties.finding.raw.cvssScore, Properties.raw.cvss.cvssScore))
               | extend SecuritySeverity = case(
@@ -502,8 +542,12 @@
                   "Low")
               | where FindingLabel contains "CVE"
               | where not (FindingName in (_excludedCves))
-              | extend CVELastModified = todatetime(coalesce(Properties.finding.raw.lastModifiedDate, Properties.raw.lastModifiedDate))
-              | where CVELastModified < ago(40d)
+              // v2.2.208 -- removed redundant `extend CVELastModified` + hardcoded
+              // `where CVELastModified < ago(40d)`. The hardcoded filter ignored
+              // _cveMinAgeDays / $global:SI_CVE_MinAgeDays AND silently dropped
+              // CVEs with null lastModifiedDate. CVELastModified now flows through
+              // summarize from the canonical parameterised filter above; the only
+              // CVE-age control is _cveMinAgeDays.
               | extend HasExploit        = tobool(coalesce(Properties.finding.rawData.hasExploit,        Properties.raw.hasExploit,        Properties.finding.raw.hasExploit))
               | extend IsExploitVerified = tobool(coalesce(Properties.finding.rawData.isExploitVerified, Properties.raw.isExploitVerified, Properties.finding.raw.isExploitVerified))
               | extend IsInExploitKit    = tobool(coalesce(Properties.finding.rawData.isInExploitKit,    Properties.raw.isInExploitKit,    Properties.finding.raw.isInExploitKit))
@@ -756,7 +800,10 @@
               | join kind=leftouter (DeviceInfoLatest)               on DeviceId
               | join kind=leftouter (_EG_Flags)                      on $left.DI_AadDeviceId == $right.EG_AadDeviceId
               | join kind=leftouter (_ep)                            on $left.DI_AadDeviceId == $right.AadDeviceId
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""), strcat_array(column_ifexists("SourceAssets_Path", dynamic([])), "; "), strcat_array(column_ifexists("TargetAssets_Path", dynamic([])), "; "), column_ifexists("ImpactedAssets", ""))
+              // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
+              // TargetAssets_Path / ImpactedAssets were copy-pasted from an
+              // Attack_Paths report and never exist on this CVE shape.
+              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
               | extend DeviceKey = iif(isnotempty(DI_AadDeviceId), DI_AadDeviceId, coalesce(DI_DeviceName, DeviceName))
@@ -1031,7 +1078,10 @@
               | join kind=leftouter (DeviceInfoLatest) on DeviceId
               | join kind=leftouter (_EG_Flags)        on $left.DI_AadDeviceId == $right.EG_AadDeviceId
               | join kind=leftouter (_ep)              on $left.DI_AadDeviceId == $right.AadDeviceId
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""), strcat_array(column_ifexists("SourceAssets_Path", dynamic([])), "; "), strcat_array(column_ifexists("TargetAssets_Path", dynamic([])), "; "), column_ifexists("ImpactedAssets", ""))
+              // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
+              // TargetAssets_Path / ImpactedAssets were copy-pasted from an
+              // Attack_Paths report and never exist on this CVE shape.
+              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AadDeviceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Endpoint")
               | extend AssetName  = coalesce(column_ifexists("DI_DeviceName", ""), column_ifexists("DeviceName", ""), AssetName)
@@ -1256,7 +1306,10 @@
                 by AssetNodeId, AssetName, AssetLabel, FindingName
               // Bring in CL fields (Tier + IsExcludedByTag + cmdb*) via EG NodeId == AzureResourceId_Guid.
               | join kind=leftouter (_ap) on $left.AssetNodeId == $right.AzureResourceId_Guid
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""), strcat_array(column_ifexists("SourceAssets_Path", dynamic([])), "; "), strcat_array(column_ifexists("TargetAssets_Path", dynamic([])), "; "), column_ifexists("ImpactedAssets", ""))
+              // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
+              // TargetAssets_Path / ImpactedAssets were copy-pasted from an
+              // Attack_Paths report and never exist on this CVE shape.
+              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AzureResourceId_Guid", ""), column_ifexists("AzureResourceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false
@@ -1503,7 +1556,10 @@
             ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
                 by AssetNodeId, AssetName, AssetLabel, FindingName
               | join kind=leftouter (_ap) on $left.AssetNodeId == $right.AzureResourceId_Guid
-              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""), strcat_array(column_ifexists("SourceAssets_Path", dynamic([])), "; "), strcat_array(column_ifexists("TargetAssets_Path", dynamic([])), "; "), column_ifexists("ImpactedAssets", ""))
+              // v2.2.208 -- dropped dead coalesce sources. SourceAssets_Path /
+              // TargetAssets_Path / ImpactedAssets were copy-pasted from an
+              // Attack_Paths report and never exist on this CVE shape.
+              | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AzureResourceId_Guid", ""), column_ifexists("AzureResourceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure")
               | where tobool(column_ifexists("IsExcludedByTag", false)) == false

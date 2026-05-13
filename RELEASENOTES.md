@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.251
+## v2.2.252
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.252 - Machine.Read.All instead of Machine.ReadWrite.All for WDATP (e02c9297)
 - release: SecurityInsight v2.2.251 - DCR auto-rename length guard (>60 chars -> SHA1 hash fallback) (ef4ef053)
 - release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
 - release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.226 - clean version stamp + MoreDetails wrap in Excel (1f72026d)
 - release: SecurityInsight v2.2.225 - extra YAML-projected columns carry through (CVE Detailed exploit cols back) (771146f4)
 - release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
-- release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.252 — Stop requesting `Machine.ReadWrite.All` on WindowsDefenderATP (v2.2 is read-only)
+
+Operator: "only read is required - not write."
+
+Customer's SPN got the MDE 403 with a body that says `API required roles: Machine.Read.All, Machine.ReadWrite.All` -- either role satisfies the `/api/machines` endpoint. Our setup wizard was requesting (and consenting to) the **write** role, which is gratuitously over-permissioned for an engine that **does not write back**. Per the v2.2 read-only invariant the Tagging stage emits WOULD-APPLY rows to `SI_AssetTagActivity_CL` and never calls the MDE machine-tags API. The actual tag writeback is a separate solution outside v2.2 that needs its own SPN with `Machine.ReadWrite.All`.
+
+Three sites switched from `Machine.ReadWrite.All` → `Machine.Read.All`:
+
+1. `Setup-SecurityInsight.ps1` (line 464) — the wizard's WindowsDefenderATP permission grant block.
+2. `setup/Validate-SIPermissions.ps1` (line 213) — the permission validator's expectation.
+3. `README.md` — the customer-facing permission table; row description now correctly attributes the role to endpoint asset-profiling reads (`/api/machines`), not tagging writes, and notes that a tagger solution outside v2.2 needs its own SPN for the write role.
+
+Customers re-running Setup-SecurityInsight after pulling v2.2.252 will see admin-consent prompts for **Read** only. Existing tenants that already consented to `Machine.ReadWrite.All` can leave it alone (the engine only uses read) or trim the unused write permission manually.
 
 ---
 

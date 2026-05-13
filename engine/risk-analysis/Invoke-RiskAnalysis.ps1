@@ -7126,6 +7126,49 @@ if ([bool]$global:BuildSummaryByAI) {
             } |
             Select-Object -First $TopN)
 
+        # v2.2.227 path B -- collapse pass for *_Detailed reports so the AI
+        # rollup sees the same (asset x finding) shape as Summary does.
+        # Detailed YAMLs emit one row per (asset, CVE): a host with 562 CVEs
+        # contributes 562 rows. Summary YAMLs hard-code `extend ConfigurationId = "CVE"`
+        # which collapses those 562 per-CVE rows into one "Update vulnerable
+        # software [CVE]" row. Without engine-side parity the Detailed AI
+        # over-weights hot assets (observed 24x sum on mgmt1: 562 rows ->
+        # 24'024 weighted vs Summary's 25 rows -> 994), causing Summary and
+        # Detailed to rank different top assets.
+        #
+        # Here we mirror Summary's collapse engine-side: for each
+        # (asset, ConfigBucket) pair keep only the max-WeightedRisk row and
+        # feed it to Add-AssetAgg / Add-FindingAgg once. ConfigBucket = "CVE"
+        # when ConfigurationId looks like a CVE (CVE-YYYY-N+), otherwise the
+        # raw ConfigurationId (scid-NNN etc. pass through unchanged so
+        # recommendations stay 1:1). Other rows in the same pair are skipped
+        # from AI rollup only -- the XLSX export remains untouched (the full
+        # 562 rows still ship for forensic detail).
+        $isDetailedTemplate = ($global:ReportTemplate -like '*_Detailed')
+        $collapseBuckets    = $null
+        if ($isDetailedTemplate -and $topRows.Count -gt 0) {
+            $collapseBuckets = @{}
+            foreach ($r in $topRows) {
+                $cId = Get-RowValue -Row $r -Names @("ConfigurationId","RecommendationId","FindingId","Id")
+                $bucket = if ([string]$cId -match '^CVE-\d{4}-\d+$') { 'CVE' } else { [string]$cId }
+                $wTxt = Get-RowValue -Row $r -Names @("RiskScoreTotal_Weighted")
+                [double]$w = 0; [void][double]::TryParse((([string]$wTxt) -replace ',', '.'), [ref]$w)
+                $aTxt = Get-RowValue -Row $r -Names @("ImpactedAssetsList","ImpactedAssets","Assets","AffectedAssets","Machines")
+                $aList = Resolve-AssetNamesForRow -Row $r -AssetsText $aTxt
+                foreach ($a in $aList) {
+                    if ([string]::IsNullOrWhiteSpace($a)) { continue }
+                    $key = "{0}|{1}" -f ([string]$a).ToLowerInvariant(), $bucket
+                    if (-not $collapseBuckets.ContainsKey($key)) {
+                        $collapseBuckets[$key] = [pscustomobject]@{ MaxW = $w; RowRef = $r }
+                    } elseif ($collapseBuckets[$key].MaxW -lt $w) {
+                        $collapseBuckets[$key].MaxW   = $w
+                        $collapseBuckets[$key].RowRef = $r
+                    }
+                }
+            }
+            Write-Info ("AI rollup collapse: {0} *_Detailed rows -> {1} (asset x ConfigBucket) buckets (max-weighted; XLSX unaffected)" -f $topRows.Count, $collapseBuckets.Count)
+        }
+
         $findingLines = @()
         $assetAgg     = @{}
 
@@ -7318,6 +7361,18 @@ if ([bool]$global:BuildSummaryByAI) {
 
             if ($assetList -and @($assetList).Count -gt 0) {
                 foreach ($a in $assetList) {
+                    # v2.2.227 path B -- in *_Detailed reports skip rows that
+                    # aren't the max-weighted representative for their
+                    # (asset, ConfigBucket) pair. Summary path is unaffected
+                    # ($collapseBuckets stays $null when the template isn't *_Detailed).
+                    if ($isDetailedTemplate -and $collapseBuckets) {
+                        $bucket = if ([string]$confId -match '^CVE-\d{4}-\d+$') { 'CVE' } else { [string]$confId }
+                        $key    = "{0}|{1}" -f ([string]$a).ToLowerInvariant(), $bucket
+                        if ($collapseBuckets.ContainsKey($key) -and -not [object]::ReferenceEquals($collapseBuckets[$key].RowRef, $r)) {
+                            continue
+                        }
+                    }
+
                     Add-AssetAgg -Asset $a -RiskScore $riskScore -TierLevel $tierLevel -Severity $severity -Domain $domain `
                         -Category $category -Subcat $subcat -ConfName $confName -ConfId $confId `
                         -CmdbId $cmdbId -CmdbName $cmdbName -CmdbCriticality $cmdbCrit -CmdbDataSensitivity $cmdbSens `

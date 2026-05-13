@@ -6947,8 +6947,19 @@ if ([bool]$global:BuildSummaryByAI) {
     }
     else {
 
-        $TopN = 50
-        $TopAssetsN = 25
+        # v2.2.224 -- AI rollup builds from ALL final rows (was top 50), so the
+        # asset universe seen by the rollup is identical between Summary and
+        # Detailed regardless of report shape. Detailed previously fed only top
+        # 50 raw rows which often covered just 3-8 hot assets (one asset
+        # dominates the top with many CVE rows); the AI then ranked the same
+        # narrow set every run. Summary had broader coverage because each row
+        # carried ImpactedAssetsList across many assets. Equalizing the input
+        # window makes both reports converge on the same top assets.
+        # $TopFindingsN is new in v2.2.224 -- parallel finding rollup so the AI
+        # gets per-CVE/per-recommendation aggregation alongside the asset one.
+        $TopN         = @($global:final).Count
+        $TopAssetsN   = 50
+        $TopFindingsN = 50
 
         function Test-LooksLikeHost {
             param([string]$s)
@@ -7015,7 +7026,79 @@ if ([bool]$global:BuildSummaryByAI) {
             Select-Object -First $TopN)
 
         $findingLines = @()
-        $assetAgg = @{}
+        $assetAgg     = @{}
+
+        # v2.2.224 -- parallel finding aggregator keyed by ConfigurationId. Lets the
+        # AI prompt include a "top critical findings" rollup alongside the asset
+        # rollup, so the operator sees BOTH "which assets to fix" AND "what to fix
+        # on them" -- consistent across Summary + Detailed because both reports
+        # share the same Add-FindingAgg logic on the same Final-rows pool.
+        $findingAgg   = @{}
+
+        function Add-FindingAgg {
+            param(
+                [string]$ConfId,
+                [string]$ConfName,
+                [string]$Category,
+                [string]$Subcat,
+                [string]$Severity,
+                [string]$Domain,
+                [string]$Asset,
+                [double]$RiskScoreUnweighted = 0.0,
+                [double]$RiskScoreWeighted   = 0.0,
+                [string]$MoreDetails         = ''
+            )
+
+            if ([string]::IsNullOrWhiteSpace($ConfId)) { return }
+
+            if (-not $findingAgg.ContainsKey($ConfId)) {
+                $findingAgg[$ConfId] = [pscustomobject]@{
+                    ConfId                  = $ConfId
+                    ConfName                = $ConfName
+                    Category                = $Category
+                    Subcategory             = $Subcat
+                    Severity                = $Severity
+                    Domain                  = $Domain
+                    TotalRiskScore          = 0.0
+                    TotalRiskScore_Weighted = 0.0
+                    AffectedAssetCount      = 0
+                    AffectedAssets          = New-Object System.Collections.Generic.HashSet[string]
+                    AssetRiskScores         = @{}   # asset -> weighted score sum (top-5 cross-ref)
+                    Links                   = New-Object System.Collections.Generic.HashSet[string]
+                }
+            }
+
+            $f = $findingAgg[$ConfId]
+            $f.TotalRiskScore          += $RiskScoreUnweighted
+            $f.TotalRiskScore_Weighted += $RiskScoreWeighted
+
+            # Sticky: keep first-seen non-empty descriptive fields
+            if (-not $f.ConfName -and $ConfName) { $f.ConfName = $ConfName }
+            if (-not $f.Category -and $Category) { $f.Category = $Category }
+            if (-not $f.Subcategory -and $Subcat) { $f.Subcategory = $Subcat }
+            if (-not $f.Severity -and $Severity) { $f.Severity = $Severity }
+            if (-not $f.Domain   -and $Domain)   { $f.Domain   = $Domain }
+
+            if ($Asset -and -not [string]::IsNullOrWhiteSpace($Asset)) {
+                $wasNew = $f.AffectedAssets.Add($Asset)
+                if ($wasNew) { $f.AffectedAssetCount++ }
+                # Track per-asset risk score sum so we can list top-5 hottest assets per finding
+                if ($f.AssetRiskScores.ContainsKey($Asset)) {
+                    $f.AssetRiskScores[$Asset] += $RiskScoreWeighted
+                } else {
+                    $f.AssetRiskScores[$Asset]  = $RiskScoreWeighted
+                }
+            }
+
+            # Harvest reference URLs (cap 6 per finding)
+            if (-not [string]::IsNullOrWhiteSpace($MoreDetails) -and $f.Links.Count -lt 6) {
+                foreach ($urlMatch in ([regex]::Matches([string]$MoreDetails, 'https?://[^\s,;<>"`)\]]+'))) {
+                    if ($f.Links.Count -ge 6) { break }
+                    $u = $urlMatch.Value.TrimEnd('.', ',', ';', ')', ']', '"', "'")
+                    [void]$f.Links.Add($u)
+                }
+            }
+        }
 
         function Add-AssetAgg {
             param(
@@ -7138,13 +7221,25 @@ if ([bool]$global:BuildSummaryByAI) {
                         -Category $category -Subcat $subcat -ConfName $confName -ConfId $confId `
                         -CmdbId $cmdbId -CmdbName $cmdbName -CmdbCriticality $cmdbCrit -CmdbDataSensitivity $cmdbSens `
                         -RiskScoreUnweighted $riskScoreUn -RiskScoreWeighted $riskScoreWt -MoreDetails $rowMoreDetails
+
+                    # v2.2.224 -- parallel finding rollup. Same row, same scoring,
+                    # but keyed by ConfigurationId so AI gets per-finding aggregation
+                    # alongside the per-asset one.
+                    Add-FindingAgg -ConfId $confId -ConfName $confName -Category $category -Subcat $subcat `
+                        -Severity $severity -Domain $domain -Asset $a `
+                        -RiskScoreUnweighted $riskScoreUn -RiskScoreWeighted $riskScoreWt -MoreDetails $rowMoreDetails
                 }
             } else {
                 Write-Warn2 ("AI rollup: no asset resolved for row {0}. Config={1} [{2}]" -f $i, $confName, $confId)
             }
         }
 
-        $findingsText = $findingLines -join "`n"
+        # v2.2.224 -- $findingsText replaced by aggregated per-finding rollup
+        # built from $findingAgg below. Old raw-row dump ($findingLines) is no
+        # longer fed to the AI; it produced inconsistent top-N across Summary
+        # (50 aggregated rows = ~50 unique findings) vs Detailed (50 per-asset
+        # rows = ~3-8 unique findings dominated by hot assets). Aggregating
+        # first guarantees the same finding universe regardless of report shape.
 
         $assetRanked = @()
         if ($assetAgg.Count -gt 0) {
@@ -7152,6 +7247,33 @@ if ([bool]$global:BuildSummaryByAI) {
                 Sort-Object -Property @{Expression="TotalRiskScore_Weighted";Descending=$true}, @{Expression="TotalRiskScore";Descending=$true}, @{Expression="Findings";Descending=$true} |
                 Select-Object -First $TopAssetsN
         }
+
+        # v2.2.224 -- finding rollup (parallel to asset rollup)
+        $findingRanked = @()
+        if ($findingAgg.Count -gt 0) {
+            $findingRanked = $findingAgg.Values |
+                Sort-Object -Property @{Expression="TotalRiskScore_Weighted";Descending=$true}, @{Expression="TotalRiskScore";Descending=$true}, @{Expression="AffectedAssetCount";Descending=$true} |
+                Select-Object -First $TopFindingsN
+        }
+
+        $findingLines2 = @()
+        $rankF = 0
+        foreach ($f in $findingRanked) {
+            $rankF++
+            # Top 5 affected assets per finding, ranked by per-asset weighted risk
+            $topAssetsForFinding = @($f.AssetRiskScores.GetEnumerator() |
+                Sort-Object -Property Value -Descending |
+                Select-Object -First 5 |
+                ForEach-Object { ("{0} ({1:N0})" -f $_.Key, $_.Value) }) -join '; '
+
+            $finLinks = ""
+            if ($f.Links.Count -gt 0) { $finLinks = (@($f.Links) | Select-Object -First 6) -join "; " }
+
+            $findingLines2 += ("{0}. ConfigId={1}; Name={2}; Severity={3}; Domain={4}; Category={5}/{6}; AffectedAssetCount={7}; TotalRiskScore={8:N0}; WeightedRiskScore={9:N0}; TopAffectedAssets=[{10}]; Links={11}" -f `
+                $rankF, $f.ConfId, $f.ConfName, $f.Severity, $f.Domain, $f.Category, $f.Subcategory, $f.AffectedAssetCount, $f.TotalRiskScore, $f.TotalRiskScore_Weighted, $topAssetsForFinding, $finLinks)
+        }
+
+        $findingsTextForAI = $findingLines2 -join "`n"
 
         $assetLines = @()
         $rank = 0
@@ -7195,6 +7317,15 @@ Scope:
 Risk scoring is transparent: Consequence × Probability = RiskScore, based on raw Kusto query outputs and a customizable risk index.
 "@
 
+        # v2.2.224 -- output the EXACT counts the engine produced so the AI
+        # narrative header matches the bullet count. Previously the prompt
+        # said "Top 25" as a literal, but $assetAgg often had fewer than 25
+        # entries -- the AI would emit fewer bullets while the header still
+        # claimed 25, confusing operators.
+        $assetActualN   = [Math]::Min($TopAssetsN,   @($assetRanked).Count)
+        $findingActualN = [Math]::Min($TopFindingsN, @($findingRanked).Count)
+        $drilldownN     = [Math]::Min(10, $assetActualN)
+
         $userPrompt = @"
 $intro
 
@@ -7202,32 +7333,47 @@ You are a security advisor AI.
 
 You MUST focus on ASSETS and prioritize remediation by RiskScore.
 You are given:
-A) An asset rollup (already ranked).
-B) The top findings (highest RiskScore first) for traceability.
+A) An asset rollup (top $assetActualN, already ranked by Weighted Risk Score).
+B) A finding rollup (top $findingActualN, already ranked by Weighted Risk Score).
+   Each finding lists its TopAffectedAssets so you can pair "what to fix" with "where".
+
+Both rollups are PRE-AGGREGATED from the SAME source data (engine-side, not by
+you), so Summary and Detailed report variants converge on the same top entries.
+Do not invent assets or findings outside this rollup.
 
 $runMeta
 
 A) Asset rollup:
 $assetsTextForAI
 
-B) Top findings:
-$findingsText
+B) Finding rollup:
+$findingsTextForAI
 
 Return format (STRICT MARKDOWN). Use the exact section headers, bold labels,
 and bullet structure below. Every header MUST start at the beginning of a line.
 Do not wrap in code fences. Do not add a preamble or closing remarks.
 
-## Top 25 risky assets
+## Top $assetActualN risky assets
 
 One bullet per asset, in rank order. Use ONLY the two score numbers provided
 (TotalRiskScore = unweighted sum, WeightedRiskScore = weighted sum). Do NOT
 invent a 'MaxRiskScore' field. Format numbers with thousands separators.
+Output EXACTLY $assetActualN bullets (one per asset rollup entry).
 
 - **<Rank>. <AssetName>** -- Tier **<Tier>** | Total Risk Score **<TotalRiskScore>** | Weighted Risk Score **<WeightedRiskScore>** | Findings **<Count>** | Domains: <Domains>
 
-## Top 10 asset drilldown
+## Top $findingActualN critical findings
 
-For each of the Top 10 assets, output exactly this structure (separate each asset with a blank line):
+One bullet per finding, in rank order. Use the AffectedAssetCount and Weighted
+Risk Score from the finding rollup. List up to 4 of the TopAffectedAssets per
+bullet (the assets that contribute the most risk score to this finding).
+Output EXACTLY $findingActualN bullets.
+
+- **<Rank>. <ConfName>** [<ConfId>] -- Severity **<Severity>** | Affected assets **<AffectedAssetCount>** | Weighted Risk Score **<WeightedRiskScore>** | Top affected: <up to 4 asset names>
+
+## Top $drilldownN asset drilldown
+
+For each of the Top $drilldownN assets (same order as the asset rollup), output exactly this structure (separate each asset with a blank line):
 
 ### <Rank>. <AssetName>
 
@@ -7240,17 +7386,18 @@ For each of the Top 10 assets, output exactly this structure (separate each asse
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_
 - **Expected overall risk reduction:** High | Medium | Low
-- **Reference links:** when the asset's `Links=` field includes URLs, render them as inline markdown anchors `[label](url)`. Pick descriptive labels from the URL itself (e.g. `[CVE-2026-33824](https://nvd.nist.gov/vuln/detail/CVE-2026-33824)`, `[ATT&CK T1078](https://attack.mitre.org/techniques/T1078/)`). Maximum 3 links per asset; omit this line if the asset has no links.
+- **Reference links:** when the asset's ``Links=`` field includes URLs, render them as inline markdown anchors ``[label](url)``. Pick descriptive labels from the URL itself (e.g. ``[CVE-2026-33824](https://nvd.nist.gov/vuln/detail/CVE-2026-33824)``, ``[ATT&CK T1078](https://attack.mitre.org/techniques/T1078/)``). Maximum 3 links per asset; omit this line if the asset has no links.
 
 ## Cross-asset quick wins
 
-Max 8 bullets:
+Use the finding rollup's AffectedAssetCount + TopAffectedAssets to pick remediation actions that fix the MOST assets per action. Max 8 bullets:
 
-- **<Action>** [<ConfigId>] -- Affects <N> assets | Example: <up to 4 asset names>
+- **<Action>** [<ConfigId>] -- Affects <N> assets | Example: <up to 4 asset names from TopAffectedAssets>
 
 Rules:
-- Do NOT write generic advice. Every action must tie back to ConfigName [ConfigId] and concrete assets.
-- Do NOT merge multiple assets into one line.
+- Do NOT write generic advice. Every action must tie back to ConfigName [ConfigId] and concrete assets from the rollup.
+- Do NOT merge multiple findings into one line.
+- Do NOT invent or hallucinate assets / findings outside the rollups provided.
 - Keep the output concise. No long paragraphs.
 - Use **bold** for all labels and field values exactly as shown above.
 - ONLY use the two score columns provided (Total Risk Score, Weighted Risk Score). Do NOT invent or carry over old field names like 'MaxRiskScore' or 'RiskScoreTotal' from prior outputs.

@@ -103,6 +103,7 @@ param(
     [Parameter()]          [string]$ManagedIdentityClientId,   # required when CredKind=ManagedIdentity
     [Parameter()]          [string[]]$GraphPermissions,
     [Parameter()]          [string[]]$ThreatProtectionPermissions,
+    [Parameter()]          [string[]]$WindowsDefenderAtpPermissions,
     [Parameter()]          [switch]$SkipAdminConsent,
     [Parameter()]          [switch]$SkipTenantRbac,
     [Parameter()]          [switch]$IncludeTagContributor,  # opt-in: granted ONLY when asset-exclusion-tagging engine is in scope
@@ -155,6 +156,20 @@ if (-not $GraphPermissions -or $GraphPermissions.Count -eq 0) {
 if (-not $ThreatProtectionPermissions -or $ThreatProtectionPermissions.Count -eq 0) {
     $ThreatProtectionPermissions = @(
         'AdvancedHunting.Read.All'               # Defender XDR Advanced Hunting (MTP API)
+    )
+}
+
+# ----- Default WindowsDefenderATP permission matrix (v2.2.239) -----
+# WindowsDefenderATP (resource AppId fc780465-2017-40d4-a0c5-307022471b92)
+# is the legacy MDE API. Machine.Read.All gates the /api/machines endpoint
+# (device inventory + secure config status) that the endpoint asset-profiling
+# engine reads on tenants where the unified Graph /security/runHuntingQuery
+# path isn't available. Without this perm the engine still runs via Graph,
+# but tenants on legacy MDE-only licensing get 403 on the device inventory
+# fetch. Extra perms can be appended via -WindowsDefenderAtpPermissions.
+if (-not $WindowsDefenderAtpPermissions -or $WindowsDefenderAtpPermissions.Count -eq 0) {
+    $WindowsDefenderAtpPermissions = @(
+        'Machine.Read.All'                       # MDE device inventory + secure config
     )
 }
 
@@ -447,6 +462,52 @@ if (-not $mtpSp) {
     $mtpGranted = ($mtpResults | Where-Object { $_.Status -in @('granted','already') }).Count
     $mtpPending = ($mtpResults | Where-Object { $_.Status -in @('pending','skipped') }).Count
     _Ok ("MTP permissions: {0}/{1} active ({2} pending admin consent)" -f $mtpGranted, $ThreatProtectionPermissions.Count, $mtpPending)
+}
+
+# ----- 5c. Add WindowsDefenderATP application permissions (v2.2.239) -----
+# Separate resource SP from Microsoft Graph + MTP. Machine.Read.All on
+# WindowsDefenderATP unlocks the legacy MDE /api/machines inventory endpoint
+# the endpoint asset-profiling engine reads on tenants where the unified
+# Graph /security/runHuntingQuery path isn't available. Soft-fails when the
+# WindowsDefenderATP SP isn't present (no MDE licensing) so the wizard run
+# completes regardless.
+_Step "grant WindowsDefenderATP application permissions"
+$mdeAppId = 'fc780465-2017-40d4-a0c5-307022471b92'   # WindowsDefenderATP
+$mdeSp    = Get-MgServicePrincipal -Filter "appId eq '$mdeAppId'" -ErrorAction SilentlyContinue
+if (-not $mdeSp) {
+    _Warn "WindowsDefenderATP SP not found in tenant (resourceAppId=$mdeAppId). Skipping MDE perms -- tenant may lack MDE licensing; the engine can still run via Graph hunting."
+} else {
+    foreach ($permName in $WindowsDefenderAtpPermissions) {
+        $role = $mdeSp.AppRoles | Where-Object { $_.Value -eq $permName -and $_.AllowedMemberTypes -contains 'Application' }
+        if (-not $role) {
+            _Warn "MDE role not found: $permName -- skipped"
+            $permResults += @{ Name = $permName; Status = 'not-found'; Error = 'Permission name not on WindowsDefenderATP AppRoles' }
+            continue
+        }
+        $existing = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -ErrorAction SilentlyContinue |
+            Where-Object { $_.AppRoleId -eq $role.Id -and $_.ResourceId -eq $mdeSp.Id }
+        if ($existing) {
+            $permResults += @{ Name = $permName; Status = 'already'; Error = $null }
+            continue
+        }
+        if ($SkipAdminConsent) {
+            $permResults += @{ Name = $permName; Status = 'skipped'; Error = 'SkipAdminConsent set -- a Global Admin must click the consent URL' }
+            continue
+        }
+        try {
+            $null = New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id `
+                -PrincipalId $sp.Id -ResourceId $mdeSp.Id -AppRoleId $role.Id -ErrorAction Stop
+            $permResults += @{ Name = $permName; Status = 'granted'; Error = $null }
+        } catch {
+            $errMsg = $_.Exception.Message
+            _Warn ("could not grant {0}: {1}" -f $permName, $errMsg)
+            $permResults += @{ Name = $permName; Status = 'pending'; Error = $errMsg }
+        }
+    }
+    $mdeResults = $permResults | Where-Object { $_.Name -in $WindowsDefenderAtpPermissions }
+    $mdeGranted = ($mdeResults | Where-Object { $_.Status -in @('granted','already') }).Count
+    $mdePending = ($mdeResults | Where-Object { $_.Status -in @('pending','skipped') }).Count
+    _Ok ("MDE permissions: {0}/{1} active ({2} pending admin consent)" -f $mdeGranted, $WindowsDefenderAtpPermissions.Count, $mdePending)
 }
 
 # Compute an admin-consent URL the wizard UI can surface to the operator. A

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.238
+## v2.2.239
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
 - release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
 - release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
 - release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
 - release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
 - release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
-- release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.239 — Setup Wizard: also grant `Machine.Read.All` on WindowsDefenderATP (third API resource)
+
+Following the pattern of v2.2.231 (added MTP as a second API resource alongside Microsoft Graph), this release adds **WindowsDefenderATP** (`fc780465-2017-40d4-a0c5-307022471b92`) — the legacy MDE API — as a third grant target on the SI Service Principal.
+
+### Fix
+
+- New `-WindowsDefenderAtpPermissions` parameter on `New-SISpn.ps1`, defaulting to `@('Machine.Read.All')`.
+- New grant block in `New-SISpn.ps1` § 5c that resolves the WindowsDefenderATP SP and assigns the role(s) idempotently with the same `granted / already / pending / not-found / skipped` status tracking as the Graph and MTP blocks.
+- Soft-fail when the WindowsDefenderATP SP isn't in the tenant (no MDE licensing). Engine still runs via Graph hunting.
+
+### Why `Machine.Read.All`
+
+The endpoint asset-profiling engine reads `/api/machines` on MDE for device inventory + secure-config status. On tenants where the unified Graph `/security/runHuntingQuery` path isn't available (older MDE-only licensing without Defender XDR), the engine falls back to the legacy MDE REST API. Without this permission, that fallback path returns 403 and the endpoint inventory comes back empty.
+
+### Migration for existing SPNs
+
+Existing wizard-bootstrapped SPNs need `Machine.Read.All` granted manually:
+
+1. Entra portal → App registrations → SI's SPN → API permissions
+2. Add a permission → **APIs my organization uses** → search **`WindowsDefenderATP`**
+3. Application permissions → `Machine.Read.All`
+4. Grant admin consent
+
+Or re-run `New-SISpn.ps1 -UseExistingAppId -ExistingAppId <appid>` and it now grants Graph + MTP + WindowsDefenderATP in one pass.
+
+### Full SPN permission inventory after v2.2.239
+
+| Resource | Permission | Used by |
+|---|---|---|
+| Microsoft Graph | 14 perms (ThreatHunting, Device, User, ..., RoleManagement.Read.Directory) | All engines |
+| Microsoft Threat Protection | `AdvancedHunting.Read.All` | RA engine (XDR hunting fallback) |
+| **WindowsDefenderATP** | **`Machine.Read.All`** | **Endpoint profiler (MDE REST fallback)** |
 
 ---
 

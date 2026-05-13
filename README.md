@@ -843,6 +843,12 @@ Microsoft Threat Protection is a **separate API resource** from Microsoft Graph 
 
 - **AdvancedHunting.Read.All** *(v2.2.231)* — the legacy Defender XDR `advancedhunting/run` endpoint that the Risk Analysis engine probes as a fallback when Graph's `/security/runHuntingQuery` isn't available in the tenant. Soft-fails when the MTP SP isn't present in the tenant (no XDR licensing) — the engine then runs via Graph hunting only.
 
+#### 1c. WindowsDefenderATP application permissions
+
+WindowsDefenderATP is the legacy Microsoft Defender for Endpoint API resource (`fc780465-2017-40d4-a0c5-307022471b92`) — separate from Microsoft Graph and Microsoft Threat Protection. Granted to the same SI Service Principal as Graph/MTP, also application-only + admin consent.
+
+- **Machine.Read.All** *(v2.2.239)* — unlocks the legacy MDE `/api/machines` device-inventory endpoint that the endpoint asset-profiling engine reads on tenants where the unified Graph hunting path isn't available. Soft-fails when the WindowsDefenderATP SP isn't present in the tenant (no MDE licensing) — the engine then runs via Graph hunting only.
+
 #### 2. Azure RBAC role assignments
 
 Granted to the **SI Service Principal**. All grants are visible in the Setup page's per-step log + the Apply payload — no hidden grants.

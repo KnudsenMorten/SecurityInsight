@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.221
+## v2.2.222
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
 - release: SecurityInsight v2.2.221 - comprehensive AadDeviceId column_ifexists sweep (3d08309a)
 - release: SecurityInsight v2.2.220 - Device_Recommendations regression fix (column_ifexists wrapper restored) (31ebbe30)
 - release: SecurityInsight v2.2.219 - CVE Summary/Detailed: AssetTags exclusion filter actually fires (9f486787)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
 - release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
 - release: SecurityInsight v2.2.193 - provisioning helpers self-heal on already-exists (92842167)
-- release: SecurityInsight v2.2.192 - Set-PlatformDefaultsSmtp creates file if missing (ae1d6e27)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.222 — Risk Analysis: infer anonymous SMTP when no creds resolved (no more mandatory toggle)
+
+Engine threw `Mail is enabled but no SMTP credential is available` when neither a credential pair NOR `$global:Mail_SendAnonymous = $true` were set. That's redundant ceremony -- "no user + no password" can only mean anonymous relay.
+
+### Fix
+
+After the credential-resolution chain returns nothing, the engine now **infers anonymous** instead of throwing:
+
+```powershell
+$global:Mail_SendAnonymous = $true
+Write-Warn2 "No SMTP credentials found and no explicit `$global:Mail_SendAnonymous; INFERRING anonymous relay. ..."
+```
+
+If the SMTP relay actually requires auth, the SMTP layer will reject with a 530-style "Authentication required" error -- the failure surfaces just as visibly, one layer later, with the relay's own diagnostic instead of an opinion from our engine.
+
+### Operator-visible behaviour
+
+- Old: hard error, complete dispatch refusal until operator sets one of 9 alias pairs OR explicit `Mail_SendAnonymous`
+- New: WARN log line ("INFERRING anonymous relay"), dispatch proceeds, normal SMTP error if relay rejects
+
+The diagnostic dump immediately after the credential-resolution block prints `Anonymous : 'True'` so the operator can see what the engine is about to do; the WARN makes it impossible to miss in the log.
+
+### To silence the warning
+
+Set `$global:Mail_SendAnonymous = $true` explicitly in `LauncherConfig.custom.ps1` / `platform-defaults.ps1` / `<Solution>.custom.ps1`. The WARN only fires when neither creds nor the explicit flag are set.
+
+### Verification context
+
+A complete v2.2.221 run on Nordstern tenant confirmed all earlier fixes (v2.2.219 AssetTags filter, v2.2.220 AssetName/Id/Type column_ifexists, v2.2.221 AadDeviceId column_ifexists sweep) work end-to-end:
+- Device_Missing_CVEs_Detailed: 2,469 rows in 1 bucket
+- Device_Recommendations_Detailed: 143,065 -> 11,089 unique rows after dedup
+- Azure_Recommendations_Detailed: 148 rows (`_ap` pre-fetch succeeded)
+- Total exported: 15,186 rows, AI summary generated, XLSX written
+
+Only the SMTP-creds error blocked final mail dispatch. v2.2.222 unblocks that path.
 
 ---
 

@@ -7915,23 +7915,17 @@ $aiSection
             if ([string]::IsNullOrWhiteSpace([string]$global:SMTPUser)) { $global:SMTPUser = $resolvedUser }
             Write-Info ("SMTP credential assembled from {0}" -f $resolvedLabel)
         } else {
-            throw @"
-Mail is enabled but no SMTP credential is available.
-Set ONE of the following in your LauncherConfig.custom.ps1 / platform-defaults.ps1 / <Solution>.custom.ps1:
-  (a) `$global:Mail_SendAnonymous = `$true              (anonymous relay)
-  (b) A recognized user/password pair. The engine checks (in order):
-        `$global:SMTPUser + `$global:SMTPPassword                                  (canonical)
-        `$global:SmtpUser + `$global:SmtpPassword
-        `$global:SmtpUsername + `$global:SmtpPassword
-        `$global:Mail_SmtpUser + `$global:Mail_SmtpPassword
-        `$global:Mail_SMTPUser + `$global:Mail_SMTPPassword
-        `$global:Mail_Username + `$global:Mail_Password
-        `$global:MailUser + `$global:MailPassword
-        `$global:SMTP_User + `$global:SMTP_Password
-        `$global:Mail_SecurityInsight_Username + `$global:Mail_SecurityInsight_Password
-  (c) `$global:SecureCredentialsSMTP = <PSCredential>   (pre-built credential object)
-Refusing to prompt interactively -- unattended runs would hang.
-"@
+            # v2.2.222 -- INFER anonymous when no credentials resolved AND no explicit
+            # toggle. Rationale: "no user + no password" can only mean anonymous relay;
+            # forcing the operator to ALSO set $global:Mail_SendAnonymous = $true was
+            # ceremony with no information value. If the relay actually requires auth,
+            # the SMTP layer will reject with "530 Authentication required" -- the
+            # error surfaces just as visibly, one layer later.
+            # The diagnostic dump immediately below prints `Anonymous : 'True'` so the
+            # operator can see what the engine is about to do; a Warn here makes it
+            # impossible to miss in the log.
+            $global:Mail_SendAnonymous = $true
+            Write-Warn2 "No SMTP credentials found and no explicit `$global:Mail_SendAnonymous; INFERRING anonymous relay. If the SMTP server requires auth, expect a 530-style rejection. To silence this warning, set `$global:Mail_SendAnonymous = `$true explicitly in your LauncherConfig.custom.ps1 / platform-defaults.ps1 / <Solution>.custom.ps1, or provide a credential pair (e.g. `$global:SMTPUser + `$global:SMTPPassword)."
         }
     }
 

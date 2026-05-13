@@ -6917,6 +6917,17 @@ elseif ([bool]$global:SendToLogAnalytics) {
                     }
                 }
 
+                # v2.2.271 -- cert OR secret auth. Build a splat once and reuse at all
+                # 4 ingest call sites. Passing $global:SpnClientSecret='' to the module
+                # under cert auth triggered ParameterBindingValidationException ("Cannot
+                # bind argument to parameter 'AzAppSecret' because it is an empty string").
+                $__ingestAuth = @{}
+                if (-not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)) {
+                    $__ingestAuth['AzAppCertificateThumbprint'] = [string]$global:SpnCertificateThumbprint
+                } elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
+                    $__ingestAuth['AzAppSecret'] = [string]$global:SpnClientSecret
+                }
+
                 $null = Ensure-SecurityInsightDce `
                               -DceName              $laDceName `
                               -DceResourceGroup     $laDceRg `
@@ -6924,7 +6935,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                               -SubscriptionId       $laSubId `
                               -TenantId             $global:SpnTenantId `
                               -AzAppId              $global:SpnClientId `
-                              -AzAppSecret          $global:SpnClientSecret `
+                              @__ingestAuth `
                               -IngestionSpnObjectId $spnObjectId
 
                 $null = Ensure-SecurityInsightRg `
@@ -6987,7 +6998,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 $null = CheckCreateUpdate-TableDcr-Structure `
                             -AzLogWorkspaceResourceId                   $laWs `
                             -AzAppId                                    $global:SpnClientId `
-                            -AzAppSecret                                $global:SpnClientSecret `
+                            @__ingestAuth `
                             -TenantId                                   $global:SpnTenantId `
                             -Verbose:$false `
                             -DceName                                    $laDceName `
@@ -7007,7 +7018,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 Start-Sleep -Seconds 15
                 Ensure-SecurityInsightAzDceDcrCache `
                     -AzAppId           $global:SpnClientId `
-                    -AzAppSecret       $global:SpnClientSecret `
+                    @__ingestAuth `
                     -TenantId          $global:SpnTenantId `
                     -SubscriptionId    $laSubId `
                     -DceResourceGroup  $laDceRg `
@@ -7047,7 +7058,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                             -Data        $DataVariable `
                             -TableName   $laTable `
                             -AzAppId     $global:SpnClientId `
-                            -AzAppSecret $global:SpnClientSecret `
+                            @__ingestAuth `
                             -TenantId    $global:SpnTenantId `
                             -Verbose:$false 4>$null
 

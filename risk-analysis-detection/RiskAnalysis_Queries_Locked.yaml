@@ -7908,6 +7908,16 @@
                 RiskFactor_Probability_Detailed,
                 RiskFactor_Probability_DetailedScore;
 
+        // v2.2.240 -- row caps after each intermediate let. Without these the
+        // 4-hop cartesian (Device -> CVE -> Credential -> Identity -> AzureTarget)
+        // can balloon to millions of rows in a tenant with >500 devices each
+        // having dozens of CVEs and many credentials, hanging the XDR query
+        // engine indefinitely (observed: 80+ min on AA sandbox, no output).
+        // Each cap is 50K which is well above any realistic tenant's first
+        // n top-priority paths, and the final summarize/order-by/take in the
+        // report body picks the highest-scoring 200 paths anyway. Caps can be
+        // bumped via $global:SI_RA_MaxAttackPathRows when needed.
+
         // Step 2  Devices with CVEs (bucketed by joining to DeviceNodes)
         let DevicesWithCVEs =
             ExposureGraphEdges
@@ -7937,7 +7947,8 @@
               by
                 DeviceNodeId,
                 DeviceNodeName,
-                DeviceNodeLabel;
+                DeviceNodeLabel
+            | take 50000;   // v2.2.240 cap
 
         let CredentialsOnVulnerableDevices =
             DevicesWithCVEs
@@ -7964,10 +7975,19 @@
                     CredentialNodeName = TargetNodeName,
                     CredentialNodeLabel = TargetNodeLabel
             ) on $left.DeviceNodeId == $right.SourceDeviceId
-            | project
-                DeviceNodeId, DeviceNodeName, DeviceNodeLabel,
-                CVEs, CVECount,
-                CredentialNodeId, CredentialNodeName, CredentialNodeLabel;
+            // v2.2.240 -- de-dup (DeviceId, CredentialId) BEFORE the next hop
+            // joins to identities (which can multiply by ~5x per credential).
+            | summarize any(DeviceNodeName), any(DeviceNodeLabel), any(CVEs), any(CVECount), any(CredentialNodeName), any(CredentialNodeLabel)
+              by DeviceNodeId, CredentialNodeId
+            | extend
+                DeviceNodeName      = any_DeviceNodeName,
+                DeviceNodeLabel     = any_DeviceNodeLabel,
+                CVEs                = any_CVEs,
+                CVECount            = any_CVECount,
+                CredentialNodeName  = any_CredentialNodeName,
+                CredentialNodeLabel = any_CredentialNodeLabel
+            | project-away any_DeviceNodeName, any_DeviceNodeLabel, any_CVEs, any_CVECount, any_CredentialNodeName, any_CredentialNodeLabel
+            | take 50000;   // v2.2.240 cap
 
         let Hop1 =
             CredentialsOnVulnerableDevices
@@ -7981,12 +8001,22 @@
                     IdentityNodeName = TargetNodeName,
                     IdentityNodeLabel = TargetNodeLabel
             ) on $left.CredentialNodeId == $right.Hop1_SourceCredentialId
-            | project
-                DeviceNodeId, DeviceNodeName, DeviceNodeLabel,
-                CVEs, CVECount,
-                CredentialNodeId, CredentialNodeName, CredentialNodeLabel,
-                Hop1Edge,
-                IdentityNodeId, IdentityNodeName, IdentityNodeLabel;
+            // v2.2.240 -- de-dup (DeviceId, CredentialId, IdentityId) BEFORE the
+            // final hop joins to Azure targets (~20-target type breadth).
+            | summarize any(DeviceNodeName), any(DeviceNodeLabel), any(CVEs), any(CVECount), any(CredentialNodeName), any(CredentialNodeLabel), any(Hop1Edge), any(IdentityNodeName), any(IdentityNodeLabel)
+              by DeviceNodeId, CredentialNodeId, IdentityNodeId
+            | extend
+                DeviceNodeName      = any_DeviceNodeName,
+                DeviceNodeLabel     = any_DeviceNodeLabel,
+                CVEs                = any_CVEs,
+                CVECount            = any_CVECount,
+                CredentialNodeName  = any_CredentialNodeName,
+                CredentialNodeLabel = any_CredentialNodeLabel,
+                Hop1Edge            = any_Hop1Edge,
+                IdentityNodeName    = any_IdentityNodeName,
+                IdentityNodeLabel   = any_IdentityNodeLabel
+            | project-away any_DeviceNodeName, any_DeviceNodeLabel, any_CVEs, any_CVECount, any_CredentialNodeName, any_CredentialNodeLabel, any_Hop1Edge, any_IdentityNodeName, any_IdentityNodeLabel
+            | take 50000;   // v2.2.240 cap
 
         let Detailed =
             Hop1

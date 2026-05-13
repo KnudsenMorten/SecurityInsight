@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.224
+## v2.2.225
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.225 - extra YAML-projected columns carry through (CVE Detailed exploit cols back) (771146f4)
 - release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
 - release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
 - release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
@@ -33,13 +34,67 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
 - release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
 - release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
-- release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.225 — Risk Analysis: extra YAML-projected columns now carry through to Excel/LA (OutputPropertyOrder becomes leading, not strict)
+
+Operator: "in CVE Detailed I had tons of extra columns before like exploitkit exist etc but now they are gone, can you extend and project the data out, so they popup as extra columns. they must not be part of outputprojectorder, as that is static."
+
+### Cause
+
+`Invoke-RiskAnalysis.ps1` line ~4033 was running OutputPropertyOrder as a **strict whitelist**: only the columns listed there + a hardcoded force-include set (`RiskFactor_Consequence_Detailed / MITRE_* / ComplianceTags / MoreDetails / RiskScoreDomainKPI / RiskScoreKPI`) were emitted. Everything else from the row was silently dropped.
+
+For CVE Detailed, the YAML KQL emits `HasExploit`, `IsExploitVerified`, `IsInExploitKit`, `IsZeroDay`, `CVELastModified`, `CVSSDesc`, `CveUrl` — none in OutputPropertyOrder, all dropped.
+
+### Fix
+
+OutputPropertyOrder becomes the **LEADING column order** (canonical column block first). Any additional row-level columns from the KQL projection get **appended in row-natural order** after the canonical block.
+
+```powershell
+# After the OutputPropertyOrder + force-include loops:
+foreach ($k in $tmp2.Keys) {
+    if ($h2.Contains($k))                   { continue }   # already in canonical block
+    if ($k.StartsWith('_'))                 { continue }   # internal/temp columns
+    if ($k.StartsWith('__'))                { continue }   # bucket-filter internals
+    if ($extraColBlacklist.ContainsKey($k)) { continue }   # legacy aliases
+    if ($k -like '*_From_CL')               { continue }   # leftouter-side raw cols
+    $h2[$k] = $tmp2[$k]
+}
+```
+
+### Blacklist (intentionally dropped from carry-through)
+
+- `AssetCount` / `TotalIssues` / `ImpactedAssets` / `Issues_Details` -- legacy aliases superseded by `ImpactedAssetCount` / `TotalIssuesImpactedAssets` / `ImpactedAssetsList` / `MoreDetails`
+- `RiskFactor_Weight` -- legacy alias for `RiskScore_Weight_Factor`
+- `DeviceKey` / `EpJoinKey` / `EdgeLabels` / `FindingNodeId` / `FindingLabel` / `FindingCategories` -- internal join keys / raw EG fields consumed by extends
+- `EG_IsCustomerFacing` / `EG_IsExcluded` -- internal flags (already consumed by RF_P_InternetExposed and the pre-bucket excluded-tag filter)
+- `AadDeviceId1` -- leftouter-join right-side rename artifact
+- Anything starting with `_` or `__` -- temp/internal helpers (`_AssetTagsLower`, `_AssetTierFilter`, `__bucket_key`, `__bucket`)
+- `*_From_CL` -- raw leftouter columns already consumed by AssetName/AssetId/AssetType extends
+
+### Result for CVE Detailed
+
+Excel + LA output now includes (after the canonical OutputPropertyOrder block):
+- `HasExploit`
+- `IsExploitVerified`
+- `IsInExploitKit`
+- `IsZeroDay`
+- `CVELastModified`
+- `CVSSDesc`
+- `CveUrl`
+
+Plus any future analyst columns added to the YAML projection — no engine code change needed, no OutputPropertyOrder edit needed. Add to the KQL `| project ...` and the engine carries them through.
+
+### Other reports
+
+Same behavior. Anywhere a YAML projection emits more columns than OutputPropertyOrder lists, the extras now appear. Existing reports that DON'T project extras (most of them) see no change — their output column set is unchanged.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.267
+## v2.2.268
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
 - release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
 - release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
 - release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
@@ -33,13 +34,65 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
 - release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
 - release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
-- release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.268 — CL-snapshot bucketing for the RA hybrid path (scales past 100K-asset tenants)
+
+Operator: "it is important that it can split the array size into smaller buckets so it can go through fx. cve and attack paths in larger env" — confirmed concatenation strategy: "you are just adding each result to the array."
+
+### What was breaking at scale
+
+The RA hybrid path inlines a `SI_*_Profile_CL` snapshot as a KQL `datatable(...) [...]` literal in the query body, then submits to Advanced Hunting (so EG + CL can both be queried in one shot). AH's body cap is ~1MB. With smart column projection the snapshot is 5-20× smaller than `*` -- enough for typical tenants -- but a 100K-endpoint estate's `SI_Endpoint_Profile_CL` projected to ~8 columns still serializes to >1MB and 4xx's the AH request. `Device_Missing_CVEs_Summary` and `Device_Recommendations_Summary` are the worst cases (Attack_Paths reports take the augment-plan path and bypass the inline entirely).
+
+### What v2.2.268 adds
+
+`Resolve-ProfileCLLetBlocks` now measures the serialized datatable AFTER projection-shrink. If it's over `$global:SI_HybridMaxBodyBytes` (default **700KB** -- comfortable headroom under the 1MB cap), the function:
+
+1. Estimates per-row average bytes from the full-build size.
+2. Picks a chunk size that keeps each chunk under the threshold.
+3. Slices the CL rows into N chunks.
+4. Builds N modified query variants, each with a different chunk's datatable substituted into the original `let _ep = ...;` block.
+5. Stashes the variants in `$script:_RAQueryVariants` and returns the first variant (back-compat with downstream logic that expects a single string).
+
+The submission loop wrapper at the top of the AutoBucket while-loop reads `$script:_RAQueryVariants` and iterates over each variant. Each CL bucket runs through the existing AutoBucket × outer-escalation machinery **independently**. Result rows from each CL bucket are appended to `$_RaCLAggregated`; after all CL buckets complete, `$ResultAll = @($_RaCLAggregated)` replaces the per-CL-bucket scratch.
+
+### Why concat is safe
+
+CL chunks are row-disjoint (each CL row sits in exactly one chunk). The join in the AH query matches XDR rows against the CL chunk currently inlined -- so each XDR-side result row appears in exactly one CL bucket's results, by join semantics. Concatenating across chunks reproduces the un-bucketed result set with no dedup needed.
+
+### What it looks like in the log
+
+```
+[INFO] [hybrid] pre-fetching CL snapshot for let-binding '_ep' from LA workspace ...
+[INFO] [hybrid] '_ep' snapshot: 124000 row(s) inlined would be 2147483 bytes (over 716800-byte cap); splitting into 3 CL bucket(s) of ~41334 row(s) each
+[INFO] [hybrid]   CL bucket 1/3: rows 1-41334 -> 709842 bytes
+[INFO] [hybrid]   CL bucket 2/3: rows 41335-82668 -> 712014 bytes
+[INFO] [hybrid]   CL bucket 3/3: rows 82669-124000 -> 698127 bytes
+[INFO] [CL-bucket] hybrid snapshot was bucketed into 3 chunk(s) by Resolve-ProfileCLLetBlocks; submitting each through AutoBucket independently.
+[INFO] [CL-bucket 1/3] starting
+... existing AutoBucket logs ...
+[INFO] [CL-bucket 1/3] completed: 1842 row(s) added to rollup (running total: 1842)
+[INFO] [CL-bucket 2/3] starting
+... 
+[INFO] [CL-bucket 2/3] completed: 1739 row(s) added to rollup (running total: 3581)
+[INFO] [CL-bucket 3/3] starting
+...
+[INFO] [CL-bucket 3/3] completed: 1605 row(s) added to rollup (running total: 5186)
+[INFO] [CL-bucket] aggregated 5186 row(s) across 3 CL bucket(s)
+```
+
+Single-bucket case (the common path) emits nothing new -- just the existing `[hybrid] '_ep' snapshot: N row(s) inlined as datatable (M bytes; under 716800-byte cap)` line. No noise added on the 99% of runs that don't need bucketing.
+
+### Knob
+
+`$global:SI_HybridMaxBodyBytes = 700KB` -- raise if your AH gateway tolerates more (tenant-specific), lower if you see 4xx body-size errors at the default. Most customers leave the default.
 
 ---
 

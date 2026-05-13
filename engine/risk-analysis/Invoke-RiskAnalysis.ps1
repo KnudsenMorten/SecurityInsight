@@ -3681,6 +3681,48 @@ function Calculate-RiskScore {
             }
         }
 
+        # 4) Portal links per asset (v2.2.235). Three sources, all gated on
+        # $global:SI_SPN_TenantId being set (the {tid} parameter in every URL).
+        # - MDE Endpoint   : requires MdeDeviceId
+        # - MDE Identity   : requires AccountSID OR EntraAccountObjectId (3 shapes
+        #                    based on which is present:
+        #                      both     -> synced  (aad + sid)
+        #                      AAD only -> cloud   (aad)
+        #                      SID only -> AD-only (sid))
+        # - Azure resource : requires AzureResourceId (uses $global:SI_TenantDomain
+        #                    if set; falls back to TenantId in the #@<...> anchor)
+        # Grace-skip per row when the identifier or tenant ID is missing -- the
+        # cell stays focused on CVE / MITRE links instead of dumping useless
+        # /overview?tid= placeholders.
+        $tid = [string]$global:SI_SPN_TenantId
+        if (-not [string]::IsNullOrWhiteSpace($tid)) {
+            $mdeIdVal = if ($r.PSObject.Properties['MdeDeviceId']) { [string]$r.MdeDeviceId } else { '' }
+            if (-not [string]::IsNullOrWhiteSpace($mdeIdVal)) {
+                [void]$mdLines.Add(('https://security.microsoft.com/machines/v2/{0}/overview?tid={1}' -f $mdeIdVal, $tid))
+            }
+
+            $aadIdVal = if ($r.PSObject.Properties['EntraAccountObjectId']) { [string]$r.EntraAccountObjectId } else { '' }
+            $sidVal   = if ($r.PSObject.Properties['AccountSID'])           { [string]$r.AccountSID }           else { '' }
+            $hasAad   = -not [string]::IsNullOrWhiteSpace($aadIdVal)
+            $hasSid   = -not [string]::IsNullOrWhiteSpace($sidVal)
+            if ($hasAad -and $hasSid) {
+                # Synced (AD + Entra linked)
+                [void]$mdLines.Add(('https://security.microsoft.com/user?aad={0}&sid={1}&tab=overview&tid={2}' -f $aadIdVal, $sidVal, $tid))
+            } elseif ($hasAad) {
+                # Cloud-only (Entra ID only)
+                [void]$mdLines.Add(('https://security.microsoft.com/user?aad={0}&tab=overview&tid={1}' -f $aadIdVal, $tid))
+            } elseif ($hasSid) {
+                # AD-only (no Entra sync)
+                [void]$mdLines.Add(('https://security.microsoft.com/user?sid={0}&tab=overview&tid={1}' -f $sidVal, $tid))
+            }
+
+            $azResIdVal = if ($r.PSObject.Properties['AzureResourceId']) { [string]$r.AzureResourceId } else { '' }
+            if (-not [string]::IsNullOrWhiteSpace($azResIdVal)) {
+                $tdom = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_TenantDomain)) { [string]$global:SI_TenantDomain } else { $tid }
+                [void]$mdLines.Add(('https://portal.azure.com/#@{0}/resource{1}/overview' -f $tdom, $azResIdVal))
+            }
+        }
+
         # Dedupe (preserves order), cap at 25 URLs, then join with line-break and cap at 4000 chars.
         if ($mdLines.Count -gt 0) {
             $deduped = [System.Collections.Generic.List[string]]::new()

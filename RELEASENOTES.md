@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.245
+## v2.2.246
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.246 - propagate DCR/DCE scope filter to Schema + Tagging stages (1528059a)
 - release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
 - release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
 - release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.219 - CVE Summary/Detailed: AssetTags exclusion filter actually fires (9f486787)
 - release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
 - release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
-- release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.246 — Propagate the DCR/DCE scope filter to Schema + Tagging stages
+
+v2.2.245 added `Apply-SIDcrScopeFilter` to `Invoke-Output.ps1` but the **Schema** and **Tagging** stages (which also call `CheckCreateUpdate-TableDcr-Structure` + `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` against their own DCRs) were still vulnerable to the same name-only-lookup hijack when same-named `dcr-si-schema-catalog` or `dcr-si-assettag-activity` records exist in sibling subs/RGs.
+
+Both stages now build the DCE/DCR caches explicitly and call `Apply-SIDcrScopeFilter` pre-create and post-create — symmetric with the Profiler engine fix. The helper is detected via `Get-Command Apply-SIDcrScopeFilter` so each stage stays standalone-safe if invoked outside the normal engine pipeline.
+
+No customer-facing config changes; this is a pure regression-prevention follow-up to v2.2.245.
 
 ---
 

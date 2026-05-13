@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.235
+## v2.2.236
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
 - release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
 - release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
 - release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
@@ -33,13 +34,26 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
 - release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
 - release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
-- release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.236 — Docs: README permission list catches up with v2.2.230 + v2.2.231
+
+The README's "Permissions granted by the wizard" narrative section still listed only the original 13 Microsoft Graph permissions, even though v2.2.230 added `RoleManagement.Read.Directory` (Graph) and v2.2.231 added `AdvancedHunting.Read.All` (Microsoft Threat Protection — a separate API resource). The codified default in `setup/ConfigWizard/backend/New-SISpn.ps1` was correct; the docs lagged.
+
+### Update
+
+- README "13 minimum permissions" → **"14 minimum permissions"**
+- New entry under Microsoft Graph: `RoleManagement.Read.Directory` (with the IdentityRoleFetcher / 403 explanation)
+- New subsection §1b "Microsoft Threat Protection application permissions" introducing the separate API resource (`8ee8fdad-f234-4243-8f3b-15c294843740`) and listing `AdvancedHunting.Read.All` with the soft-fail behavior when the MTP SP isn't in the tenant.
+
+The compact permission tables further down in the README (under the `<details><summary>Microsoft Graph</summary>` and `<details><summary>Microsoft Threat Protection</summary>` blocks) already had the right rows — only the narrative section needed catching up.
 
 ---
 

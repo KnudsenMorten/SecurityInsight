@@ -820,9 +820,9 @@ Full disclosure of every permission / role assignment the wizard creates on **Se
 
 #### 1. Microsoft Graph application permissions
 
-Granted to the **SI Service Principal**. All are **application-only** (no delegated user-impersonation) and all require admin consent. The 13 minimum permissions every SI engine reads:
+Granted to the **SI Service Principal**. All are **application-only** (no delegated user-impersonation) and all require admin consent. The 14 minimum permissions every SI engine reads:
 
-- **ThreatHunting.Read.All** — Defender XDR Advanced Hunting (KQL queries against `DeviceInfo`, `IdentityInfo` etc. — the bulk of asset-profiling data).
+- **ThreatHunting.Read.All** — Defender XDR Advanced Hunting via Microsoft Graph (`/security/runHuntingQuery`).
 - **Device.Read.All** — MDE devices, vulnerabilities, secure-config baselines.
 - **User.Read.All** — Entra users (UPNs, sign-in metadata, account enabled/disabled).
 - **Application.Read.All** — app registrations + service principals (for the Identity engine's SPN-tier classification).
@@ -835,6 +835,13 @@ Granted to the **SI Service Principal**. All are **application-only** (no delega
 - **DirectoryRecommendations.Read.All** — Entra directory health + posture recommendations.
 - **SecurityEvents.Read.All** — security-alert pipeline.
 - **CrossTenantInformation.ReadBasic.All** — cross-tenant guest metadata for B2B asset attribution.
+- **RoleManagement.Read.Directory** *(v2.2.230)* — tenant-wide role definitions, role assignments, PIM eligibility schedules. **Required** by `IdentityRoleFetcher` in the `EntraUsers` + `EntraServicePrincipals` discovery sources; without it both sources catch a 403 fetching role definitions and return 0 rows.
+
+#### 1b. Microsoft Threat Protection application permissions
+
+Microsoft Threat Protection is a **separate API resource** from Microsoft Graph (resource AppId `8ee8fdad-f234-4243-8f3b-15c294843740`). Granted to the same SI Service Principal as Graph permissions, also application-only + admin consent.
+
+- **AdvancedHunting.Read.All** *(v2.2.231)* — the legacy Defender XDR `advancedhunting/run` endpoint that the Risk Analysis engine probes as a fallback when Graph's `/security/runHuntingQuery` isn't available in the tenant. Soft-fails when the MTP SP isn't present in the tenant (no XDR licensing) — the engine then runs via Graph hunting only.
 
 #### 2. Azure RBAC role assignments
 

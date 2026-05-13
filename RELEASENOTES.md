@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.240
+## v2.2.241
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
 - release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
 - release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
 - release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
 - release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
 - release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
-- release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.241 — Docs: README "What's New" table updated with v2.2.227 – v2.2.240 highlights
+
+Operator: "update the release notes with human data of the new updates since the last human update".
+
+The README's "What's New" appendix table jumped from v2.2.85 straight to today's customer-facing changes — 14 releases worth of operator-facing improvements weren't summarized in the single-page narrative. Added 9 grouped table rows covering:
+
+- **RA AI summary convergence** (v2.2.227) — Summary + Detailed now rank the same top assets
+- **Weighted-factors JSON walk-up discovery** (v2.2.228) — no more silent fall-through to the YAML stub
+- **SPN + Certificate auth wired end-to-end** (v2.2.229, 232, 233, 234, 237, 238) — cert-only customers unblocked across every engine + every LA sink, plus a new shared `Get-SIAuthState` helper so future engines can't drift again
+- **Setup Wizard: 3 API resources granted in one pass** (v2.2.230, 231, 239) — Graph + MTP + WindowsDefenderATP, all with soft-fail when the target resource SP isn't licensed in the tenant
+- **MoreDetails portal URLs** (v2.2.235) — MDE Endpoint, MDE Identity 3-shape, Azure resource
+- **Setup Wizard email serializer + port-25 SSL coercion** (v2.2.229) — no more `@('System.Collections.Hashtable',...)` in MailTo
+- **`Attack_Paths_Summary_Device_..._Azure` 80+ min hang fix** (v2.2.240) — per-hop summarize + row caps
+- **AzLogDcrIngestPS / MicrosoftGraphPS auto-upgrade** (v2.2.238) — PSGallery version check throttled to once per 24h per module
+
+The per-release detail entries lower in this file are unchanged; this update is just the single-page table consumers read first.
 
 ---
 

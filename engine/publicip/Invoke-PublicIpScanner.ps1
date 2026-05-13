@@ -37,6 +37,16 @@
 . (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
 Ensure-SecurityInsightModules
 
+# v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
+# Mirrors $global:SI_SPN_* (v2.3 Setup Wizard output) onto the legacy
+# $global:Spn* names this engine still reads, so the engine works when invoked
+# outside the standard launcher path.
+if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
+if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
+if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
+if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
+if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
+
 # ============================================================
 # CONFIGURATION (v2: launcher is source of truth)
 # ============================================================

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.232
+## v2.2.233
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
 - release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
 - release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
 - release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
 - release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
 - release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
-- release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.233 — Defensive SPN name bridge in remaining engines + tier classifier cert-auth gap
+
+Follow-up to v2.2.232 (RA bridge). The same `SI_SPN_*` → `Spn*` mirror is now applied to the other engine entry-points so direct/AF/orchestrator invocations work for SPN+cert too:
+
+- `engine/asset-profiling/Invoke-SIEngineRun.ps1` — endpoint / identity / azure / publicip profilers
+- `engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1`
+- `engine/publicip/Invoke-PublicIpScanner.ps1`
+- `engine/asset-tagging/AssetTagging.ps1`
+
+Same 5-line idempotent block as v2.2.232 (`if (SI_SPN_X and -not SpnX) { SpnX = SI_SPN_X }`).
+
+### Bonus fix — tier classifier accepts cert auth
+
+`Invoke-PrivilegeTierClassifier.ps1` previously required `$global:SpnClientSecret` and threw if it was missing — even when `$global:SpnCertificateThumbprint` was set. SPN+cert customers couldn't run the tier classifier at all. The check now accepts either credential type:
+
+```powershell
+$hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+$hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
+if ($noTenant -or $noClientId -or (-not $hasSecret -and -not $hasCert)) { throw ... }
+```
 
 ---
 

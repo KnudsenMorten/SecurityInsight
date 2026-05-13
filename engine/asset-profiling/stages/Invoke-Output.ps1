@@ -57,6 +57,83 @@ function Apply-SIDcrScopeFilter {
     }
 }
 
+function Persist-SIDcrAutoRename {
+    # v2.2.249 -- persist auto-renamed DCR name back into the customer's
+    # SecurityInsight.custom.ps1 so the next run reads it from the override
+    # path (Step 1a's "per-engine DCR name override") instead of having to
+    # re-detect the collision + re-derive the suffix every run.
+    #
+    # Why bother since the suffix is deterministic from $global:SI_DcrResourceGroup?
+    # Two reasons: (1) the customer can SEE the binding in their config file --
+    # no surprise "where did this DCR name come from"; (2) if they ever change
+    # SI_DcrResourceGroup, the DCR name won't silently move with it -- it stays
+    # pinned to whatever was first written. The persisted value is the source
+    # of truth from run 2 onward.
+    #
+    # Best-effort: file might not exist (community / no-custom-file mode),
+    # might be read-only, or path resolution from $PSScriptRoot might fail.
+    # Any failure is logged + ignored -- never blocks the engine.
+    param(
+        [Parameter(Mandatory)][string]$Engine,        # 'endpoint' / 'identity' / 'azure' / 'publicip'
+        [Parameter(Mandatory)][string]$DcrName        # the auto-renamed value
+    )
+
+    try {
+        # Walk up from this stage file (engine/asset-profiling/stages/) until
+        # we find the SI repo root (the dir containing VERSION). config/ lives
+        # next to it.
+        $cur = $PSScriptRoot
+        while ($cur -and -not (Test-Path -LiteralPath (Join-Path $cur 'VERSION'))) {
+            $parent = Split-Path -Parent $cur
+            if (-not $parent -or $parent -eq $cur) { $cur = $null; break }
+            $cur = $parent
+        }
+        if (-not $cur) {
+            Write-Warning "DCR auto-rename: could not locate SI repo root from script path -- skipping persist."
+            return
+        }
+        $customPath = Join-Path $cur 'config\SecurityInsight.custom.ps1'
+        if (-not (Test-Path -LiteralPath $customPath)) {
+            Write-Warning ("DCR auto-rename: '{0}' not found -- skipping persist. Next run will re-derive the same name." -f $customPath)
+            return
+        }
+
+        $engineCap = (Get-Culture).TextInfo.ToTitleCase($Engine.ToLowerInvariant())
+        # Normalize 'Publicip' -> 'PublicIp' to match the override naming convention.
+        if ($engineCap -eq 'Publicip') { $engineCap = 'PublicIp' }
+        $varName  = ('SI_{0}_DcrName' -f $engineCap)
+        $varToken = ('\$global:' + $varName)
+
+        $content = Get-Content -LiteralPath $customPath -Raw -ErrorAction Stop
+        $line    = ('$global:{0} = ''{1}''' -f $varName, $DcrName)
+
+        # If the variable already exists in the file, leave it alone -- customer
+        # may have set it intentionally; auto-rename only fires when it's empty,
+        # so the only way this branch hits is a race with a manual edit.
+        if ($content -match $varToken) {
+            Write-Warning ("DCR auto-rename: `$global:{0} already present in {1} -- not overwriting." -f $varName, $customPath)
+            return
+        }
+
+        $block = @"
+
+# ----------------------------------------------------------------------------
+# Added by SecurityInsight engine v2.2.249 -- $((Get-Date).ToUniversalTime().ToString('u'))
+# DCR auto-rename: cross-scope name collision detected for the default DCR
+# name. The engine auto-renamed this install's DCR to a unique target-RG-derived
+# value to avoid the AzLogDcrIngestPS module's name-only-lookup hijack.
+# Edit / remove this line to override; engine will re-detect on next run if absent.
+# ----------------------------------------------------------------------------
+$line
+
+"@
+        Add-Content -LiteralPath $customPath -Value $block -Encoding UTF8 -ErrorAction Stop
+        Write-SIInfo ("DCR auto-rename persisted: appended `$global:{0} = '{1}' to {2}" -f $varName, $DcrName, $customPath)
+    } catch {
+        Write-Warning ("DCR auto-rename persist FAILED ({0}) -- next run will re-derive the same name from the target RG, so this is non-fatal." -f $_.Exception.Message)
+    }
+}
+
 function Write-SIClassificationToLogAnalytics {
     # NO [CmdletBinding()]. Mirrors v2.1 RA / IAC pattern --
     # those engines are plain script bodies (no advanced-function wrappers)
@@ -354,6 +431,49 @@ function Write-SIClassificationToLogAnalytics {
         # name -> id / immutableId. Always rebuild fresh per ingest.
         $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
         $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+
+        # Step 1a: Auto-rename on cross-scope name collision (v2.2.249).
+        #
+        # Customer-tenant reality: the SPN has reader rights on dozens of subs.
+        # Get-AzDcrListAll returns 80-100+ DCRs across them. Many share generic
+        # names like 'dcr-si-endpoint' from previous installs. CheckCreateUpdate
+        # internally re-fetches the cache (defeating our scope filter at Step 1b)
+        # and decides "a DCR by that name exists, skip create". The wait loop
+        # then never finds the DCR in target sub/RG -> 120s timeout -> 404 on
+        # Post-*. Net result with v2.2.245's scope filter alone:
+        #   "DCR scope filter [wait-loop-120s]: 82 cached -> 0 in target / 404"
+        #
+        # Real-world fix: give THIS install a unique DCR name so the cross-scope
+        # records can never collide. v2.2.245 added $global:SI_<Engine>_DcrName
+        # for that, but it requires customer editing custom.ps1 -- which they
+        # only know after the first run fails. Auto-rename closes the loop: the
+        # engine detects the collision, mints a unique suffix (-<rg> normalized),
+        # and uses that. Customer-set override always still wins.
+        if ([string]::IsNullOrWhiteSpace($_perEngineDcrName) -and $global:AzDcrDetails -and $global:SI_AzSubscriptionId -and $global:SI_DcrResourceGroup) {
+            $_crossScope = @($global:AzDcrDetails | Where-Object {
+                $_.name -eq $dcrName -and
+                $_.id   -notlike "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DcrResourceGroup)/*"
+            })
+            if ($_crossScope.Count -gt 0) {
+                $_inScope = @($global:AzDcrDetails | Where-Object {
+                    $_.name -eq $dcrName -and
+                    $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DcrResourceGroup)/*"
+                })
+                if ($_inScope.Count -eq 0) {
+                    # No DCR by this name in target scope, but N cross-scope namesakes
+                    # exist. Module's name-only lookup will hijack -- auto-rename to
+                    # avoid the collision entirely. Suffix is the target RG name
+                    # normalized to DCR-name-safe chars.
+                    $_suffix = ($global:SI_DcrResourceGroup -replace '[^a-zA-Z0-9-]','-').ToLowerInvariant().Trim('-')
+                    $_uniqueName = "$dcrName-$_suffix"
+                    Write-SIInfo ("DCR auto-rename: '{0}' -> '{1}' to avoid {2} cross-scope same-named DCR(s). Persisting to SecurityInsight.custom.ps1 so next run reads it as a normal override." -f $dcrName, $_uniqueName, $_crossScope.Count)
+                    $dcrName = $_uniqueName
+                    Persist-SIDcrAutoRename -Engine $RunContext.Engine -DcrName $_uniqueName
+                }
+                # If $_inScope.Count -gt 0, target scope HAS the DCR -- scope filter
+                # at Step 1b will isolate it, no rename needed.
+            }
+        }
 
         # Step 1b: Scope filter (v2.2.245). AzLogDcrIngestPS resolves DCE/DCR by
         # NAME-ONLY Where-Object lookup against the global caches (module lines

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.248
+## v2.2.249
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
 - release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
 - release: SecurityInsight v2.2.247 - anonymous-mail diagnostic logging, never lie about success (bae363f7)
 - release: SecurityInsight v2.2.247 - fix silent anonymous-mail failure (704a2513)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
 - release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
 - release: SecurityInsight v2.2.221 - comprehensive AadDeviceId column_ifexists sweep (3d08309a)
-- release: SecurityInsight v2.2.220 - Device_Recommendations regression fix (column_ifexists wrapper restored) (31ebbe30)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.249 — Auto-rename DCR on cross-scope name collision (scope filter alone wasn't enough)
+
+Customer trace from v2.2.248:
+```
+[INFO] DCR scope filter [pre-create]: 93 cached -> 0 in sub=.../rg=rg-securityinsighttest (dropped 93 cross-scope)
+[INFO] DCR scope filter [wait-loop-15s]: 88 cached -> 0 ... (dropped 88 cross-scope)
+... (8 wait-loop iterations, all showing 80-90 cross-scope DCRs and 0 in target RG)
+WARNING: DCR 'dcr-si-endpoint' immutableId not in ARG after 120s -- ingest may 404.
+[ERR]  === LA INGEST FAILED ===  HTTP Status: 404
+```
+
+Diagnosis: v2.2.245's `Apply-SIDcrScopeFilter` correctly empties the cache on every pass, but `CheckCreateUpdate-TableDcr-Structure` **re-fetches the cache internally** via its own `Get-AzDcrListAll` call -- that fresh fetch sees the 88 cross-scope namesakes and short-circuits with "DCR by that name already exists, no need to create." The DCR never lands in the target RG, the wait loop times out, ingest 404s. Scope-filtering the engine's view of the cache wasn't enough -- the module looks at the world too.
+
+Fix: detect the collision **before** `CheckCreateUpdate` runs and auto-rename the DCR with a target-RG-derived suffix so the cross-scope records can never collide with this install's name. New Step 1a in `Invoke-Output.ps1` runs after the initial cache build:
+
+```
+IF customer has not set $global:SI_<Engine>_DcrName
+AND cache has >0 same-named DCRs in OTHER subs/RGs
+AND cache has 0 same-named DCRs in TARGET sub/RG
+THEN
+   $dcrName = '<base>-<target-rg-normalized>'
+   log: "DCR auto-rename: 'dcr-si-endpoint' -> 'dcr-si-endpoint-rg-securityinsighttest'
+         to avoid 88 cross-scope same-named DCR(s)."
+```
+
+When `$global:SI_Endpoint_DcrName` (or `_Identity_`, `_Azure_`, `_PublicIp_`) IS set, the customer-pinned name always wins -- auto-rename only fires when no override is present **and** the collision would actually break the run. When the target sub/RG already owns a same-named DCR, no rename happens (scope filter alone handles that case fine).
+
+Customer doesn't need to edit the custom file. First run on a new tenant with legacy DCRs visible auto-self-heals.
+
+**Persistence:** the auto-renamed value is also written back into `SecurityInsight.custom.ps1` (new `Persist-SIDcrAutoRename` helper). From run 2 onward the file ITSELF is the source of truth -- the override path at Step 1a's `$global:SI_<Engine>_DcrName` picks it up like any other customer-pinned value. So:
+
+- the operator can SEE in the config what name is actually used (no surprise "where did this come from")
+- if they later change `$global:SI_DcrResourceGroup` the DCR name stays pinned (won't silently move)
+- the auto-rename block runs ONCE per install, then becomes a normal override
+
+Best-effort write -- if the custom file is missing (community / no-custom mode) or read-only, the engine logs the reason and continues. The suffix is deterministic (`<base>-<rg-normalized>`), so even without persistence the next run produces the same name.
+
+To pin a different name long-term, set the per-engine override yourself BEFORE the first auto-run, or edit the appended line after the fact.
 
 ---
 

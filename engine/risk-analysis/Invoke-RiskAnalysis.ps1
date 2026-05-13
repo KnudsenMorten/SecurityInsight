@@ -4054,9 +4054,42 @@ function Calculate-RiskScore {
                 foreach ($forceCol in 'RiskFactor_Consequence_Detailed','MITRE_Tactics','MITRE_Techniques','ComplianceTags','MoreDetails','RiskScoreDomainKPI','RiskScoreKPI') {
                     if (-not $h2.Contains($forceCol)) { $h2[$forceCol] = $tmp2[$forceCol] }
                 }
-                # YAML OutputPropertyOrder is the SOLE column-order authority
-                # (canonical shape places _Detailed BEFORE the count). No engine
-                # reorder.
+                # v2.2.225 -- carry-through extra YAML-projected columns. Previously
+                # OutputPropertyOrder was a strict whitelist: any column projected by
+                # the YAML KQL but missing from OutputPropertyOrder got silently
+                # dropped. That made CVE Detailed lose HasExploit / IsExploitVerified /
+                # IsInExploitKit / IsZeroDay / CVELastModified / CVSSDesc / CveUrl
+                # which the operator wants visible without inflating the canonical
+                # OutputPropertyOrder. Now: OutputPropertyOrder defines the LEADING
+                # canonical column block; any additional row-level columns from the
+                # KQL get appended in row-natural order. Blacklist below skips legacy
+                # engine-aliases + internal helpers.
+                $extraColBlacklist = @{
+                    'AssetCount'        = $true   # legacy alias -> ImpactedAssetCount
+                    'TotalIssues'       = $true   # legacy alias -> TotalIssuesImpactedAssets
+                    'ImpactedAssets'    = $true   # legacy alias -> ImpactedAssetsList
+                    'Issues_Details'    = $true   # legacy alias -> MoreDetails
+                    'RiskFactor_Weight' = $true   # legacy alias -> RiskScore_Weight_Factor
+                    'DeviceKey'         = $true   # internal join key
+                    'EpJoinKey'         = $true   # internal join key (v2.2.221)
+                    'EdgeLabels'        = $true   # internal trace set (v2.2.215)
+                    'FindingNodeId'     = $true   # internal join key
+                    'FindingLabel'      = $true   # internal raw-EG label (kept inside Finding* scalars)
+                    'FindingCategories' = $true   # internal raw-EG categories
+                    'EG_IsCustomerFacing' = $true # internal raw flag (consumed by RF_P_InternetExposed)
+                    'EG_IsExcluded'     = $true   # internal raw flag (filtered upstream)
+                    'AadDeviceId1'      = $true   # leftouter-join right-side rename
+                }
+                foreach ($k in $tmp2.Keys) {
+                    if ($h2.Contains($k))            { continue }   # already emitted in canonical block
+                    if ($k.StartsWith('_'))          { continue }   # internal/temp columns (e.g. _AssetTagsLower, _AssetTierFilter)
+                    if ($k.StartsWith('__'))         { continue }   # bucket-filter internals (__bucket_key, __bucket)
+                    if ($extraColBlacklist.ContainsKey($k)) { continue }
+                    if ($k -like '*_From_CL')        { continue }   # leftouter-side raw cols (consumed by AssetName/AssetId/AssetType extends)
+                    $h2[$k] = $tmp2[$k]
+                }
+                # YAML OutputPropertyOrder is the LEADING column-order authority;
+                # extras appended above sit AFTER the canonical block.
                 [void]$reordered.Add([pscustomobject]$h2)
             } else {
                 [void]$reordered.Add([pscustomobject]$tmp2)

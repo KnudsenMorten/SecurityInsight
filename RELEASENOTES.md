@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.261
+## v2.2.262
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
 - release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
 - release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
 - release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
 - release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
 - release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
-- release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.262 — Bump `AzLogDcrIngestPS` minimum to 1.6.7 (MI extensions actually live now)
+
+v1.6.5 and v1.6.6 published to PSGallery with only the v1.6.4 cert gate fix -- a local working-copy revert dropped the MI patches before publish. v1.6.7 is the real fix-up with the full MI extension chain: `-UseManagedIdentity` / `-ManagedIdentityClientId` on every function in the DCR create + read chain, plus the gate at line 913 widened to accept MI as a valid auth source.
+
+All 4 engine `_shared/Ensure-Module.ps1` copies bumped from `1.6.5` → `1.6.7`. v2.2.261's stale-session force-reload guard ensures customers actually pick up the new module in-process even if PowerShell auto-loaded an older one earlier in the session.
 
 ---
 

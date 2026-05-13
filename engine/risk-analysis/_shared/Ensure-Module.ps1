@@ -423,16 +423,19 @@ function Ensure-SecurityInsightModules {
     # 1.6.4 fixed CheckCreateUpdate-TableDcr-Structure's gate so cert-only
     # auth (no client secret) actually enters the create block instead of
     # returning silently.
-    # 1.6.5 added -UseManagedIdentity / -ManagedIdentityClientId params to the
-    # entire DCR create + read chain (CheckCreateUpdate, CreateUpdate-AzData...,
-    # CreateUpdate-AzLogAnalytics..., Get-AzDce/DcrListAll, Get-AzLogAnalytics-
-    # TableAzDcrStatus) so SI's UAMI mode works canonically end-to-end.
-    # SI v2.2.260+ requires 1.6.5 minimum.
+    # 1.6.5 and 1.6.6 were intended to add MI to the create chain but shipped
+    # without those edits (PSGallery upload race). 1.6.7 carries the actual
+    # MI extensions: -UseManagedIdentity / -ManagedIdentityClientId on every
+    # function in the DCR create + read chain (CheckCreateUpdate,
+    # CreateUpdate-AzData..., CreateUpdate-AzLogAnalytics..., Get-AzDce/DcrListAll,
+    # Get-AzLogAnalyticsTableAzDcrStatus), plus the gate widening to accept MI.
+    # SI v2.2.262+ requires 1.6.7 minimum so customers running UAMI mode
+    # don't hit "A parameter cannot be found matching UseManagedIdentity".
     $null = Ensure-Module `
         -Name            $script:SecurityInsight_RequiredModules `
         -Scope           $Scope `
         -Quiet:$Quiet `
         -Required:$Required `
         -KeepLatest      @('AzLogDcrIngestPS','MicrosoftGraphPS') `
-        -MinimumVersions @{ AzLogDcrIngestPS = '1.6.5' }
+        -MinimumVersions @{ AzLogDcrIngestPS = '1.6.7' }
 }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.233
+## v2.2.234
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
 - release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
 - release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
 - release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
@@ -33,13 +34,68 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
 - release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
 - release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
-- release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.234 — RA engine: actually wire SPN+cert auth through Connect-AzAccount + Connect-MgGraph
+
+v2.2.232 mirrored `SI_SPN_CertThumbprint` → `SpnCertificateThumbprint` at engine startup. But two checks downstream still hardcoded `SpnClientSecret`:
+
+1. **Auth precondition** at `Invoke-RiskAnalysis.ps1:4874–4878` — threw `Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret)` if Secret was empty, regardless of whether CertThumbprint was set.
+2. **Az + Graph connect** at line 4880+ and inside `Connect-GraphHighPriv` (line 489) — only built a `PSCredential` from `SpnClientSecret` and called `Connect-MicrosoftGraphPS -AppSecret`. Cert thumbprint was ignored even when present.
+
+Result: SPN+cert customer ran v2.2.233, the bridge populated `SpnCertificateThumbprint` correctly, but the engine still threw at line 4877 before ever attempting auth.
+
+### Fix
+
+**Precondition** now accepts either credential:
+
+```powershell
+$hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+$hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
+if ($noTenant -or $noClientId -or (-not $hasSecret -and -not $hasCert)) { throw ... }
+```
+
+**Connect-AzAccount** branches on the credential type:
+
+```powershell
+if ($hasCert) {
+    Connect-AzAccount -ServicePrincipal -Tenant $TenantId `
+        -ApplicationId $ClientId -CertificateThumbprint $Thumb
+} else {
+    # existing PSCredential / Secret path
+}
+```
+
+**Connect-GraphHighPriv** branches too. `Connect-MicrosoftGraphPS` only takes `-AppSecret`; for cert auth we fall through to `Connect-MgGraph -CertificateThumbprint` directly (the Microsoft.Graph.Authentication module is already loaded as part of the SDK).
+
+```powershell
+if ($hasCert) {
+    Connect-MgGraph -TenantId $TenantId -ClientId $ClientId `
+        -CertificateThumbprint $Thumb -NoWelcome
+} else {
+    Connect-MicrosoftGraphPS -AppId $ClientId -AppSecret $Secret -TenantId $TenantId
+}
+```
+
+### Verification
+
+For an SPN+cert customer (`SI_SPN_CertThumbprint` set, no Secret), the engine now logs:
+
+```
+Connect using ServicePrincipal with AppId & Certificate
+[STEP] connecting to Azure
+[OK]   azure connection step done
+[STEP] connecting to Microsoft Graph (initial)
+[INFO] Connecting to Microsoft Graph (app+certificate)...
+[OK]   Graph connected at ...
+```
 
 ---
 

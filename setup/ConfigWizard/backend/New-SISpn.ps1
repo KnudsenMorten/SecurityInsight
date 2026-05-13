@@ -138,7 +138,8 @@ if (-not $GraphPermissions -or $GraphPermissions.Count -eq 0) {
         'Reports.Read.All',                      # MFA registration + activity reports
         'DirectoryRecommendations.Read.All',     # Defender for Identity + Entra recs
         'SecurityEvents.Read.All',               # Defender alerts
-        'CrossTenantInformation.ReadBasic.All'   # Multi-tenant SP visibility
+        'CrossTenantInformation.ReadBasic.All', # Multi-tenant SP visibility
+        'RoleManagement.Read.Directory'          # v2.2.230 -- /roleManagement/directory/roleDefinitions + roleAssignments + roleEligibilitySchedules (IdentityRoleFetcher in EntraUsers + EntraServicePrincipals discovery). Without this, both sources catch a 403 fetching tenant-wide role definitions and return 0 rows.
     )
 }
 

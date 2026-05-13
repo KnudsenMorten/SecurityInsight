@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.226
+## v2.2.227
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.227 - AI rollup collapse-per-(asset, ConfigBucket) for *_Detailed reports (2e0896b0)
 - release: SecurityInsight v2.2.226 - clean version stamp + MoreDetails wrap in Excel (1f72026d)
 - release: SecurityInsight v2.2.225 - extra YAML-projected columns carry through (CVE Detailed exploit cols back) (771146f4)
 - release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
@@ -33,13 +34,79 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
 - release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
 - release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
-- release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.227 — Risk Analysis: Detailed AI rollup collapses per-(asset, ConfigBucket) so Summary + Detailed converge on the same top assets
+
+Operator: "look at the weighted risk score for mgmt1 in the detailed report (does it calculate everything together?)"
+
+Observed: Summary's #1 risky asset was `dc1` (1,975 weighted) and `mgmt1` was #3 with 994 weighted across 25 findings. The Detailed report on the same data put `mgmt1` at #1 with **24,024 weighted** across **562 findings** — a 24x sum delta over Summary on the same host.
+
+### Why the two reports disagreed
+
+The Summary YAML for vulnerabilities hard-codes the finding identifier:
+
+```kql
+| extend ConfigurationId = "CVE"
+```
+
+So every CVE on `mgmt1` collapses into ONE row called *"Update vulnerable software [CVE]"*. The Detailed YAML keeps each CVE separate:
+
+```kql
+| extend ConfigurationId = FindingName     // e.g. "CVE-2024-12345"
+```
+
+Per-row WeightedRisk on each report is comparable (Summary ~22, Detailed ~43), but the **row count** differs by ~22x on hot assets — and `Add-AssetAgg` SUMS WeightedRisk across rows belonging to the asset. Result: the same `mgmt1` shows up tame in Summary and dominant in Detailed.
+
+### Fix (path B — engine-side collapse for AI rollup only)
+
+Before the AI rollup's per-row loop, for `*_Detailed` reports the engine now collapses rows by `(asset, ConfigBucket)`:
+
+- `ConfigBucket = "CVE"` when `ConfigurationId` looks like a CVE (`^CVE-\d{4}-\d+$`)
+- `ConfigBucket = ConfigurationId` otherwise (so `scid-NNN` and other recommendation IDs pass through unchanged and stay 1:1)
+
+For each `(asset, bucket)` pair only the row with `max(RiskScoreTotal_Weighted)` is fed to `Add-AssetAgg` / `Add-FindingAgg`. Other rows in the same pair are skipped from the rollup. The XLSX export remains untouched — Detailed still writes all 562 per-CVE rows to disk for forensic detail; only the AI input view is collapsed.
+
+```powershell
+# Pre-pass on $topRows when ReportTemplate -like '*_Detailed'
+$collapseBuckets = @{}
+foreach ($r in $topRows) {
+    $cId    = Get-RowValue -Row $r -Names @("ConfigurationId", ...)
+    $bucket = if ([string]$cId -match '^CVE-\d{4}-\d+$') { 'CVE' } else { [string]$cId }
+    [double]$w = ... # RiskScoreTotal_Weighted
+    foreach ($a in Resolve-AssetNamesForRow $r) {
+        $key = "$a|$bucket".ToLowerInvariant()
+        if (-not $collapseBuckets.ContainsKey($key) -or $collapseBuckets[$key].MaxW -lt $w) {
+            $collapseBuckets[$key] = [pscustomobject]@{ MaxW = $w; RowRef = $r }
+        }
+    }
+}
+
+# In the main row loop, skip if the row isn't the winner for (asset, bucket):
+if ($isDetailedTemplate -and $collapseBuckets) {
+    $key = "$a|$bucket".ToLowerInvariant()
+    if ($collapseBuckets[$key].RowRef -ne $r) { continue }
+}
+```
+
+A `[INFO] AI rollup collapse: NNN *_Detailed rows -> MM (asset x ConfigBucket) buckets` line is emitted so operators can verify the collapse actually fired.
+
+### Expected behaviour after this fix
+
+- Detailed AI rollup now sees ~25 buckets per asset on a typical CVE-heavy host (matching Summary's ~25)
+- Summary and Detailed should rank the **same top N assets** in the AI summary section
+- Detailed XLSX is byte-for-byte identical to v2.2.226 (collapse only affects the AI input view, not the exported data)
+
+### Scope
+
+Path A would have changed Summary's KQL to keep per-CVE rows. That was rejected — Summary's compact shape is the whole point of running it. Path B keeps both reports faithful to their YAML shape on disk and only equalizes the AI input window.
 
 ---
 

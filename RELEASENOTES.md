@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.250
+## v2.2.251
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.251 - DCR auto-rename length guard (>60 chars -> SHA1 hash fallback) (ef4ef053)
 - release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
 - release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
 - release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
@@ -33,13 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.225 - extra YAML-projected columns carry through (CVE Detailed exploit cols back) (771146f4)
 - release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
 - release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
-- release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.251 — DCR auto-rename length guard (Azure caps `Microsoft.Insights` names at 260; we cap at 60 for sanity)
+
+Operator: "length of dcr name?" Right -- the v2.2.249 auto-rename appends the full normalized RG name as a suffix, which works fine for `rg-securityinsighttest` (22 chars → 38-char DCR name) but blows up for long RG names like `rg-securityinsight-production-tenant1-westeurope` (52 chars → 67-char DCR name).
+
+Per Microsoft Learn's [resource-name-rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) page, every `Microsoft.Insights` entity allows **1-260 characters**. DCR names follow the same rule. So we're nowhere near the ARM ceiling. But practical limits bite well before 260:
+- ARG queries truncate long names in some views
+- RBAC scope strings get unwieldy
+- Portal display columns clip at ~50-64 chars
+
+Conservative cutover: when the auto-rename's full-RG suffix would push the combined name over **60 chars**, fall back to an **8-char SHA1 hash** of the RG name as the suffix. Hash is deterministic (same RG → same hash across runs), so the persisted name in `SecurityInsight.custom.ps1` stays valid run-over-run.
+
+Examples:
+
+| Target RG | Auto-renamed DCR | Note |
+|---|---|---|
+| `rg-securityinsighttest` | `dcr-si-endpoint-rg-securityinsighttest` (38 chars) | full RG -- unchanged behavior |
+| `rg-securityinsight-production-tenant1-westeurope` | `dcr-si-endpoint-7f3a9c12` (24 chars) | hash fallback -- combined would've been 67 chars |
+
+The length guard only fires when needed; short-RG customers see no change.
 
 ---
 

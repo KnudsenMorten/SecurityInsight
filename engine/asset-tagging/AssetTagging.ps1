@@ -55,10 +55,14 @@ try {
 }
 
 if (-not [bool]$global:AutomationFramework) {
+  # v2.2.238 -- accept Secret OR CertThumbprint. The bridge in this engine's
+  # preamble at v2.2.233 mirrors SI_SPN_CertThumbprint -> SpnCertificateThumbprint.
+  $_hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+  $_hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
   if ([string]::IsNullOrWhiteSpace([string]$global:SpnTenantId) -or
       [string]::IsNullOrWhiteSpace([string]$global:SpnClientId) -or
-      [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
-    throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Launcher must set them or enable AutomationFramework."
+      (-not $_hasSecret -and -not $_hasCert)) {
+    throw "Missing SPN globals (SpnTenantId/SpnClientId + one of SpnClientSecret OR SpnCertificateThumbprint). Launcher must set them or enable AutomationFramework."
   }
 }
 

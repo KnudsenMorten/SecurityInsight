@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.225
+## v2.2.226
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.226 - clean version stamp + MoreDetails wrap in Excel (1f72026d)
 - release: SecurityInsight v2.2.225 - extra YAML-projected columns carry through (CVE Detailed exploit cols back) (771146f4)
 - release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
 - release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
@@ -33,13 +34,60 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
 - release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
 - release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
-- release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.226 — Risk Analysis: clean version stamp + MoreDetails actually renders multi-line in Excel
+
+Two operator complaints fixed.
+
+### 1. Version stamp showed the compound bootstrap label
+
+Operator saw the SolutionVersion stamp in Excel header + email subject as:
+
+```
+AutomateIT-internal-main-3d08309a... (solutions: PlatformConfiguration, PlatformMonitoring, SecurityInsight-v2.2.221) @ 2026-05-13T01:10:20
+```
+
+Wanted just `2.2.226` (or whatever the current SecurityInsight release is).
+
+**Cause**: `$global:RA_SolutionVersion` resolver in `Invoke-RiskAnalysis.ps1` seeded its candidate-paths list with `$global:RepoRoot` / `$global:InstallPath` FIRST, then appended walk-up from `$PSScriptRoot`. The root-level `VERSION.txt` (compound bootstrap label) won over the per-solution `SOLUTIONS/SecurityInsight/VERSION` (clean version).
+
+**Fix**: walk-up from `$PSScriptRoot` runs first. It hits `SOLUTIONS/SecurityInsight/VERSION` ("2.2.226") two levels up from the engine, before reaching the repo root. Repo-root `VERSION.txt` is now the fallback only when no per-solution VERSION is discoverable.
+
+### 2. MoreDetails column shows one long string in Excel
+
+Operator: "MoreDetails doesn't separate multiple entries."
+
+**Cause**: The engine's MoreDetails post-process at line ~3530 joins entries with `\r\n` (intended as a cell line-break). But Export-Excel writes cells WITHOUT WrapText by default, so the line-break characters are invisible -- Excel renders one continuous string.
+
+**Fix**: after `Export-Excel`, iterate the columns and enable `Style.WrapText = $true` on known multi-line columns:
+
+```powershell
+$wrapTargets = @{
+    'MoreDetails'                     = $true
+    'IssueList'                       = $true
+    'RiskFactor_Probability_Detailed' = $true
+    'RiskFactor_Consequence_Detailed' = $true
+    'ImpactedAssetsList'              = $true
+    'AssetDetectedInReportName'       = $true
+    'CVSSDesc'                        = $true
+}
+```
+
+Width cap at 50 (already present) keeps cells readable when wrap fires.
+
+Applied to BOTH Excel-write paths in the engine (Export-Excel happens in two functions).
+
+### Out of scope for this release
+
+- **Email HTML rendering of MoreDetails**: `\r\n` in HTML doesn't render as a line break -- needs `<br>`. Not yet replaced in the email path. If operators want multi-line MoreDetails in email too, file a follow-up; quick fix would be a `-replace "(\r\n|\n)", "<br>"` in the email body builder.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.244
+## v2.2.245
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
 - release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
 - release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
 - release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
@@ -33,13 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
 - release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
 - release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
-- release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.245 — Per-engine DCR-name overrides + always-on DCR/DCE scope filter
+
+Two related changes — one feature, one bug-fix — both targeting the same failure mode: same-named DCRs in OTHER subs/RGs that the SPN can see, hijacking the AzLogDcrIngestPS name-only lookup.
+
+### The failure mode (real customer trace)
+
+```
+[INFO] DCR   : dcr-si-endpoint  (rg=rg-securityinsighttest)
+[INFO] rows  : 47
+WARNING: DCR collision guard: 4 DCRs named 'dcr-si-endpoint' visible but NONE in sub
+         '54468121-…' / RG 'rg-securityinsighttest' -- ingest will likely 404 with 'westeurope'.
+[ERR]  === LA INGEST FAILED ===
+[ERR]  Exception : Log Ingestion API request failed. HTTP Status: 400 Response:
+```
+
+`AzLogDcrIngestPS` resolves DCEs and DCRs via **name-only** `Where-Object` lookups against the global `$AzDceDetails` / `$AzDcrDetails` caches (module lines 1575 / 3548 / 5457). On long-lived tenants — or whenever the SPN has reader rights on sibling subscriptions — those caches return MULTIPLE rows for the same DCR/DCE name. The module's downstream `.id` / `.immutableId` becomes an array; the next Post call ships a malformed JSON body (`'Array'` type) or substitutes the *wrong* region's immutableId, and ingest 4xx's.
+
+### Fix 1 — Always-on scope filter (the actual bug)
+
+`Apply-SIDcrScopeFilter` (new helper in `Invoke-Output.ps1`) drops every cached DCE/DCR row whose ARM resource-id is NOT under the customer's configured `SI_AzSubscriptionId` + `SI_DceResourceGroup` / `SI_DcrResourceGroup`. Applied at three points:
+
+1. **Pre-create** — before `CheckCreateUpdate-TableDcr-Structure`, so the module doesn't see a stale cross-scope DCR and skip creation.
+2. **Inside the immutableId wait loop** — every `Get-AzDcrListAll` repopulates the full multi-sub view; we re-filter on every iteration so the name lookup that resolves `_dcrRow` can't pick a sibling-scope record.
+3. **Post-create** — final pass before the Post call, belt-and-suspenders.
+
+Replaces the v2.2 narrow collision guards (which only triggered when `Count -gt 1` and only filtered by name + sub + RG). The new filter is broader: filter by sub/RG *always*, drop cross-scope rows entirely, let the module's name-only lookup operate on a single-scope view.
+
+### Fix 2 — Per-engine DCR name overrides (the requested feature)
+
+Operator: "is it possible to overrule the dcr name for the remaining 3 profilers. if defined in custom in wins."
+
+`Invoke-Output.ps1` now reads four new globals — `$global:SI_Endpoint_DcrName`, `$global:SI_Identity_DcrName`, `$global:SI_Azure_DcrName`, `$global:SI_PublicIp_DcrName`. When set, they override the pattern-derived default (`SI_DcrNamePattern -f engineName`) for that specific profiler engine. Mirrors the existing `SI_Shodan_DcrName` / `SI_RiskAnalysis_DcrName_*` / `SI_RunHealth_DcrName` / `SI_SchemaCatalogDcr` / `SI_AssetTagActivityDcr` pattern for the other SI engines.
+
+Use case: customer with 4 legacy `dcr-si-endpoint` DCRs in sibling subs renames their new install's DCR to `dcr-si-endpoint-mycustomer` via a single line in `SecurityInsight.custom.ps1` — no more name collision *anywhere* in the SPN's visible scope.
+
+Setup Wizard (`Write-SICustomConfig.ps1`) emits all four overrides into the generated `SecurityInsight.custom.ps1` next to the existing five engine-specific DCR globals, with the default name pre-filled — customers see them as commented-out-ready knobs.
+
+### Why ship both together
+
+The scope filter alone fixes the immediate 400 (engine creates a fresh DCR in target sub/RG, name-lookup resolves to it). The per-engine override is the cleaner long-term answer for tenants where the customer *wants* distinct names for governance / shared-workspace clarity, not just collision avoidance.
 
 ---
 

@@ -11,6 +11,52 @@
     real files so the pipeline produces verifiable artifacts.
 #>
 
+function Apply-SIDcrScopeFilter {
+    # v2.2.245 -- always-on cache-scope filter. AzLogDcrIngestPS resolves
+    # DCE/DCR by NAME-ONLY Where-Object lookup against $global:AzDceDetails /
+    # $global:AzDcrDetails. When same-named records exist in OTHER subs/RGs
+    # (legacy installs, sibling subscriptions, other tenants the SPN can see),
+    # the lookup returns an ARRAY and downstream id/immutableId becomes an
+    # array -> ingest 400/404 ('Array' type or wrong-region immutableId
+    # like 'westeurope'). Pre-filtering the caches to ONLY records in the
+    # customer's configured sub + RG means the module physically cannot see
+    # cross-scope rows -- name-only lookups are safe.
+    param(
+        [string]$Scope = 'pre-create',
+        [string]$DcrName,
+        [string]$DceName,
+        [string]$SubscriptionId,
+        [string]$DceResourceGroup,
+        [string]$DcrResourceGroup
+    )
+    if (-not $SubscriptionId) { return }
+
+    if ($global:AzDceDetails -and $DceResourceGroup) {
+        $_dceBefore = @($global:AzDceDetails).Count
+        $_dceAfter = @($global:AzDceDetails | Where-Object {
+            $_.id -like "*/subscriptions/$SubscriptionId/resourceGroups/$DceResourceGroup/*"
+        })
+        if (@($_dceAfter).Count -ne $_dceBefore) {
+            Write-SIInfo ("DCE scope filter [{0}]: {1} cached -> {2} in sub={3} / rg={4} (dropped {5})" -f $Scope, $_dceBefore, @($_dceAfter).Count, $SubscriptionId, $DceResourceGroup, ($_dceBefore - @($_dceAfter).Count))
+        }
+        $global:AzDceDetails = @($_dceAfter)
+        if ($DceName -and (@($global:AzDceDetails | Where-Object { $_.name -eq $DceName })).Count -eq 0) {
+            Write-Warning ("DCE scope filter [{0}]: no DCE named '{1}' in target sub/RG -- CheckCreateUpdate will create it." -f $Scope, $DceName)
+        }
+    }
+
+    if ($global:AzDcrDetails -and $DcrResourceGroup) {
+        $_dcrBefore = @($global:AzDcrDetails).Count
+        $_dcrAfter = @($global:AzDcrDetails | Where-Object {
+            $_.id -like "*/subscriptions/$SubscriptionId/resourceGroups/$DcrResourceGroup/*"
+        })
+        if (@($_dcrAfter).Count -ne $_dcrBefore) {
+            Write-SIInfo ("DCR scope filter [{0}]: {1} cached -> {2} in sub={3} / rg={4} (dropped {5} cross-scope)" -f $Scope, $_dcrBefore, @($_dcrAfter).Count, $SubscriptionId, $DcrResourceGroup, ($_dcrBefore - @($_dcrAfter).Count))
+        }
+        $global:AzDcrDetails = @($_dcrAfter)
+    }
+}
+
 function Write-SIClassificationToLogAnalytics {
     # NO [CmdletBinding()]. Mirrors v2.1 RA / IAC pattern --
     # those engines are plain script bodies (no advanced-function wrappers)
@@ -192,6 +238,25 @@ function Write-SIClassificationToLogAnalytics {
     $tableName = $tablePattern -f $engineCap
     $dcrName   = $dcrPattern   -f $RunContext.Engine.ToLowerInvariant()
 
+    # v2.2.245 -- per-engine DCR name override (Layer 4: custom-file global beats
+    # pattern). When the customer-set $global:SI_<Engine>_DcrName is non-empty,
+    # it wins over the pattern-derived default. Lets each profiler engine point
+    # at a fully-qualified unique DCR name to avoid collisions with same-named
+    # DCRs from previous installs / sibling subscriptions / other tenants the
+    # SPN can see (which would make the module's name-only DCR lookup return
+    # the wrong record and 4xx the ingest).
+    $_perEngineDcrName = switch ($RunContext.Engine.ToLowerInvariant()) {
+        'endpoint' { [string]$global:SI_Endpoint_DcrName }
+        'identity' { [string]$global:SI_Identity_DcrName }
+        'azure'    { [string]$global:SI_Azure_DcrName }
+        'publicip' { [string]$global:SI_PublicIp_DcrName }
+        default    { '' }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($_perEngineDcrName)) {
+        Write-SIInfo ("DCR override: '{0}' -> '{1}' (from `$global:SI_{2}_DcrName)" -f $dcrName, $_perEngineDcrName, $engineCap)
+        $dcrName = $_perEngineDcrName
+    }
+
     try {
         # Silence Az SDK + AzLogDcrIngestPS verbose stream for the ingest block.
         # The module reads $global:VerbosePreference internally, so $env / per-call
@@ -290,27 +355,20 @@ function Write-SIClassificationToLogAnalytics {
         $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
         $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
 
-        # Step 1b: DCE name-collision guard. AzLogDcrIngestPS line 1575 resolves
-        # SI_DceName via name-only Where-Object lookup. If two DCEs share that
-        # name across subs/RGs (legacy + new install on long-lived tenants),
-        # both records come back. $DceInfo.id becomes string[], JSON-serializes
-        # as an array into the DCR PUT body, ARM rejects with
-        #   LinkedAuthorizationFailed: properties.dataCollectionEndpointId
-        #   has values which are of invalid types 'Array'.
-        # Pre-filter the cache to ONE entry by name + (optional) sub + RG so
-        # the module's name-only lookup returns exactly one record.
-        if ($global:AzDceDetails -and $global:SI_DceName -and $global:SI_AzSubscriptionId -and $global:SI_DceResourceGroup) {
-            $_picked = @($global:AzDceDetails | Where-Object {
-                $_.name -eq $global:SI_DceName -and
-                $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DceResourceGroup)/*"
-            }) | Select-Object -First 1
-            if ($_picked) {
-                $global:AzDceDetails = @($_picked)
-            } else {
-                $_byName = @($global:AzDceDetails | Where-Object { $_.name -eq $global:SI_DceName })
-                Write-Warning ("DCE collision guard: '{0}' NOT in sub '{1}' / RG '{2}'. {3} same-named DCE(s) visible in other scopes -- module name-only lookup will pick wrong record. Verify SI_DceName / SI_AzSubscriptionId / SI_DceResourceGroup." -f $global:SI_DceName, $global:SI_AzSubscriptionId, $global:SI_DceResourceGroup, $_byName.Count)
-            }
-        }
+        # Step 1b: Scope filter (v2.2.245). AzLogDcrIngestPS resolves DCE/DCR by
+        # NAME-ONLY Where-Object lookup against the global caches (module lines
+        # 1575 / 3548 / 5457). When same-named records exist in other subs/RGs
+        # (legacy installs, sibling subscriptions, cross-tenant the SPN can see),
+        # the lookup returns ARRAY -> id becomes string[] -> ingest 400/404 with
+        # invalid 'Array' type or wrong-region immutableId ('westeurope').
+        # Fix: pre-filter BOTH caches to ONLY records that live in the customer's
+        # configured sub + RG. Cross-scope records are dropped entirely so the
+        # module physically cannot see them. Applied here (pre-create) and again
+        # after Step 4's cache re-sync.
+        Apply-SIDcrScopeFilter -Scope 'pre-create' -DcrName $dcrName -DceName $global:SI_DceName `
+                               -SubscriptionId $global:SI_AzSubscriptionId `
+                               -DceResourceGroup $global:SI_DceResourceGroup `
+                               -DcrResourceGroup $global:SI_DcrResourceGroup
 
         # Step 2: schema sample (full dataset for type inference) + CollectionTime stamp.
         $schemaSample = @($flat | ForEach-Object {
@@ -346,6 +404,12 @@ function Write-SIClassificationToLogAnalytics {
             $_waitTotal += $_waitStep
             $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
             $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+            # Filter to target sub/RG so the name-only lookup below can't pick
+            # a cross-scope DCR's immutableId (which would be in another region).
+            Apply-SIDcrScopeFilter -Scope ('wait-loop-' + $_waitTotal + 's') -DcrName $dcrName -DceName $global:SI_DceName `
+                                   -SubscriptionId $global:SI_AzSubscriptionId `
+                                   -DceResourceGroup $global:SI_DceResourceGroup `
+                                   -DcrResourceGroup $global:SI_DcrResourceGroup
             $_dcrRow = @($global:AzDcrDetails | Where-Object { $_.name -eq $dcrName } | Select-Object -First 1)[0]
             $_immId  = if ($_dcrRow) {
                 if ($_dcrRow.properties -and $_dcrRow.properties.immutableId) { [string]$_dcrRow.properties.immutableId }
@@ -363,40 +427,14 @@ function Write-SIClassificationToLogAnalytics {
             Write-Warning ("DCR '{0}' immutableId not in ARG after {1}s -- ingest may 404. Will retry; if persistent, wait a few minutes and re-run." -f $dcrName, $_waitMax)
         }
 
-        # Re-apply the DCE collision guard (Step 1b above) -- the cache rebuild
-        # restored the full multi-DCE list, which would re-trigger the
-        # LinkedAuthorizationFailed array bug on the upcoming Post-* call.
-        if ($global:AzDceDetails -and $global:SI_DceName -and $global:SI_AzSubscriptionId -and $global:SI_DceResourceGroup) {
-            $_picked = @($global:AzDceDetails | Where-Object {
-                $_.name -eq $global:SI_DceName -and
-                $_.id   -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DceResourceGroup)/*"
-            }) | Select-Object -First 1
-            if ($_picked) { $global:AzDceDetails = @($_picked) }
-        }
-
-        # SAME guard for DCRs. AzLogDcrIngestPS line 5457 calls
-        # Get-AzDcrDceDetails, which does its OWN name-only Where-Object lookup
-        # against $global:AzDcrDetails (line 3548). When same-named DCRs exist
-        # in other subs/RGs (typically previous installs the SPN can still
-        # read), $DcrInfo becomes ARRAY -> $DcrImmutableId becomes ARRAY ->
-        # implicit-return position shift -> $azDcrDceDetails[6] ends up as
-        # 'westeurope' (DcrLocation from second match) -> 404 NotFound:
-        # "Data collection rule with immutable Id 'westeurope' not found".
-        # Pre-filter to ONE entry by name + sub + RG.
-        if ($global:AzDcrDetails -and $dcrName -and $global:SI_AzSubscriptionId -and $global:SI_DcrResourceGroup) {
-            $_dcrMatches = @($global:AzDcrDetails | Where-Object { $_.name -eq $dcrName })
-            if ($_dcrMatches.Count -gt 1) {
-                $_pickedDcr = @($_dcrMatches | Where-Object {
-                    $_.id -like "*/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DcrResourceGroup)/*"
-                }) | Select-Object -First 1
-                if ($_pickedDcr) {
-                    Write-SIInfo ("DCR collision guard: {0} DCRs named '{1}' visible -- pinned to {2}" -f $_dcrMatches.Count, $dcrName, $_pickedDcr.id)
-                    $global:AzDcrDetails = @($global:AzDcrDetails | Where-Object { $_.name -ne $dcrName }) + @($_pickedDcr)
-                } else {
-                    Write-Warning ("DCR collision guard: {0} DCRs named '{1}' visible but NONE in sub '{2}' / RG '{3}' -- ingest will likely 404 with 'westeurope'." -f $_dcrMatches.Count, $dcrName, $global:SI_AzSubscriptionId, $global:SI_DcrResourceGroup)
-                }
-            }
-        }
+        # Re-apply scope filter after Step 4's cache re-sync -- Get-Az*ListAll
+        # repopulated the caches with the full cross-sub view; drop cross-scope
+        # entries again so the upcoming Post-* call resolves names within the
+        # customer's target sub/RG only.
+        Apply-SIDcrScopeFilter -Scope 'post-create' -DcrName $dcrName -DceName $global:SI_DceName `
+                               -SubscriptionId $global:SI_AzSubscriptionId `
+                               -DceResourceGroup $global:SI_DceResourceGroup `
+                               -DcrResourceGroup $global:SI_DcrResourceGroup
 
         # Step 5: standard 4-step prep pipeline (mirrors RA engine).
         $DataVariable = @($flat)

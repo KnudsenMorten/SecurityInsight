@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.228
+## v2.2.229
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
 - release: SecurityInsight v2.2.228 - weighted-factors JSON discovered via walk-up (no SettingsPath dependency) (1776d679)
 - release: SecurityInsight v2.2.227 - AI rollup collapse-per-(asset, ConfigBucket) for *_Detailed reports (2e0896b0)
 - release: SecurityInsight v2.2.226 - clean version stamp + MoreDetails wrap in Excel (1f72026d)
@@ -33,13 +34,61 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
 - release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
 - release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
-- release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.229 — URGENT: community SPN+cert login fix + Setup Wizard email-serializer + port-25/SSL coercion
+
+Three fixes shipped together because one of them is a hard blocker for every community customer the Setup Wizard generated a config for.
+
+### 1. Community SPN+cert login was completely broken (THE blocker)
+
+**Symptom.** Operators ran the Setup Wizard, got a customer file with `$global:SI_SPN_CertThumbprint` populated, dot-sourced it into `launcher.community-vm.ps1`, and got:
+
+```
+Authentication failed: No authentication method configured in LauncherConfig.custom.ps1.
+```
+
+**Cause.** The unified-SPN bridge at `launcher/_lib/Initialize-LauncherConfig.ps1:601–604` mirrors `$global:SI_SPN_*` (the v2.3 unified contract the Setup Wizard writes) onto the legacy `$global:Spn*` names that the community-vm launcher's auth chain still reads. The bridge had four mappings — `TenantId`, `AppId`, `Secret`, `ObjectId` — but **was missing `CertThumbprint`**. Customers using SPN+cert (no client secret) fell through every `elseif` branch in the auth chain and hit the `else { throw }`.
+
+**Fix.** One added line in the bridge:
+
+```powershell
+if ($global:SI_SPN_CertThumbprint -and -not $global:SpnCertificateThumbprint) {
+    $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint
+}
+```
+
+The cmdlet bindings (`Connect-AzAccount -ServicePrincipal -CertificateThumbprint ...`) were always correct — only the global-name plumbing had drifted. No customer file change required; the existing wizard-generated `SecurityInsight.custom.ps1` files start working the next time the launcher runs.
+
+### 2. Setup Wizard MailTo serializer wrote `'System.Collections.Hashtable'`
+
+**Symptom.** Wizard-generated files showed:
+
+```powershell
+$global:MailTo = @('System.Collections.Hashtable','System.Collections.Hashtable')
+```
+
+Mail dispatch then tried to send to a literal recipient named `System.Collections.Hashtable`.
+
+**Cause.** The frontend sometimes delivers recipient items as hashtables (shape `@{ Email='foo@bar'; Name='Foo' }`) instead of plain strings. The old serializer at `Write-SICustomConfig.ps1:211` did `"'$_'"` which `.ToString()`'d the hashtable and produced its type name.
+
+**Fix.** New `_CfgEmailString` helper that coerces either shape (hashtable, pscustomobject, string) to the email address, looking through `Email/Address/Mail/Value/Recipient/Upn` keys and falling back to string conversion. Applied to `MailTo`, `DetailedTo`, `SummaryTo` blocks.
+
+### 3. Setup Wizard auto-coerces `SMTP_UseSSL=$false` when `SmtpPort=25`
+
+Wizard-generated files were combining `$global:SmtpPort = 25` with `$global:SMTP_UseSSL = $true`. Port 25 is plain-SMTP or opportunistic STARTTLS by convention; `Send-MailMessage`'s `-UseSsl` flag is **implicit TLS only** — handing it to a port-25 listener triggers a TLS handshake the server doesn't expect, then mail dispatch fails. The serializer now auto-coerces `UseSSL=$false` when port is 25 and emits a `# Port 25 + UseSSL=$true ...` comment explaining the override. Customers running port 587 (STARTTLS) or 465 (implicit TLS) get the expected `$true` value through.
+
+### Migration
+
+- **Community SPN+cert customers**: no action — next launcher run picks up the fixed bridge automatically.
+- **MailTo / port-25 customers**: re-run the Setup Wizard to regenerate `SecurityInsight.custom.ps1`, OR hand-edit the existing file (replace the bogus `@('System.Collections.Hashtable',...)` list with real email addresses; flip `SMTP_UseSSL` to `$false` for port-25 servers).
 
 ---
 

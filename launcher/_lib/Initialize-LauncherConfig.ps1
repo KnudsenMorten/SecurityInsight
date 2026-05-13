@@ -598,10 +598,16 @@ Copy $(Join-Path $LauncherDir 'LauncherConfig.sample.ps1') to LauncherConfig.cus
     # so the SPN-secret auth path in launcher.community-vm.ps1 +
     # Invoke-RiskAnalysis.ps1 just works without the customer having to
     # duplicate the values.
-    if ($global:SI_SPN_TenantId -and -not $global:SpnTenantId)     { $global:SpnTenantId     = [string]$global:SI_SPN_TenantId }
-    if ($global:SI_SPN_AppId    -and -not $global:SpnClientId)     { $global:SpnClientId     = [string]$global:SI_SPN_AppId }
-    if ($global:SI_SPN_Secret   -and -not $global:SpnClientSecret) { $global:SpnClientSecret = [string]$global:SI_SPN_Secret }
-    if ($global:SI_SPN_ObjectId -and -not $global:SpnObjectId)     { $global:SpnObjectId     = [string]$global:SI_SPN_ObjectId }
+    if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
+    if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
+    if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
+    if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
+    # v2.2.229 -- bridge was missing the cert-thumbprint mapping. Community-vm
+    # launcher's SPN+cert auth branch reads $global:SpnCertificateThumbprint;
+    # without this mirror, GUI-generated configs that only set
+    # SI_SPN_CertThumbprint silently fell through every auth branch and threw
+    # "No authentication method configured". This unblocks SPN+cert community login.
+    if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
 
     $script:_CfgSnapBefore = $__beforeDerived
     _CfgRecordLayer 'Layer 6 - derived' '(initializer derivation step)' $true

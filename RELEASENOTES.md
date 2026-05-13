@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.268
+## v2.2.269
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
 - release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
 - release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
 - release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
 - release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
 - release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
-- release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
 
 ---
 
@@ -43,7 +43,23 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 
 ---
 
-## v2.2.268 — CL-snapshot bucketing for the RA hybrid path (scales past 100K-asset tenants)
+## v2.2.269 — Revert v2.2.268 CL-snapshot bucketing (regression: every RA query failed with KQL "incomplete fragment")
+
+Customer's first run on v2.2.268 came back with every report failing the parse: `[BadRequest] : The incomplete fragment is unexpected. Fix syntax errors in your query.` — including reports that don't take the hybrid CL-snapshot path at all. v2.2.268's wrapper for-loop around `while (-not $bucketRunSucceeded)` plus the `$script:_RAQueryVariants` stash had a state-leak / substitution-edge bug we couldn't reproduce locally and the customer's test install was blocked by it.
+
+This revert restores the v2.2.265 single-string `Resolve-ProfileCLLetBlocks` return and removes the AutoBucket CL-bucket wrapper. RA goes back to single-snapshot inlining; bucketing will be reshipped after a controlled repro + unit test.
+
+### Affected files
+
+- `engine/risk-analysis/Invoke-RiskAnalysis.ps1` — reverted `Resolve-ProfileCLLetBlocks` (drops `$script:_RAQueryVariants` stash, restores single `$datatableLet` cache); removed CL-bucket wrapper for-loop + `$_RaCLAggregated` rollup around the inner AutoBucket loop.
+
+### What's still queued
+
+The bucketing requirement stands ("split the array size into smaller buckets so it can go through fx. cve and attack paths in larger env"). Next attempt will (a) repro the 100K-asset case locally before shipping, (b) keep the bucketing isolated to the function that builds the datatable rather than reaching back into the AutoBucket submission loop, and (c) confirm non-hybrid queries truly bypass the new path before customer rollout.
+
+---
+
+## v2.2.268 — CL-snapshot bucketing for the RA hybrid path (scales past 100K-asset tenants) [REVERTED in v2.2.269]
 
 Operator: "it is important that it can split the array size into smaller buckets so it can go through fx. cve and attack paths in larger env" — confirmed concatenation strategy: "you are just adding each result to the array."
 

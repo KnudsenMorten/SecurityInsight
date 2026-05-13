@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.269
+## v2.2.270
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
 - release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
 - release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
 - release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
@@ -33,13 +34,37 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
 - release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
 - release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
-- release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.270 — Every rendered query staged to disk, on every submission path
+
+Pre-2.2.270 the rendered-query dump fired only inside the EG+CL hybrid branch, so customers running LA-direct, pure-AH, or Sentinel-data-lake reports saw nothing under `staging/risk-analysis/`. When the v2.2.268 regression returned `BadRequest: The incomplete fragment is unexpected.` for every report including non-hybrid ones, the operator pointed at the empty staging dir and asked "why do i not see the queries in a log file." This release plugs that gap.
+
+### What changes
+
+New helper `Save-RARenderedQuery` factored out of the old inline hybrid block. Called from every actual submission point in `Invoke-GraphHuntingQuery`:
+
+- `Save-RARenderedQuery -Query $Query -Tag 'lake'` — before `Invoke-SISentinelLakeQuery`
+- `Save-RARenderedQuery -Query $Query -Tag 'hybrid'` — after `Resolve-ProfileCLLetBlocks` + `Add-CLSnapshotShadows` substitution
+- `Save-RARenderedQuery -Query $finalQuery -Tag 'la-direct'` — after cross-workspace let-block prepend
+- `Save-RARenderedQuery -Query $Query -Tag 'ah'` — before `Start-MgBetaSecurityHuntingQuery`
+
+The startup wipe at the top of `Invoke-RiskAnalysis.ps1` still clears `staging/risk-analysis/ra-rendered-*.kql` on every run (already there pre-2.2.270) so the dir only ever contains the current run's queries. The helper de-dupes via an MD5-hash hashset so multi-bucket runs don't re-write the same file 200 times.
+
+### Where to look
+
+`<install-root>/SOLUTIONS/SecurityInsight/staging/risk-analysis/ra-rendered-<hash>.kql` — one file per unique rendered query. On a parse failure the engine already writes `ra-laerr-*.txt` next to it with the workspace + full inner-exception chain; combining the two gives the precise line+column from the portal paste.
+
+### No behavior change for runs
+
+This is observability only — the staged files are written before the actual submission; if submission fails (or the staging dir is read-only) the engine carries on. No new flags, no new globals, no new dependencies.
 
 ---
 

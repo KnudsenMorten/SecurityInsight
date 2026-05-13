@@ -12,15 +12,6 @@
 
 #>
 #------------------------------------------------------------------------------------------------
-Write-host "***********************************************************************************************"
-Write-host "Risk-based Security Exposure Insight"
-Write-host ""
-write-host "Security Insight: Rethink Secure Score into a new risk-based security risk score, based on consequence, probability and risk factors. "
-write-host "Solution includes critical asset tagging, ready-to-use reports (based on Defender Exposure Graph and Azure Resource Graphs),"
-write-host "automation-scripts, risk index and more"
-Write-host ""
-Write-host "Support: mok@mortenknudsen.net | https://github.com/KnudsenMorten/SecurityInsight"
-Write-host "***********************************************************************************************"
 
 # Disable StrictMode (script designed for non-StrictMode environments)
 try {

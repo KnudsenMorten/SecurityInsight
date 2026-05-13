@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.229
+## v2.2.230
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
 - release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
 - release: SecurityInsight v2.2.228 - weighted-factors JSON discovered via walk-up (no SettingsPath dependency) (1776d679)
 - release: SecurityInsight v2.2.227 - AI rollup collapse-per-(asset, ConfigBucket) for *_Detailed reports (2e0896b0)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
 - release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
 - release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
-- release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.230 — Setup Wizard: add `RoleManagement.Read.Directory` to default SPN Graph permissions
+
+Customer running v2.2.229 hit:
+
+```
+[INFO] [perms] fetching tenant-wide Entra role definitions...
+[ERR]  Discovery source 'EntraUsers' threw -- The remote server returned an error: (403) Forbidden.
+[INFO] source 'EntraUsers' returned     0 rows
+```
+
+Same 403 on `EntraServicePrincipals`. Both sources call `IdentityRoleFetcher` which hits `/roleManagement/directory/roleDefinitions`, `/roleAssignments`, and `/roleEligibilitySchedules`. Those endpoints require **`RoleManagement.Read.Directory`** (Application).
+
+That permission was missing from the default list shipped by `setup/ConfigWizard/backend/New-SISpn.ps1`, so every wizard-bootstrapped SPN failed the role-definition fetch on its first identity run.
+
+### Fix
+
+Added `RoleManagement.Read.Directory` to the default Graph-permission list. Future wizard runs grant it automatically; existing SPNs need either a re-run of `New-SISpn` (idempotent — picks up the new default + re-consents) or manual addition via the Entra portal:
+
+1. Entra portal → App registrations → SI's SPN → API permissions
+2. Add a permission → Microsoft Graph → Application permissions → `RoleManagement.Read.Directory`
+3. Grant admin consent
+
+The full default list is now 14 permissions (was 13).
 
 ---
 

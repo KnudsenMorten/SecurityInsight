@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.264
+## v2.2.265
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
 - release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
 - release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
 - release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
 - release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
 - release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
-- release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.265 — Drop the redundant "Risk-based Security Exposure Insight" banner from RA engine
+
+The launcher already prints a banner with the engine name, version, and contact info. The RA engine then printed its own 9-line star-bordered marketing-style block (`Rethink Secure Score into a new risk-based security risk score...`) immediately after the module check. Duplicate visual noise on every run. Removed.
 
 ---
 

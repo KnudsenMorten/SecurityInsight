@@ -381,12 +381,17 @@ function Ensure-SecurityInsightModules {
     # -AzAppCertificateStoreLocation / -UseManagedIdentity / -EnableCompression.
     # 1.6.4 fixed CheckCreateUpdate-TableDcr-Structure's gate so cert-only
     # auth (no client secret) actually enters the create block instead of
-    # returning silently. SI v2.2.259+ requires 1.6.4 minimum.
+    # returning silently.
+    # 1.6.5 added -UseManagedIdentity / -ManagedIdentityClientId params to the
+    # entire DCR create + read chain (CheckCreateUpdate, CreateUpdate-AzData...,
+    # CreateUpdate-AzLogAnalytics..., Get-AzDce/DcrListAll, Get-AzLogAnalytics-
+    # TableAzDcrStatus) so SI's UAMI mode works canonically end-to-end.
+    # SI v2.2.260+ requires 1.6.5 minimum.
     $null = Ensure-Module `
         -Name            $script:SecurityInsight_RequiredModules `
         -Scope           $Scope `
         -Quiet:$Quiet `
         -Required:$Required `
         -KeepLatest      @('AzLogDcrIngestPS','MicrosoftGraphPS') `
-        -MinimumVersions @{ AzLogDcrIngestPS = '1.6.4' }
+        -MinimumVersions @{ AzLogDcrIngestPS = '1.6.5' }
 }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.259
+## v2.2.260
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
 - release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
 - release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
 - release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
 - release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
 - release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
-- release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.260 — Bump `AzLogDcrIngestPS` minimum to 1.6.5 (Managed Identity now supported end-to-end)
+
+Operator: "publish v1.6.5 is being done now".
+
+AzLogDcrIngestPS v1.6.5 adds `-UseManagedIdentity` + `-ManagedIdentityClientId` params to the **entire DCR create + read chain**, not just `Get-AzAccessTokenManagement` / `Post-...Output` (which had them since v1.6.3). The affected functions:
+
+| Function | MI params in 1.6.4 | MI params in 1.6.5 |
+|---|---|---|
+| `CheckCreateUpdate-TableDcr-Structure` | ❌ | ✅ |
+| `CreateUpdate-AzDataCollectionRuleLogIngestCustomLog` | ❌ | ✅ |
+| `CreateUpdate-AzLogAnalyticsCustomLogTableDcr` | ❌ | ✅ |
+| `Get-AzDceListAll` | ❌ | ✅ |
+| `Get-AzDcrListAll` | ❌ | ✅ |
+| `Get-AzLogAnalyticsTableAzDataCollectionRuleStatus` | ❌ | ✅ |
+| `Get-AzAccessTokenManagement` | ✅ | ✅ |
+| `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` | ✅ | ✅ |
+
+v1.6.5 also extends the `CheckCreateUpdate` gate (v1.6.4 fixed for cert) to also accept MI:
+
+```powershell
+# v1.6.5 gate
+If ( ( ($AzAppId) -and ( ($AzAppSecret) -or ($AzAppCertificateThumbprint) ) ) -or ($UseManagedIdentity) )
+```
+
+### What this means for SI
+
+Customers running SI on a VM/Function/Container with a User-Assigned Managed Identity (`$global:SI_PreferUami = $true` + `$global:SI_UAMI_ClientId = '...'`) can now ingest end-to-end without the engine throwing **`A parameter cannot be found that matches parameter name 'UseManagedIdentity'`** the moment it calls `Get-AzDcrListAll`. The canonical `CheckCreateUpdate-TableDcr-Structure` path is fully MI-aware now.
+
+### Engine cert workaround stays for one more release
+
+v2.2.258's `if ($useCert) { ... call inner helpers directly ... }` branch in `Invoke-Output.ps1` Step 3 is still in place. With v1.6.5 the canonical path also works for cert, so the workaround is functionally redundant — but harmless. Removing it can wait for v2.2.265+ after v1.6.5 has soaked.
+
+All 4 engine `_shared/Ensure-Module.ps1` copies (risk-analysis, publicip, privilege-tier-classifier, asset-tagging) bumped to `-MinimumVersions @{ AzLogDcrIngestPS = '1.6.5' }`. Customer's next run pulls v1.6.5 from PSGallery automatically.
 
 ---
 

@@ -52,7 +52,11 @@ $global:WriteJsonOutput = $false
 #   SI_RiskAnalysis_Summary_CL   (when $global:Summary  = $true)
 #   SI_RiskAnalysis_Detailed_CL  (when $global:Detailed = $true)
 # AzLogDcrIngestPS module auto-creates the table + DCR on first ingest.
-$global:SendToLogAnalytics                    = $false
+# v2.2.223 -- default flipped to $true. Historical-tracking + Power BI ingest
+# are the Phase-2 reason most operators run RA in the first place; making them
+# opt-IN was friction. To disable on a particular flavour, set this to $false
+# in your LauncherConfig.custom.ps1.
+$global:SendToLogAnalytics                    = $true
 
 # Two DCRs (one per table) -- HARDCODED in the engine ('dcr-si-risk-analysis-summary'
 # + 'dcr-si-risk-analysis-detailed'); customer doesn't pick the names.

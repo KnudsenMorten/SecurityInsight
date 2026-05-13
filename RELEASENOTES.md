@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.222
+## v2.2.223
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
 - release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
 - release: SecurityInsight v2.2.221 - comprehensive AadDeviceId column_ifexists sweep (3d08309a)
 - release: SecurityInsight v2.2.220 - Device_Recommendations regression fix (column_ifexists wrapper restored) (31ebbe30)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
 - release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
 - release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
-- release: SecurityInsight v2.2.193 - provisioning helpers self-heal on already-exists (92842167)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.223 — Risk Analysis: $global:SendToLogAnalytics defaults to $true
+
+LA ingest is the Phase-2 reason most operators run RA in the first place (history tracking, Power BI, KQL slicing). Making it opt-IN was friction.
+
+### Change
+
+`launcher/risk-analysis/LauncherConfig.defaults.ps1`:
+
+```powershell
+# was: $global:SendToLogAnalytics = $false
+$global:SendToLogAnalytics = $true
+```
+
+### To opt out
+
+Set in your `LauncherConfig.custom.ps1`:
+
+```powershell
+$global:SendToLogAnalytics = $false
+```
+
+Custom layer (Layer 5) wins over defaults (Layer 4) -- one-line override per launcher flavour.
+
+### What lights up after this
+
+On next run you'll see (after the report execution + before XLSX export, depending on engine flow):
+
+```
+Posting data to LogAnalytics table [ SI_RiskAnalysis_Detailed_CL ]
+  Rows       : 1..N / N
+  Compression=OFF | Auth=SPN
+SUCCESS - data uploaded to LogAnalytics
+```
+
+DCR + table auto-create on first ingest via AzLogDcrIngestPS. `dcr-si-risk-analysis-summary` and `dcr-si-risk-analysis-detailed` are the canonical DCR names; the engine wires the correct one based on Summary/Detailed mode.
 
 ---
 

@@ -224,51 +224,52 @@ function Invoke-SIPrestageInfra {
                     }
                 } catch { Write-Warning ("could not grant '{0}' on storage: {1}" -f $role, $_.Exception.Message) }
             }
-            # Fetch storage key (in-memory) ONLY when SI_StorageKey isn't set
-            # this run. Persist to custom.ps1 ONLY when the storage account was
-            # JUST CREATED in this prestage call -- not on every cold start.
-            # This avoids re-writing the file when the operator deleted the
-            # auto-persisted block intentionally (e.g. after a key rotation
-            # they want to handle manually) or used a custom-secrets pattern.
-            try {
-                if (-not $global:SI_StorageKey) {
-                    $keys = Get-AzStorageAccountKey -ResourceGroupName $stRg -Name $StorageAccountName -ErrorAction Stop
-                    $primary = $keys | Where-Object { $_.KeyName -eq 'key1' } | Select-Object -First 1
-                    if ($primary -and $primary.Value) {
-                        $global:SI_StorageKey = [string]$primary.Value
-                        Write-SIInfo ('  backfilled $global:SI_StorageKey from storage account key1 (in-memory)')
+            # v2.2.253 -- skip key fetch + writeback when OAuth-on-storage is
+            # enabled (the Setup-Wizard default since v2.2.105). In OAuth mode
+            # the engine authenticates to blob/table/queue via the SPN/MSI's
+            # Storage Data Contributor RBAC -- the shared key is never used,
+            # so fetching it (requires listKeys permission the SPN might not
+            # have) AND persisting it to custom.ps1 are both pure noise.
+            # Operator: "why do you continue to add this to custom file when
+            # we use oauth on storage account by default".
+            if ($global:SI_UseStorageOAuth) {
+                Write-SIInfo '  OAuth-on-storage enabled ($global:SI_UseStorageOAuth = $true) -- skipping SI_StorageKey fetch + writeback'
+            } else {
+                # Legacy key-auth path. Fetch storage key (in-memory) ONLY when
+                # SI_StorageKey isn't set this run. Persist to custom.ps1 when
+                # the file doesn't already have it. Operator opt-outs:
+                #   - existing plaintext SI_StorageKey line: $hasKey wins
+                #   - KV-fetch line (internal-vm pattern): $hasKvFetch wins
+                try {
+                    if (-not $global:SI_StorageKey) {
+                        $keys = Get-AzStorageAccountKey -ResourceGroupName $stRg -Name $StorageAccountName -ErrorAction Stop
+                        $primary = $keys | Where-Object { $_.KeyName -eq 'key1' } | Select-Object -First 1
+                        if ($primary -and $primary.Value) {
+                            $global:SI_StorageKey = [string]$primary.Value
+                            Write-SIInfo ('  backfilled $global:SI_StorageKey from storage account key1 (in-memory)')
 
-                        # Persist to custom.ps1 whenever the file doesn't already
-                        # have the key. Idempotent -- the $hasKey check below
-                        # short-circuits subsequent runs. Operator opt-outs:
-                        #   - existing plaintext SI_StorageKey line: $hasKey wins
-                        #   - KV-fetch line (internal-vm pattern): $hasKvFetch wins
-                        # Note: this fires whether the account was created
-                        # this run OR pre-existed. The $saCreated-only gate
-                        # in v2.2.57 was too narrow -- if a prior run created
-                        # the account but writeback was unavailable, the file
-                        # never got the key and ingest 403'd forever.
-                        try {
-                            $cfgPath = $global:SI_LoadedCustomConfigPath
-                            if ($cfgPath -and (Test-Path -LiteralPath $cfgPath)) {
-                                $content    = Get-Content -LiteralPath $cfgPath -Raw -ErrorAction Stop
-                                $hasKey     = $content -match '(?im)^\s*\$global:SI_StorageKey\s*=\s*[''"][^''"]+[''"]'
-                                $hasKvFetch = $content -match '(?im)^\s*if\s*\(\s*-not\s+\$global:SI_StorageKey'
-                                if (-not $hasKey -and -not $hasKvFetch) {
-                                    $createdNote = if ($saCreated) { 'on first-create of storage account' } else { 'on first-fetch (account pre-existed)' }
-                                    $append = "`r`n`r`n# Auto-persisted by SI v2.2.56+ prestage $createdNote.`r`n# Remove this block to force re-fetch from Azure on next run (e.g. after key rotation).`r`n`$global:SI_StorageKey = '$($primary.Value)'`r`n"
-                                    Add-Content -LiteralPath $cfgPath -Value $append -Encoding UTF8 -NoNewline -ErrorAction Stop
-                                    Write-SIInfo ('  persisted $global:SI_StorageKey to {0}' -f $cfgPath)
-                                } elseif ($hasKvFetch) {
-                                    Write-SIInfo ('  custom.ps1 already has KV-fetch for SI_StorageKey -- not appending plaintext')
-                                } else {
-                                    Write-SIInfo ('  custom.ps1 already has $global:SI_StorageKey set -- not overwriting')
+                            try {
+                                $cfgPath = $global:SI_LoadedCustomConfigPath
+                                if ($cfgPath -and (Test-Path -LiteralPath $cfgPath)) {
+                                    $content    = Get-Content -LiteralPath $cfgPath -Raw -ErrorAction Stop
+                                    $hasKey     = $content -match '(?im)^\s*\$global:SI_StorageKey\s*=\s*[''"][^''"]+[''"]'
+                                    $hasKvFetch = $content -match '(?im)^\s*if\s*\(\s*-not\s+\$global:SI_StorageKey'
+                                    if (-not $hasKey -and -not $hasKvFetch) {
+                                        $createdNote = if ($saCreated) { 'on first-create of storage account' } else { 'on first-fetch (account pre-existed)' }
+                                        $append = "`r`n`r`n# Auto-persisted by SI v2.2.56+ prestage $createdNote.`r`n# Remove this block to force re-fetch from Azure on next run (e.g. after key rotation).`r`n`$global:SI_StorageKey = '$($primary.Value)'`r`n"
+                                        Add-Content -LiteralPath $cfgPath -Value $append -Encoding UTF8 -NoNewline -ErrorAction Stop
+                                        Write-SIInfo ('  persisted $global:SI_StorageKey to {0}' -f $cfgPath)
+                                    } elseif ($hasKvFetch) {
+                                        Write-SIInfo ('  custom.ps1 already has KV-fetch for SI_StorageKey -- not appending plaintext')
+                                    } else {
+                                        Write-SIInfo ('  custom.ps1 already has $global:SI_StorageKey set -- not overwriting')
+                                    }
                                 }
-                            }
-                        } catch { Write-Warning ('Prestage: storage key writeback to custom.ps1 failed: {0}' -f $_.Exception.Message) }
+                            } catch { Write-Warning ('Prestage: storage key writeback to custom.ps1 failed: {0}' -f $_.Exception.Message) }
+                        }
                     }
-                }
-            } catch { Write-Warning ('Prestage: storage key fetch failed: {0} (set $global:SI_StorageKey manually or use -UseStorageOAuth)' -f $_.Exception.Message) }
+                } catch { Write-Warning ('Prestage: storage key fetch failed: {0} (set $global:SI_StorageKey manually or use -UseStorageOAuth)' -f $_.Exception.Message) }
+            }
 
             # Storage containers:
             #   - sistaging        : engine shard blobs (Discover/Collect/Enrich/Classify/Output stages)

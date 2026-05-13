@@ -490,10 +490,23 @@ function Connect-GraphHighPriv {
     [CmdletBinding()]
     param()
 
-    Write-Info "Connecting to Microsoft Graph (app+secret)..."
-    Connect-MicrosoftGraphPS -AppId $global:SpnClientId `
-                             -AppSecret $global:SpnClientSecret `
-                             -TenantId $global:SpnTenantId
+    # v2.2.234 -- branch on cert vs secret. Connect-MicrosoftGraphPS only takes
+    # AppSecret; for SPN+cert we fall through to Connect-MgGraph directly
+    # (Microsoft.Graph.Authentication module ships with the rest of the SDK,
+    # so no extra dependency).
+    $hasCert = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
+    if ($hasCert) {
+        Write-Info "Connecting to Microsoft Graph (app+certificate)..."
+        Connect-MgGraph -TenantId $global:SpnTenantId `
+                        -ClientId $global:SpnClientId `
+                        -CertificateThumbprint $global:SpnCertificateThumbprint `
+                        -NoWelcome -ErrorAction Stop
+    } else {
+        Write-Info "Connecting to Microsoft Graph (app+secret)..."
+        Connect-MicrosoftGraphPS -AppId $global:SpnClientId `
+                                 -AppSecret $global:SpnClientSecret `
+                                 -TenantId $global:SpnTenantId
+    }
 
     # increase Graph SDK HTTP timeout + tune retries
     Set-MgRequestContext -ClientTimeout 900 -MaxRetry 6 -RetryDelay 5 -RetriesTimeLimit 600
@@ -4871,28 +4884,42 @@ if ([bool]$global:AutomationFramework) {
     # Connect Custom Auth
     #----------------------
 
+    # v2.2.234 -- accept either ClientSecret OR CertificateThumbprint. Previous
+    # check demanded Secret and threw for SPN+cert customers (most common in
+    # internal tenants using cert-based v1 SPNs the wizard re-uses).
+    $__hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+    $__hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
     if ([string]::IsNullOrWhiteSpace($global:SpnTenantId) -or
         [string]::IsNullOrWhiteSpace($global:SpnClientId) -or
-        [string]::IsNullOrWhiteSpace($global:SpnClientSecret)) {
-        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Provide them via wrapper globals or enable -AutomationFramework to load them."
+        (-not $__hasSecret -and -not $__hasCert)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId + one of SpnClientSecret OR SpnCertificateThumbprint). Provide them via wrapper globals or enable -AutomationFramework to load them."
     }
 
-    write-host "Connect using ServicePrincipal with AppId & Secret"
+    if ($__hasCert) { write-host "Connect using ServicePrincipal with AppId & Certificate" }
+    else            { write-host "Connect using ServicePrincipal with AppId & Secret" }
 
     Write-Step "connecting to Azure"
     Tock
     try {
-        # Build SecureString without ConvertTo-SecureString -- avoids Microsoft.PowerShell.Security
-        # autoload failures observed when Az/Graph have already loaded conflicting type data.
-        $global:SecureSecret = New-Object System.Security.SecureString
-        foreach ($__c in ([string]$global:SpnClientSecret).ToCharArray()) { $global:SecureSecret.AppendChar($__c) }
-        $global:SecureSecret.MakeReadOnly()
-        $global:Credential = New-Object System.Management.Automation.PSCredential (
-            $global:SpnClientId,
-            $global:SecureSecret
-        )
+        if ($__hasCert) {
+            Connect-AzAccount -ServicePrincipal `
+                -Tenant              $global:SpnTenantId `
+                -ApplicationId       $global:SpnClientId `
+                -CertificateThumbprint $global:SpnCertificateThumbprint `
+                -WarningAction SilentlyContinue | Out-Null
+        } else {
+            # Build SecureString without ConvertTo-SecureString -- avoids Microsoft.PowerShell.Security
+            # autoload failures observed when Az/Graph have already loaded conflicting type data.
+            $global:SecureSecret = New-Object System.Security.SecureString
+            foreach ($__c in ([string]$global:SpnClientSecret).ToCharArray()) { $global:SecureSecret.AppendChar($__c) }
+            $global:SecureSecret.MakeReadOnly()
+            $global:Credential = New-Object System.Management.Automation.PSCredential (
+                $global:SpnClientId,
+                $global:SecureSecret
+            )
 
-        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $global:Credential -WarningAction SilentlyContinue
+            Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $global:Credential -WarningAction SilentlyContinue | Out-Null
+        }
         Write-Ok "azure connection step done"
     } catch { Write-Err2 "azure connection failed: $($_.Exception.Message)"; throw }
     Tick "azure connect"

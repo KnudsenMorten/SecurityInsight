@@ -1342,6 +1342,38 @@ function Test-AdvancedHuntingHasTable {
     return $script:_TableInAdvHunting[$TableName]
 }
 
+function Save-RARenderedQuery {
+    # v2.2.270 -- dump the fully-rendered, about-to-submit KQL to staging\risk-analysis\
+    # so a failing query can be pasted into the Sentinel / AH portal for the precise
+    # parse-error line+column. Covers every submission path: Sentinel data lake, LA-direct
+    # (with cross-workspace let-block), single-workspace LA fallback, and AH. De-duped by
+    # body hash so multi-bucket runs don't spam.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        [string]$Tag = ''
+    )
+    try {
+        if (-not $script:_RAStagingDir) {
+            $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+            $script:_RAStagingDir = Join-Path $siRoot 'staging\risk-analysis'
+        }
+        if (-not (Test-Path $script:_RAStagingDir)) { New-Item -ItemType Directory -Path $script:_RAStagingDir -Force | Out-Null }
+        if (-not $script:_RADumpedHashes) { $script:_RADumpedHashes = New-Object 'System.Collections.Generic.HashSet[string]' }
+        $hash = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Query))
+        $hashStr = -join ($hash[0..3] | ForEach-Object { $_.ToString('x2') })
+        $dumpPath = Join-Path $script:_RAStagingDir ("ra-rendered-{0}.kql" -f $hashStr)
+        Set-Content -Path $dumpPath -Value $Query -Encoding UTF8 -ErrorAction Stop
+        if ($script:_RADumpedHashes.Add($hashStr) -and $Tag) {
+            Write-Diag ("[{0}] rendered query staged: {1}" -f $Tag, (Split-Path -Leaf $dumpPath))
+        }
+        return $dumpPath
+    } catch {
+        Write-Warn2 ("failed to stage rendered query: {0}" -f $_.Exception.Message)
+        return $null
+    }
+}
+
 function Invoke-GraphHuntingQuery {
     [CmdletBinding()]
     param(
@@ -1391,6 +1423,7 @@ function Invoke-GraphHuntingQuery {
             # per report (100+ queries x ~1s each = noticeable latency).
             if (-not $script:_SentinelLakeUnavailable) {
                 Write-Diag ("[lake] probing Sentinel data lake for {0} ..." -f (Split-Path -Leaf $wsForCL))
+                [void](Save-RARenderedQuery -Query $Query -Tag 'lake')
                 try {
                     $lakeRows = Invoke-SISentinelLakeQuery -Query $Query -WorkspaceResourceId $wsForCL -ErrorAction Stop
                     Write-Ok ("[lake] {0} row(s) returned -- single-query path active." -f (@($lakeRows).Count))
@@ -1452,24 +1485,7 @@ function Invoke-GraphHuntingQuery {
                     Write-Warn2 ("[shadow] failed; routing query as-is. Reason: {0}" -f $_.Exception.Message)
                 }
             }
-            # Dump the rendered query to staging for paste-into-portal diagnostics.
-            # Suppress the info line if we already dumped this same query body earlier
-            # (multi-bucket runs would otherwise log it once per bucket).
-            try {
-                if (-not $script:_RAStagingDir) {
-                    $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-                    $script:_RAStagingDir = Join-Path $siRoot 'staging\risk-analysis'
-                }
-                if (-not (Test-Path $script:_RAStagingDir)) { New-Item -ItemType Directory -Path $script:_RAStagingDir -Force | Out-Null }
-                if (-not $script:_RADumpedHashes) { $script:_RADumpedHashes = New-Object 'System.Collections.Generic.HashSet[string]' }
-                $hash = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Query))
-                $hashStr = -join ($hash[0..3] | ForEach-Object { $_.ToString('x2') })
-                $dumpPath = Join-Path $script:_RAStagingDir ("ra-rendered-{0}.kql" -f $hashStr)
-                Set-Content -Path $dumpPath -Value $Query -Encoding UTF8 -ErrorAction Stop
-                if ($script:_RADumpedHashes.Add($hashStr)) {
-                    Write-Diag ("[hybrid] EG+CL query routed to AH ({0} CL: {1})" -f $clTableHits.Count, ($clTableHits -join ','))
-                }
-            } catch { Write-Warn2 ("[hybrid] failed to dump rendered query: {0}" -f $_.Exception.Message) }
+            [void](Save-RARenderedQuery -Query $Query -Tag 'hybrid')
         } else {
             foreach ($clTbl in $clTableHits) {
                 if (-not (Test-AdvancedHuntingHasTable -TableName $clTbl)) { $available = $false; break }
@@ -1634,6 +1650,7 @@ function Invoke-GraphHuntingQuery {
             }
 
             $finalQuery = if ($crossWorkspaceLet) { $crossWorkspaceLet + "`n" + $Query } else { $Query }
+            [void](Save-RARenderedQuery -Query $finalQuery -Tag 'la-direct')
 
             # NO @() wrap on the call below. Invoke-LogAnalyticsKqlQuery returns the rows
             # array via `,@($resp.Results)` (comma-protected so PowerShell emits it as ONE
@@ -1694,6 +1711,8 @@ function Invoke-GraphHuntingQuery {
     # to true before each call; flipped false in the catch on ANY non-timeout
     # exception OR on success below.
     $script:_LastGraphHuntingAllTimedOut = $true
+
+    [void](Save-RARenderedQuery -Query $Query -Tag 'ah')
 
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         Ensure-GraphAuth -MaxAgeMinutes $ReconnectMaxAgeMinutes

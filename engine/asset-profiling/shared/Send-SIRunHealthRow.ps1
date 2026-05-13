@@ -76,7 +76,19 @@ function Send-SIRunHealthRow {
         $spnTenantId   = if ($global:SI_SPN_TenantId) { $global:SI_SPN_TenantId } else { $global:SI_LogIngest_TenantId }
         $spnObjectId   = if ($global:SI_SPN_ObjectId) { $global:SI_SPN_ObjectId } else { $global:SI_LogIngest_ObjectId }
         $spnCertThumb  = [string]$global:SI_SPN_CertThumbprint
-        $spnCertStore  = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
+        # v2.2.243 -- auto-detect cert store (LocalMachine vs CurrentUser).
+        $spnCertStore  = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation }
+                         elseif ($spnCertThumb) {
+                             $_clean = $spnCertThumb -replace '\s',''
+                             $_resolved = 'LocalMachine'
+                             foreach ($_s in 'LocalMachine','CurrentUser') {
+                                 $_c = Get-ChildItem "Cert:\$_s\My" -ErrorAction SilentlyContinue |
+                                       Where-Object { $_.Thumbprint -eq $_clean -and $_.HasPrivateKey } |
+                                       Select-Object -First 1
+                                 if ($_c) { $_resolved = $_s; break }
+                             }
+                             $_resolved
+                         } else { 'LocalMachine' }
 
         $useMi   = $global:SI_PreferUami -and -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
         $useCert = -not $useMi -and -not [string]::IsNullOrWhiteSpace($spnCertThumb)

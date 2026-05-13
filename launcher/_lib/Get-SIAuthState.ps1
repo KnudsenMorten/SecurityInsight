@@ -42,6 +42,49 @@
     v2.3 names) and falls back to SI_LogIngest_* / Spn* only when needed.
 #>
 
+function Resolve-SICertStoreLocation {
+    <#
+    .SYNOPSIS
+    Auto-detect which cert store (LocalMachine\My or CurrentUser\My) holds the
+    given thumbprint with a usable private key.
+
+    .DESCRIPTION
+    `Connect-AzAccount -CertificateThumbprint` probes both stores automatically,
+    but AzLogDcrIngestPS only looks in the store passed via
+    -AzAppCertificateStoreLocation (default LocalMachine). When the cert is in
+    CurrentUser\My, the engine auth succeeds but LA ingest fails with
+    "Certificate with thumbprint '...' was not found in Cert:\LocalMachine\My".
+
+    This helper probes both stores in priority order (LocalMachine first since
+    that's the conventional production install) and returns the store that
+    holds the cert WITH a private key. Returns 'LocalMachine' as a fallback
+    when neither store contains it so the downstream error message stays
+    accurate. The customer's $global:SI_SPN_CertStoreLocation always wins.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Thumbprint
+    )
+    if ([string]::IsNullOrWhiteSpace($Thumbprint)) { return 'LocalMachine' }
+    $clean = $Thumbprint -replace '\s', ''
+    $lmHit = Get-ChildItem 'Cert:\LocalMachine\My' -ErrorAction SilentlyContinue |
+             Where-Object { $_.Thumbprint -eq $clean -and $_.HasPrivateKey } |
+             Select-Object -First 1
+    if ($lmHit) { return 'LocalMachine' }
+    $cuHit = Get-ChildItem 'Cert:\CurrentUser\My' -ErrorAction SilentlyContinue |
+             Where-Object { $_.Thumbprint -eq $clean -and $_.HasPrivateKey } |
+             Select-Object -First 1
+    if ($cuHit) {
+        # v2.2.243 -- emit ONCE per process so repeated calls don't spam.
+        if (-not $script:_SICertStoreWarnedCurrentUser) {
+            Write-Warning ("[auth] SPN cert '{0}' was found only in Cert:\CurrentUser\My (HasPrivateKey=True). For production -- and for scheduled-task / SYSTEM service-account use -- install the cert in Cert:\LocalMachine\My so it's available to every account on this host. CurrentUser scope is fine for dev/interactive but will fail when the engine runs as a different account." -f $clean)
+            $script:_SICertStoreWarnedCurrentUser = $true
+        }
+        return 'CurrentUser'
+    }
+    return 'LocalMachine'
+}
+
 function Get-SIAuthState {
     [CmdletBinding()]
     param()
@@ -90,7 +133,8 @@ function Get-SIAuthState {
     $secret   = if ($global:SI_SPN_Secret)   { [string]$global:SI_SPN_Secret }   else { [string]$global:SI_LogIngest_Secret }
     $objectId = if ($global:SI_SPN_ObjectId) { [string]$global:SI_SPN_ObjectId } else { [string]$global:SI_LogIngest_ObjectId }
     $thumb    = [string]$global:SI_SPN_CertThumbprint
-    $store    = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
+    $store    = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation }
+                else { Resolve-SICertStoreLocation -Thumbprint $thumb }
 
     if (-not $appId -or -not $tenantId) {
         return [pscustomobject]@{

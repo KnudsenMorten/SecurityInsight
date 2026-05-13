@@ -31,29 +31,20 @@ function Apply-SIDcrScopeFilter {
     )
     if (-not $SubscriptionId) { return }
 
+    # v2.2.264 -- silent. Filter does its work without per-call logging.
+    # The wait-loop's "waiting for DCR ... immutableId in ARG" messages and
+    # v2.2.250's captured CheckCreateUpdate output cover the diagnostic case
+    # if something actually fails. Successful runs were emitting 30+ noise
+    # lines (pre-create + post-create + every 15s wait-loop iteration).
     if ($global:AzDceDetails -and $DceResourceGroup) {
-        $_dceBefore = @($global:AzDceDetails).Count
-        $_dceAfter = @($global:AzDceDetails | Where-Object {
+        $global:AzDceDetails = @($global:AzDceDetails | Where-Object {
             $_.id -like "*/subscriptions/$SubscriptionId/resourceGroups/$DceResourceGroup/*"
         })
-        if (@($_dceAfter).Count -ne $_dceBefore) {
-            Write-SIInfo ("DCE scope filter [{0}]: {1} cached -> {2} in sub={3} / rg={4} (dropped {5})" -f $Scope, $_dceBefore, @($_dceAfter).Count, $SubscriptionId, $DceResourceGroup, ($_dceBefore - @($_dceAfter).Count))
-        }
-        $global:AzDceDetails = @($_dceAfter)
-        if ($DceName -and (@($global:AzDceDetails | Where-Object { $_.name -eq $DceName })).Count -eq 0) {
-            Write-Warning ("DCE scope filter [{0}]: no DCE named '{1}' in target sub/RG -- CheckCreateUpdate will create it." -f $Scope, $DceName)
-        }
     }
-
     if ($global:AzDcrDetails -and $DcrResourceGroup) {
-        $_dcrBefore = @($global:AzDcrDetails).Count
-        $_dcrAfter = @($global:AzDcrDetails | Where-Object {
+        $global:AzDcrDetails = @($global:AzDcrDetails | Where-Object {
             $_.id -like "*/subscriptions/$SubscriptionId/resourceGroups/$DcrResourceGroup/*"
         })
-        if (@($_dcrAfter).Count -ne $_dcrBefore) {
-            Write-SIInfo ("DCR scope filter [{0}]: {1} cached -> {2} in sub={3} / rg={4} (dropped {5} cross-scope)" -f $Scope, $_dcrBefore, @($_dcrAfter).Count, $SubscriptionId, $DcrResourceGroup, ($_dcrBefore - @($_dcrAfter).Count))
-        }
-        $global:AzDcrDetails = @($_dcrAfter)
     }
 }
 

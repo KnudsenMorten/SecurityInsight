@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.263
+## v2.2.264
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
 - release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
 - release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
 - release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
@@ -33,13 +34,22 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
 - release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
 - release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
-- release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.264 — Silence the DCE/DCR scope-filter chatter
+
+`Apply-SIDcrScopeFilter` was logging two `[INFO]` lines on every invocation -- pre-create, post-create, and every 15s wait-loop iteration. On a tenant with cross-scope DCRs (the typical case for SI customers since the SPN sees other subs' Reader-visible DCRs), that's 30+ noise lines per ingest.
+
+The filter is invisible plumbing -- it just shrinks the cache before name-only lookups. When everything works it has nothing to say. When something fails, the wait-loop's `waiting for DCR ... immutableId in ARG` messages and v2.2.250's captured `CheckCreateUpdate` output already cover the diagnostic path.
+
+`Apply-SIDcrScopeFilter` now does its work silently. No behavior change.
 
 ---
 

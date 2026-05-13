@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.256
+## v2.2.257
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
 - release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
 - release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
 - release: SecurityInsight v2.2.254 - wizard DCR names aligned with engine -profile convention (6c3abca9)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
 - release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
 - release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
-- release: SecurityInsight v2.2.228 - weighted-factors JSON discovered via walk-up (no SettingsPath dependency) (1776d679)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.257 — Print copy-pastable RBAC remediation command when DCR-write role missing
+
+Operator: "crap, then customer need to redeploy everything". No -- the v2.2.256 probe identifies the missing role precisely, and the fix is a single `New-AzRoleAssignment` call. Customer does NOT need to re-run `Setup-SecurityInsight.ps1`.
+
+v2.2.257 has the probe print the exact remediation, copy-pastable, in both PowerShell and az CLI form:
+
+```
+[WARN]   RBAC probe : roles present grant READ only (Reader). CheckCreateUpdate needs WRITE -- assign one of: Owner, Contributor, Monitoring Contributor, Data Collection Rule Contributor, Log Analytics Contributor.
+[WARN]   REMEDIATION (run as Owner / User Access Administrator on the target RG):
+[WARN]       New-AzRoleAssignment -ObjectId '4b1f-...' -RoleDefinitionName 'Contributor' -Scope '/subscriptions/.../resourceGroups/rg-securityinsighttest'
+[WARN]   ... or az CLI equivalent:
+[WARN]       az role assignment create --assignee-object-id 4b1f-... --assignee-principal-type ServicePrincipal --role Contributor --scope /subscriptions/.../resourceGroups/rg-securityinsighttest
+[WARN]   Re-run the engine in ~60s after the grant; no Setup-SecurityInsight re-run required.
+```
+
+The customer's Owner / User Access Administrator runs the one-liner, ARM propagates in 30-90s, the next engine run picks it up and creates the DCR. No full re-deploy, no Setup-SecurityInsight re-run, no SPN re-creation.
 
 ---
 

@@ -115,6 +115,20 @@ function Invoke-SISchemaOutput {
 
             Write-SIInfo ('audit table : {0}_CL  /  DCR : {1}' -f $auditTable, $auditDcr)
             Write-SIInfo ('audit rows  : {0}' -f $auditRows.Count)
+            # v2.2.246 -- same DCR/DCE name-collision guard as Stage Output.
+            # AzLogDcrIngestPS resolves names against $global:AzD*Details via
+            # name-only Where-Object; cross-scope same-named records hijack
+            # the lookup and 4xx the ingest. Build + scope-filter the caches
+            # before calling CheckCreateUpdate. Helper is defined in
+            # Invoke-Output.ps1 (dot-sourced by the engine runner).
+            $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+            if (Get-Command Apply-SIDcrScopeFilter -ErrorAction SilentlyContinue) {
+                Apply-SIDcrScopeFilter -Scope 'schema-pre-create' -DcrName $auditDcr -DceName $global:SI_DceName `
+                                       -SubscriptionId $global:SI_AzSubscriptionId `
+                                       -DceResourceGroup $global:SI_DceResourceGroup `
+                                       -DcrResourceGroup $global:SI_DcrResourceGroup
+            }
             Write-SIInfo '-> CheckCreateUpdate-TableDcr-Structure'
             $null = CheckCreateUpdate-TableDcr-Structure `
                 -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
@@ -130,6 +144,15 @@ function Invoke-SISchemaOutput {
                 -AzLogDcrTableCreateFromReferenceMachine    @()
             Write-SIInfo '-> waiting 15s for ARM eventual consistency...'
             Start-Sleep -Seconds 15
+            # Re-scope-filter post-create so Post-* resolves to the local-scope DCR.
+            $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+            if (Get-Command Apply-SIDcrScopeFilter -ErrorAction SilentlyContinue) {
+                Apply-SIDcrScopeFilter -Scope 'schema-post-create' -DcrName $auditDcr -DceName $global:SI_DceName `
+                                       -SubscriptionId $global:SI_AzSubscriptionId `
+                                       -DceResourceGroup $global:SI_DceResourceGroup `
+                                       -DcrResourceGroup $global:SI_DcrResourceGroup
+            }
 
             $payload = @($auditRows)
             $payload = Add-ColumnDataToAllEntriesInArray -Data $payload `

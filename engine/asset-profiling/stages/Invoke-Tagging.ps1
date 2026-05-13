@@ -131,6 +131,15 @@ function Invoke-SITagging {
 
             Write-SIInfo ('audit table : {0}_CL  /  DCR : {1}' -f $auditTable, $auditDcr)
             Write-SIInfo ('audit rows  : {0}' -f $activity.Count)
+            # v2.2.246 -- DCR/DCE scope filter (see Invoke-Output.ps1 for rationale).
+            $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+            if (Get-Command Apply-SIDcrScopeFilter -ErrorAction SilentlyContinue) {
+                Apply-SIDcrScopeFilter -Scope 'tag-pre-create' -DcrName $auditDcr -DceName $global:SI_DceName `
+                                       -SubscriptionId $global:SI_AzSubscriptionId `
+                                       -DceResourceGroup $global:SI_DceResourceGroup `
+                                       -DcrResourceGroup $global:SI_DcrResourceGroup
+            }
             Write-SIInfo '-> CheckCreateUpdate-TableDcr-Structure'
             $null = CheckCreateUpdate-TableDcr-Structure `
                 -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
@@ -146,6 +155,14 @@ function Invoke-SITagging {
                 -AzLogDcrTableCreateFromReferenceMachine    @()
             Write-SIInfo '-> waiting 15s for ARM eventual consistency...'
             Start-Sleep -Seconds 15
+            $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
+            if (Get-Command Apply-SIDcrScopeFilter -ErrorAction SilentlyContinue) {
+                Apply-SIDcrScopeFilter -Scope 'tag-post-create' -DcrName $auditDcr -DceName $global:SI_DceName `
+                                       -SubscriptionId $global:SI_AzSubscriptionId `
+                                       -DceResourceGroup $global:SI_DceResourceGroup `
+                                       -DcrResourceGroup $global:SI_DcrResourceGroup
+            }
 
             $payload = @($activity)
             $payload = Add-ColumnDataToAllEntriesInArray -Data $payload `

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.241
+## v2.2.242
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
 - release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
 - release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
 - release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
@@ -33,13 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
 - release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
 - release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
-- release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.242 — Docs: stale sections audit + sync after v2.2.227 – v2.2.240 shipments
+
+Doc-only follow-up to the v2.2.241 README update. An Explore agent swept the docs tree for content stale-against the recent shipments and surfaced 6 files needing touches (3 HIGH operator-facing, 3 MEDIUM reference). 5 fixed in this release; 1 LOW (`docs/risk-analysis-detection.md` migration-notes addendum) deferred.
+
+### Updated
+
+| File | Was | Now |
+|---|---|---|
+| `setup/ConfigWizard/ROADMAP.md` | "Microsoft Graph (ThreatHunting / Device / User / Application + the rest of the SI matrix)" | All 14 Graph perms enumerated explicitly + new sections for Microsoft Threat Protection (`AdvancedHunting.Read.All`) and WindowsDefenderATP (`Machine.Read.All`) as **separate** API resources, with the soft-fail behavior when target SP isn't licensed |
+| `internal/onboard-internal-AutomateIT.md` | Auth example showed cert + secret as co-equal options | Cert path now PREFERRED (explicit comment + comment-out shape for secret block); reflects v2.2.229+ end-to-end cert wiring |
+| `engine/risk-analysis/README.md` | "Engine reads from `$global:SettingsPath`" + folder layout under `v2.2/engine/risk-analysis/locked/` | Removed `$global:SettingsPath` requirement (v2.2.228 walk-up discovery), corrected layout to `SOLUTIONS/SecurityInsight/risk-analysis-detection/`, kept `$global:SettingsPath` as an explicit override mechanism for non-standard layouts |
+| `docs/Operations.md` | Schema-source table referenced `profiles/`, `profiles-custom/`, `DATA/privilege-tier-catalog.locked.json`, `posture-rules-locked/` (all pre-v2.2 folder names) | Updated to `asset-profiling-schema/<engine>.schema.locked.json` / `<engine>.schema.custom.json` layout, `privilege-tier-catalog/`, `risk-analysis-detection/`, `asset-profiling-rules/` per the v2.2 architecture |
+| `docs/RISKSCORE-REFERENCE.md` | Authority line cited specific line numbers (2231-2294, 2296-2409, 3121-3144) — drift target | Removed brittle line numbers, kept function-name authority; added v2.2.228 walk-up note so operators understand `$global:SettingsPath` is no longer required |
+
+### Deferred
+
+- `docs/risk-analysis-detection.md` — LOW priority. Could mention MoreDetails portal URLs (v2.2.235) and Summary+Detailed AI convergence (v2.2.227) in its migration-notes section, but the file is already aligned with current behavior; this would be additive context, not a correction.
+
+No code changes.
 
 ---
 

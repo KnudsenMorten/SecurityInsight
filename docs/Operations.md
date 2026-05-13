@@ -226,13 +226,15 @@ SURVIVES upgrades. The merge happens at engine load time. Same model everywhere:
 
 | Authority | Locked (ships) | Custom override (customer-owned) |
 |---|---|---|
-| Identity schema | `profiles/identity.schema.json` | `profiles-custom/identity.schema.custom.json` |
-| Endpoint schema | `profiles/endpoint.schema.json` | `profiles-custom/endpoint.schema.custom.json` |
-| Azure schema | `profiles/azure.schema.json` | `profiles-custom/azure.schema.custom.json` |
-| Identity tier catalog | `DATA/privilege-tier-catalog.locked.json` | `identity-catalog-custom/PrivilegeTierClassifier.json` |
-| Endpoint asset-class catalog | `endpoint-catalog/endpoint-tiering.json` | `endpoint-catalog-custom/endpoint-tiering.json` |
-| Endpoint application catalog | `endpoint-catalog/server-applications.json` | `endpoint-catalog-custom/server-applications.json` |
-| Posture rules per engine | `posture-rules-locked/<engine>/*.yaml` | `posture-rules-custom/<engine>/*.yaml` |
+| Identity schema | `asset-profiling-schema/identity.schema.locked.json` | `asset-profiling-schema/identity.schema.custom.json` |
+| Endpoint schema | `asset-profiling-schema/endpoint.schema.locked.json` | `asset-profiling-schema/endpoint.schema.custom.json` |
+| Azure schema | `asset-profiling-schema/azure.schema.locked.json` | `asset-profiling-schema/azure.schema.custom.json` |
+| PublicIP schema | `asset-profiling-schema/public-ip.schema.locked.json` | `asset-profiling-schema/public-ip.schema.custom.json` |
+| Cross-engine schema fragments | `asset-profiling-schema/SCHEMA.locked.json` | (locked-only) |
+| Privilege tier catalog | `privilege-tier-catalog/privilege-tier-catalog.locked.json` | `privilege-tier-catalog/privilege-tier-catalog.custom.json` |
+| Risk-score weighted factors | `risk-analysis-detection/riskscore_weighted.schema.locked.json` | `risk-analysis-detection/riskscore_weighted.schema.custom.json` |
+| Risk Analysis queries | `risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml` | `risk-analysis-detection/RiskAnalysis_Queries_Custom.yaml` |
+| Posture rules (per engine) | `asset-profiling-rules/<engine>/*.locked.yaml` | `asset-profiling-rules/<engine>/*.custom.yaml` |
 
 ### Schema-merge semantics (handled by `Get-SISchemaWithCustomMerge.ps1`)
 

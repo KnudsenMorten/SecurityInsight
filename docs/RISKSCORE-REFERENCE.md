@@ -2,7 +2,9 @@
 
 This is the **single source of truth** for `riskscore_weighted.schema.custom.json` and its `.sample` companion. Every field below is grounded in `engine/risk-analysis/Invoke-RiskAnalysis.ps1` -- if a field isn't here, the engine doesn't read it.
 
-> **Authority**: validated against `engine/risk-analysis/Invoke-RiskAnalysis.ps1` (`Get-WeightedFactorsConfig` lines 2231-2294, `Build-WeightedFactorsKql` lines 2296-2409, Layer-3 application lines 3121-3144). When code disagrees with this doc, code wins.
+> **Authority**: validated against `engine/risk-analysis/Invoke-RiskAnalysis.ps1` — `Get-WeightedFactorsConfig` (loads `riskscore_weighted.schema.custom.json`), `Build-WeightedFactorsKql` (emits the per-field case() + `RiskScore_Weight_Factor` + `RiskScore_Weight_Detailed` columns), and the Layer-3 application loop (multiplies `RiskScoreTotal` by `RiskFactor_Weight`). When code disagrees with this doc, code wins.
+>
+> **v2.2.228**: `Get-WeightedFactorsConfig` no longer requires `$global:SettingsPath`. It walks up from the engine's `$PSScriptRoot` looking for a `risk-analysis-detection/` sibling at every level (depth cap 6). Per-report `<ReportName>.weighted.custom.json` overrides the solution-wide `riskscore_weighted.schema.custom.json`. Each successful load emits `[INFO] [weight] <Report> (engine=<x>): N field(s), source=<path>`; a miss emits a `[WARN]` naming the searched dirs so misconfigs are visible at runtime.
 
 ---
 

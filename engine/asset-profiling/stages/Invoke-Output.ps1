@@ -464,8 +464,25 @@ function Write-SIClassificationToLogAnalytics {
                     # exist. Module's name-only lookup will hijack -- auto-rename to
                     # avoid the collision entirely. Suffix is the target RG name
                     # normalized to DCR-name-safe chars.
-                    $_suffix = ($global:SI_DcrResourceGroup -replace '[^a-zA-Z0-9-]','-').ToLowerInvariant().Trim('-')
-                    $_uniqueName = "$dcrName-$_suffix"
+                    #
+                    # v2.2.251 -- length guard. Azure Microsoft.Insights resources
+                    # (DCR included) allow 1-260 chars per ARM, but practical limits
+                    # (portal display, RBAC scope strings, ARG queries) cap useful
+                    # names at ~60-64. If the full RG name pushes the combined name
+                    # over 60 chars, fall back to an 8-char SHA1 hash of the RG
+                    # name -- deterministic across runs (same RG -> same hash) so
+                    # subsequent runs read the same persisted name from custom.ps1.
+                    $_rgClean = ($global:SI_DcrResourceGroup -replace '[^a-zA-Z0-9-]','-').ToLowerInvariant().Trim('-')
+                    $_uniqueName = "$dcrName-$_rgClean"
+                    if ($_uniqueName.Length -gt 60) {
+                        $_sha = [System.Security.Cryptography.SHA1]::Create()
+                        try {
+                            $_hashBytes = $_sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($global:SI_DcrResourceGroup.ToLowerInvariant()))
+                        } finally { $_sha.Dispose() }
+                        $_hashSuffix = ([BitConverter]::ToString($_hashBytes) -replace '-','').Substring(0,8).ToLowerInvariant()
+                        $_uniqueName = "$dcrName-$_hashSuffix"
+                        Write-SIInfo ("DCR auto-rename length guard: full-RG suffix would produce a {0}-char name (>60); replaced with 8-char SHA1 hash of RG '{1}' -> '{2}'" -f ($dcrName.Length + 1 + $_rgClean.Length), $global:SI_DcrResourceGroup, $_uniqueName)
+                    }
                     Write-SIInfo ("DCR auto-rename: '{0}' -> '{1}' to avoid {2} cross-scope same-named DCR(s). Persisting to SecurityInsight.custom.ps1 so next run reads it as a normal override." -f $dcrName, $_uniqueName, $_crossScope.Count)
                     $dcrName = $_uniqueName
                     Persist-SIDcrAutoRename -Engine $RunContext.Engine -DcrName $_uniqueName

@@ -90,7 +90,19 @@ function Invoke-SISchemaOutput {
             $_secret  = if ($global:SI_SPN_Secret)          { $global:SI_SPN_Secret }          else { $global:SI_LogIngest_Secret }
             $_tenant  = if ($global:SI_SPN_TenantId)        { $global:SI_SPN_TenantId }        else { $global:SI_LogIngest_TenantId }
             $_certThumb = [string]$global:SI_SPN_CertThumbprint
-            $_certStore = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
+            # v2.2.243 -- auto-detect cert store (LocalMachine vs CurrentUser).
+            $_certStore = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation }
+                          elseif ($_certThumb) {
+                              $_clean = $_certThumb -replace '\s',''
+                              $_resolved = 'LocalMachine'
+                              foreach ($_s in 'LocalMachine','CurrentUser') {
+                                  $_c = Get-ChildItem "Cert:\$_s\My" -ErrorAction SilentlyContinue |
+                                        Where-Object { $_.Thumbprint -eq $_clean -and $_.HasPrivateKey } |
+                                        Select-Object -First 1
+                                  if ($_c) { $_resolved = $_s; break }
+                              }
+                              $_resolved
+                          } else { 'LocalMachine' }
             $useMi      = -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
             $useCert    = -not $useMi -and -not [string]::IsNullOrWhiteSpace($_certThumb)
             $authParams = if ($useMi) {

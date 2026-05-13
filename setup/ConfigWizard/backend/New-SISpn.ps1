@@ -334,7 +334,24 @@ elseif ($CredKind -eq 'Secret') {
 elseif ($CredKind -eq 'Cert') {
     _Step "generate self-signed certificate (validity ${SecretValidityYears}y)"
     $certSubject = "CN=$DisplayName"
-    $cert = New-SelfSignedCertificate -Subject $certSubject -CertStoreLocation 'Cert:\CurrentUser\My' `
+    # v2.2.243 -- install to LocalMachine\My, not CurrentUser\My. Reason:
+    #   - LocalMachine certs are visible to ANY account on this host (SYSTEM
+    #     scheduled-task, gMSA, IIS app pool, alternate service accounts, etc.).
+    #   - CurrentUser certs are scoped to the wizard operator's profile only.
+    #     The customer hits this when the engine runs under a different user
+    #     than the one who clicked through the wizard -- AzLogDcrIngestPS
+    #     fails with "Certificate ... not found in Cert:\LocalMachine\My".
+    # LocalMachine cert generation requires an elevated PowerShell session.
+    $certStorePath = 'Cert:\LocalMachine\My'
+    $isAdmin = $false
+    try {
+        $_curId = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $isAdmin = ([Security.Principal.WindowsPrincipal]::new($_curId)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { }
+    if (-not $isAdmin) {
+        throw "Certificate generation requires an ELEVATED PowerShell session so the cert can be installed to Cert:\LocalMachine\My (required for production use). Re-launch PowerShell as Administrator and run the wizard again. If you cannot elevate, switch the wizard to 'Client secret' credentials instead."
+    }
+    $cert = New-SelfSignedCertificate -Subject $certSubject -CertStoreLocation $certStorePath `
         -KeySpec Signature -KeyExportPolicy Exportable -KeyLength 2048 `
         -NotAfter (Get-Date).AddYears($SecretValidityYears) -ErrorAction Stop
     _Ok ("cert generated: thumbprint $($cert.Thumbprint), expires $($cert.NotAfter.ToString('u'))")
@@ -643,8 +660,8 @@ elseif ($CredKind -eq 'Cert') {
             if (Test-Path -LiteralPath $tmpPfx) { Remove-Item -LiteralPath $tmpPfx -Force -ErrorAction SilentlyContinue }
         }
     } elseif ($CredStorage -eq 'LocalCertStore') {
-        _Info ("cert kept in CurrentUser\My (thumbprint $($certInfo.Thumbprint)) -- private key stays on this machine only")
-        # Already in CurrentUser\My from New-SelfSignedCertificate. Nothing else to do.
+        _Info ("cert kept in LocalMachine\My (thumbprint $($certInfo.Thumbprint)) -- private key stays on this machine only, visible to any account on this host")
+        # Already in LocalMachine\My from New-SelfSignedCertificate (v2.2.243). Nothing else to do.
     }
 }
 elseif ($CredKind -eq 'ManagedIdentity') {

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.242
+## v2.2.243
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
 - release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
 - release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
 - release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
@@ -33,13 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
 - release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
 - release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
-- release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.243 — Cert-store auto-detect (LocalMachine vs CurrentUser) + Setup Wizard installs to LocalMachine
+
+Operator running v2.2.238 with SPN+cert hit a new failure at LA ingest:
+
+```
+[ERR]  Exception : Certificate with thumbprint 'C77B71E13F933AC30926697A923C64420F8F202A' was not found in Cert:\LocalMachine\My.
+[ERR]  At        : ...AzLogDcrIngestPS\1.6.3\AzLogDcrIngestPS.psm1:4533
+```
+
+The launcher's `Connect-AzAccount -CertificateThumbprint` probes BOTH stores (LocalMachine\My + CurrentUser\My) and authenticated successfully — but `AzLogDcrIngestPS` only looks in the store passed via `-AzAppCertificateStoreLocation`. The customer's cert lived in `CurrentUser\My`; the engine was passing the default `'LocalMachine'`; ingest failed.
+
+### Engine fix: auto-detect cert store
+
+Four asset-profiling sites + `Get-SIAuthState` now probe both `LocalMachine\My` and `CurrentUser\My` (in that order — LocalMachine wins, matching production install convention), and pass the store that actually holds the cert with a private key. Customer-pinned `$global:SI_SPN_CertStoreLocation` always overrides the auto-detect.
+
+`Get-SIAuthState` also emits a one-time `[WARN]` per process when the cert is only found in `CurrentUser\My`:
+
+```
+WARNING: [auth] SPN cert 'C77B71E...' was found only in Cert:\CurrentUser\My (HasPrivateKey=True).
+For production -- and for scheduled-task / SYSTEM service-account use -- install the cert in
+Cert:\LocalMachine\My so it's available to every account on this host. CurrentUser scope is fine
+for dev/interactive but will fail when the engine runs as a different account.
+```
+
+### Setup Wizard fix: generate cert in LocalMachine\My
+
+`New-SISpn.ps1`'s `Cert` credkind branch was generating self-signed certs in `Cert:\CurrentUser\My` — a "big mistake" per the operator's words because CurrentUser scope is invisible to SYSTEM scheduled tasks and alternate service accounts. Now generates in `Cert:\LocalMachine\My`, with a fail-fast check that the wizard runs elevated (PowerShell as Administrator) since LocalMachine cert store writes require admin. The fallback message tells the operator to either elevate or switch to client-secret credentials.
+
+### Migration
+
+Customers with existing CurrentUser\My certs have two options. The autodetect (above) lets the engine run today, but the warning is correct — for production, move it. See operator response below the table for the one-liner.
 
 ---
 

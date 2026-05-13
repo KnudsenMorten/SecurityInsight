@@ -568,6 +568,15 @@ function Write-SIClassificationToLogAnalytics {
                         $_hasWriter  = @($_assignments | Where-Object { $_.RoleDefinitionName -in $_dcrWriters })
                         if ($_hasWriter.Count -eq 0) {
                             Write-Warning ('  RBAC probe : roles present grant READ only ({0}). CheckCreateUpdate needs WRITE -- assign one of: {1}.' -f (($_assignments.RoleDefinitionName | Sort-Object -Unique) -join ', '), ($_dcrWriters -join ', '))
+                            # v2.2.257 -- print exact remediation. No full Setup re-run
+                            # needed; an Owner / User Access Admin on the target RG runs
+                            # this one-liner and the next engine run picks it up after
+                            # ARM propagates (usually 30-90s).
+                            Write-Warning  '  REMEDIATION (run as Owner / User Access Administrator on the target RG):'
+                            Write-Warning ("      New-AzRoleAssignment -ObjectId '{0}' -RoleDefinitionName 'Contributor' -Scope '{1}'" -f $_spnObjectId, $_rgScope)
+                            Write-Warning  '  ... or az CLI equivalent:'
+                            Write-Warning ("      az role assignment create --assignee-object-id {0} --assignee-principal-type ServicePrincipal --role Contributor --scope {1}" -f $_spnObjectId, $_rgScope)
+                            Write-Warning  '  Re-run the engine in ~60s after the grant; no Setup-SecurityInsight re-run required.'
                         } else {
                             Write-SIInfo  ('  RBAC probe : write-capable role found ({0}) -- DCR create should succeed.' -f (($_hasWriter.RoleDefinitionName | Sort-Object -Unique) -join ', '))
                         }

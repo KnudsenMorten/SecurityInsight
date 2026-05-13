@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.247
+## v2.2.248
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
+- release: SecurityInsight v2.2.247 - anonymous-mail diagnostic logging, never lie about success (bae363f7)
 - release: SecurityInsight v2.2.247 - fix silent anonymous-mail failure (704a2513)
 - release: SecurityInsight v2.2.246 - propagate DCR/DCE scope filter to Schema + Tagging stages (1528059a)
 - release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
@@ -32,8 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
 - release: SecurityInsight v2.2.221 - comprehensive AadDeviceId column_ifexists sweep (3d08309a)
 - release: SecurityInsight v2.2.220 - Device_Recommendations regression fix (column_ifexists wrapper restored) (31ebbe30)
-- release: SecurityInsight v2.2.219 - CVE Summary/Detailed: AssetTags exclusion filter actually fires (9f486787)
-- release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
 
 ---
 
@@ -43,26 +43,29 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 
 ---
 
-## v2.2.247 — Fix silent anonymous-mail failure (Send-MailMessage → direct SmtpClient)
+## v2.2.248 — Anonymous-mail diagnostic logging: never lie about success, print the real SMTP failure
 
-Operator: "no email, fix" -- engine printed `[OK] anonymous mail sent` while no email arrived.
+(v2.2.247 shipped briefly with a wrong fix that swapped `Send-MailMessage` for direct `SmtpClient`; the operator confirmed `Send-MailMessage` works normally and that swap was misdiagnosed. v2.2.248 reverts to `Send-MailMessage` and ships the correct diagnostic-logging fix below.)
 
-**Root cause.** `Send-MailAnonymous` was calling `Send-MailMessage` without `-Credential`. Internally that cmdlet instantiates `System.Net.Mail.SmtpClient` with the .NET default `UseDefaultCredentials = $true`, which auto-attaches the current Windows account's NT credentials to the SMTP handshake. Several common relay configurations (Postfix `smtpd_relay_restrictions = permit_mynetworks, reject`; Exchange receive-connectors scoped to **Anonymous Users** with auth disabled) **silently reject** that credentialed connection and return a success response anyway -- the cmdlet doesn't throw, so the engine logs a phantom OK.
+Operator: "no email, fix" → engine logs `[OK] anonymous mail sent` but mail never arrives. Then: "why dont you give me more details on error" → the engine should print **what** went wrong, not paper over it. Then: "no -stop as script must continue" → mail failure must not abort the run.
 
-**Fix.** `Send-MailAnonymous` now builds `System.Net.Mail.SmtpClient` directly:
+**Root cause.** `Send-MailAnonymous` called `Send-MailMessage` without `-ErrorAction Stop` and without `-ErrorVariable`. Any non-terminating SMTP error (relay 530/550, name-not-resolved, connection-refused, TLS handshake mismatch) gets written to the error stream but the cmdlet returns. The caller's next line was `Write-Ok "anonymous mail sent"` -- unconditionally fired regardless of actual outcome. Engine looked green; inbox stayed empty.
+
+**Fix.** `Send-MailAnonymous` rewritten to be **diagnostic-loud and silent-failure-proof**:
+
+1. **TCP pre-flight** (5 s async with timeout) against `SmtpServer:Port` before calling the cmdlet. If the socket can't open, we say so up front -- DNS failure, firewall ACL, listener-not-on-port, or source-IP restriction surface as a 5-second clear error instead of a 30-second mystery SmtpException.
+2. **`Send-MailMessage` with `-ErrorVariable`** + `-ErrorAction SilentlyContinue` -- any rejection from the relay now lands in our variable instead of getting swallowed. We walk the .NET `SmtpException` chain (incl. nested `InnerException`) and print each level: exception type, message, SMTP status code, inner status code. The "common causes" hint at the bottom lists the four diagnoses operators usually need to check: relay requires AUTH, sender not whitelisted, RBL, SPF/DMARC, TLS mismatch.
+3. **Function returns `[bool]`** instead of throwing -- `$true` = sent, `$false` = failed (details already printed inline). The caller gates the `[OK]` line on the return value:
 
 ```powershell
-$smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $Port)
-$smtp.EnableSsl              = [bool]$UseSsl
-$smtp.UseDefaultCredentials  = $false   # forces no NT-cred handshake
-$smtp.Credentials            = $null    # explicit anonymous
-$smtp.DeliveryMethod         = [System.Net.Mail.SmtpDeliveryMethod]::Network
-$smtp.Timeout                = 60000
+$mailOk = Send-MailAnonymous ...
+if ($mailOk) { Write-Ok  "anonymous mail sent (..." }
+else         { Write-Err2 "anonymous mail FAILED -- see details above. Engine continues (mail is non-fatal)." }
 ```
 
-Then a `System.Net.Mail.MailMessage` with explicit UTF-8 subject/body encoding, attachments handled with `try/finally` cleanup. `$smtp.Send($msg)` throws on transport-layer failure -- so any future relay rejection (530, network timeout) surfaces as a real engine error, not a green log lying about delivery.
+The script **never aborts** on a mail failure -- the engine continues to AI summary, LA ingest, and run-health emit. The only thing that changed is that the log now matches reality.
 
-Affects every customer running with no `$global:SMTPUser` / `$global:SMTPPassword` (i.e. routed through an internal mail relay that accepts anonymous SMTP from trusted IPs).
+`Send-MailSecure` left untouched -- the secure path works correctly today and the operator confirmed `Send-MailMessage` itself works normally; the bug was strictly in how we *interpreted* its result.
 
 ---
 

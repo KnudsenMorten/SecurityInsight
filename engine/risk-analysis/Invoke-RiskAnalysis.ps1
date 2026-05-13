@@ -4725,64 +4725,88 @@ function Send-MailAnonymous {
         [Parameter()] [ValidateSet('Normal','High','Low')] [string]$Priority = 'High'
     )
 
-    # v2.2.247 -- direct System.Net.Mail.SmtpClient instead of Send-MailMessage.
-    # Send-MailMessage internally creates an SmtpClient with the .NET default
-    # UseDefaultCredentials = $true. On a Windows host that means the current
-    # account's NT credentials get auto-attached to the SMTP handshake. Many
-    # relays (Postfix anon-relay, Exchange receive-connectors scoped to
-    # "Anonymous Users") silently REJECT those creds and the cmdlet still
-    # returns without throwing -- so the engine logs "[OK] anonymous mail sent"
-    # while the message never left the relay. Operator reported "no email, fix".
+    # v2.2.247 -- diagnostic-rich anonymous send. NEVER throws (operator: "no
+    # -stop as script must continue"). Returns $true on success, $false on
+    # failure, with the relay's actual status code / .NET exception chain
+    # printed inline so the operator can see WHY mail didn't arrive instead
+    # of a green "[OK] anonymous mail sent" line that lied about success.
     #
-    # Direct SmtpClient lets us force UseDefaultCredentials = $false AND
-    # Credentials = $null, guaranteeing a true anonymous MAIL FROM. Send()
-    # throws on transport-layer failure, so any future silent-reject regression
-    # surfaces as a real error in the engine log rather than a phantom success.
+    # Two phases:
+    #   1. TCP pre-flight (5s, async with timeout). If we can't even open a
+    #      socket -- DNS failure, firewall ACL, listener down, source-IP
+    #      restriction -- skip the cmdlet call entirely and log the cause.
+    #   2. Send-MailMessage with -ErrorAction SilentlyContinue + -ErrorVariable.
+    #      Any non-terminating error from the cmdlet now lands in $smtpErr
+    #      instead of getting swallowed; we walk the .NET exception chain
+    #      (SmtpException -> SmtpStatusCode, InnerException) and print each
+    #      level. Then return $false so the caller knows not to log [OK].
 
     Write-Output ("Sending mail (anonymous) to {0} with subject '{1}'" -f ($To -join ', '), $Subject)
 
-    $smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $Port)
-    $smtp.EnableSsl              = [bool]$UseSsl
-    $smtp.UseDefaultCredentials  = $false
-    $smtp.Credentials            = $null
-    $smtp.DeliveryMethod         = [System.Net.Mail.SmtpDeliveryMethod]::Network
-    $smtp.Timeout                = 60000
-
-    $msg = New-Object System.Net.Mail.MailMessage
-    $msg.From            = New-Object System.Net.Mail.MailAddress($From)
-    foreach ($t in $To) { [void]$msg.To.Add($t) }
-    $msg.Subject         = $Subject
-    $msg.SubjectEncoding = [System.Text.Encoding]::UTF8
-    $msg.Body            = $BodyHtml
-    $msg.IsBodyHtml      = $true
-    $msg.BodyEncoding    = [System.Text.Encoding]::UTF8
-    $msg.Priority        = switch ($Priority) {
-        'High'  { [System.Net.Mail.MailPriority]::High }
-        'Low'   { [System.Net.Mail.MailPriority]::Low }
-        default { [System.Net.Mail.MailPriority]::Normal }
-    }
-
-    $attachObjs = @()
-    if ($Attachments) {
-        foreach ($a in $Attachments) {
-            if ([string]::IsNullOrWhiteSpace($a)) { continue }
-            if (-not (Test-Path -LiteralPath $a)) {
-                Write-Warning ("Send-MailAnonymous: attachment not found, skipping -- {0}" -f $a)
-                continue
-            }
-            $att = New-Object System.Net.Mail.Attachment($a)
-            $msg.Attachments.Add($att)
-            $attachObjs += $att
-        }
-    }
-
+    # 1. TCP pre-flight
     try {
-        $smtp.Send($msg)
-    } finally {
-        foreach ($att in $attachObjs) { try { $att.Dispose() } catch { } }
-        $msg.Dispose()
-        $smtp.Dispose()
+        $tcp = New-Object System.Net.Sockets.TcpClient
+        $iar = $tcp.BeginConnect($SmtpServer, $Port, $null, $null)
+        if (-not $iar.AsyncWaitHandle.WaitOne(5000, $false)) {
+            $tcp.Close()
+            Write-Output ("   TCP pre-flight FAILED (5s timeout) -- {0}:{1}" -f $SmtpServer, $Port)
+            Write-Output  "   (likely cause: DNS resolution slow / wrong, firewall ACL silently dropping, listener not on this port)"
+            return $false
+        }
+        $tcp.EndConnect($iar)
+        $tcp.Close()
+        Write-Output ("   TCP pre-flight OK -- {0}:{1} accepted connection" -f $SmtpServer, $Port)
+    } catch {
+        Write-Output ("   TCP pre-flight FAILED -- {0}:{1} :: {2}" -f $SmtpServer, $Port, $_.Exception.Message)
+        Write-Output  "   (likely cause: DNS resolution, firewall ACL, listener down, or relay restricting source IP)"
+        return $false
     }
+
+    $params = @{
+        SmtpServer  = $SmtpServer
+        Port        = $Port
+        From        = $From
+        To          = $To
+        Subject     = $Subject
+        Body        = $BodyHtml
+        BodyAsHtml  = $true
+        Encoding    = 'UTF8'
+        Priority    = $Priority
+        ErrorAction = 'SilentlyContinue'
+    }
+    if ($UseSsl) { $params.UseSsl = $true }
+    if ($Attachments -and $Attachments.Count -gt 0) { $params.Attachments = $Attachments }
+
+    # 2. Send; capture any non-terminating error so we can surface details
+    $smtpErr = $null
+    Send-MailMessage @params -ErrorVariable smtpErr 2>$null
+
+    if ($smtpErr -and $smtpErr.Count -gt 0) {
+        Write-Output  "   SMTP send FAILED -- relay rejected or cmdlet hit a non-terminating error:"
+        foreach ($er in $smtpErr) {
+            $ex = $er.Exception
+            if ($null -eq $ex) { continue }
+            Write-Output ("   Exception type : {0}" -f $ex.GetType().FullName)
+            Write-Output ("   Message        : {0}" -f $ex.Message)
+            if ($ex.PSObject.Properties['StatusCode']) {
+                Write-Output ("   SMTP StatusCode: {0}" -f $ex.StatusCode)
+            }
+            $inner = $ex.InnerException
+            $depth = 0
+            while ($inner -and $depth -lt 5) {
+                Write-Output ("   InnerException : [{0}] {1}" -f $inner.GetType().FullName, $inner.Message)
+                if ($inner.PSObject.Properties['StatusCode']) {
+                    Write-Output ("   Inner StatusCode: {0}" -f $inner.StatusCode)
+                }
+                $inner = $inner.InnerException
+                $depth++
+            }
+        }
+        Write-Output  "   (common causes: relay requires AUTH, sender not whitelisted, RBL block, SPF/DMARC reject, TLS handshake mismatch)"
+        return $false
+    }
+
+    return $true
 }
 
 function Send-MailSecure {
@@ -8412,9 +8436,17 @@ $aiSection
     try {
         if ([bool]$global:Mail_SendAnonymous) {
             Write-Step ("sending mail anonymously to: {0}" -f ($to -join ', '))
-            Send-MailAnonymous -SmtpServer $global:SmtpServer -Port $global:SMTPPort -UseSsl $global:SMTP_UseSSL `
-                -From $from -To $to -Subject $subject -BodyHtml $bodyHtml -Attachments $attachments
-            Write-Ok "anonymous mail sent"
+            # v2.2.247 -- Send-MailAnonymous now returns [bool] (true=sent,
+            # false=failed-with-details-printed-inline). Gate the [OK] line on
+            # the return value so we never claim success when the relay
+            # actually rejected. Script continues regardless ("no -stop").
+            $mailOk = Send-MailAnonymous -SmtpServer $global:SmtpServer -Port $global:SMTPPort -UseSsl $global:SMTP_UseSSL `
+                          -From $from -To $to -Subject $subject -BodyHtml $bodyHtml -Attachments $attachments
+            if ($mailOk) {
+                Write-Ok "anonymous mail sent (NOTE: SMTP 250 OK only proves the relay accepted the message -- verify actual delivery in your SMTP provider's activity log + the recipient's junk folder)"
+            } else {
+                Write-Err2 "anonymous mail FAILED -- see TCP pre-flight / SMTP exception details immediately above. Engine continues (mail is non-fatal); fix the cause and re-run, or set credentials if the relay requires AUTH."
+            }
         }
         else {
             Write-Step ("sending mail using secure credentials to: {0}" -f ($to -join ', '))

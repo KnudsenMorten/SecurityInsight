@@ -26,13 +26,19 @@ function Write-SIClassificationToLogAnalytics {
     # No required-infra-globals check anymore -- the prestage block below
     # supplies defaults for everything (workspace, DCE, DCR, RGs, location).
     # Only auth is hard-required.
-    # Auth: SI_SPN_* primary, SI_LogIngest_* fallback,
+    # Auth: SI_SPN_* primary (Secret OR CertThumbprint), SI_LogIngest_* fallback,
     # UAMI when $global:SI_PreferUami + $global:SI_UAMI_ClientId set.
-    $haveSpn  = $global:SI_SPN_AppId   -and $global:SI_SPN_Secret   -and $global:SI_SPN_TenantId   -and $global:SI_SPN_ObjectId
-    $haveLi   = $global:SI_LogIngest_AppId -and $global:SI_LogIngest_Secret -and $global:SI_LogIngest_TenantId -and $global:SI_LogIngest_ObjectId
-    $haveUami = $global:SI_PreferUami -and $global:SI_UAMI_ClientId
+    # v2.2.237 -- accept cert as well as secret. AzLogDcrIngestPS module supports
+    # both via -AzAppCertificateThumbprint / -AzAppSecret. SPN+cert customers
+    # were previously gate-failed at this check even though Bootstrap-Auth had
+    # successfully authenticated them.
+    $haveSpnSecret = $global:SI_SPN_AppId  -and $global:SI_SPN_Secret         -and $global:SI_SPN_TenantId -and $global:SI_SPN_ObjectId
+    $haveSpnCert   = $global:SI_SPN_AppId  -and $global:SI_SPN_CertThumbprint -and $global:SI_SPN_TenantId -and $global:SI_SPN_ObjectId
+    $haveSpn       = $haveSpnSecret -or $haveSpnCert
+    $haveLi        = $global:SI_LogIngest_AppId -and $global:SI_LogIngest_Secret -and $global:SI_LogIngest_TenantId -and $global:SI_LogIngest_ObjectId
+    $haveUami      = $global:SI_PreferUami -and $global:SI_UAMI_ClientId
     if (-not ($haveSpn -or $haveLi -or $haveUami)) {
-        return 'SKIPPED -- no auth configured. Set $global:SI_SPN_AppId/Secret/TenantId/ObjectId in custom.ps1, or run Bootstrap-Auth.ps1.'
+        return 'SKIPPED -- no auth configured. Set $global:SI_SPN_AppId + (Secret OR CertThumbprint) + TenantId + ObjectId in custom.ps1, or run Bootstrap-Auth.ps1.'
     }
 
     if (-not (Get-Module -Name AzLogDcrIngestPS)) {
@@ -195,33 +201,57 @@ function Write-SIClassificationToLogAnalytics {
 
         # Auth: SPN primary (SI_SPN_* unified globals from Bootstrap-Auth.ps1),
         # SI_LogIngest_* legacy fallback. UAMI opt-in via $global:SI_PreferUami.
-        $spnAppId    = if ($global:SI_SPN_AppId)    { $global:SI_SPN_AppId }    else { $global:SI_LogIngest_AppId }
-        $spnSecret   = if ($global:SI_SPN_Secret)   { $global:SI_SPN_Secret }   else { $global:SI_LogIngest_Secret }
-        $spnTenantId = if ($global:SI_SPN_TenantId) { $global:SI_SPN_TenantId } else { $global:SI_LogIngest_TenantId }
+        # v2.2.237 -- cert path. AzLogDcrIngestPS module accepts cert directly via
+        # -AzAppCertificateThumbprint / -AzAppCertificateStoreLocation. Route the
+        # right credential into $authParams based on which globals are set:
+        #   1. $global:SI_PreferUami           -> managed identity
+        #   2. $global:SI_SPN_CertThumbprint   -> SPN + certificate
+        #   3. $global:SI_SPN_Secret           -> SPN + secret (legacy)
+        $spnAppId      = if ($global:SI_SPN_AppId)           { $global:SI_SPN_AppId }           else { $global:SI_LogIngest_AppId }
+        $spnSecret     = if ($global:SI_SPN_Secret)          { $global:SI_SPN_Secret }          else { $global:SI_LogIngest_Secret }
+        $spnTenantId   = if ($global:SI_SPN_TenantId)        { $global:SI_SPN_TenantId }        else { $global:SI_LogIngest_TenantId }
+        $spnCertThumb  = [string]$global:SI_SPN_CertThumbprint
+        $spnCertStore  = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
 
-        $useMi = $global:SI_PreferUami -and -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
+        $useMi   = $global:SI_PreferUami -and -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
+        $useCert = -not $useMi -and -not [string]::IsNullOrWhiteSpace($spnCertThumb)
+
         $authParams = if ($useMi) {
             @{ UseManagedIdentity = $true; ManagedIdentityClientId = $global:SI_UAMI_ClientId }
+        } elseif ($useCert) {
+            @{
+                AzAppId                       = $spnAppId
+                AzAppCertificateThumbprint    = $spnCertThumb
+                AzAppCertificateStoreLocation = $spnCertStore
+                TenantId                      = $spnTenantId
+            }
         } else {
             @{ AzAppId = $spnAppId; AzAppSecret = $spnSecret; TenantId = $spnTenantId }
         }
-        $authNote = if ($useMi) { 'UAMI' } else { 'SPN' }
+        $authNote = if ($useMi) { 'UAMI' } elseif ($useCert) { 'SPN+Cert' } else { 'SPN+Secret' }
 
-        # AzLogDcrIngestPS (1.6.2) reads tokens from the active Az session cache
-        # rather than doing a clean client_credentials call internally. When the
-        # session was established via cert (v1 Connect_Azure.ps1) the cached
-        # token won't satisfy the LA ingest endpoint and we get AADSTS7000215
-        # "Invalid client secret". Refresh the session here with the secret SPN
-        # so the cache holds a token AzLogDcrIngestPS can use. Idempotent.
-        if (-not $useMi -and $spnAppId -and $spnSecret -and $spnTenantId) {
+        # AzLogDcrIngestPS reads tokens from the active Az session cache rather
+        # than doing a clean client_credentials call internally. Refresh the
+        # session here so the cache holds a token the module can use. Idempotent.
+        # v2.2.237 -- branch on cert vs secret so SPN+cert customers don't fall
+        # through to the secret path and hit AADSTS7000215 "Invalid client secret".
+        if (-not $useMi -and $spnAppId -and $spnTenantId) {
             try {
-                $secCred = [pscredential]::new($spnAppId, (ConvertTo-SecureString $spnSecret -AsPlainText -Force))
-                $null = Connect-AzAccount -ServicePrincipal `
-                                          -Tenant $spnTenantId `
-                                          -Credential $secCred `
-                                          -ErrorAction Stop -WarningAction SilentlyContinue
+                if ($useCert) {
+                    $null = Connect-AzAccount -ServicePrincipal `
+                                              -Tenant                 $spnTenantId `
+                                              -ApplicationId          $spnAppId `
+                                              -CertificateThumbprint  $spnCertThumb `
+                                              -ErrorAction Stop -WarningAction SilentlyContinue
+                } elseif ($spnSecret) {
+                    $secCred = [pscredential]::new($spnAppId, (ConvertTo-SecureString $spnSecret -AsPlainText -Force))
+                    $null = Connect-AzAccount -ServicePrincipal `
+                                              -Tenant $spnTenantId `
+                                              -Credential $secCred `
+                                              -ErrorAction Stop -WarningAction SilentlyContinue
+                }
             } catch {
-                Write-Warning ("LA ingest: secret-SPN session refresh failed -- AzLogDcrIngestPS may 401: {0}" -f $_.Exception.Message)
+                Write-Warning ("LA ingest: SPN session refresh failed -- AzLogDcrIngestPS may 401: {0}" -f $_.Exception.Message)
             }
         }
 

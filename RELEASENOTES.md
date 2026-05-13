@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.236
+## v2.2.237
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
 - release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
 - release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
 - release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
 - release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
 - release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
-- release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.237 — Asset-profiling stages: route SPN+cert (and MI) into AzLogDcrIngestPS auth params
+
+Customer running v2.2.236 with SPN+cert (no secret) hit:
+
+```
+WARNING: Sink LA: SKIPPED -- no auth configured. Set $global:SI_SPN_AppId/Secret/TenantId/ObjectId in custom.ps1, or run Bootstrap-Auth.ps1.
+```
+
+`AzLogDcrIngestPS` (the underlying ingestion module) now accepts certificate-based SPN auth directly via `-AzAppCertificateThumbprint` / `-AzAppCertificateStoreLocation`, and also accepts Managed Identity via `-UseManagedIdentity`. The asset-profiling stages were still gating on `$global:SI_SPN_Secret` specifically — and building `$authParams` with `-AzAppSecret` only — so cert-only customers were blocked at the very first LA-sink check, even though Bootstrap-Auth had already authenticated them.
+
+### Files updated (4)
+
+| File | Change |
+|---|---|
+| `engine/asset-profiling/stages/Invoke-Output.ps1` | (1) `$haveSpn` check accepts Secret OR CertThumbprint. (2) `$authParams` picks MI / SPN+Cert / SPN+Secret in that priority order. (3) The Az-session refresh that runs before AzLogDcrIngestPS calls now branches on cert vs secret. |
+| `engine/asset-profiling/shared/Send-SIRunHealthRow.ps1` | Same auth-resolution shape as Invoke-Output (MI / cert / secret). Sends the per-run health row to `SI_RunHealth_CL`. |
+| `engine/asset-profiling/stages/Invoke-Tagging.ps1` | Audit-row sink (`SI_AssetTagActivity_CL`) — was only honoring SI_LogIngest_* + MI. Now also honors SI_SPN_* (cert or secret). |
+| `engine/asset-profiling/stages/Invoke-SchemaOutput.ps1` | Schema-catalog sink (`SI_SchemaCatalog_CL`) — same pattern. |
+
+### Auth priority in all 4 sites (post-fix)
+
+```powershell
+$authParams = if ($useMi) {
+    @{ UseManagedIdentity = $true; ManagedIdentityClientId = $global:SI_UAMI_ClientId }
+} elseif ($useCert) {
+    @{
+        AzAppId                       = $spnAppId
+        AzAppCertificateThumbprint    = $global:SI_SPN_CertThumbprint
+        AzAppCertificateStoreLocation = $global:SI_SPN_CertStoreLocation  # default 'LocalMachine'
+        TenantId                      = $spnTenantId
+    }
+} else {
+    @{ AzAppId = $spnAppId; AzAppSecret = $spnSecret; TenantId = $spnTenantId }
+}
+$authNote = if ($useMi) { 'UAMI' } elseif ($useCert) { 'SPN+Cert' } else { 'SPN+Secret' }
+```
+
+The hashtable is splatted into every `AzLogDcrIngestPS` call (`Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output`, `CheckCreateUpdate-TableDcr-Structure`, `Get-AzDcrListAll`, etc) so the module receives exactly the right credential type — never both, never neither.
 
 ---
 

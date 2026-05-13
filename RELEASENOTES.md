@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.265
+## v2.2.266
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
 - release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
 - release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
 - release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
 - release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
 - release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
-- release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.266 — Drop the RBAC visibility line from the LA-ingest auth probe
+
+v2.2.263 left a single informational line in the auth probe:
+
+```
+[INFO] auth probe : SPN can see 1 of its own role assignment(s) -- partial view only; actual write capability proven by Step 3.
+```
+
+…which was structurally honest but never actionable. The number of assignments the SPN can see about itself is just a side-effect of where `roleAssignments/read` is granted; it tells us nothing about actual write capability. Step 3's `CheckCreateUpdate-TableDcr-Structure` is the real test, and v2.2.250 already captures its output on failure.
+
+The auth probe is now one line:
+
+```
+[INFO] auth probe : ARM token OK (ServicePrincipal, <appid>)
+```
+
+…with a `[WARN]` instead if the token mint actually fails (cert thumbprint/store mismatch, expired SPN, etc.). That's the only signal at this stage that's worth surfacing.
 
 ---
 

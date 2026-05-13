@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.234
+## v2.2.235
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
 - release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
 - release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
 - release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
@@ -33,13 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
 - release: SecurityInsight v2.2.207 - tenant-specific CVE narrowing + materialise filtered edges (8b4a689f)
 - release: SecurityInsight v2.2.206 - drop dead _AssetFindingEdges_oneway join branch (ce96d274)
-- release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.235 — Risk Analysis: portal URLs (MDE Endpoint / MDE Identity / Azure resource) in `MoreDetails`
+
+Operator request from earlier — the `MoreDetails` cell already collects NVD + MITRE + auto-harvested links, but operators wanted **per-asset portal URLs** so they can click straight to the affected device / user / resource. Deferred at v2.2.227 (URL shapes weren't pinned down) and shipping now.
+
+### URL templates
+
+All three are gated on `$global:SI_SPN_TenantId` being set (provides the `{tid}` query param). When the tenant ID is missing or a row has no matching identifier, the URL is grace-skipped — no useless `tid=` placeholders end up in the cell.
+
+| Asset kind | Row column | URL emitted |
+|---|---|---|
+| **MDE Endpoint** | `MdeDeviceId` | `https://security.microsoft.com/machines/v2/{MdeDeviceId}/overview?tid={tid}` |
+| **MDE Identity — AD-only** (no Entra sync) | `AccountSID` only | `https://security.microsoft.com/user?sid={AccountSID}&tab=overview&tid={tid}` |
+| **MDE Identity — Synced** (AD + Entra) | `AccountSID` + `EntraAccountObjectId` | `https://security.microsoft.com/user?aad={EntraAccountObjectId}&sid={AccountSID}&tab=overview&tid={tid}` |
+| **MDE Identity — Cloud-only** (Entra only) | `EntraAccountObjectId` only | `https://security.microsoft.com/user?aad={EntraAccountObjectId}&tab=overview&tid={tid}` |
+| **Azure resource** | `AzureResourceId` | `https://portal.azure.com/#@{tdom}/resource{AzureResourceId}/overview` |
+
+For Azure, `{tdom}` prefers `$global:SI_TenantDomain` (e.g. `myfamilynetwork.onmicrosoft.com`) and falls back to the tenant ID GUID when the domain isn't set.
+
+### Placement
+
+Inserted as **step 4** of the `MoreDetails` post-process in `Invoke-RiskAnalysis.ps1` — right after step 3 (MITRE links) and before the dedupe/cap step. Order is auto-harvest → CVE → MITRE → portal URLs → dedupe (preserves first occurrence) → cap at 25 URLs / 4000 chars, joined with `\r\n` and wrapped in Excel (the WrapText loop from v2.2.226 still fires on the `MoreDetails` column so they render one-per-line).
+
+### Per-row example for the Identity profiler
+
+Synced user on the customer's tenant `f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e` would get a `MoreDetails` cell containing (among the other harvested URLs):
+
+```
+https://security.microsoft.com/user?aad=ba20b9a9-9aa8-484b-9bc1-4a55a04129e5&sid=s-1-5-21-...&tab=overview&tid=f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e
+```
+
+Click → straight to that user's Defender XDR overview, no portal navigation.
 
 ---
 

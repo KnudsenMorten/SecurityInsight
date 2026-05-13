@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.266
+## v2.2.267
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
 - release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
 - release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
 - release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
 - release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
 - release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
-- release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.267 — Internal/AutomateIT mode now supports SPN+cert end-to-end (no secret needed)
+
+Operator: "does the change we have made also work for internal automateit mode, so we don't have to re-auth with secret there, but can do a certificate auth with thumbprint. prior we had to re-auth with secret for la ingestion. change that"
+
+### Where the gap was
+
+The **engine** has supported cert auth for LA ingest since v2.2.237 -- when `$global:SI_SPN_CertThumbprint` is set, `Invoke-Output.ps1`'s `$useCert = $true` wins over secret in the auth-params splat to `AzLogDcrIngestPS`. With module v1.6.7 now live on PSGallery, every function in the create + read chain accepts `-AzAppCertificateThumbprint` correctly.
+
+But `Bootstrap-Auth.ps1` was secret-only across the board:
+
+1. **Static-wins-over-KV detection** (line 155-156) required BOTH `$global:SI_SPN_AppId` AND `$global:SI_SPN_Secret`. A customer who set AppId + CertThumbprint (no Secret) failed the detection, fell through to KV lookup, and threw because the KV path also only knew how to fetch a secret.
+2. **`Test-SISpnConnection`** did a raw HTTP `client_credentials` POST with `client_secret`. No cert path.
+3. **The block written to `custom.ps1`** always emitted `$global:SI_SPN_Secret = '...'` -- even when no secret was available -- producing an invalid block.
+
+### Three changes in `Bootstrap-Auth.ps1`
+
+**(1) `Test-SISpnConnection` accepts cert.** New `-CertThumbprint` + `-CertStoreLocation` params. Cert path uses `Connect-AzAccount -ServicePrincipal -CertificateThumbprint` (Az.Accounts handles the JWT-assertion signing); the function probes both stores if the chosen store is missing the cert. Returns the same `@{ Ok; ExpiresIn; Error }` shape regardless of method.
+
+**(2) Static-wins detection accepts cert OR secret.** Customer with `$global:SI_SPN_AppId` + `$global:SI_SPN_TenantId` + `$global:SI_SPN_CertThumbprint` (no Secret) is now a valid auth source. A new `$spnAuthMethod` variable carries the resolved method ('cert' or 'secret') through the rest of the script.
+
+**(3) `custom.ps1` block emits the right credential lines.** When `$spnAuthMethod -eq 'cert'`, the block writes `SI_SPN_CertThumbprint` + `SI_SPN_CertStoreLocation` -- and **does not** emit `SI_SPN_Secret` or the legacy `SI_LogIngest_Secret` alias (those would be empty/garbage). When secret-mode, behavior is unchanged.
+
+The idempotency check at the top (existing-block-detected → skip rewrite, just probe) also picks up cert vs secret from the existing globals and runs the right kind of probe.
+
+### What this means for AutomateIT customers
+
+Set `$global:SI_SPN_CertThumbprint` (and optionally `$global:SI_SPN_CertStoreLocation`) in your platform-defaults / `SecurityInsight.custom.ps1` -- no `$global:SI_SPN_Secret` needed -- and Bootstrap-Auth will:
+
+- Validate the cert can mint an ARM token via `Connect-AzAccount -ServicePrincipal -CertificateThumbprint`.
+- Write a clean `SI_SPN_CertThumbprint` + `SI_SPN_CertStoreLocation` block to `SecurityInsight.custom.ps1`.
+- Engine inherits the same cert path through to the LA-ingest call. **No re-auth with a secret. No plaintext secret on disk.**
+
+KV-stored cert (download cert into local store from `Get-AzKeyVaultCertificate`) is **not** in this release -- the assumption is the cert lives in `Cert:\LocalMachine\My` (or `Cert:\CurrentUser\My`) before Bootstrap-Auth runs. If you want KV-cert pull-down too, file a follow-up.
 
 ---
 

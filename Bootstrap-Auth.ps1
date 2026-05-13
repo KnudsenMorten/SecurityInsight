@@ -65,12 +65,46 @@ $ErrorActionPreference = 'Stop'
 # path so the operator ALWAYS sees explicit confirmation that the resolved
 # credential actually authenticates against the target tenant.
 function Test-SISpnConnection {
+    # v2.2.267 -- now accepts EITHER -Secret OR -CertThumbprint.
+    # Secret path: client_credentials with client_secret (raw HTTP).
+    # Cert path: Connect-AzAccount -ServicePrincipal -CertificateThumbprint
+    # (the cert must be on disk in the chosen store; we don't sign the JWT
+    # assertion ourselves -- Az.Accounts handles that). Either path returns
+    # the same hashtable so callers don't need to branch.
     param(
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter(Mandatory)][string]$AppId,
-        [Parameter(Mandatory)][string]$Secret,
+        [Parameter()][string]$Secret,
+        [Parameter()][string]$CertThumbprint,
+        [Parameter()][ValidateSet('CurrentUser','LocalMachine')][string]$CertStoreLocation = 'LocalMachine',
         [string]$Resource = 'https://graph.microsoft.com/.default'
     )
+    if ($CertThumbprint) {
+        try {
+            $_certPath = "Cert:\$CertStoreLocation\My\$CertThumbprint"
+            if (-not (Test-Path -LiteralPath $_certPath)) {
+                # Probe BOTH stores so cert-path detection is consistent with engine.
+                $_alt = if ($CertStoreLocation -eq 'LocalMachine') { 'CurrentUser' } else { 'LocalMachine' }
+                if (Test-Path -LiteralPath "Cert:\$_alt\My\$CertThumbprint") {
+                    $CertStoreLocation = $_alt
+                } else {
+                    return @{ Ok = $false; Error = "Certificate thumbprint $CertThumbprint not found in Cert:\LocalMachine\My or Cert:\CurrentUser\My on this host." }
+                }
+            }
+            $null = Connect-AzAccount -ServicePrincipal `
+                                     -Tenant                $TenantId `
+                                     -ApplicationId         $AppId `
+                                     -CertificateThumbprint $CertThumbprint `
+                                     -ErrorAction Stop -WarningAction SilentlyContinue
+            # ~1h default token lifetime; we don't read it back to keep the call cheap.
+            return @{ Ok = $true; ExpiresIn = 3600 }
+        } catch {
+            return @{ Ok = $false; Error = $_.Exception.Message }
+        }
+    }
+    if (-not $Secret) {
+        return @{ Ok = $false; Error = 'Test-SISpnConnection: neither -Secret nor -CertThumbprint provided.' }
+    }
     $body = @{
         grant_type    = 'client_credentials'
         client_id     = $AppId
@@ -139,26 +173,51 @@ $customRaw = if (Test-Path $CustomFile) { Get-Content -Path $CustomFile -Raw } e
 if ($customRaw -match '\$global:SI_SPN_AppId' -and -not $global:SI_RebuildAuthBlock) {
     $existingAppId    = [string]$global:SI_SPN_AppId
     $existingSecret   = [string]$global:SI_SPN_Secret
+    $existingCertTh   = [string]$global:SI_SPN_CertThumbprint
+    $existingCertLoc  = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
     $existingTenantId = [string]$global:SI_SPN_TenantId
-    if (-not $existingAppId -or -not $existingSecret -or -not $existingTenantId) {
-        throw "custom.ps1 contains an SI_SPN_AppId line but one of SI_SPN_AppId / SI_SPN_Secret / SI_SPN_TenantId is empty after dot-source. Inspect $CustomFile."
+    if (-not $existingAppId -or -not $existingTenantId -or (-not $existingSecret -and -not $existingCertTh)) {
+        throw "custom.ps1 contains an SI_SPN_AppId line but is missing TenantId AND one of Secret / CertThumbprint after dot-source. Inspect $CustomFile."
     }
-    $probe = Test-SISpnConnection -TenantId $existingTenantId -AppId $existingAppId -Secret $existingSecret
-    Write-SIAuthResult -Probe $probe -AuthSource 'custom.ps1' -AppId $existingAppId -TenantId $existingTenantId `
-                       -ExtraDetail 'existing SI_SPN_AppId block; no file rewrite. Set $global:SI_RebuildAuthBlock = $true to re-pull.'
+    if ($existingCertTh) {
+        $probe = Test-SISpnConnection -TenantId $existingTenantId -AppId $existingAppId -CertThumbprint $existingCertTh -CertStoreLocation $existingCertLoc
+        $authExtra = 'existing SI_SPN_AppId + SI_SPN_CertThumbprint block; no file rewrite. Set $global:SI_RebuildAuthBlock = $true to re-pull.'
+    } else {
+        $probe = Test-SISpnConnection -TenantId $existingTenantId -AppId $existingAppId -Secret $existingSecret
+        $authExtra = 'existing SI_SPN_AppId + SI_SPN_Secret block; no file rewrite. Set $global:SI_RebuildAuthBlock = $true to re-pull.'
+    }
+    Write-SIAuthResult -Probe $probe -AuthSource 'custom.ps1' -AppId $existingAppId -TenantId $existingTenantId -ExtraDetail $authExtra
     return
 }
 
 # Static-wins-over-KV: did the customer already set $global:SI_SPN_* via
 # their own pre-loaded custom file or environment? If so, SKIP the KV
-# fetch entirely.
-$staticSpnPresent = -not [string]::IsNullOrWhiteSpace([string]$global:SI_SPN_AppId) `
-                  -and -not [string]::IsNullOrWhiteSpace([string]$global:SI_SPN_Secret)
+# fetch entirely. v2.2.267 -- cert is now an acceptable static auth method
+# (was secret-only). Internal/AutomateIT customers running on cert-only
+# SPNs (no plaintext secret on disk) get parity with the engine, which
+# has supported cert in $useCert since v2.2.237 and module v1.6.7.
+$_haveStaticSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SI_SPN_Secret)
+$_haveStaticCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SI_SPN_CertThumbprint)
+$staticSpnPresent  = -not [string]::IsNullOrWhiteSpace([string]$global:SI_SPN_AppId) -and ($_haveStaticSecret -or $_haveStaticCert)
+
+# Resolved auth method -- 'cert' or 'secret'. Drives both the probe path
+# and the block emitted to custom.ps1 (only write the line you actually use).
+$spnAuthMethod  = $null
+$spnCertThumb   = $null
+$spnCertLoc     = $null
 
 if ($staticSpnPresent) {
-    Write-Host '[1/4] AUTH SOURCE: custom.ps1 ($global:SI_SPN_AppId / $global:SI_SPN_Secret read directly from file)'
-    $spnAppId  = [string]$global:SI_SPN_AppId
-    $spnSecret = [string]$global:SI_SPN_Secret
+    $spnAppId = [string]$global:SI_SPN_AppId
+    if ($_haveStaticCert) {
+        $spnAuthMethod = 'cert'
+        $spnCertThumb  = [string]$global:SI_SPN_CertThumbprint
+        $spnCertLoc    = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
+        Write-Host ('[1/4] AUTH SOURCE: custom.ps1 ($global:SI_SPN_AppId + $global:SI_SPN_CertThumbprint; store={0})' -f $spnCertLoc)
+    } else {
+        $spnAuthMethod = 'secret'
+        $spnSecret     = [string]$global:SI_SPN_Secret
+        Write-Host '[1/4] AUTH SOURCE: custom.ps1 ($global:SI_SPN_AppId / $global:SI_SPN_Secret read directly from file)'
+    }
 } else {
     # Backwards compat: if the legacy $global:SI_Graph_AppId is already set
     #, copy it forward to SI_SPN_*.
@@ -240,11 +299,19 @@ foreach ($pair in @(
 # disk. Acquires a short-lived Microsoft Graph access token via OAuth
 # client_credentials flow against the target tenant. Failure aborts the
 # bootstrap with a clear message instead of writing dud creds to custom.ps1.
-$probe = Test-SISpnConnection -TenantId $tenantId -AppId $spnAppId -Secret $spnSecret
+# v2.2.267 -- branch on resolved auth method. Cert path uses
+# Connect-AzAccount under the hood; secret path uses raw HTTP.
+if ($spnAuthMethod -eq 'cert') {
+    $probe = Test-SISpnConnection -TenantId $tenantId -AppId $spnAppId -CertThumbprint $spnCertThumb -CertStoreLocation $spnCertLoc
+    $authMethodLabel = "cert (thumbprint=$spnCertThumb, store=$spnCertLoc)"
+} else {
+    $probe = Test-SISpnConnection -TenantId $tenantId -AppId $spnAppId -Secret $spnSecret
+    $authMethodLabel = 'client secret'
+}
 $authSourceLabel = if ($staticSpnPresent) { 'custom.ps1' }
                    elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SI_Graph_AppId)) { 'custom.ps1' }
                    else { 'KeyVault {0}' -f $KeyVaultName }
-$authExtra = if ($staticSpnPresent) { '$global:SI_SPN_AppId / $global:SI_SPN_Secret read directly' }
+$authExtra = if ($staticSpnPresent) { ('$global:SI_SPN_AppId + {0}' -f $authMethodLabel) }
              elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SI_Graph_AppId)) { 'legacy $global:SI_Graph_AppId / $global:SI_Graph_Secret aliased to SI_SPN_*' }
              else { 'secrets {0} / {1}' -f $resolvedAppName, $resolvedSecretName }
 Write-SIAuthResult -Probe $probe -AuthSource $authSourceLabel -AppId $spnAppId -TenantId $tenantId -ExtraDetail $authExtra
@@ -262,6 +329,36 @@ if (-not $spnObjectId) {
 Write-Host ('       SPN ObjectId : {0}' -f $spnObjectId)
 
 Write-Host '[3/4] Building auth block ...'
+# v2.2.267 -- emit cert thumbprint OR client secret based on resolved
+# auth method. Engine ($useCert in Invoke-Output.ps1) prefers cert when
+# CertThumbprint is set; the legacy SI_LogIngest_Secret alias is only
+# emitted when the resolved method is actually 'secret'.
+if ($spnAuthMethod -eq 'cert') {
+    $_credLines = @"
+`$global:SI_SPN_CertThumbprint     = '$spnCertThumb'
+`$global:SI_SPN_CertStoreLocation  = '$spnCertLoc'
+"@
+    $_legacyAliasLines = @"
+`$global:SI_Graph_AppId            = `$global:SI_SPN_AppId
+`$global:SI_Graph_TenantId         = `$global:SI_SPN_TenantId
+`$global:SI_LogIngest_AppId        = `$global:SI_SPN_AppId
+`$global:SI_LogIngest_TenantId     = `$global:SI_SPN_TenantId
+`$global:SI_LogIngest_ObjectId     = `$global:SI_SPN_ObjectId
+"@
+} else {
+    $_credLines = @"
+`$global:SI_SPN_Secret             = '$spnSecret'
+"@
+    $_legacyAliasLines = @"
+`$global:SI_Graph_AppId            = `$global:SI_SPN_AppId
+`$global:SI_Graph_Secret           = `$global:SI_SPN_Secret
+`$global:SI_Graph_TenantId         = `$global:SI_SPN_TenantId
+`$global:SI_LogIngest_AppId        = `$global:SI_SPN_AppId
+`$global:SI_LogIngest_Secret       = `$global:SI_SPN_Secret
+`$global:SI_LogIngest_TenantId     = `$global:SI_SPN_TenantId
+`$global:SI_LogIngest_ObjectId     = `$global:SI_SPN_ObjectId
+"@
+}
 $block = @"
 
 
@@ -271,24 +368,19 @@ $block = @"
 # Single-SPN model: same credential handles Graph reads + LA ingest.
 # Static globals here OVERRIDE Bootstrap-Auth's KV lookup on next run --
 # delete these lines + re-run if you want a fresh KV pull.
-`$global:SI_SPN_AppId           = '$spnAppId'
-`$global:SI_SPN_Secret          = '$spnSecret'
-`$global:SI_SPN_TenantId        = '$tenantId'
-`$global:SI_SPN_ObjectId        = '$spnObjectId'
+# Auth method resolved this run: $spnAuthMethod
+`$global:SI_SPN_AppId              = '$spnAppId'
+`$global:SI_SPN_TenantId           = '$tenantId'
+`$global:SI_SPN_ObjectId           = '$spnObjectId'
+$_credLines
 
 # Backwards-compat aliases for 25 callers that still read the
 # old names. New code reads SI_SPN_* directly.
-`$global:SI_Graph_AppId         = `$global:SI_SPN_AppId
-`$global:SI_Graph_Secret        = `$global:SI_SPN_Secret
-`$global:SI_Graph_TenantId      = `$global:SI_SPN_TenantId
-`$global:SI_LogIngest_AppId     = `$global:SI_SPN_AppId
-`$global:SI_LogIngest_Secret    = `$global:SI_SPN_Secret
-`$global:SI_LogIngest_TenantId  = `$global:SI_SPN_TenantId
-`$global:SI_LogIngest_ObjectId  = `$global:SI_SPN_ObjectId
+$_legacyAliasLines
 
-`$global:SI_WorkspaceResourceId = '$wsResId'
-`$global:SI_DceName             = '$dceName'
-`$global:SI_DcrResourceGroup    = '$dcrRG'
+`$global:SI_WorkspaceResourceId    = '$wsResId'
+`$global:SI_DceName                = '$dceName'
+`$global:SI_DcrResourceGroup       = '$dcrRG'
 "@
 
 Write-Host '[4/5] Appending to custom.ps1 ...'

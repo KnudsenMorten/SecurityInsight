@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.239
+## v2.2.240
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.240 - row caps + per-hop dedupe on Attack_Paths_Summary_Device...Azure (fixes 80+ min XDR hang) (18383e48)
 - release: SecurityInsight v2.2.239 - grant Machine.Read.All on WindowsDefenderATP (third API resource) (902153c9)
 - release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
 - release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
@@ -33,13 +34,62 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.213 - snapshot dedup on ExposureGraphNodes/Edges (real CVE Detailed fix) (1aafed71)
 - release: SecurityInsight v2.2.212 - revert v2.2.210 architecture collapse, keep scalar extraction (b8522da0)
 - release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
-- release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.240 — Risk Analysis: row caps on `Attack_Paths_Summary_Device_..._Azure` 4-hop cartesian (fixes 80+ min hang)
+
+Operator: `Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` hung indefinitely when run in Azure Automation. 80+ min zero output, hit the 3h AA sandbox limit, no errors. All other 12 EG templates completed in <10 min on the same tenant.
+
+### Diagnosis
+
+The report does a **4-hop cartesian join** through the Exposure Graph:
+
+```
+DeviceNodes (bucketed)
+  -> DevicesWithCVEs          (Device + CVE)
+    -> CredentialsOnDevices    (Device + CVE + Credential)        -- ~5x fan-out per device
+      -> Hop1                  (... + Identity)                    -- ~3-5x fan-out per credential
+        -> Detailed            (... + 20+ Azure target types)      -- ~10-20x fan-out per identity
+```
+
+Before v2.2.240 the only `summarize` happened **after** the 4th hop. On a tenant with >500 devices, each with 50 CVEs and many credentials, the intermediate result set could balloon to millions of rows before the collapse. The XDR query engine never times out cleanly in that state — it just churns until the AA sandbox kills the job.
+
+The other 12 EG reports work because they have shorter join chains (1-2 hops) or stricter source filters.
+
+### Fix
+
+Two changes inside the report's KQL:
+
+1. **De-dup after each hop**. Added a `summarize any(...) by <natural key>` between every join so the row set collapses to its logical key (Device / Credential / Identity / Target) before the next fan-out.
+
+2. **`| take 50000` cap** after each intermediate `let`. Well above any realistic tenant's first-N top-priority paths, and the report's final `order by` + summarize picks the top-200 anyway. Operators on truly huge tenants who need more headroom can override by patching the cap in their `risk-analysis-detection/RiskAnalysis_Queries_Custom.yaml` overlay.
+
+```kql
+let DevicesWithCVEs = ... | summarize ... by Device | take 50000;
+let CredentialsOnVulnerableDevices = ... | summarize any(...) by Device, Credential | take 50000;
+let Hop1 = ... | summarize any(...) by Device, Credential, Identity | take 50000;
+```
+
+### Why this report and not the others
+
+A grep across the YAML confirms this is the only report with a 4-hop join structure. The Identity- and Github-source attack-path reports are 2-3 hops, and the PublicIP-source one is also 3 hops. The 4-hop combination of Device → CVE → Credential → Identity → AzureTarget is uniquely cartesian-prone.
+
+### Expected behavior post-fix
+
+- Query completes well under 10 min (matching the other EG reports) even on multi-thousand-device tenants
+- Top-priority attack paths still surface — the `take 50000` cap is per-hop, not on the final result; the report's existing `RiskScoreTotal_Weighted DESC` + `take` controls the final row count
+- Operators get a real result set instead of a sandbox-timeout zero-row run
+
+### Follow-up
+
+Engine work — separate from this YAML fix — could add a client-side timeout to `Invoke-GraphHuntingQuery` so a future runaway query surfaces as a `[WARN]` instead of hanging the whole engine run. Tracked but not in this release.
 
 ---
 

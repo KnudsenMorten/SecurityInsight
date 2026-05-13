@@ -4326,8 +4326,28 @@ function Export-Worksheet {
         -AutoSize -FreezeTopRow -BoldTopRow -ClearSheet -PassThru
     $ws = $excel.Workbook.Worksheets[$safeSheet]
     $ws.Cells.AutoFitColumns()
+    # v2.2.226 -- enable WrapText on known multi-line columns so embedded
+    # newlines (\r\n built by the MoreDetails post-process; IssueList /
+    # RiskFactor_*_Detailed / ImpactedAssetsList aggregations) render as
+    # line breaks in Excel. Without WrapText the cell shows one long
+    # string and operators see "MoreDetails doesn't separate multiple
+    # entries". Capping width at 50 (below) keeps cells readable when
+    # wrap fires.
+    $wrapTargets = @{
+        'MoreDetails'                     = $true
+        'IssueList'                       = $true
+        'RiskFactor_Probability_Detailed' = $true
+        'RiskFactor_Consequence_Detailed' = $true
+        'ImpactedAssetsList'              = $true
+        'AssetDetectedInReportName'       = $true
+        'CVSSDesc'                        = $true
+    }
     for ($col = 1; $col -le $ws.Dimension.Columns; $col++) {
       if ($ws.Column($col).Width -gt 50) { $ws.Column($col).Width = 50 }
+      $headerVal = [string]$ws.Cells[1, $col].Value
+      if ($headerVal -and $wrapTargets.ContainsKey($headerVal)) {
+        try { $ws.Column($col).Style.WrapText = $true } catch { }
+      }
     }
     Close-ExcelPackage $excel
     $script:_sheetWritten[$safeSheet] = $true
@@ -4402,8 +4422,28 @@ function Export-Worksheet {
 
     $ws = $excel.Workbook.Worksheets[$safeSheet]
     $ws.Cells.AutoFitColumns()
+    # v2.2.226 -- enable WrapText on known multi-line columns so embedded
+    # newlines (\r\n built by the MoreDetails post-process; IssueList /
+    # RiskFactor_*_Detailed / ImpactedAssetsList aggregations) render as
+    # line breaks in Excel. Without WrapText the cell shows one long
+    # string and operators see "MoreDetails doesn't separate multiple
+    # entries". Capping width at 50 (below) keeps cells readable when
+    # wrap fires.
+    $wrapTargets = @{
+        'MoreDetails'                     = $true
+        'IssueList'                       = $true
+        'RiskFactor_Probability_Detailed' = $true
+        'RiskFactor_Consequence_Detailed' = $true
+        'ImpactedAssetsList'              = $true
+        'AssetDetectedInReportName'       = $true
+        'CVSSDesc'                        = $true
+    }
     for ($col = 1; $col -le $ws.Dimension.Columns; $col++) {
       if ($ws.Column($col).Width -gt 50) { $ws.Column($col).Width = 50 }
+      $headerVal = [string]$ws.Cells[1, $col].Value
+      if ($headerVal -and $wrapTargets.ContainsKey($headerVal)) {
+        try { $ws.Column($col).Style.WrapText = $true } catch { }
+      }
     }
     Close-ExcelPackage $excel
   } finally {
@@ -5649,27 +5689,55 @@ try {
 # with a KQL `| distinct SolutionVersion` across the table.
 $global:RA_SolutionVersion = '(dev)'
 try {
-    $_candidateRoots = @()
-    if ($global:RepoRoot)    { $_candidateRoots += [string]$global:RepoRoot }
-    if ($global:InstallPath) { $_candidateRoots += [string]$global:InstallPath }
-    # walk up from $PSScriptRoot looking for VERSION.txt (covers both monorepo
-    # and community install where engine lives in scripts/).
+    # v2.2.226 -- walk up from $PSScriptRoot FIRST. The walk naturally finds the
+    # per-solution VERSION (e.g. SOLUTIONS/SecurityInsight/VERSION = "2.2.225")
+    # before reaching the repo-root VERSION.txt -- which the bootstrap stamps
+    # with a compound label like
+    #   AutomateIT-internal-main-<sha> (solutions: PlatformConfiguration,
+    #   PlatformMonitoring, SecurityInsight-v2.2.221) @ 2026-05-13T01:10:20
+    # for sync tracking. That compound label was leaking into the engine's
+    # SolutionVersion stamp (Excel header, email subject, LA row column) and
+    # confusing operators -- they wanted just "2.2.225".
+    # Old logic seeded $_candidateRoots with $global:RepoRoot/$global:InstallPath
+    # FIRST, so the repo-root VERSION.txt was read before the walk-up reached
+    # the per-solution file. Reordered: walk-up from $PSScriptRoot wins, root
+    # VERSION.txt is the fallback only when no per-solution VERSION is found.
     $_cur = $PSScriptRoot
     while ($_cur) {
-        $_candidateRoots += $_cur
+        foreach ($_name in @('VERSION','VERSION.txt')) {
+            $_ver = Join-Path $_cur $_name
+            if (Test-Path -LiteralPath $_ver) {
+                $_raw = $null
+                try { $_raw = (Get-Content -LiteralPath $_ver -Raw -ErrorAction Stop) } catch { }
+                if ($_raw) { $_raw = $_raw.Trim() }
+                if ($_raw) {
+                    $global:RA_SolutionVersion = $_raw
+                    break
+                }
+            }
+        }
+        if ($global:RA_SolutionVersion -ne '(dev)') { break }
         $_parent = Split-Path -Parent $_cur
         if (-not $_parent -or $_parent -eq $_cur) { break }
         $_cur = $_parent
     }
-    foreach ($_r in $_candidateRoots) {
-        foreach ($_name in @('VERSION','VERSION.txt')) {
-            $_ver = Join-Path $_r $_name
-            if (Test-Path -LiteralPath $_ver) {
-                $global:RA_SolutionVersion = (Get-Content -LiteralPath $_ver -Raw).Trim()
-                break
+    # Fallback: explicit repo-root candidates if walk-up missed (e.g. engine
+    # symlinked into an unusual layout). Same logic as before but only runs
+    # when the per-solution VERSION wasn't discoverable.
+    if ($global:RA_SolutionVersion -eq '(dev)') {
+        $_candidateRoots = @()
+        if ($global:RepoRoot)    { $_candidateRoots += [string]$global:RepoRoot }
+        if ($global:InstallPath) { $_candidateRoots += [string]$global:InstallPath }
+        foreach ($_r in $_candidateRoots) {
+            foreach ($_name in @('VERSION','VERSION.txt')) {
+                $_ver = Join-Path $_r $_name
+                if (Test-Path -LiteralPath $_ver) {
+                    $global:RA_SolutionVersion = (Get-Content -LiteralPath $_ver -Raw).Trim()
+                    break
+                }
             }
+            if ($global:RA_SolutionVersion -ne '(dev)') { break }
         }
-        if ($global:RA_SolutionVersion -ne '(dev)') { break }
     }
 } catch { }
 

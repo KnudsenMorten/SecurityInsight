@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.227
+## v2.2.228
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.228 - weighted-factors JSON discovered via walk-up (no SettingsPath dependency) (1776d679)
 - release: SecurityInsight v2.2.227 - AI rollup collapse-per-(asset, ConfigBucket) for *_Detailed reports (2e0896b0)
 - release: SecurityInsight v2.2.226 - clean version stamp + MoreDetails wrap in Excel (1f72026d)
 - release: SecurityInsight v2.2.225 - extra YAML-projected columns carry through (CVE Detailed exploit cols back) (771146f4)
@@ -33,13 +34,71 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
 - release: SecurityInsight v2.2.200 - composite-key bucketing for *_Detailed reports (c733adce)
 - release: SecurityInsight v2.2.199 - retry overflow/preempted buckets before escalating (f948feca)
-- release: SecurityInsight v2.2.198 - cache CL snapshots + short-circuit Graph 900s deathloops (494900a2)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.228 — Risk Analysis: weighted-factors JSON now discovered via walk-up, no longer requires `$global:SettingsPath`
+
+Operator: "something change for the weighted detailed, as both criticality and data sensitivity are part of the cmdb integration. suddenly that has changed. i thought we control this by json or where is that controlled."
+
+### Symptom
+
+Detailed report rows showed:
+
+| Column                     | Value                          |
+|----------------------------|--------------------------------|
+| `RiskScore_Weight_Factor`  | `100`                          |
+| `RiskScore_Weight_Detailed`| `cmdbCriticality=Critical`     |
+| `cmdbCriticality`          | `Critical`                     |
+| `cmdbDataSensitivity`      | `Confidential`                 |
+
+A row with `Critical` + `Confidential` should have lifted to `Factor=225` (1.5x criticality * 1.5x sensitivity) and `Detailed="cmdbCriticality=Critical;cmdbDataSensitivity=Confidential"`. The JSON config at `risk-analysis-detection/riskscore_weighted.schema.custom.json` already declares both fields for every engine (endpoint/identity/azure) — it had not been changed.
+
+### Cause
+
+`Get-WeightedFactorsConfig` looked for the JSON only under `$global:SettingsPath`. When the launcher didn't set that global (or set it to a directory without `riskscore_weighted.schema.custom.json`), `Get-WeightedFactorsConfig` returned `$null` and `Resolve-WeightedFactorsBlock` left the YAML fallback stub in place:
+
+```kql
+//__WEIGHTED_FACTORS_BEGIN__
+| extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
+| extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
+//__WEIGHTED_FACTORS_END__
+```
+
+That stub is exactly what shipped through to KQL — hence `Factor=100` and a single-field detail string regardless of how many fields the JSON declared.
+
+### Fix
+
+`Get-WeightedFactorsConfig` now builds its candidate-directory list by walking up from the engine's own `$PSScriptRoot` looking for a `risk-analysis-detection/` sibling at each level (depth cap 6), in addition to honoring `$global:SettingsPath` when set. First hit wins; per-report `<ReportName>.weighted.custom.json` overrides solution-wide `riskscore_weighted.schema.custom.json`.
+
+```powershell
+$searchDirs = New-Object System.Collections.Generic.List[string]
+if (-not [string]::IsNullOrWhiteSpace($global:SettingsPath)) { [void]$searchDirs.Add([string]$global:SettingsPath) }
+$cur = $PSScriptRoot
+for ($depth = 0; $depth -lt 6; $depth++) {
+    $sibling = Join-Path $cur 'risk-analysis-detection'
+    if (Test-Path -LiteralPath $sibling -PathType Container) { [void]$searchDirs.Add([string]$sibling) }
+    $cur = Split-Path -Parent $cur
+}
+```
+
+Each successful load now emits `[INFO] [weight] <Report> (engine=<x>): N field(s), combine=product, source=<path>` and each miss emits a `[WARN] [weight] ... no riskscore_weighted.schema.custom.json found in [<dirs>] -- YAML stub will ship` so the operator can see at a glance which reports got the multi-field substitution and which fell back to the stub. The cache key (`ReportName|Engine`) is unchanged, so the log fires once per (report, engine) pair, not per row.
+
+### Verification
+
+After this fix on the same dataset:
+- `Factor=225` for a Critical / Confidential asset (1.5 * 1.5)
+- `Factor=187` for a Critical / Internal (1.5 * 1.25, rounded basis-100)
+- `Detailed="cmdbCriticality=Critical;cmdbDataSensitivity=Confidential"` when both lift
+- `Detailed="cmdbCriticality=Critical"` when only criticality lifts (default sensitivity)
+
+The JSON file (`risk-analysis-detection/riskscore_weighted.schema.custom.json`) remains the single source of truth — operators edit it (or a per-report `<ReportName>.weighted.custom.json` next to it) to retune multipliers.
 
 ---
 

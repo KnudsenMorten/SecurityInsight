@@ -496,10 +496,20 @@ function Write-SIClassificationToLogAnalytics {
         })
 
         # Step 3: provision/update DCR + LA table.
-        $null = CheckCreateUpdate-TableDcr-Structure `
+        # v2.2.250 -- capture the module's verbose/warning/error streams to a
+        # buffer instead of suppressing them outright. Successful runs the
+        # buffer is dropped; if the wait loop times out below, we DUMP the
+        # captured output so the operator can see WHY creation failed instead
+        # of staring at "immutableId not in ARG after 120s" with no clue.
+        $_createOutput = $null
+        try {
+            $_createOutput = & {
+                $VerbosePreference = 'Continue'
+                $WarningPreference = 'Continue'
+                $ErrorActionPreference = 'Continue'
+                CheckCreateUpdate-TableDcr-Structure `
                     -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
                     @authParams `
-                    -Verbose:$false `
                     -DceName                                    $global:SI_DceName `
                     -DcrName                                    $dcrName `
                     -DcrResourceGroup                           $global:SI_DcrResourceGroup `
@@ -507,17 +517,21 @@ function Write-SIClassificationToLogAnalytics {
                     -Data                                       $schemaSample `
                     -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
                     -AzLogDcrTableCreateFromAnyMachine          $true `
-                    -AzLogDcrTableCreateFromReferenceMachine    @() 4>$null
+                    -AzLogDcrTableCreateFromReferenceMachine    @() 4>&1 3>&1 2>&1
+            } | Out-String
+        } catch {
+            $_createOutput = ("CheckCreateUpdate-TableDcr-Structure threw a terminating exception: {0}" -f $_.Exception.Message)
+        }
 
         # Step 4: re-sync caches after DCR provisioning. Newly-created DCR's
         # immutableId needs to land in ARG before Post-* can resolve it.
-        # Poll for up to 120s -- when ARG hasn't indexed the new DCR yet, the
-        # module falls back to substituting the DCE's location ('westeurope')
-        # as the URL path segment, producing
-        #   404 NotFound: Data collection rule with immutable Id 'westeurope' not found.
+        # v2.2.250 -- bumped wait from 120s -> 240s. New-tenant scenarios (RG
+        # was just created, ARG cold-start) routinely take 90-180s to index a
+        # brand-new DCR. 120s was burning customer cycles on what's actually
+        # just ARG eventual consistency.
         $_dcrReady = $false
         $_waitTotal = 0
-        $_waitMax   = 120
+        $_waitMax   = 240
         $_waitStep  = 15
         while ($_waitTotal -lt $_waitMax) {
             Start-Sleep -Seconds $_waitStep
@@ -544,7 +558,30 @@ function Write-SIClassificationToLogAnalytics {
             Write-SIInfo ("waiting for DCR '{0}' immutableId in ARG ({1}s/{2}s) ..." -f $dcrName, $_waitTotal, $_waitMax)
         }
         if (-not $_dcrReady) {
-            Write-Warning ("DCR '{0}' immutableId not in ARG after {1}s -- ingest may 404. Will retry; if persistent, wait a few minutes and re-run." -f $dcrName, $_waitMax)
+            Write-Warning ("DCR '{0}' immutableId not in ARG after {1}s -- ingest will likely 404." -f $dcrName, $_waitMax)
+            # v2.2.250 -- dump CheckCreateUpdate-TableDcr-Structure's captured
+            # verbose/warning/error stream so the operator can see WHY the DCR
+            # didn't land. Three classes of failure show up in this dump:
+            #   1. Module says "DCR already exists in different RG -- skipping
+            #      create" -- collision detection didn't catch it (file a bug).
+            #   2. Module says "creating DCR..." followed by an ARM PUT 403/401
+            #      -- SPN missing Monitoring Contributor on target RG.
+            #   3. Module says "creating DCR..." with no error -- DCR was created
+            #      and this is genuine ARG eventual consistency lag (wait + re-run).
+            if ($_createOutput) {
+                Write-Warning  "===== CheckCreateUpdate-TableDcr-Structure output (captured for diagnosis) ====="
+                $_createOutput -split "`r?`n" | Where-Object { $_.Trim() } | ForEach-Object {
+                    Write-Warning ("  | {0}" -f $_)
+                }
+                Write-Warning  "===== end module output ====="
+            } else {
+                Write-Warning "(no module output captured -- CheckCreateUpdate returned silently)"
+            }
+            Write-Warning "Likely root causes:"
+            Write-Warning "  - ARG eventual consistency on new RG (re-run in 5 min)"
+            Write-Warning "  - SPN missing 'Monitoring Contributor' on target sub or RG"
+            Write-Warning "  - Module hit a same-named DCR via its internal ARM lookup that"
+            Write-Warning "    bypasses our cache filter (file a bug + paste the module output above)"
         }
 
         # Re-apply scope filter after Step 4's cache re-sync -- Get-Az*ListAll

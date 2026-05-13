@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.249
+## v2.2.250
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
 - release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
 - release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
 - release: SecurityInsight v2.2.247 - anonymous-mail diagnostic logging, never lie about success (bae363f7)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
 - release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
 - release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
-- release: SecurityInsight v2.2.221 - comprehensive AadDeviceId column_ifexists sweep (3d08309a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.250 — Stop flying blind: capture CheckCreateUpdate output + extend ARG wait to 240s
+
+Customer running v2.2.249: auto-rename + persist worked beautifully (`dcr-si-endpoint` → `dcr-si-endpoint-rg-securityinsighttest`, line written to custom.ps1). But the wait loop still couldn't find the new unique-named DCR in ARG, even though there's no possible cross-scope collision on a name with that target-RG-derived suffix.
+
+Three things could explain that, and **we have no way to tell which** because `CheckCreateUpdate-TableDcr-Structure` is called with `-Verbose:$false 4>$null` — we swallow its entire diagnostic stream. Result: a single warning line "immutableId not in ARG after 120s" with no actionable info.
+
+### Fix 1 — capture the module's full output
+
+Step 3 now runs `CheckCreateUpdate-TableDcr-Structure` inside an inline scriptblock that forces `$VerbosePreference = 'Continue'` + `$WarningPreference = 'Continue'`, then merges every stream (`*>&1 3>&1 2>&1 4>&1`) into a string buffer:
+
+```powershell
+$_createOutput = & {
+    $VerbosePreference = 'Continue'
+    $WarningPreference = 'Continue'
+    $ErrorActionPreference = 'Continue'
+    CheckCreateUpdate-TableDcr-Structure ... 4>&1 3>&1 2>&1
+} | Out-String
+```
+
+Successful runs: buffer dropped, log stays clean.
+
+Failed runs (wait loop times out): the buffer is dumped after the timeout warning, line-by-line, prefixed with `  | ` so the operator can scan the entire module trace. The dump is followed by a three-bullet checklist of the most likely root causes (ARG eventual consistency / SPN missing Monitoring Contributor / module's internal ARM lookup bypassing our cache filter).
+
+### Fix 2 — wait 240s instead of 120s
+
+New-tenant + new-RG + brand-new DCR routinely takes 90–180 s for ARG to index. 120 s was burning customer cycles on what's usually just eventual consistency. Bumped to 240 s — same 15 s polling cadence, just more iterations.
+
+### Why this matters
+
+The v2.2.249 customer trace ended at the 60 s mark with no resolution visible. With v2.2.250 they'd have seen either (a) the DCR resolve at 75–180 s and the run succeed, or (b) the captured module output telling them exactly which of the three root causes fired. No more "wait for the timeout, then guess."
 
 ---
 

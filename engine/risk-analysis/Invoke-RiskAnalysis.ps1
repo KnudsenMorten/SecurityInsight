@@ -818,18 +818,9 @@ function Resolve-ProfileCLLetBlocks {
         $bodyHash = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash(
                         [System.Text.Encoding]::UTF8.GetBytes($bodyKql))).Replace('-','')
         $cacheKey = $varName + '|' + $bodyHash
-        # v2.2.268 -- CL-snapshot bucketing. After projection-shrink, if the
-        # serialized datatable exceeds the AH body cap headroom, split CL
-        # rows into chunks where each chunk's datatable stays under the cap.
-        # Cache stores ARRAY of datatables (1 element when not bucketed, N
-        # when bucketed). Returned as a script-scoped list of substituted
-        # queries; each variant runs through the existing AutoBucket loop
-        # independently. CL chunks are row-disjoint so result concat is safe.
-        $_maxBodyBytes = if ($global:SI_HybridMaxBodyBytes) { [int]$global:SI_HybridMaxBodyBytes } else { 700KB }
         if ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
-            $datatableLetList = @($script:_HybridSnapshotCache[$cacheKey])
-            $_size = ($datatableLetList | Measure-Object -Property Length -Sum).Sum
-            Write-Info ("[hybrid] '{0}' snapshot reused from cache ({1} bucket(s), {2} bytes total)" -f $varName, $datatableLetList.Count, $_size)
+            $datatableLet = $script:_HybridSnapshotCache[$cacheKey]
+            Write-Info ("[hybrid] '{0}' snapshot reused from cache ({1} bytes)" -f $varName, $datatableLet.Length)
         } else {
             Write-Info ("[hybrid] pre-fetching CL snapshot for let-binding '{0}' from LA workspace ..." -f $varName)
             try {
@@ -838,52 +829,12 @@ function Resolve-ProfileCLLetBlocks {
                 Write-Err2 ("[hybrid] CL snapshot fetch failed for '{0}': {1}" -f $varName, $_.Exception.Message)
                 throw
             }
-            $clRowsArr = @($clRows)
-            $rowCount = $clRowsArr.Count
-            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $clRowsArr
-            if ($datatableLet.Length -le $_maxBodyBytes -or $rowCount -le 1) {
-                # Single-bucket path (default).
-                $datatableLetList = @($datatableLet)
-                Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes; under {3}-byte cap)" -f $varName, $rowCount, $datatableLet.Length, $_maxBodyBytes)
-            } else {
-                # Bucketing fires. Estimate per-row average from full build
-                # (just-computed $datatableLet length), pick a chunk size that
-                # leaves headroom, slice rows, build per-chunk datatables.
-                $_avgPerRow   = [Math]::Max(1, [int]($datatableLet.Length / $rowCount))
-                $_chunkRows   = [Math]::Max(1, [int]([Math]::Floor($_maxBodyBytes / $_avgPerRow)))
-                $_bucketCount = [Math]::Ceiling([double]$rowCount / [double]$_chunkRows)
-                Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined would be {2} bytes (over {3}-byte cap); splitting into {4} CL bucket(s) of ~{5} row(s) each" -f $varName, $rowCount, $datatableLet.Length, $_maxBodyBytes, $_bucketCount, $_chunkRows)
-                $datatableLetList = New-Object System.Collections.Generic.List[string]
-                for ($_i = 0; $_i -lt $rowCount; $_i += $_chunkRows) {
-                    $_end = [Math]::Min($_i + $_chunkRows - 1, $rowCount - 1)
-                    $_slice = $clRowsArr[$_i..$_end]
-                    $_chunkDt = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $_slice
-                    [void]$datatableLetList.Add($_chunkDt)
-                    Write-Info ("[hybrid]   CL bucket {0}/{1}: rows {2}-{3} -> {4} bytes" -f $datatableLetList.Count, $_bucketCount, ($_i + 1), ($_end + 1), $_chunkDt.Length)
-                }
-                $datatableLetList = @($datatableLetList)
-            }
-            $script:_HybridSnapshotCache[$cacheKey] = $datatableLetList
+            $rowCount = if ($clRows) { @($clRows).Count } else { 0 }
+            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows)
+            Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, $rowCount, $datatableLet.Length)
+            $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
         }
-        # Substitute. If single bucket, single replacement (legacy semantics).
-        # If N buckets, build N variants of the modified query and stash
-        # them in $script:_RAQueryVariants for the submission loop to pick up.
-        if ($datatableLetList.Count -le 1) {
-            $modified = $modified.Replace($fullBlock, $datatableLetList[0])
-        } else {
-            # Build N modified queries (one per CL chunk), each with its
-            # corresponding chunk-datatable in place of $fullBlock. The first
-            # one becomes $modified (so the existing return-value contract
-            # holds for downstream logic that expects a string); the rest are
-            # stored in $script:_RAQueryVariants and consumed by the submission
-            # wrapper at the AutoBucket loop entry.
-            if (-not $script:_RAQueryVariants) { $script:_RAQueryVariants = New-Object System.Collections.Generic.List[string] }
-            $script:_RAQueryVariants.Clear()
-            foreach ($_dt in $datatableLetList) {
-                [void]$script:_RAQueryVariants.Add($modified.Replace($fullBlock, $_dt))
-            }
-            $modified = $script:_RAQueryVariants[0]
-        }
+        $modified = $modified.Replace($fullBlock, $datatableLet)
     }
     return $modified
 }
@@ -6145,33 +6096,6 @@ $lastBucketRunError = $null
 # report run so other reports start clean.
 $script:_AutoBucketSkipRemainingBuckets = $false
 
-# v2.2.268 -- CL-bucketing wrapper. When the hybrid CL-snapshot exceeds
-# the AH 1MB body cap, Resolve-ProfileCLLetBlocks splits it into N
-# row-chunks and stashes the N substituted query variants in
-# $script:_RAQueryVariants. Each variant runs through the existing
-# AutoBucket loop independently; result rows are concatenated (CL chunks
-# are row-disjoint so the join produces non-overlapping rows per chunk).
-# When no CL bucketing fired (the common case), this iterates exactly
-# once over the original $Query.
-$_RaCLVariants = if ($script:_RAQueryVariants -and @($script:_RAQueryVariants).Count -gt 1) {
-    @($script:_RAQueryVariants)
-} else {
-    @($Query)
-}
-$_RaCLBucketTotal = $_RaCLVariants.Count
-$_RaCLAggregated  = New-Object System.Collections.Generic.List[object]
-if ($_RaCLBucketTotal -gt 1) {
-    Write-Info ("[CL-bucket] hybrid snapshot was bucketed into {0} chunk(s) by Resolve-ProfileCLLetBlocks; submitting each through AutoBucket independently." -f $_RaCLBucketTotal)
-}
-
-for ($_RaCLIdx = 0; $_RaCLIdx -lt $_RaCLBucketTotal; $_RaCLIdx++) {
-    if ($_RaCLBucketTotal -gt 1) {
-        Write-Info ("[CL-bucket {0}/{1}] starting" -f ($_RaCLIdx + 1), $_RaCLBucketTotal)
-    }
-    $Query              = $_RaCLVariants[$_RaCLIdx]
-    $bucketRunSucceeded = $false   # reset per CL bucket so the inner while loop runs again
-    $script:_AutoBucketSkipRemainingBuckets = $false
-
 while (-not $bucketRunSucceeded) {
 
   # Reset results on each (re)run so we don't keep partial data from a failing bucket count
@@ -6359,21 +6283,6 @@ while (-not $bucketRunSucceeded) {
   # Success: all buckets executed without deterministic overflow/timeout
   $bucketRunSucceeded = $true
 }
-
-    # v2.2.268 -- end of inner CL-bucket iteration. Accumulate this CL chunk's
-    # AutoBucket result into the cross-CL-bucket rollup. CL chunks are
-    # row-disjoint so concat is safe (no dedup needed).
-    if ($_RaCLBucketTotal -gt 1) {
-        [void]$_RaCLAggregated.AddRange(@($ResultAll))
-        Write-Info ("[CL-bucket {0}/{1}] completed: {2} row(s) added to rollup (running total: {3})" -f ($_RaCLIdx + 1), $_RaCLBucketTotal, @($ResultAll).Count, $_RaCLAggregated.Count)
-    }
-}  # end CL-bucket for-loop (v2.2.268)
-
-if ($_RaCLBucketTotal -gt 1) {
-    $ResultAll = @($_RaCLAggregated)
-    Write-Info ("[CL-bucket] aggregated {0} row(s) across {1} CL bucket(s)" -f $ResultAll.Count, $_RaCLBucketTotal)
-}
-$script:_RAQueryVariants = $null   # reset for next report
 
 # If we succeeded with a higher bucket count than the initial AutoBucket probe, update memo/cache so next run starts smarter.
 if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {

@@ -39,6 +39,22 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 }
 
 # ----------------------------------------------------------------------
+# v2.2.232 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
+# The v2.3 Setup Wizard writes $global:SI_SPN_* (unified names). The
+# Connect-AzAccount calls inside this engine (token refresh + reconnect
+# paths) still read the legacy $global:Spn* names. Initialize-LauncherConfig
+# already does this mirror -- but if the engine is invoked OUTSIDE the
+# standard launcher path (direct call, custom orchestrator, AF bootstrap),
+# the legacy names stay $null and SPN+cert auth in particular falls through
+# every elseif branch. Mirror the names here so the engine is defensive.
+# ----------------------------------------------------------------------
+if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
+if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
+if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
+if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
+if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
+
+# ----------------------------------------------------------------------
 #  Module dependencies -- centralized helper under _shared/
 # ----------------------------------------------------------------------
 . (Join-Path $PSScriptRoot '_shared/Ensure-Module.ps1')   # forward slash works on both Win + Linux container

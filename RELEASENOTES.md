@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.231
+## v2.2.232
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
 - release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
 - release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
 - release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.205 - pre-filter _Edges to edges touching our endpoints (no output change) (f54dec6a)
 - release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
 - release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
-- release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.232 — Risk Analysis engine: defensive SPN name bridge (mirrors `SI_SPN_*` → `Spn*` on startup)
+
+v2.2.229 fixed the SPN-cert bridge in `Initialize-LauncherConfig.ps1`, which is the layered-config loader the standard launcher path runs. That covers community-vm and internal-vm launchers. But if the **RA engine** is invoked outside that path — direct call, custom orchestrator, or AF bootstrap that pre-populates v1 `HighPriv_*` globals — `Initialize-LauncherConfig` never runs, so `$global:Spn*` stays `$null` even though the customer's `SecurityInsight.custom.ps1` set `$global:SI_SPN_*`.
+
+The transient-retry reconnect path in `Invoke-RiskAnalysis.ps1` (around line 6068) then reads `$global:SpnCertificateThumbprint` → finds nothing → can't re-authenticate when tokens expire mid-run.
+
+### Fix
+
+A defensive copy of the bridge runs at the top of `Invoke-RiskAnalysis.ps1`, right after the PS5.1/PS7 PSModulePath scrubber:
+
+```powershell
+if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
+if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
+if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
+if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
+if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
+```
+
+Same `if (-not legacy)` shape as `Initialize-LauncherConfig.ps1:601–606` so existing legacy-name customers (who set `$global:SpnTenantId` directly in their custom file) still win over the auto-mirror.
+
+### Follow-up
+
+Other engines (`Invoke-SIEngineRun.ps1` for endpoint/identity/azure/publicip profilers, `Invoke-PrivilegeTierClassifier.ps1`, `Invoke-PublicIpScanner.ps1`, `AssetTagging.ps1`) also read the legacy names and would benefit from the same defensive mirror. Tracked for a follow-up release; RA was the immediate blocker.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.254
+## v2.2.255
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
 - release: SecurityInsight v2.2.254 - wizard DCR names aligned with engine -profile convention (6c3abca9)
 - release: SecurityInsight v2.2.253 - skip SI_StorageKey fetch+persist when OAuth-on-storage enabled (2e8a6edf)
 - release: SecurityInsight v2.2.252 - Machine.Read.All instead of Machine.ReadWrite.All for WDATP (e02c9297)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
 - release: SecurityInsight v2.2.228 - weighted-factors JSON discovered via walk-up (no SettingsPath dependency) (1776d679)
 - release: SecurityInsight v2.2.227 - AI rollup collapse-per-(asset, ConfigBucket) for *_Detailed reports (2e0896b0)
-- release: SecurityInsight v2.2.226 - clean version stamp + MoreDetails wrap in Excel (1f72026d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.255 — Drop dead `$global:SI_DcrNamePattern` from wizard output
+
+Operator: "why have that if we overrule?"
+
+Right — v2.2.254 had the wizard emit both:
+
+```powershell
+$global:SI_DcrNamePattern             = 'dcr-si-{0}-profile'   # ← never read
+# ... and ...
+$global:SI_Endpoint_DcrName              = 'dcr-si-endpoint-profile'   # ← always wins
+$global:SI_Azure_DcrName                 = 'dcr-si-azure-profile'
+$global:SI_Identity_DcrName              = 'dcr-si-identity-profile'
+$global:SI_Shodan_DcrName                = 'dcr-si-publicip-profile'
+```
+
+The per-engine override path in `Invoke-Output.ps1` always wins over the pattern, and since v2.2.254 every profiler engine has an explicit override emitted. The pattern was pure noise in the generated custom file.
+
+Dropped. New resolution chain:
+
+1. `$global:SI_<Engine>_DcrName` in custom.ps1 → wins (always present after wizard run).
+2. Engine internal default in `Invoke-Output.ps1` → `'dcr-si-{0}-profile'`. Used only when the operator deletes the per-engine override line. No broken state.
+
+A short comment explaining the omission is left in its place so the absence is intentional, not a bug.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.252
+## v2.2.253
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.253 - skip SI_StorageKey fetch+persist when OAuth-on-storage enabled (2e8a6edf)
 - release: SecurityInsight v2.2.252 - Machine.Read.All instead of Machine.ReadWrite.All for WDATP (e02c9297)
 - release: SecurityInsight v2.2.251 - DCR auto-rename length guard (>60 chars -> SHA1 hash fallback) (ef4ef053)
 - release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
@@ -33,13 +34,27 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.227 - AI rollup collapse-per-(asset, ConfigBucket) for *_Detailed reports (2e0896b0)
 - release: SecurityInsight v2.2.226 - clean version stamp + MoreDetails wrap in Excel (1f72026d)
 - release: SecurityInsight v2.2.225 - extra YAML-projected columns carry through (CVE Detailed exploit cols back) (771146f4)
-- release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.253 — Stop appending plaintext `SI_StorageKey` to custom.ps1 when OAuth-on-storage is enabled
+
+Operator: "why do you continue to add this to custom file when we use oauth on storage account by default `$global:SI_UseStorageOAuth = $true`?"
+
+Right. The setup wizard's `Write-SICustomConfig.ps1` correctly emits `$global:SI_UseStorageOAuth = $true` and explicitly *omits* `SI_StorageKey` (RBAC-only mode, v2.2.105+). But the engine's prestage (`Invoke-SIPrestageInfra.ps1`) was still calling `Get-AzStorageAccountKey` and **appending the plaintext shared key** to `SecurityInsight.custom.ps1` regardless of the OAuth flag — two strikes:
+
+1. **Pointless secret on disk** — the key gets persisted into a config file the operator just opted out of needing.
+2. **`listKeys` permission requirement** — the SPN needs `Microsoft.Storage/storageAccounts/listkeys/action` to fetch it; many SPNs running with Storage Data Contributor only (the OAuth-mode minimum) get a 403 here, surfacing as a confusing prestage warning.
+
+Fix: gate the entire fetch + writeback block on `-not $global:SI_UseStorageOAuth`. When OAuth-on-storage is enabled, the engine logs `OAuth-on-storage enabled -- skipping SI_StorageKey fetch + writeback` and moves on. The legacy key-auth path is unchanged for customers who explicitly opt back to shared-key auth.
+
+The engine entry (`Invoke-SIEngineRun.ps1`) was already OAuth-aware (line 234 `if ($global:SI_UseStorageOAuth) { $ctx = New-SIStorageContext -UseOAuth }`) — only the prestage was non-compliant. No behavior change for customers already on OAuth + a clean custom file; the unwanted append simply stops.
 
 ---
 

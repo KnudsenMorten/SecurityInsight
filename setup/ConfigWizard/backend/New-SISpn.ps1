@@ -102,6 +102,7 @@ param(
     [Parameter()]          [int]$SecretValidityYears = 2,
     [Parameter()]          [string]$ManagedIdentityClientId,   # required when CredKind=ManagedIdentity
     [Parameter()]          [string[]]$GraphPermissions,
+    [Parameter()]          [string[]]$ThreatProtectionPermissions,
     [Parameter()]          [switch]$SkipAdminConsent,
     [Parameter()]          [switch]$SkipTenantRbac,
     [Parameter()]          [switch]$IncludeTagContributor,  # opt-in: granted ONLY when asset-exclusion-tagging engine is in scope
@@ -140,6 +141,20 @@ if (-not $GraphPermissions -or $GraphPermissions.Count -eq 0) {
         'SecurityEvents.Read.All',               # Defender alerts
         'CrossTenantInformation.ReadBasic.All', # Multi-tenant SP visibility
         'RoleManagement.Read.Directory'          # v2.2.230 -- /roleManagement/directory/roleDefinitions + roleAssignments + roleEligibilitySchedules (IdentityRoleFetcher in EntraUsers + EntraServicePrincipals discovery). Without this, both sources catch a 403 fetching tenant-wide role definitions and return 0 rows.
+    )
+}
+
+# ----- Default Microsoft Threat Protection permission matrix (v2.2.231) -----
+# Microsoft Threat Protection (resource AppId 8ee8fdad-f234-4243-8f3b-15c294843740)
+# is the unified Defender XDR API. AdvancedHunting.Read.All gates the legacy
+# advancedhunting/run endpoint that the RiskAnalysis engine probes when Graph's
+# /security/runHuntingQuery fails the licensing check. Customers running v2.2.230+
+# with only the Graph permission set saw "403 Forbidden" on every XDR-routed
+# query in tenants where the unified endpoint isn't available. Extra perms
+# can be appended via -ThreatProtectionPermissions.
+if (-not $ThreatProtectionPermissions -or $ThreatProtectionPermissions.Count -eq 0) {
+    $ThreatProtectionPermissions = @(
+        'AdvancedHunting.Read.All'               # Defender XDR Advanced Hunting (MTP API)
     )
 }
 
@@ -389,6 +404,50 @@ foreach ($permName in $GraphPermissions) {
 $grantedCount = ($permResults | Where-Object { $_.Status -in @('granted','already') }).Count
 $pendingCount = ($permResults | Where-Object { $_.Status -in @('pending','skipped') }).Count
 _Ok ("Graph permissions: {0}/{1} active ({2} pending admin consent)" -f $grantedCount, $GraphPermissions.Count, $pendingCount)
+
+# ----- 5b. Add Microsoft Threat Protection (MTP) application permissions (v2.2.231) -----
+# Separate resource SP from Microsoft Graph. AdvancedHunting.Read.All on MTP
+# is what gates the legacy advancedhunting/run endpoint -- the RiskAnalysis
+# engine probes it as a fallback when Graph's /security/runHuntingQuery isn't
+# available. Same per-permission status semantics as the Graph block above.
+_Step "grant Microsoft Threat Protection application permissions"
+$mtpAppId = '8ee8fdad-f234-4243-8f3b-15c294843740'   # Microsoft Threat Protection
+$mtpSp    = Get-MgServicePrincipal -Filter "appId eq '$mtpAppId'" -ErrorAction SilentlyContinue
+if (-not $mtpSp) {
+    _Warn "Microsoft Threat Protection SP not found in tenant (resourceAppId=$mtpAppId). Skipping MTP perms -- tenant may lack Defender XDR licensing; the engine can still run via Graph hunting."
+} else {
+    foreach ($permName in $ThreatProtectionPermissions) {
+        $role = $mtpSp.AppRoles | Where-Object { $_.Value -eq $permName -and $_.AllowedMemberTypes -contains 'Application' }
+        if (-not $role) {
+            _Warn "MTP role not found: $permName -- skipped"
+            $permResults += @{ Name = $permName; Status = 'not-found'; Error = 'Permission name not on Microsoft Threat Protection AppRoles' }
+            continue
+        }
+        $existing = Get-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id -ErrorAction SilentlyContinue |
+            Where-Object { $_.AppRoleId -eq $role.Id -and $_.ResourceId -eq $mtpSp.Id }
+        if ($existing) {
+            $permResults += @{ Name = $permName; Status = 'already'; Error = $null }
+            continue
+        }
+        if ($SkipAdminConsent) {
+            $permResults += @{ Name = $permName; Status = 'skipped'; Error = 'SkipAdminConsent set -- a Global Admin must click the consent URL' }
+            continue
+        }
+        try {
+            $null = New-MgServicePrincipalAppRoleAssignment -ServicePrincipalId $sp.Id `
+                -PrincipalId $sp.Id -ResourceId $mtpSp.Id -AppRoleId $role.Id -ErrorAction Stop
+            $permResults += @{ Name = $permName; Status = 'granted'; Error = $null }
+        } catch {
+            $errMsg = $_.Exception.Message
+            _Warn ("could not grant {0}: {1}" -f $permName, $errMsg)
+            $permResults += @{ Name = $permName; Status = 'pending'; Error = $errMsg }
+        }
+    }
+    $mtpResults = $permResults | Where-Object { $_.Name -in $ThreatProtectionPermissions }
+    $mtpGranted = ($mtpResults | Where-Object { $_.Status -in @('granted','already') }).Count
+    $mtpPending = ($mtpResults | Where-Object { $_.Status -in @('pending','skipped') }).Count
+    _Ok ("MTP permissions: {0}/{1} active ({2} pending admin consent)" -f $mtpGranted, $ThreatProtectionPermissions.Count, $mtpPending)
+}
 
 # Compute an admin-consent URL the wizard UI can surface to the operator. A
 # Global Admin (or anyone with Privileged Role Administrator on the app) clicks

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.258
+## v2.2.259
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
 - release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
 - release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
 - release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
 - release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
 - release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
-- release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.259 — Bump `AzLogDcrIngestPS` minimum to 1.6.4 (cert-auth gate fix is now upstream)
+
+Operator: "publish v1.6.4 to PSGallery is done".
+
+AzLogDcrIngestPS v1.6.4 is live on PSGallery with the one-line fix to `CheckCreateUpdate-TableDcr-Structure` line 910 -- the gate now accepts cert auth (`$AzAppSecret -or $AzAppCertificateThumbprint`). All four engine `_shared/Ensure-Module.ps1` copies bumped to `-MinimumVersions @{ AzLogDcrIngestPS = '1.6.4' }`. Customer's next engine run will:
+
+1. Probe PSGallery -> see v1.6.4 (no 24h throttle blocking).
+2. Compare to local v1.6.3 -> install v1.6.4.
+3. Re-import v1.6.4 in-process.
+4. Minimum-version check passes.
+5. Cert-auth `CheckCreateUpdate-TableDcr-Structure` enters the create block, PUTs the DCR, the wait loop finds the immutableId in ARG within 15-30s, ingest succeeds.
+
+### Engine cert workaround kept as belt-and-suspenders
+
+v2.2.258's `$useCert` branch in `Invoke-Output.ps1` Step 3 stays in place. With v1.6.4 the canonical `CheckCreateUpdate` path works, but the inner-function path is functionally equivalent and harmless. If a tenant is genuinely offline from PSGallery, the minimum-version check throws anyway -- so the engine never runs on v1.6.3 with v2.2.259+. The workaround is dead code, but cheap. Will revisit removing it once v1.6.4 has soaked for a few release cycles.
 
 ---
 

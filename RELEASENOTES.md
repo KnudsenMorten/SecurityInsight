@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.223
+## v2.2.224
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.224 - AI summary pre-aggregate so Summary + Detailed converge (ce84f016)
 - release: SecurityInsight v2.2.223 - SendToLogAnalytics defaults to \$true (41dd470c)
 - release: SecurityInsight v2.2.222 - infer anonymous SMTP when no creds resolved (7e78cc00)
 - release: SecurityInsight v2.2.221 - comprehensive AadDeviceId column_ifexists sweep (3d08309a)
@@ -33,13 +34,54 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.197 - short-circuit lake probes on 404/TenantNotFound (03549a59)
 - release: SecurityInsight v2.2.196 - CLI -Detailed/-Summary wins over *_Override globals (90a10737)
 - release: SecurityInsight v2.2.195 - PublicIP scanner discovery fixes (dc299102)
-- release: SecurityInsight v2.2.194 - move SI_SPN_* bridge to shared-defaults (43dccd1b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.224 — Risk Analysis: AI summary -- pre-aggregate to a finding-rollup so Summary and Detailed converge
+
+Operator observed: the AI summary's Top-N risky assets list differed between Summary and Detailed report runs of the SAME data. Cause was that the engine fed only the top-50 raw report rows into the AI's asset-rollup pass:
+
+- **Summary**: 50 aggregated rows = ~50 unique findings = wide asset coverage via ImpactedAssetsList
+- **Detailed**: 50 per-asset rows = ~3-8 unique assets (one hot asset dominates the top with many CVE rows) = narrow asset coverage
+
+Different input window -> different top-N output. Operators saw different "top 25" lists between the two reports for the same tenant.
+
+A second visible bug: the AI prompt's section header was a literal "## Top 25 risky assets", but `$assetAgg` often had fewer than 25 entries -- the AI produced fewer bullets while the header still claimed 25.
+
+### Fix
+
+1. **Process ALL final rows into the rollup** -- `$TopN = @($global:final).Count` (was 50). Asset rollup now sees the full data universe regardless of report shape. Aggregation by asset name + score-sum stays the same -- only the input window changed.
+2. **Add a parallel finding rollup** keyed by `ConfigurationId` (`$findingAgg` + `Add-FindingAgg`). Tracks total weighted risk, affected asset count, and the top-5 affected assets per finding.
+3. **Replace the raw-row "Top findings" prompt section** with the aggregated finding rollup. AI now sees both perspectives:
+   - A) Top-N risky assets (per-asset weighted risk score)
+   - B) Top-N critical findings (per-finding weighted risk score + which assets it hurts most)
+4. **Dynamic headers**: prompt now uses `## Top $assetActualN risky assets` etc., where the value is `min($TopAssetsN, actual rollup count)`. No more "claimed 25, showed 9" mismatch.
+5. **New section in AI output**: `## Top N critical findings` -- one bullet per finding with its top-affected assets. Lets the operator pair "what to fix" with "where to fix it" without scrolling Excel.
+
+### Knobs
+
+- `$TopAssetsN = 50` (was 25). More headroom; AI emits as many bullets as there are unique assets, capped at this.
+- `$TopFindingsN = 50` (new). Same idea, applied to the finding rollup.
+
+### Token / cost impact
+
+For a 20K-row Detailed run on Nordstern: rollup output is ~50 asset entries + ~50 finding entries = ~10K input tokens. Plus boilerplate ~5K = **~15K input tokens to AI** (was ~10K with the raw top-50 dump). Output unchanged (~8K).
+
+Cost on gpt-4o:
+- Previous: ~$0.10 / run
+- v2.2.224: ~$0.13 / run
+
+Negligible delta for a daily-run cadence. The richer prompt produces more decision-relevant output without exceeding context windows.
+
+### Convergence guarantee
+
+Both Summary and Detailed feed the same `Add-AssetAgg` + `Add-FindingAgg` logic against the same `$global:final` pool. Sort keys are deterministic (Weighted -> Total -> count). With AI temperature 0.2 the output should be deterministic too. Top-N assets should match across reports for the same tenant data.
 
 ---
 

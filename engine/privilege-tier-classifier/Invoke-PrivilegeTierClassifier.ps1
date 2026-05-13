@@ -36,6 +36,17 @@
 # ----------------------------------------------------------------------
 . (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
 Ensure-SecurityInsightModules
+
+# v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
+# Mirrors $global:SI_SPN_* (v2.3 Setup Wizard output) onto the legacy
+# $global:Spn* names this engine still reads, so the engine works when invoked
+# outside the standard launcher path.
+if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
+if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
+if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
+if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
+if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
+
 # ============================================================
 # CONFIGURATION (v2: launcher is source of truth)
 # ============================================================
@@ -46,10 +57,14 @@ if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:S
 if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
 
 if (-not [bool]$global:AutomationFramework) {
+    # v2.2.233 -- accept either ClientSecret OR CertificateThumbprint. The old
+    # check required Secret, breaking SPN+cert customers entirely.
+    $hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+    $hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
     if ([string]::IsNullOrWhiteSpace([string]$global:SpnTenantId) -or
         [string]::IsNullOrWhiteSpace([string]$global:SpnClientId) -or
-        [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
-        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Launcher must set them or enable AutomationFramework."
+        (-not $hasSecret -and -not $hasCert)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId + one of SpnClientSecret OR SpnCertificateThumbprint). Launcher must set them or enable AutomationFramework."
     }
 }
 
@@ -181,6 +196,17 @@ if (-not $global:AI_MaxTokens  -or [int]$global:AI_MaxTokens  -lt 1) { $global:A
 # ----------------------------------------------------------------------
 . (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
 Ensure-SecurityInsightModules
+
+# v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
+# Mirrors $global:SI_SPN_* (v2.3 Setup Wizard output) onto the legacy
+# $global:Spn* names this engine still reads, so the engine works when invoked
+# outside the standard launcher path.
+if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
+if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
+if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
+if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
+if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
+
 # ============================================================
 # CONFIGURATION (v2: launcher is source of truth)
 # ============================================================
@@ -191,10 +217,14 @@ if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:S
 if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
 
 if (-not [bool]$global:AutomationFramework) {
+    # v2.2.233 -- accept either ClientSecret OR CertificateThumbprint. The old
+    # check required Secret, breaking SPN+cert customers entirely.
+    $hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+    $hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
     if ([string]::IsNullOrWhiteSpace([string]$global:SpnTenantId) -or
         [string]::IsNullOrWhiteSpace([string]$global:SpnClientId) -or
-        [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
-        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Launcher must set them or enable AutomationFramework."
+        (-not $hasSecret -and -not $hasCert)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId + one of SpnClientSecret OR SpnCertificateThumbprint). Launcher must set them or enable AutomationFramework."
     }
 }
 

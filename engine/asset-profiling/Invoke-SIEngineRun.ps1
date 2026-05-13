@@ -70,6 +70,18 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
+# The v2.3 Setup Wizard writes $global:SI_SPN_* (unified names). Engines / shared
+# auth helpers still read the legacy $global:Spn* names. Initialize-LauncherConfig
+# does the mirror -- but if the engine is invoked outside the standard launcher
+# path (AF bootstrap, custom orchestrator, direct call), the legacy names stay
+# $null and SPN+cert auth in particular falls through every elseif branch.
+if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
+if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
+if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
+if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
+if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
+
 # auto-load customer-overlay file each engine launch.
 # Lookup order (first hit wins; cycle stops at filesystem root):
 #   1. $global:SI_CustomConfigPath  (explicit override set in $PROFILE / launcher)

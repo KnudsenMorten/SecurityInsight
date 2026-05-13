@@ -2442,39 +2442,72 @@ function Get-WeightedFactorsConfig {
     $cacheKey = ('{0}|{1}' -f $ReportName, $Engine.ToLowerInvariant())
     if ($script:_WeightedFactorsCache.ContainsKey($cacheKey)) { return $script:_WeightedFactorsCache[$cacheKey] }
 
-    $cfg = $null
+    # v2.2.228 -- walk-up discovery, no longer requires $global:SettingsPath
+    # being set by the launcher. Search order:
+    #   1. $global:SettingsPath (when launcher set it; backward compat)
+    #   2. walk-up from THIS file's $PSScriptRoot looking for a
+    #      `risk-analysis-detection/` sibling at every level
+    # First hit wins. Per-report `<ReportName>.weighted.custom.json` always
+    # beats the solution-wide `riskscore_weighted.schema.custom.json`.
+    $searchDirs = New-Object System.Collections.Generic.List[string]
     if (-not [string]::IsNullOrWhiteSpace($global:SettingsPath)) {
-        $candidates = @(
-            (Join-Path $global:SettingsPath ('{0}.weighted.custom.json' -f $ReportName)),
-            (Join-Path $global:SettingsPath  'riskscore_weighted.schema.custom.json')
-        )
-        $engineKey = $Engine.ToLowerInvariant()
-        foreach ($path in $candidates) {
-            if (-not (Test-Path -LiteralPath $path)) { continue }
-            try {
-                $body = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
-            } catch {
-                Write-Warn2 ("[weight] failed to parse {0}: {1}" -f $path, $_.Exception.Message)
-                continue
-            }
-            $root = if ($body.PSObject.Properties['weightedRiskFactors']) { $body.weightedRiskFactors } else { $null }
-            if ($null -eq $root) { continue }
-            $section = if ($root.PSObject.Properties[$engineKey]) { $root.$engineKey } else { $null }
-            if ($null -eq $section) { continue }
-            # Accept either 'fields' (preferred new shape) or 'rules' (legacy alias)
-            $fields = if     ($section.PSObject.Properties['fields']) { @($section.fields) }
-                      elseif ($section.PSObject.Properties['rules'])  { @($section.rules)  }
-                      else                                            { @() }
-            if ($fields.Count -eq 0) { continue }
-            $cfg = [pscustomobject]@{
-                Path          = $path
-                Engine        = $engineKey
-                Combine       = if ($section.PSObject.Properties['combine']       -and $section.combine)       { [string]$section.combine } else { 'product' }
-                MaxMultiplier = if ($section.PSObject.Properties['maxMultiplier'] -and $section.maxMultiplier) { [double]$section.maxMultiplier } else { 0.0 }
-                Fields        = $fields
-            }
-            break
+        [void]$searchDirs.Add([string]$global:SettingsPath)
+    }
+    $cur = $PSScriptRoot
+    for ($depth = 0; $depth -lt 6; $depth++) {
+        if ([string]::IsNullOrWhiteSpace($cur)) { break }
+        $sibling = Join-Path $cur 'risk-analysis-detection'
+        if (Test-Path -LiteralPath $sibling -PathType Container) {
+            [void]$searchDirs.Add([string]$sibling)
         }
+        $parent = Split-Path -Parent $cur
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $cur) { break }
+        $cur = $parent
+    }
+
+    $seenDirs  = @{}
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($d in $searchDirs) {
+        if ([string]::IsNullOrWhiteSpace($d)) { continue }
+        $dKey = $d.ToLowerInvariant()
+        if ($seenDirs.ContainsKey($dKey)) { continue }
+        $seenDirs[$dKey] = $true
+        [void]$candidates.Add((Join-Path $d ('{0}.weighted.custom.json' -f $ReportName)))
+        [void]$candidates.Add((Join-Path $d 'riskscore_weighted.schema.custom.json'))
+    }
+
+    $cfg       = $null
+    $engineKey = $Engine.ToLowerInvariant()
+    foreach ($path in $candidates) {
+        if (-not (Test-Path -LiteralPath $path)) { continue }
+        try {
+            $body = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        } catch {
+            Write-Warn2 ("[weight] failed to parse {0}: {1}" -f $path, $_.Exception.Message)
+            continue
+        }
+        $root = if ($body.PSObject.Properties['weightedRiskFactors']) { $body.weightedRiskFactors } else { $null }
+        if ($null -eq $root) { continue }
+        $section = if ($root.PSObject.Properties[$engineKey]) { $root.$engineKey } else { $null }
+        if ($null -eq $section) { continue }
+        # Accept either 'fields' (preferred new shape) or 'rules' (legacy alias)
+        $fields = if     ($section.PSObject.Properties['fields']) { @($section.fields) }
+                  elseif ($section.PSObject.Properties['rules'])  { @($section.rules)  }
+                  else                                            { @() }
+        if ($fields.Count -eq 0) { continue }
+        $cfg = [pscustomobject]@{
+            Path          = $path
+            Engine        = $engineKey
+            Combine       = if ($section.PSObject.Properties['combine']       -and $section.combine)       { [string]$section.combine } else { 'product' }
+            MaxMultiplier = if ($section.PSObject.Properties['maxMultiplier'] -and $section.maxMultiplier) { [double]$section.maxMultiplier } else { 0.0 }
+            Fields        = $fields
+        }
+        break
+    }
+    if ($null -ne $cfg) {
+        Write-Info ("[weight] {0} (engine={1}): {2} field(s), combine={3}, source={4}" -f $ReportName, $cfg.Engine, @($cfg.Fields).Count, $cfg.Combine, $cfg.Path)
+    } else {
+        Write-Warn2 ("[weight] {0} (engine={1}): no riskscore_weighted.schema.custom.json found in [{2}] -- YAML stub will ship (Factor=100, Detailed='cmdbCriticality=...')" -f $ReportName, $engineKey, (@($searchDirs) -join '; '))
     }
     $script:_WeightedFactorsCache[$cacheKey] = $cfg
     return $cfg

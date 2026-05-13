@@ -16,7 +16,13 @@ The Config Wizard at [`Setup-SecurityInsight.html`](./Setup-SecurityInsight.html
 | Cred type radio: **Client secret** or **Self-signed certificate** | Generates the cred automatically |
 | Cred storage radio: **Azure Key Vault** *(preferred)*, **Local cert store** *(cert only)*, or **Inline in custom.ps1** *(secret only)* | Stores the cred where the operator picked |
 
-API permissions applied automatically: Microsoft Graph (`ThreatHunting.Read.All`, `Device.Read.All`, `User.Read.All`, `Application.Read.All`, plus the rest of the SI matrix), with admin consent. Azure RBAC: `Reader` at tenant-root MG, `Tag Contributor` for the asset-tagging engine.
+API permissions applied automatically across **three API resources**, all application-only with admin consent:
+
+- **Microsoft Graph** — 14 permissions (`ThreatHunting.Read.All`, `Device.Read.All`, `User.Read.All`, `Application.Read.All`, `Group.Read.All`, `Policy.Read.All`, `AuditLog.Read.All`, `IdentityRiskEvent.Read.All`, `IdentityRiskyUser.Read.All`, `Reports.Read.All`, `DirectoryRecommendations.Read.All`, `SecurityEvents.Read.All`, `CrossTenantInformation.ReadBasic.All`, `RoleManagement.Read.Directory`)
+- **Microsoft Threat Protection** — `AdvancedHunting.Read.All` (separate API resource; the legacy Defender XDR Advanced Hunting endpoint)
+- **WindowsDefenderATP** — `Machine.Read.All` (legacy MDE device-inventory API)
+
+Each MTP / WindowsDefenderATP grant soft-fails when the target resource SP isn't licensed in the tenant — the engine continues running via Graph hunting. Azure RBAC: `Reader` at tenant-root MG, `Tag Contributor` for the asset-tagging engine.
 
 ### 2. Log Analytics + DCE + DCRs
 

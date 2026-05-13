@@ -2,20 +2,14 @@
 
 ## Engine contract (matches today)
 
-The `SecurityInsight_RiskAnalysis` engine reads **exactly two files** from `$global:SettingsPath`:
+The `SecurityInsight_RiskAnalysis` engine reads **exactly two files** from `risk-analysis-detection/`:
 
 | File | Purpose |
 |---|---|
 | `RiskAnalysis_Queries_Locked.yaml`   | Curated set, ships in repo |
 | `RiskAnalysis_Queries_Custom.yaml`   | Customer additions / overrides |
 
-No code change to the engine. Operator flips from v2.1 → v2.2 by re-pointing `$global:SettingsPath`:
-
-```powershell
-# in config/SecurityInsight.custom.ps1
-$global:SettingsPath = '<repo>/SOLUTIONS/SecurityInsight/risk-analysis-detection'
-# (custom yaml in v2.2/risk-analysis-detection/ is picked up via $global:ReportSettingsFileCustom default name)
-```
+**v2.2.228+** — `$global:SettingsPath` is no longer required. The engine walks up from its own `$PSScriptRoot` looking for a `risk-analysis-detection/` sibling (depth cap 6) and finds the YAMLs there. Same walk-up applies to `riskscore_weighted.schema.custom.json` (the weighted-factors config used by `Get-WeightedFactorsConfig`). Set `$global:SettingsPath` explicitly only when shipping the YAML / JSON outside the standard `SOLUTIONS/SecurityInsight/risk-analysis-detection/` layout — the launcher then honors the override.
 
 ## Folder layout
 

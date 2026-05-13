@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.270
+## v2.2.271
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
 - release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
 - release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
 - release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
 - release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
 - release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
-- release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.271 — RA + PublicIP LA-ingest now actually honours cert auth (not just secret)
+
+Customer ran v2.2.269 with SPN+cert (thumbprint resolved fine, 118 RA reports green). Then the LA-ingest step failed with `Cannot bind argument to parameter 'AzAppSecret' because it is an empty string.` — twice, once from the DCE/DCR self-heal, once from the actual ingest call. RA wrote the xlsx + json to disk but the `SI_RiskAnalysis_Summary_CL` row never went to LA. PublicIP engine had the same shape.
+
+### Root cause
+
+Four call sites in `Invoke-RiskAnalysis.ps1` and four in `Invoke-PublicIpScanner.ps1` passed `-AzAppSecret $global:SpnClientSecret` unconditionally. Under cert auth that global is empty, and the AzLogDcrIngestPS module's `[Mandatory] [string]` param binding rejects empty strings before the function body sees them. The cert thumbprint was sitting in `$global:SpnCertificateThumbprint` the whole time, never forwarded.
+
+The asset-profiling Output, Tagging, SchemaOutput stages and `Send-SIRunHealthRow` already had the cert/secret branch (v2.2.258 + v2.2.267). RA + PublicIP were the gaps.
+
+### What changes
+
+`Invoke-RiskAnalysis.ps1` and `Invoke-PublicIpScanner.ps1` build a `$__ingestAuth` splat hashtable once at the top of their ingest blocks:
+
+```powershell
+$__ingestAuth = @{}
+if (-not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)) {
+    $__ingestAuth['AzAppCertificateThumbprint'] = [string]$global:SpnCertificateThumbprint
+} elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
+    $__ingestAuth['AzAppSecret'] = [string]$global:SpnClientSecret
+}
+```
+
+…and splat it into every `CheckCreateUpdate-TableDcr-Structure` / `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` / `Get-AzDc{e,r}ListAll` / `Ensure-SecurityInsightDce` / `Ensure-SecurityInsightAzDceDcrCache` call. Cert wins over secret when both are set; throws when neither is.
+
+`engine/risk-analysis/_shared/Ensure-SecurityInsightInfra.ps1` was tightened to match — `AzAppSecret` is no longer `[Mandatory]`, a new optional `-AzAppCertificateThumbprint` is forwarded to the module's `Get-AzDc{e,r}ListAll` calls, and an explicit error fires when both are missing.
+
+### Audit
+
+Grep for `AzAppSecret` across `engine/` confirms the remaining sites (asset-profiling/stages/Invoke-{Output,Tagging,SchemaOutput}.ps1, asset-profiling/shared/Send-SIRunHealthRow.ps1) already branch on cert thumbprint. The setup/_shared copy of `Ensure-SecurityInsightInfra.ps1` is only used during bootstrap and not in the runtime ingest hot-path; left as-is for now.
 
 ---
 

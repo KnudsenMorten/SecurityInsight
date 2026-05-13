@@ -35,18 +35,28 @@ function Ensure-SecurityInsightAzDceDcrCache {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [string] $AzAppId,
-        [Parameter(Mandatory)] [string] $AzAppSecret,
+        [string] $AzAppSecret,
+        [string] $AzAppCertificateThumbprint,
         [Parameter(Mandatory)] [string] $TenantId,
         [string] $SubscriptionId,
         [string] $DceResourceGroup,
         [string] $DcrResourceGroup,
         [switch] $Force
     )
+    # v2.2.271 -- accept EITHER secret or cert thumbprint; forward whichever is set.
+    $__authSplat = @{ AzAppId = $AzAppId; TenantId = $TenantId; Verbose = $false }
+    if (-not [string]::IsNullOrWhiteSpace($AzAppCertificateThumbprint)) {
+        $__authSplat['AzAppCertificateThumbprint'] = $AzAppCertificateThumbprint
+    } elseif (-not [string]::IsNullOrWhiteSpace($AzAppSecret)) {
+        $__authSplat['AzAppSecret'] = $AzAppSecret
+    } else {
+        throw "Ensure-SecurityInsightAzDceDcrCache: neither -AzAppSecret nor -AzAppCertificateThumbprint provided"
+    }
     if ($Force -or -not $global:AzDceDetails) {
-        $global:AzDceDetails = Get-AzDceListAll -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -Verbose:$false
+        $global:AzDceDetails = Get-AzDceListAll @__authSplat
     }
     if ($Force -or -not $global:AzDcrDetails) {
-        $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -Verbose:$false
+        $global:AzDcrDetails = Get-AzDcrListAll @__authSplat
     }
 
     # Filter 1: target subscription. Both DCE and DCR objects carry a
@@ -148,10 +158,18 @@ function Ensure-SecurityInsightDce {
         [Parameter(Mandatory)] [string] $SubscriptionId,
         [Parameter(Mandatory)] [string] $TenantId,
         [Parameter(Mandatory)] [string] $AzAppId,
-        [Parameter(Mandatory)] [string] $AzAppSecret,
+        [string] $AzAppSecret,
+        [string] $AzAppCertificateThumbprint,
         [string] $IngestionSpnObjectId
     )
-    Ensure-SecurityInsightAzDceDcrCache -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -SubscriptionId $SubscriptionId
+    # v2.2.271 -- accept EITHER secret or cert thumbprint; forward to cache helper.
+    $__cacheSplat = @{ AzAppId = $AzAppId; TenantId = $TenantId; SubscriptionId = $SubscriptionId }
+    if (-not [string]::IsNullOrWhiteSpace($AzAppCertificateThumbprint)) {
+        $__cacheSplat['AzAppCertificateThumbprint'] = $AzAppCertificateThumbprint
+    } elseif (-not [string]::IsNullOrWhiteSpace($AzAppSecret)) {
+        $__cacheSplat['AzAppSecret'] = $AzAppSecret
+    }
+    Ensure-SecurityInsightAzDceDcrCache @__cacheSplat
 
     $dce = @($global:AzDceDetails | Where-Object { $_.name -eq $DceName }) | Select-Object -First 1
     if ($dce) {
@@ -183,7 +201,8 @@ function Ensure-SecurityInsightDce {
         Start-Sleep -Seconds 10
     }
 
-    Ensure-SecurityInsightAzDceDcrCache -AzAppId $AzAppId -AzAppSecret $AzAppSecret -TenantId $TenantId -SubscriptionId $SubscriptionId -Force
+    $__cacheSplat['Force'] = $true
+    Ensure-SecurityInsightAzDceDcrCache @__cacheSplat
     $dce = @($global:AzDceDetails | Where-Object { $_.name -eq $DceName }) | Select-Object -First 1
     if (-not $dce) {
         throw "DCE '$DceName' was created but did not appear in the refreshed cache -- provisioning state may still be 'Creating'"

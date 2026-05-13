@@ -581,6 +581,17 @@ function Send-RowsToLogAnalytics {
     if (-not $global:LogIngestAppSecret) { $global:LogIngestAppSecret = $global:SpnClientSecret }
     if (-not $global:TenantId)           { $global:TenantId           = $global:SpnTenantId }
 
+    # v2.2.271 -- cert OR secret auth. Build a splat once and reuse at all 4 ingest
+    # call sites below. Passing $global:LogIngestAppSecret='' to the module under
+    # cert auth triggered ParameterBindingValidationException ("Cannot bind argument
+    # to parameter 'AzAppSecret' because it is an empty string").
+    $__ingestAuth = @{}
+    if (-not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)) {
+        $__ingestAuth['AzAppCertificateThumbprint'] = [string]$global:SpnCertificateThumbprint
+    } elseif (-not [string]::IsNullOrWhiteSpace([string]$global:LogIngestAppSecret)) {
+        $__ingestAuth['AzAppSecret'] = [string]$global:LogIngestAppSecret
+    }
+
     # AzLogDcrIngestPS Post-* + CheckCreateUpdate-* resolve DCE/DCR by name on
     # their own (Get-AzDcrListAll scans the SPN's visible scope), so we don't
     # need $global:DceIngestionUri pre-populated AND we don't care which RG
@@ -627,8 +638,8 @@ function Send-RowsToLogAnalytics {
         # happening on greenfield community runs -> module's internal name-only
         # lookup returned BOTH same-named DCEs -> 'Array' bug.
         try {
-            $global:AzDceDetails = Get-AzDceListAll -AzAppId $global:LogIngestAppId -AzAppSecret $global:LogIngestAppSecret -TenantId $global:TenantId -Verbose:$false 4>$null
-            $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $global:LogIngestAppId -AzAppSecret $global:LogIngestAppSecret -TenantId $global:TenantId -Verbose:$false 4>$null
+            $global:AzDceDetails = Get-AzDceListAll -AzAppId $global:LogIngestAppId @__ingestAuth -TenantId $global:TenantId -Verbose:$false 4>$null
+            $global:AzDcrDetails = Get-AzDcrListAll -AzAppId $global:LogIngestAppId @__ingestAuth -TenantId $global:TenantId -Verbose:$false 4>$null
         } catch { Write-Log ('Get-AzDceListAll/Get-AzDcrListAll prefetch failed: {0} -- collision guard may not fire' -f $_.Exception.Message) 'WARN' }
 
         # DCE collision guard (mirrors v2.2.59 in Invoke-Output.ps1). Strict:
@@ -653,7 +664,7 @@ function Send-RowsToLogAnalytics {
             $null = CheckCreateUpdate-TableDcr-Structure `
                         -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
                         -AzAppId                                    $global:LogIngestAppId `
-                        -AzAppSecret                                $global:LogIngestAppSecret `
+                        @__ingestAuth `
                         -TenantId                                   $global:TenantId `
                         -Verbose:$false `
                         -DceName                                    $global:SI_DceName `
@@ -684,7 +695,7 @@ function Send-RowsToLogAnalytics {
         try {
             $global:AzDcrDetails = Get-AzDcrListAll `
                                         -AzAppId        $global:LogIngestAppId `
-                                        -AzAppSecret    $global:LogIngestAppSecret `
+                                        @__ingestAuth `
                                         -TenantId       $global:TenantId `
                                         -Verbose:$false 4>$null
         } catch {
@@ -717,7 +728,7 @@ function Send-RowsToLogAnalytics {
                             -Data        $DataVariable `
                             -TableName   $tableName `
                             -AzAppId     $global:LogIngestAppId `
-                            -AzAppSecret $global:LogIngestAppSecret `
+                            @__ingestAuth `
                             -TenantId    $global:TenantId `
                             -Verbose:$false 4>$null
     } finally {

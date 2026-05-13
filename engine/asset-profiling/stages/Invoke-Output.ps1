@@ -512,12 +512,11 @@ function Write-SIClassificationToLogAnalytics {
         #      Need "Monitoring Contributor" or higher.
         # If either check fails, log loud + actionable but DO NOT abort
         # (the engine still runs the JSON + Excel sinks; LA fails predictably).
-        # v2.2.263 -- terse auth probe. Token-mint = one line. RBAC visibility =
-        # one line (count of visible assignments; the SPN can only see its own
-        # assignments at scopes where it has roleAssignments/read, so this is
-        # never the full picture). True write-capability test = Step 3's DCR
-        # create -- if it works, auth is fine; if it fails, v2.2.250 dumps the
-        # ARM error. No warnings or remediation guesses based on visibility.
+        # v2.2.266 -- token-mint probe only. RBAC visibility line dropped --
+        # informational at best (the SPN only sees its own assignments at
+        # scopes where it has roleAssignments/read, so partial view is the
+        # norm and the line never told us anything actionable). True write-
+        # capability test = Step 3's DCR create.
         try {
             $_ctx = Get-AzContext -ErrorAction SilentlyContinue
             if ($_ctx) {
@@ -529,16 +528,6 @@ function Write-SIClassificationToLogAnalytics {
                 }
             } else {
                 Write-Warning 'auth probe : NO Az context (Connect-AzAccount not run this session).'
-            }
-
-            $_spnObjectId = if ($global:SI_SPN_ObjectId) { [string]$global:SI_SPN_ObjectId } else { '' }
-            if ($_spnObjectId) {
-                try {
-                    $_visCount = @(Get-AzRoleAssignment -ObjectId $_spnObjectId -ErrorAction Stop).Count
-                    Write-SIInfo ('auth probe : SPN can see {0} of its own role assignment(s) -- partial view only; actual write capability proven by Step 3.' -f $_visCount)
-                } catch {
-                    Write-SIInfo  'auth probe : SPN cannot enumerate its own role assignments -- partial view only; actual write capability proven by Step 3.'
-                }
             }
         } catch { }
 

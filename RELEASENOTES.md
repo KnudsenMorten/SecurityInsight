@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.237
+## v2.2.238
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.238 - shared auth-state helper + remaining inline gates + AzLogDcrIngestPS auto-upgrade (539ac269)
 - release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
 - release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
 - release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
@@ -33,13 +34,81 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.211 - hotfix v2.2.210 Detailed Properties bag block was missed (6290337a)
 - release: SecurityInsight v2.2.210 - eliminate Properties bag, extract CVE scalars up-front (8f54cdce)
 - release: SecurityInsight v2.2.209 - drop AssetProps dead-weight bag from CVE join (be6a74a0)
-- release: SecurityInsight v2.2.208 - four CVE pipeline fixes (wrong CMDB attach, dead filter, dead bag, dead coalesce) (c05b3c5f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.238 — End the auth-gate whack-a-mole + auto-upgrade `AzLogDcrIngestPS` from PSGallery
+
+Operator: "why don't you make better sanity check"
+
+Fair. The cert-auth fix in v2.2.232 / v2.2.233 / v2.2.234 / v2.2.237 fixed one inline `if ($SpnClientSecret -is-empty) { throw }` gate per release, in different engines. Today's customer log showed `Invoke-PublicIpScanner.ps1:91` had the same gate untouched — same shape, same wrong message, same fix. That's drift, not a fix.
+
+### 1. Remaining inline gates patched
+
+| Engine | Was | Now |
+|---|---|---|
+| `engine/publicip/Invoke-PublicIpScanner.ps1` line ~88 | required `SpnClientSecret` | accepts Cert OR Secret |
+| `engine/risk-analysis/Invoke-RiskAnalysis.ps1` line ~4839 (AF branch) | required `SpnClientSecret` | accepts Cert OR Secret |
+| `engine/asset-tagging/AssetTagging.ps1` line ~57 | required `SpnClientSecret` | accepts Cert OR Secret |
+
+Combined with v2.2.232–v2.2.237, every known SPN-auth gate now accepts either credential type.
+
+### 2. New shared helper — `Get-SIAuthState`
+
+To stop chasing this per-engine, a single source-of-truth helper lives at
+`launcher/_lib/Get-SIAuthState.ps1`. It inspects every relevant `$global:*`
+and returns:
+
+```powershell
+[pscustomobject] @{
+    IsConfigured  = [bool]
+    AuthMode      = 'MI' | 'SPN-Cert' | 'SPN-Secret' | 'AF' | 'None'
+    AuthParams    = [hashtable]  # splat-ready for AzLogDcrIngestPS
+    MissingReason = [string]
+    TenantId  / ClientId  / ObjectId
+}
+```
+
+Priority order: `AutomationFramework` → Managed Identity → SPN+Cert → SPN+Secret → SI_LogIngest_* fallback → None. Cert wins over secret when both are set. Future engines call `Get-SIAuthState` instead of inlining their own check — when a new credential type lands, ONE file changes.
+
+Smoke-tested on all 4 modes locally:
+
+```
+CERT  : Mode=SPN-Cert    Params=[AzAppCertificateStoreLocation,AzAppCertificateThumbprint,AzAppId,TenantId]
+SEC   : Mode=SPN-Secret  Params=[AzAppId,AzAppSecret,TenantId]
+MI    : Mode=MI          Params=[ManagedIdentityClientId,UseManagedIdentity]
+NONE  : Mode=None        IsConfigured=False
+```
+
+### 3. `AzLogDcrIngestPS` auto-upgrade from PSGallery
+
+Operator: "i need you to check for newer versions of azlogdcringestps from ps gallery and install latest version when available"
+
+Added to `Ensure-Module` (4 identical copies, kept in sync across `publicip / privilege-tier-classifier / risk-analysis / asset-tagging` engine `_shared/`):
+
+- New `-KeepLatest <string[]>` parameter. For named modules, after the on-disk probe succeeds, `Find-Module -Repository PSGallery` is called to compare versions. When the gallery has a newer version, `Install-Module` is invoked, the in-session module is `Remove-Module`'d, and (when `-Import` is set) the new version is `Import-Module`'d with the right `-RequiredVersion` so the upgrade is live in the same run.
+- Throttled: per-module marker file at `$env:TEMP\si-modcheck-<mod>.json` records the last check time. Subsequent runs skip the gallery hit when < 24h since last probe. `-ForceUpdateCheck` bypasses the throttle.
+- `Ensure-SecurityInsightModules` passes `-KeepLatest @('AzLogDcrIngestPS','MicrosoftGraphPS')` by default — these are the two modules where Morten ships updates worth pulling automatically.
+- Gallery query failures are non-fatal — log + continue with local version.
+
+```
+[MODULE] AzLogDcrIngestPS v1.6.2 present
+[MODULE] AzLogDcrIngestPS update available: local v1.6.2 -> PSGallery v1.6.3 -- installing...
+[MODULE] AzLogDcrIngestPS upgraded to v1.6.3
+```
+
+Or the steady-state line on every other engine run:
+
+```
+[MODULE] AzLogDcrIngestPS v1.6.3 present
+[MODULE] AzLogDcrIngestPS is current (PSGallery v1.6.3)
+```
 
 ---
 

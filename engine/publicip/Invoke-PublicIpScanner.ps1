@@ -83,12 +83,17 @@ if ($null -eq $global:SI_Shodan_LastFreshScanPath)     {
     $global:SI_Shodan_LastFreshScanPath = Join-Path $_dataDir2 'shodan-last-fresh-scan.json'
 }
 
-# Auth required when not in AutomationFramework
+# Auth required when not in AutomationFramework. v2.2.238 -- accept either
+# ClientSecret OR CertificateThumbprint (the bridge in this engine's preamble
+# at v2.2.233 mirrors SI_SPN_CertThumbprint -> SpnCertificateThumbprint, and
+# the community-vm launcher already supports cert auth via Connect-AzAccount).
 if (-not [bool]$global:AutomationFramework) {
+    $_hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+    $_hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
     if ([string]::IsNullOrWhiteSpace([string]$global:SpnTenantId) -or
         [string]::IsNullOrWhiteSpace([string]$global:SpnClientId) -or
-        [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
-        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Launcher must set them or enable AutomationFramework."
+        (-not $_hasSecret -and -not $_hasCert)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId + one of SpnClientSecret OR SpnCertificateThumbprint). Launcher must set them or enable AutomationFramework."
     }
 }
 # Accept either the canonical SI-prefixed name or the legacy v1 SHODAN_ApiKey

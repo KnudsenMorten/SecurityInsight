@@ -4836,10 +4836,15 @@ if ([bool]$global:AutomationFramework) {
 
     if ([bool]$global:ShowConfig) { Show-ResolvedConfig -Stage "after AutomationFramework defaults loaded" }
 
+    # v2.2.238 -- AutomationFramework branch accepts cert OR secret. AF cert-based
+    # SPNs leave HighPriv_Modern_Secret_Azure empty and rely on a thumbprint mirror
+    # populated by Initialize-PlatformAutomationFramework.
+    $_afHasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
+    $_afHasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
     if ([string]::IsNullOrWhiteSpace($global:SpnTenantId) -or
         [string]::IsNullOrWhiteSpace($global:SpnClientId) -or
-        [string]::IsNullOrWhiteSpace($global:SpnClientSecret)) {
-        throw "Missing SPN globals (SpnTenantId/SpnClientId/SpnClientSecret). Provide them via wrapper globals or enable -AutomationFramework to load them."
+        (-not $_afHasSecret -and -not $_afHasCert)) {
+        throw "Missing SPN globals (SpnTenantId/SpnClientId + one of SpnClientSecret OR SpnCertificateThumbprint). Provide them via wrapper globals or enable -AutomationFramework to load them."
     }
 
     # ==============================

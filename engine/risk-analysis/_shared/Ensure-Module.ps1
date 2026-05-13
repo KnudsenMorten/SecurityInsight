@@ -55,7 +55,21 @@ function Ensure-Module {
 
         [switch]$Required,
         [switch]$Import,
-        [switch]$Quiet
+        [switch]$Quiet,
+
+        # v2.2.238 -- modules in this list get an additional PSGallery version
+        # check after the on-disk probe. When the gallery has a newer version
+        # than the local copy, Install-Module is called to pull the update.
+        # Throttled per module via $env:TEMP\si-modcheck-<mod>.json (one hit
+        # per 24h max) so repeated engine runs don't spam Find-Module.
+        # Default empty; Ensure-SecurityInsightModules passes
+        # @('AzLogDcrIngestPS','MicrosoftGraphPS') (Morten's own modules where
+        # we want customers on the latest).
+        [string[]]$KeepLatest = @(),
+
+        # Force the gallery check to run even when the per-module marker file
+        # says we already checked within the last 24h. Useful for ad-hoc runs.
+        [switch]$ForceUpdateCheck
     )
 
     function _SayStep ([string]$m) { if (-not $Quiet) { Write-Host "[MODULE] $m" -ForegroundColor Cyan } }
@@ -166,6 +180,50 @@ function Ensure-Module {
 
         if ($existing) {
             _SayOk ("{0} v{1} present" -f $mod, $existing.Version)
+
+            # v2.2.238 -- PSGallery upgrade probe for modules in $KeepLatest.
+            # Hits Find-Module at most once per 24h per module (marker file in
+            # $env:TEMP) so we don't spam the gallery on every engine run.
+            if ($KeepLatest -contains $mod) {
+                $markerPath = Join-Path $env:TEMP ("si-modcheck-{0}.json" -f $mod)
+                $checkNow   = [bool]$ForceUpdateCheck
+                if (-not $checkNow) {
+                    if (Test-Path -LiteralPath $markerPath) {
+                        try {
+                            $last = (Get-Item -LiteralPath $markerPath).LastWriteTimeUtc
+                            if (([datetime]::UtcNow - $last).TotalHours -ge 24) { $checkNow = $true }
+                        } catch { $checkNow = $true }
+                    } else { $checkNow = $true }
+                }
+
+                if ($checkNow) {
+                    try {
+                        $gallery = Find-Module -Name $mod -Repository PSGallery -ErrorAction Stop
+                        $localV  = try { [version]$existing.Version } catch { [version]'0.0.0' }
+                        $remoteV = try { [version]$gallery.Version }  catch { [version]'0.0.0' }
+                        if ($remoteV -gt $localV) {
+                            _SayWarn ("{0} update available: local v{1} -> PSGallery v{2} -- installing..." -f $mod, $localV, $remoteV)
+                            try {
+                                Install-Module -Name $mod -Scope $effectiveScope -Force -AllowClobber -ErrorAction Stop
+                                _SayOk ("{0} upgraded to v{1}" -f $mod, $remoteV)
+                                # Force re-import so the new version is the one PowerShell uses
+                                # this run (otherwise the old loaded version sticks until next session).
+                                Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
+                                if ($Import) { Import-Module -Name $mod -RequiredVersion $remoteV -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
+                            } catch {
+                                _SayWarn ("{0} upgrade attempt failed (continuing with local v{1}): {2}" -f $mod, $localV, $_.Exception.Message)
+                            }
+                        } else {
+                            _SayOk ("{0} is current (PSGallery v{1})" -f $mod, $remoteV)
+                        }
+                    } catch {
+                        _SayWarn ("{0} PSGallery version check failed (continuing with local): {1}" -f $mod, $_.Exception.Message)
+                    }
+                    # Stamp the marker even when the gallery query failed so a
+                    # broken PSGallery doesn't make every run pay for the probe.
+                    try { '' | Out-File -FilePath $markerPath -Encoding ASCII -Force } catch { }
+                }
+            }
         } else {
             # Fail fast with a clear message if we need to install to AllUsers
             # but the session is not elevated. Without this the customer gets
@@ -291,9 +349,13 @@ function Ensure-SecurityInsightModules {
     # ConvertFrom-Yaml -> powershell-yaml, Export-Excel -> ImportExcel, etc.).
     # Eagerly importing Az or Microsoft.Graph meta-modules force-loads 70+ submodules
     # and blocks the script for 2-5 minutes with noisy "unapproved verbs" warnings.
+    #
+    # v2.2.238 -- KeepLatest = Morten's own modules (AzLogDcrIngestPS, MicrosoftGraphPS).
+    # PSGallery query throttled to once per 24h per module (marker in $env:TEMP).
     $null = Ensure-Module `
-        -Name $script:SecurityInsight_RequiredModules `
-        -Scope $Scope `
+        -Name       $script:SecurityInsight_RequiredModules `
+        -Scope      $Scope `
         -Quiet:$Quiet `
-        -Required:$Required
+        -Required:$Required `
+        -KeepLatest @('AzLogDcrIngestPS','MicrosoftGraphPS')
 }

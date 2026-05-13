@@ -379,11 +379,14 @@ function Ensure-SecurityInsightModules {
     # with a clear message instead of confusing "parameter not found" errors.
     # AzLogDcrIngestPS 1.6.3 added -AzAppCertificateThumbprint /
     # -AzAppCertificateStoreLocation / -UseManagedIdentity / -EnableCompression.
+    # 1.6.4 fixed CheckCreateUpdate-TableDcr-Structure's gate so cert-only
+    # auth (no client secret) actually enters the create block instead of
+    # returning silently. SI v2.2.259+ requires 1.6.4 minimum.
     $null = Ensure-Module `
         -Name            $script:SecurityInsight_RequiredModules `
         -Scope           $Scope `
         -Quiet:$Quiet `
         -Required:$Required `
         -KeepLatest      @('AzLogDcrIngestPS','MicrosoftGraphPS') `
-        -MinimumVersions @{ AzLogDcrIngestPS = '1.6.3' }
+        -MinimumVersions @{ AzLogDcrIngestPS = '1.6.4' }
 }

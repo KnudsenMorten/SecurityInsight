@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.262
+## v2.2.263
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
 - release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
 - release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
 - release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.237 - route SPN+cert + MI into AzLogDcrIngestPS calls (asset-profiling stages) (f32aec3a)
 - release: SecurityInsight v2.2.236 - docs catch up with v2.2.230 + v2.2.231 permission additions (e21f51e1)
 - release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
-- release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.263 — Terse auth probe + AllUsers-only enforcement for KeepLatest modules + min-version always throws
+
+Three follow-ups from a single customer trace where the engine printed 8 lines of "RBAC probe : roles present grant READ only" + a copy-pastable remediation, then succeeded immediately afterwards. The probe was lying — DCR creation worked fine.
+
+### 1. Auth + RBAC probe is now 1-2 informational lines, no false-positive warnings
+
+`Get-AzRoleAssignment -ObjectId <SPN>` runs under the **SPN's own credentials** and only returns assignments at scopes where the SPN has `Microsoft.Authorization/roleAssignments/read`. Reader-at-MG-root grants that only at the MG-root scope -- assignments at any other scope are invisible to the SPN. So the heuristic "no Contributor visible -> warn READ-only" was structurally wrong, firing whenever the SPN's actual Contributor grant lived at a scope it couldn't enumerate (which is **most** tenants).
+
+The honest signal for "did write succeed" is Step 3's `CheckCreateUpdate-TableDcr-Structure` call -- it either creates the DCR or it doesn't, and v2.2.250's captured-output dump shows the actual ARM error on failure. The probe block now prints:
+
+```
+[INFO] auth probe : ARM token OK (ServicePrincipal, <appid>)
+[INFO] auth probe : SPN can see 1 of its own role assignment(s) -- partial view only; actual write capability proven by Step 3.
+```
+
+No more 8-line warning block. No more REMEDIATION dump. Applies to all 4 asset-profiling engines (endpoint, identity, azure, publicip) via the shared `Invoke-Output.ps1`.
+
+### 2. KeepLatest modules pinned to AllUsers; CurrentUser/OneDrive copies are rejected
+
+Customer's run was loading `AzLogDcrIngestPS v1.6.2` from `C:\Users\mok\OneDrive - 2linkIT\Documents\WindowsPowerShell\Modules\AzLogDcrIngestPS\1.6.2\`. My probe missed the OneDrive-redirected path, the slow `Get-Module -ListAvailable` fallback found it, and `Install-Module -Scope AllUsers` failed silently because the prompt wasn't elevated. Net: the engine kept running on v1.6.2 forever.
+
+Operator: "i don't support currentuser." Agreed.
+
+`Ensure-Module` now treats `KeepLatest` modules (`AzLogDcrIngestPS`, `MicrosoftGraphPS`) as production-critical:
+
+- Hard-pinned to `AllUsers` scope, ignoring the caller's `-Scope`.
+- If the existing copy is in a user-scope path, **throw** with explicit instructions to remove it and re-install elevated.
+- If an upgrade is needed and the session isn't elevated, throw with "Re-launch as Administrator."
+- After install + force-reload, verify `(Get-Module).Path` starts with `C:\Program Files\WindowsPowerShell\Modules\` -- if not, throw with a `Remove-Item` command for the offending user-scope folder.
+
+No CurrentUser fallback. No silent best-effort. The OneDrive-redirected scenario surfaces immediately instead of cascading into a confusing "parameter not found" 100s of seconds later.
+
+### 3. Minimum-version violations always throw
+
+The previous min-version check called `_SayErr` + `continue` unless `-Required` was set. `Ensure-SecurityInsightModules` didn't pass `-Required`, so a customer with `AzLogDcrIngestPS v1.6.2` and a minimum of `1.6.5` got an `[ERR]` line logged at startup, the engine continued anyway, and crashed at the LA-ingest cmdlet call. Min-version represents "engine **will** crash without this" -- always terminal. The check now throws unconditionally.
 
 ---
 

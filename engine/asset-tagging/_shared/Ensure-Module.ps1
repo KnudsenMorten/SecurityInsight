@@ -203,58 +203,140 @@ function Ensure-Module {
             # bumps the version by at least +1 patch", so same-version
             # on disk and gallery means we're already current.
             if ($KeepLatest -contains $mod) {
+                # v2.2.263 -- KeepLatest modules (Morten's PSGallery modules:
+                # AzLogDcrIngestPS, MicrosoftGraphPS) MUST live in AllUsers
+                # (`C:\Program Files\WindowsPowerShell\Modules\`). CurrentUser
+                # scope -- especially the OneDrive-redirected Documents folder
+                # that most domain-joined Windows machines have these days --
+                # is rejected for two reasons:
+                #   1. Scheduled tasks / service accounts running under a
+                #      different identity don't see CurrentUser modules.
+                #   2. OneDrive sync chaos can corrupt or hide module files
+                #      mid-run.
+                # Operator: "i dont support currentuser".
+
+                # ---- step 1: detect where the currently-installed copy lives ----
+                $_inAllUsers   = $existing.Path -like (Join-Path $pf 'WindowsPowerShell\Modules\*') -or
+                                 $existing.Path -like (Join-Path $pf 'PowerShell\Modules\*')
+                $_isUserScope  = -not $_inAllUsers
+
+                # ---- step 2: ALWAYS emit version snapshot for diagnosis ----
+                $_loadedSnapshot = @(Get-Module -Name $mod -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Version)
+                $_loadedLabel = if ($_loadedSnapshot.Count -gt 0) { ($_loadedSnapshot -join ',') } else { '<none loaded>' }
+                $_scopeLabel = if ($_inAllUsers) { 'AllUsers' } else { 'CurrentUser (REJECTED)' }
+                _SayStep ("{0} version snapshot: loaded={1}  on-disk=v{2} @ {3}  PSGallery probe next" -f $mod, $_loadedLabel, $existing.Version, $_scopeLabel)
+                _SayStep ("    on-disk path : {0}" -f $existing.Path)
+
+                # ---- step 3: HARD REJECT user-scope copies ----
+                # We won't try to "fix" by reinstalling to AllUsers because
+                # the old user-scope copy will still be on PSModulePath and
+                # auto-load might re-pick it. Operator must remove it manually
+                # or run elevated so Install-Module can target AllUsers cleanly.
+                if ($_isUserScope) {
+                    if (-not $isAdmin) {
+                        $errMsg = @"
+'$mod' is installed under CurrentUser scope:
+    $($existing.Path)
+SecurityInsight refuses to run on CurrentUser-scope copies of $mod (scheduled
+tasks / service accounts running under a different identity won't see it; OneDrive
+sync can corrupt module files mid-run). Fix:
+    1) Open an ELEVATED PowerShell session (Run as Administrator)
+    2) Run: Install-Module $mod -Scope AllUsers -Force -AllowClobber
+    3) Run: Uninstall-Module -Name $mod -RequiredVersion '$($existing.Version)'
+       (or delete the user-scope folder manually:
+        Remove-Item -Recurse -Force '$($existing.Path | Split-Path -Parent | Split-Path -Parent)')
+    4) Close this PowerShell session, open a fresh one, and re-run the launcher.
+"@
+                        _SayErr $errMsg
+                        throw $errMsg
+                    }
+                    # Admin AND user-scope copy detected: install to AllUsers
+                    # (which we'll prefer below) and leave the user-scope copy
+                    # for the operator to clean up.
+                    _SayWarn ("{0} is in user scope at {1} -- installing fresh copy to AllUsers (you should remove the user-scope folder afterwards)." -f $mod, $existing.Path)
+                }
+
+                # ---- step 4: PSGallery upgrade probe ----
                 try {
                     $gallery = Find-Module -Name $mod -Repository PSGallery -ErrorAction Stop
                     $localV  = try { [version]$existing.Version } catch { [version]'0.0.0' }
                     $remoteV = try { [version]$gallery.Version }  catch { [version]'0.0.0' }
-                    if ($remoteV -gt $localV) {
-                        _SayWarn ("{0} update available: local v{1} -> PSGallery v{2} -- installing..." -f $mod, $localV, $remoteV)
+                    if ($remoteV -gt $localV -or $_isUserScope) {
+                        if ($_isUserScope) {
+                            _SayWarn ("{0} forced-reinstall to AllUsers (current copy is user-scope) -> PSGallery v{1}" -f $mod, $remoteV)
+                        } else {
+                            _SayWarn ("{0} update available: local v{1} -> PSGallery v{2} -- installing to AllUsers..." -f $mod, $localV, $remoteV)
+                        }
+                        if (-not $isAdmin) {
+                            $errMsg = "$mod requires upgrade to v$remoteV but AllUsers install needs an elevated PowerShell session. Re-launch PowerShell as Administrator and re-run the launcher."
+                            _SayErr $errMsg
+                            throw $errMsg
+                        }
                         try {
-                            Install-Module -Name $mod -Scope $effectiveScope -Force -AllowClobber -ErrorAction Stop
-                            _SayOk ("{0} upgraded to v{1}" -f $mod, $remoteV)
-                            # Update $existing.Version so downstream force-reload picks v1.6.5 not v1.6.4
-                            $existing = [pscustomobject]@{ Name = $mod; Version = $remoteV; Path = $existing.Path }
+                            Install-Module -Name $mod -Scope AllUsers -Force -AllowClobber -ErrorAction Stop
+                            _SayOk ("{0} upgraded to v{1} in AllUsers" -f $mod, $remoteV)
+                            # Re-probe disk so $existing reflects the AllUsers install.
+                            $_newPsd = Join-Path $pf ("WindowsPowerShell\Modules\$mod\$remoteV\$mod.psd1")
+                            if (Test-Path -LiteralPath $_newPsd) {
+                                $existing = [pscustomobject]@{ Name = $mod; Version = $remoteV; Path = $_newPsd }
+                            } else {
+                                $existing = [pscustomobject]@{ Name = $mod; Version = $remoteV; Path = $existing.Path }
+                            }
                         } catch {
-                            _SayWarn ("{0} upgrade attempt failed (continuing with local v{1}): {2}" -f $mod, $localV, $_.Exception.Message)
+                            $errMsg = "{0} upgrade to AllUsers FAILED: {1}. Re-launch PowerShell as Administrator and re-run the launcher." -f $mod, $_.Exception.Message
+                            _SayErr $errMsg
+                            throw $errMsg
                         }
                     } else {
-                        _SayOk ("{0} is current (PSGallery v{1})" -f $mod, $remoteV)
+                        _SayOk ("{0} is current (PSGallery v{1}, AllUsers)" -f $mod, $remoteV)
                     }
                 } catch {
+                    if ($_.Exception.Message -like '*Install-Module*' -or $_.Exception.Message -like '*Re-launch*') { throw }
                     _SayWarn ("{0} PSGallery version check failed (continuing with local): {1}" -f $mod, $_.Exception.Message)
                 }
 
-                # v2.2.261 -- force-reload guard. The on-disk version may be
-                # v1.6.5 (just upgraded, or already current from a prior run),
-                # but PowerShell's session may STILL have an older version
-                # loaded -- e.g. the user opened pwsh, ran Import-Module
-                # AzLogDcrIngestPS once before SI's Ensure-Module fired, or a
-                # global $PROFILE imported the module before us. In that case
-                # cmdlet calls below use the OLD loaded version regardless of
-                # what's on disk, and we hit "A parameter cannot be found
-                # matching 'AzAppCertificateStoreLocation'" with a fresh
-                # install sitting right there.
-                # Fix: always Remove-Module + Import-Module -RequiredVersion
-                # to the on-disk highest, so the session matches disk. Cheap
-                # (these are single-file modules, sub-second import).
-                $loadedVersions = @(Get-Module -Name $mod -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Version)
+                # ---- step 5: force-reload from AllUsers path ----
+                # We Remove-Module first so PowerShell drops any stale in-session
+                # copy (including a user-scope one auto-loaded earlier), then
+                # Import-Module with an explicit AllUsers manifest path. Path-
+                # pinning here is the only way to guarantee we don't re-auto-load
+                # the user-scope copy on next cmdlet call.
                 $diskV = try { [version]$existing.Version } catch { [version]'0.0.0' }
-                $needReload = $loadedVersions.Count -eq 0 -or
-                              -not ($loadedVersions | Where-Object { try { [version]$_ -eq $diskV } catch { $false } })
-                if ($needReload) {
-                    if ($loadedVersions.Count -gt 0) {
-                        _SayWarn ("{0} stale in-session: loaded v{1}, on-disk v{2} -- forcing reload" -f $mod, ($loadedVersions -join ','), $diskV)
-                    } else {
-                        _SayStep ("{0} v{1} not yet loaded into session -- importing" -f $mod, $diskV)
-                    }
-                    try {
-                        Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
-                        Import-Module -Name $mod -RequiredVersion $diskV -Force -ErrorAction Stop -WarningAction SilentlyContinue
-                        _SayOk ("{0} v{1} loaded into session" -f $mod, $diskV)
-                    } catch {
-                        _SayWarn ("{0} force-reload failed: {1}" -f $mod, $_.Exception.Message)
-                    }
+                $_allUsersPsd = Join-Path $pf ("WindowsPowerShell\Modules\$mod\$diskV\$mod.psd1")
+                $_importTarget = if (Test-Path -LiteralPath $_allUsersPsd) { $_allUsersPsd } else { $existing.Path }
+                try {
+                    Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
+                    Import-Module -Name $_importTarget -Force -ErrorAction Stop -WarningAction SilentlyContinue
+                } catch {
+                    $errMsg = "{0} force-reload failed: {1}" -f $mod, $_.Exception.Message
+                    _SayErr $errMsg
+                    throw $errMsg
                 }
+
+                # ---- step 6: verify the loaded version came from AllUsers ----
+                $_postLoad = Get-Module -Name $mod -ErrorAction SilentlyContinue | Select-Object -First 1
+                if (-not $_postLoad) {
+                    $errMsg = "$mod failed to load after force-reload."
+                    _SayErr $errMsg
+                    throw $errMsg
+                }
+                $_postPath = [string]$_postLoad.Path
+                $_postInAllUsers = $_postPath -like (Join-Path $pf 'WindowsPowerShell\Modules\*') -or
+                                   $_postPath -like (Join-Path $pf 'PowerShell\Modules\*')
+                if (-not $_postInAllUsers) {
+                    $errMsg = @"
+'$mod' loaded after force-reload but NOT from AllUsers:
+    Loaded: v$($_postLoad.Version) @ $_postPath
+SecurityInsight requires $mod to come from AllUsers
+(C:\Program Files\WindowsPowerShell\Modules\$mod\<version>\). The user-scope
+copy is taking precedence on the PSModulePath. Remove it:
+    Remove-Item -Recurse -Force '$($existing.Path | Split-Path -Parent | Split-Path -Parent)'
+…and re-run the launcher in a fresh PowerShell session.
+"@
+                    _SayErr $errMsg
+                    throw $errMsg
+                }
+                _SayOk ("{0} v{1} loaded from AllUsers: {2}" -f $mod, $_postLoad.Version, $_postPath)
             }
         } else {
             # Fail fast with a clear message if we need to install to AllUsers
@@ -323,11 +405,17 @@ Options:
                           elseif ($onDisk) { try { [version]$onDisk.Version } catch { [version]'0.0.0' } }
                           else { [version]'0.0.0' }
                 if ($finalV -lt $minV) {
-                    $errMsg = "{0} v{1} is below the engine's required minimum v{2}. The engine code calls cmdlet parameters that didn't exist in older versions. Fix: run 'Install-Module {0} -Force -AllowClobber -Scope AllUsers' (elevated) to force-pull the current PSGallery version, then re-run the engine. If PSGallery is unreachable, install the module manually from https://github.com/KnudsenMorten/{0}." -f $mod, $finalV, $minV
-                    if ($Required) { _SayErr $errMsg; throw $errMsg }
+                    # v2.2.263 -- ALWAYS throw on min-version violation. The
+                    # previous "soft-fail unless -Required" path silently
+                    # logged an error and let the engine continue, which
+                    # produced the confusing "A parameter cannot be found
+                    # matching 'AzAppCertificateStoreLocation'" failure 100s
+                    # of seconds later when the actual cmdlet call missed
+                    # a newer parameter. Min-version represents "the engine
+                    # WILL crash without this version" -- always terminal.
+                    $errMsg = "{0} v{1} is below the engine's required minimum v{2}. The engine code calls cmdlet parameters that didn't exist in older versions. Fix: run 'Install-Module {0} -Force -AllowClobber -Scope AllUsers' (elevated) to force-pull the current PSGallery version, then re-run the engine in a FRESH PowerShell session. If PSGallery is unreachable, install the module manually from https://github.com/KnudsenMorten/{0}." -f $mod, $finalV, $minV
                     _SayErr $errMsg
-                    $results[$mod] = $false
-                    continue
+                    throw $errMsg
                 }
             }
         }

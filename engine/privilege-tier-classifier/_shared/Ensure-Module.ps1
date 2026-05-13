@@ -60,16 +60,26 @@ function Ensure-Module {
         # v2.2.238 -- modules in this list get an additional PSGallery version
         # check after the on-disk probe. When the gallery has a newer version
         # than the local copy, Install-Module is called to pull the update.
-        # Throttled per module via $env:TEMP\si-modcheck-<mod>.json (one hit
-        # per 24h max) so repeated engine runs don't spam Find-Module.
+        # v2.2.244 -- the per-module 24h throttle marker was REMOVED. It locked
+        # customers to stale versions for up to a day when an upstream module
+        # author published a fresh version, defeating the purpose. Find-Module
+        # against PSGallery is one HTTPS call (<1s) so probing every run is
+        # fine. Module-author publishes a hotfix at 16:00, customer's next
+        # engine run picks it up.
         # Default empty; Ensure-SecurityInsightModules passes
         # @('AzLogDcrIngestPS','MicrosoftGraphPS') (Morten's own modules where
         # we want customers on the latest).
         [string[]]$KeepLatest = @(),
 
-        # Force the gallery check to run even when the per-module marker file
-        # says we already checked within the last 24h. Useful for ad-hoc runs.
-        [switch]$ForceUpdateCheck
+        # v2.2.244 -- hard minimum versions. Module-name -> minimum-version
+        # string (e.g. @{ AzLogDcrIngestPS = '1.6.3' }). After the on-disk
+        # probe + KeepLatest upgrade attempt, if the loaded version is STILL
+        # below the minimum, throw a clear error instead of letting downstream
+        # calls fail with confusing "parameter not found" messages. The
+        # minimum encodes "the engine code requires AT LEAST this version's
+        # public surface" -- e.g. AzAppCertificateThumbprint /
+        # AzAppCertificateStoreLocation landed in 1.6.3.
+        [hashtable]$MinimumVersions = @{}
     )
 
     function _SayStep ([string]$m) { if (-not $Quiet) { Write-Host "[MODULE] $m" -ForegroundColor Cyan } }
@@ -181,47 +191,39 @@ function Ensure-Module {
         if ($existing) {
             _SayOk ("{0} v{1} present" -f $mod, $existing.Version)
 
-            # v2.2.238 -- PSGallery upgrade probe for modules in $KeepLatest.
-            # Hits Find-Module at most once per 24h per module (marker file in
-            # $env:TEMP) so we don't spam the gallery on every engine run.
+            # v2.2.244 -- PSGallery upgrade probe for modules in $KeepLatest.
+            # Probes Find-Module every run (no 24h throttle -- it locked
+            # customers to stale versions when the module author published a
+            # newer build same day; same-day publish/upgrade is the WHOLE
+            # POINT). The probe is one HTTPS call to PSGallery and completes
+            # in <1s, cheap enough to run unconditionally.
+            #
+            # POLICY: install ONLY when remote version > local version
+            # (strict greater-than). Module-author workflow is "every publish
+            # bumps the version by at least +1 patch", so same-version
+            # on disk and gallery means we're already current.
             if ($KeepLatest -contains $mod) {
-                $markerPath = Join-Path $env:TEMP ("si-modcheck-{0}.json" -f $mod)
-                $checkNow   = [bool]$ForceUpdateCheck
-                if (-not $checkNow) {
-                    if (Test-Path -LiteralPath $markerPath) {
+                try {
+                    $gallery = Find-Module -Name $mod -Repository PSGallery -ErrorAction Stop
+                    $localV  = try { [version]$existing.Version } catch { [version]'0.0.0' }
+                    $remoteV = try { [version]$gallery.Version }  catch { [version]'0.0.0' }
+                    if ($remoteV -gt $localV) {
+                        _SayWarn ("{0} update available: local v{1} -> PSGallery v{2} -- installing..." -f $mod, $localV, $remoteV)
                         try {
-                            $last = (Get-Item -LiteralPath $markerPath).LastWriteTimeUtc
-                            if (([datetime]::UtcNow - $last).TotalHours -ge 24) { $checkNow = $true }
-                        } catch { $checkNow = $true }
-                    } else { $checkNow = $true }
-                }
-
-                if ($checkNow) {
-                    try {
-                        $gallery = Find-Module -Name $mod -Repository PSGallery -ErrorAction Stop
-                        $localV  = try { [version]$existing.Version } catch { [version]'0.0.0' }
-                        $remoteV = try { [version]$gallery.Version }  catch { [version]'0.0.0' }
-                        if ($remoteV -gt $localV) {
-                            _SayWarn ("{0} update available: local v{1} -> PSGallery v{2} -- installing..." -f $mod, $localV, $remoteV)
-                            try {
-                                Install-Module -Name $mod -Scope $effectiveScope -Force -AllowClobber -ErrorAction Stop
-                                _SayOk ("{0} upgraded to v{1}" -f $mod, $remoteV)
-                                # Force re-import so the new version is the one PowerShell uses
-                                # this run (otherwise the old loaded version sticks until next session).
-                                Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
-                                if ($Import) { Import-Module -Name $mod -RequiredVersion $remoteV -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
-                            } catch {
-                                _SayWarn ("{0} upgrade attempt failed (continuing with local v{1}): {2}" -f $mod, $localV, $_.Exception.Message)
-                            }
-                        } else {
-                            _SayOk ("{0} is current (PSGallery v{1})" -f $mod, $remoteV)
+                            Install-Module -Name $mod -Scope $effectiveScope -Force -AllowClobber -ErrorAction Stop
+                            _SayOk ("{0} upgraded to v{1}" -f $mod, $remoteV)
+                            # Force re-import so the new version is the one PowerShell uses
+                            # this run (otherwise the old loaded version sticks until next session).
+                            Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
+                            if ($Import) { Import-Module -Name $mod -RequiredVersion $remoteV -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
+                        } catch {
+                            _SayWarn ("{0} upgrade attempt failed (continuing with local v{1}): {2}" -f $mod, $localV, $_.Exception.Message)
                         }
-                    } catch {
-                        _SayWarn ("{0} PSGallery version check failed (continuing with local): {1}" -f $mod, $_.Exception.Message)
+                    } else {
+                        _SayOk ("{0} is current (PSGallery v{1})" -f $mod, $remoteV)
                     }
-                    # Stamp the marker even when the gallery query failed so a
-                    # broken PSGallery doesn't make every run pay for the probe.
-                    try { '' | Out-File -FilePath $markerPath -Encoding ASCII -Force } catch { }
+                } catch {
+                    _SayWarn ("{0} PSGallery version check failed (continuing with local): {1}" -f $mod, $_.Exception.Message)
                 }
             }
         } else {
@@ -267,6 +269,25 @@ Options:
                 _SayWarn $errMsg
                 $results[$mod] = $false
                 continue
+            }
+        }
+
+        # v2.2.244 -- hard minimum-version enforcement. Re-probe the loaded
+        # version (the KeepLatest upgrade above may have changed it). If still
+        # below the declared minimum, throw with a clear "what to do" message.
+        if ($MinimumVersions.ContainsKey($mod) -and $MinimumVersions[$mod]) {
+            $minV = try { [version]$MinimumVersions[$mod] } catch { $null }
+            if ($minV) {
+                $reloaded = Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue |
+                            Sort-Object Version -Descending | Select-Object -First 1
+                $finalV = if ($reloaded) { try { [version]$reloaded.Version } catch { [version]'0.0.0' } } else { [version]'0.0.0' }
+                if ($finalV -lt $minV) {
+                    $errMsg = "{0} v{1} is below the engine's required minimum v{2}. The engine code calls cmdlet parameters that didn't exist in older versions. Fix: run 'Install-Module {0} -Force -AllowClobber -Scope AllUsers' (elevated) to force-pull the current PSGallery version, then re-run the engine. If PSGallery is unreachable, install the module manually from https://github.com/KnudsenMorten/{0}." -f $mod, $finalV, $minV
+                    if ($Required) { _SayErr $errMsg; throw $errMsg }
+                    _SayErr $errMsg
+                    $results[$mod] = $false
+                    continue
+                }
             }
         }
 
@@ -350,12 +371,19 @@ function Ensure-SecurityInsightModules {
     # Eagerly importing Az or Microsoft.Graph meta-modules force-loads 70+ submodules
     # and blocks the script for 2-5 minutes with noisy "unapproved verbs" warnings.
     #
-    # v2.2.238 -- KeepLatest = Morten's own modules (AzLogDcrIngestPS, MicrosoftGraphPS).
-    # PSGallery query throttled to once per 24h per module (marker in $env:TEMP).
+    # v2.2.244 -- KeepLatest = Morten's own modules (AzLogDcrIngestPS,
+    # MicrosoftGraphPS). PSGallery probe runs every engine run (no 24h
+    # throttle); strict version comparison (install only when remote > local).
+    # MinimumVersions encodes engine-level "must have at least this version's
+    # public surface" so engine code that uses newer parameters fails fast
+    # with a clear message instead of confusing "parameter not found" errors.
+    # AzLogDcrIngestPS 1.6.3 added -AzAppCertificateThumbprint /
+    # -AzAppCertificateStoreLocation / -UseManagedIdentity / -EnableCompression.
     $null = Ensure-Module `
-        -Name       $script:SecurityInsight_RequiredModules `
-        -Scope      $Scope `
+        -Name            $script:SecurityInsight_RequiredModules `
+        -Scope           $Scope `
         -Quiet:$Quiet `
         -Required:$Required `
-        -KeepLatest @('AzLogDcrIngestPS','MicrosoftGraphPS')
+        -KeepLatest      @('AzLogDcrIngestPS','MicrosoftGraphPS') `
+        -MinimumVersions @{ AzLogDcrIngestPS = '1.6.3' }
 }

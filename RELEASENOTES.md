@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.255
+## v2.2.256
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
 - release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
 - release: SecurityInsight v2.2.254 - wizard DCR names aligned with engine -profile convention (6c3abca9)
 - release: SecurityInsight v2.2.253 - skip SI_StorageKey fetch+persist when OAuth-on-storage enabled (2e8a6edf)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
 - release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
 - release: SecurityInsight v2.2.228 - weighted-factors JSON discovered via walk-up (no SettingsPath dependency) (1776d679)
-- release: SecurityInsight v2.2.227 - AI rollup collapse-per-(asset, ConfigBucket) for *_Detailed reports (2e0896b0)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.256 — Active auth + RBAC probe before CheckCreateUpdate (no more 240s of guessing)
+
+Operator: "can we verify that auth is working as expected with cert" -- and later "but have you not made sure that it has the right perms".
+
+`Setup-SecurityInsight.ps1` already grants `Contributor` on `$rgDcrScope` (line 1094 of that file) which includes DCR write capability. So the SPN *should* be able to create DCRs in the target RG. But the customer's run keeps failing — DCR never lands in ARG, wait loop runs to timeout, ingest 404s. Three plausible causes:
+
+1. Setup wasn't run with the same `$DcrRgLA` value the engine reads at runtime → grant landed on a different RG.
+2. Setup ran but the SPN ObjectId differs at runtime → engine's SPN has zero assignments on target RG.
+3. Setup succeeded but RBAC propagation pending (rare past Setup's 60s sleep).
+
+v2.2.255 left us **waiting 240s to find out**. v2.2.256 answers in 5s with a new probe step (Step 1c) that runs right after the scope filter, before `CheckCreateUpdate`:
+
+**(a) Token-mint probe.** Calls `Get-AzAccessToken -ResourceUrl 'https://management.azure.com/'` and prints whether the cert-based SPN session can mint a fresh ARM token + TTL. Catches expired certs, thumbprint/store mismatches, revoked SPNs — anything that would make CheckCreateUpdate's underlying ARM PUT call 401.
+
+**(b) RBAC probe.** Calls `Get-AzRoleAssignment -ObjectId $global:SI_SPN_ObjectId`, filters to assignments at target sub-scope / target RG-scope / tenant root, and prints every assignment line by line:
+
+```
+[INFO]   RBAC probe : 3 role assignment(s) on target sub/RG for SPN ObjectId 4b...:
+[INFO]      - Reader                                   @ /subscriptions/<sub>
+[INFO]      - Contributor                              @ /subscriptions/<sub>/resourceGroups/<rg>
+[INFO]      - Monitoring Metrics Publisher             @ /subscriptions/<sub>/resourceGroups/<rg>
+[INFO]   RBAC probe : write-capable role found (Contributor) -- DCR create should succeed.
+```
+
+Heuristic: if no role from {Owner, Contributor, Monitoring Contributor, Data Collection Rule Contributor, Log Analytics Contributor} is present, the probe loudly warns that `CheckCreateUpdate` is going to fail and names the exact remediation. If `Get-AzRoleAssignment` itself throws (SPN lacks `Microsoft.Authorization/roleAssignments/read` on target), the probe says so and defers to Step 3's captured module output.
+
+Non-fatal: failures emit `[WARN]` and continue the run. The JSON + Excel sinks still produce their files; only LA ingest fails predictably with a now-explained reason.
+
+When this lands in the next customer run, the answer to "is auth working" is in the log in seconds.
 
 ---
 

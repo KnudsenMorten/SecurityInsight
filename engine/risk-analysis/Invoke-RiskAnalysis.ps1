@@ -4725,23 +4725,64 @@ function Send-MailAnonymous {
         [Parameter()] [ValidateSet('Normal','High','Low')] [string]$Priority = 'High'
     )
 
-    $params = @{
-        SmtpServer = $SmtpServer
-        Port       = $Port
-        From       = $From
-        To         = $To
-        Subject    = $Subject
-        Body       = $BodyHtml
-        BodyAsHtml = $true
-        Encoding   = 'UTF8'
-        Priority   = $Priority
-    }
-
-    if ($UseSsl) { $params.UseSsl = $true }
-    if ($Attachments -and $Attachments.Count -gt 0) { $params.Attachments = $Attachments }
+    # v2.2.247 -- direct System.Net.Mail.SmtpClient instead of Send-MailMessage.
+    # Send-MailMessage internally creates an SmtpClient with the .NET default
+    # UseDefaultCredentials = $true. On a Windows host that means the current
+    # account's NT credentials get auto-attached to the SMTP handshake. Many
+    # relays (Postfix anon-relay, Exchange receive-connectors scoped to
+    # "Anonymous Users") silently REJECT those creds and the cmdlet still
+    # returns without throwing -- so the engine logs "[OK] anonymous mail sent"
+    # while the message never left the relay. Operator reported "no email, fix".
+    #
+    # Direct SmtpClient lets us force UseDefaultCredentials = $false AND
+    # Credentials = $null, guaranteeing a true anonymous MAIL FROM. Send()
+    # throws on transport-layer failure, so any future silent-reject regression
+    # surfaces as a real error in the engine log rather than a phantom success.
 
     Write-Output ("Sending mail (anonymous) to {0} with subject '{1}'" -f ($To -join ', '), $Subject)
-    Send-MailMessage @params
+
+    $smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $Port)
+    $smtp.EnableSsl              = [bool]$UseSsl
+    $smtp.UseDefaultCredentials  = $false
+    $smtp.Credentials            = $null
+    $smtp.DeliveryMethod         = [System.Net.Mail.SmtpDeliveryMethod]::Network
+    $smtp.Timeout                = 60000
+
+    $msg = New-Object System.Net.Mail.MailMessage
+    $msg.From            = New-Object System.Net.Mail.MailAddress($From)
+    foreach ($t in $To) { [void]$msg.To.Add($t) }
+    $msg.Subject         = $Subject
+    $msg.SubjectEncoding = [System.Text.Encoding]::UTF8
+    $msg.Body            = $BodyHtml
+    $msg.IsBodyHtml      = $true
+    $msg.BodyEncoding    = [System.Text.Encoding]::UTF8
+    $msg.Priority        = switch ($Priority) {
+        'High'  { [System.Net.Mail.MailPriority]::High }
+        'Low'   { [System.Net.Mail.MailPriority]::Low }
+        default { [System.Net.Mail.MailPriority]::Normal }
+    }
+
+    $attachObjs = @()
+    if ($Attachments) {
+        foreach ($a in $Attachments) {
+            if ([string]::IsNullOrWhiteSpace($a)) { continue }
+            if (-not (Test-Path -LiteralPath $a)) {
+                Write-Warning ("Send-MailAnonymous: attachment not found, skipping -- {0}" -f $a)
+                continue
+            }
+            $att = New-Object System.Net.Mail.Attachment($a)
+            $msg.Attachments.Add($att)
+            $attachObjs += $att
+        }
+    }
+
+    try {
+        $smtp.Send($msg)
+    } finally {
+        foreach ($att in $attachObjs) { try { $att.Dispose() } catch { } }
+        $msg.Dispose()
+        $smtp.Dispose()
+    }
 }
 
 function Send-MailSecure {

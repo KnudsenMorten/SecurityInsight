@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.230
+## v2.2.231
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
 - release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
 - release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
 - release: SecurityInsight v2.2.228 - weighted-factors JSON discovered via walk-up (no SettingsPath dependency) (1776d679)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.204 - pre-filter _Findings via _AffectingNodeIds (no output change) (9da09350)
 - release: SecurityInsight v2.2.203 - CVE source-side filter knobs + drop mv-expand redundancy (979c58ab)
 - release: SecurityInsight v2.2.202 - filter _Findings to CVE-only in Device_Missing_CVEs_* reports (ba1b1f1b)
-- release: SecurityInsight v2.2.201 - raise AutoBucketMax cap to 131072 for 1M+ asset tenants (64d4cae1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.231 — Setup Wizard: also grant `AdvancedHunting.Read.All` on Microsoft Threat Protection (separate API from Graph)
+
+Customer running v2.2.230 had Graph perms green but still got 403s on the legacy Defender XDR hunting endpoint. That endpoint lives on a **different API resource** — Microsoft Threat Protection (`8ee8fdad-f234-4243-8f3b-15c294843740`) — not Microsoft Graph (`00000003-0000-0000-c000-000000000000`). The Graph-side `ThreatHunting.Read.All` was already in the default list, but the MTP-side `AdvancedHunting.Read.All` was never being requested.
+
+### Fix
+
+Added a second permission-grant block in `New-SISpn.ps1` that targets the Microsoft Threat Protection SP. New `-ThreatProtectionPermissions` parameter (defaults to `@('AdvancedHunting.Read.All')`) mirrors the existing `-GraphPermissions` parameter shape. The block walks the MTP SP's AppRoles, finds the role, and creates an `App-Role-Assignment` against it with the same idempotent / granted / already / pending / not-found / skipped status tracking.
+
+```powershell
+$mtpAppId = '8ee8fdad-f234-4243-8f3b-15c294843740'
+$mtpSp    = Get-MgServicePrincipal -Filter "appId eq '$mtpAppId'"
+# ... per-permission App-Role-Assignment loop, same shape as the Graph block
+```
+
+When the MTP SP isn't present in the tenant (tenants without Defender XDR licensing), the block emits a warning and continues — the engine can still run via Graph hunting.
+
+### Migration for existing SPNs
+
+Existing wizard-bootstrapped SPNs need `AdvancedHunting.Read.All` granted manually:
+
+1. Entra portal → App registrations → SI's SPN → API permissions
+2. Add a permission → **APIs my organization uses** → search **`Microsoft Threat Protection`**
+3. Application permissions → `AdvancedHunting.Read.All`
+4. Grant admin consent
+
+Or re-run `New-SISpn.ps1 -UseExistingAppId -ExistingAppId <appid>` which picks up the new default and re-consents idempotently.
 
 ---
 

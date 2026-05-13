@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.260
+## v2.2.261
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
 - release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
 - release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
 - release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.235 - portal URLs in MoreDetails (MDE Endpoint / Identity 3-shape / Azure) (2ff7f07b)
 - release: SecurityInsight v2.2.234 - RA engine wires SPN+cert through Connect-AzAccount + Connect-MgGraph (a3070509)
 - release: SecurityInsight v2.2.233 - defensive SPN name bridge in remaining engines + tier classifier cert-auth gap (270f23ad)
-- release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.261 — Force-reload `KeepLatest` modules so the session matches disk
+
+Customer running SI v2.2.259 with the AzLogDcrIngestPS module clearly upgraded on disk hit:
+
+```
+[ERR]  Exception : A parameter cannot be found that matches parameter name 'AzAppCertificateStoreLocation'.
+[ERR]  At        : ...Invoke-Output.ps1:432
+```
+
+`-AzAppCertificateStoreLocation` shipped in **v1.6.3**. The on-disk module was v1.6.5 (just upgraded), the engine required v1.6.4 minimum -- but the **session had v1.6.2 still loaded in memory** (PowerShell auto-loaded the older version before `Ensure-Module` ran, or a launcher dot-source imported it earlier in the session). Once a module is loaded, cmdlet calls keep using that loaded instance regardless of what's on disk -- and `Get-Module -ListAvailable` only sees on-disk versions, so `Ensure-Module`'s min-version check passed against v1.6.5 while the *actual* runtime continued to use v1.6.2.
+
+Operator: "why is it not upgrading always when new version exist - into allusers".
+
+### Fix in `Ensure-Module`
+
+For any module in `$KeepLatest` (`AzLogDcrIngestPS`, `MicrosoftGraphPS` -- Morten's own modules where we always want customers on the latest), after the PSGallery upgrade probe:
+
+1. `Get-Module -Name $mod` to find what's currently **loaded** in the session.
+2. If nothing's loaded OR the loaded version != the on-disk highest → `Remove-Module -Force` + `Import-Module -RequiredVersion <on-disk> -Force`.
+3. Log the stale-reload event clearly: `"AzLogDcrIngestPS stale in-session: loaded v1.6.2, on-disk v1.6.5 -- forcing reload"`.
+
+The minimum-version enforcement at the bottom of `Ensure-Module` now prefers the **loaded** version (that's what cmdlet calls actually use) over the on-disk highest. Catches the rare race where Install-Module silently failed or another import-path slipped an older version in.
+
+All 4 engine `_shared/Ensure-Module.ps1` copies updated. Default scope was already `AllUsers`; that hasn't changed.
+
+### What the customer will see on the next run
+
+```
+[MODULE] AzLogDcrIngestPS v1.6.5 present
+[MODULE] AzLogDcrIngestPS is current (PSGallery v1.6.5)
+[MODULE] AzLogDcrIngestPS stale in-session: loaded v1.6.2, on-disk v1.6.5 -- forcing reload
+[MODULE] AzLogDcrIngestPS v1.6.5 loaded into session
+```
+
+… and the LA ingest path actually uses v1.6.5's cmdlets.
 
 ---
 

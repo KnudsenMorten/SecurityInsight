@@ -212,10 +212,8 @@ function Ensure-Module {
                         try {
                             Install-Module -Name $mod -Scope $effectiveScope -Force -AllowClobber -ErrorAction Stop
                             _SayOk ("{0} upgraded to v{1}" -f $mod, $remoteV)
-                            # Force re-import so the new version is the one PowerShell uses
-                            # this run (otherwise the old loaded version sticks until next session).
-                            Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
-                            if ($Import) { Import-Module -Name $mod -RequiredVersion $remoteV -ErrorAction SilentlyContinue -WarningAction SilentlyContinue }
+                            # Update $existing.Version so downstream force-reload picks v1.6.5 not v1.6.4
+                            $existing = [pscustomobject]@{ Name = $mod; Version = $remoteV; Path = $existing.Path }
                         } catch {
                             _SayWarn ("{0} upgrade attempt failed (continuing with local v{1}): {2}" -f $mod, $localV, $_.Exception.Message)
                         }
@@ -224,6 +222,38 @@ function Ensure-Module {
                     }
                 } catch {
                     _SayWarn ("{0} PSGallery version check failed (continuing with local): {1}" -f $mod, $_.Exception.Message)
+                }
+
+                # v2.2.261 -- force-reload guard. The on-disk version may be
+                # v1.6.5 (just upgraded, or already current from a prior run),
+                # but PowerShell's session may STILL have an older version
+                # loaded -- e.g. the user opened pwsh, ran Import-Module
+                # AzLogDcrIngestPS once before SI's Ensure-Module fired, or a
+                # global $PROFILE imported the module before us. In that case
+                # cmdlet calls below use the OLD loaded version regardless of
+                # what's on disk, and we hit "A parameter cannot be found
+                # matching 'AzAppCertificateStoreLocation'" with a fresh
+                # install sitting right there.
+                # Fix: always Remove-Module + Import-Module -RequiredVersion
+                # to the on-disk highest, so the session matches disk. Cheap
+                # (these are single-file modules, sub-second import).
+                $loadedVersions = @(Get-Module -Name $mod -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Version)
+                $diskV = try { [version]$existing.Version } catch { [version]'0.0.0' }
+                $needReload = $loadedVersions.Count -eq 0 -or
+                              -not ($loadedVersions | Where-Object { try { [version]$_ -eq $diskV } catch { $false } })
+                if ($needReload) {
+                    if ($loadedVersions.Count -gt 0) {
+                        _SayWarn ("{0} stale in-session: loaded v{1}, on-disk v{2} -- forcing reload" -f $mod, ($loadedVersions -join ','), $diskV)
+                    } else {
+                        _SayStep ("{0} v{1} not yet loaded into session -- importing" -f $mod, $diskV)
+                    }
+                    try {
+                        Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
+                        Import-Module -Name $mod -RequiredVersion $diskV -Force -ErrorAction Stop -WarningAction SilentlyContinue
+                        _SayOk ("{0} v{1} loaded into session" -f $mod, $diskV)
+                    } catch {
+                        _SayWarn ("{0} force-reload failed: {1}" -f $mod, $_.Exception.Message)
+                    }
                 }
             }
         } else {
@@ -272,15 +302,26 @@ Options:
             }
         }
 
-        # v2.2.244 -- hard minimum-version enforcement. Re-probe the loaded
-        # version (the KeepLatest upgrade above may have changed it). If still
-        # below the declared minimum, throw with a clear "what to do" message.
+        # v2.2.261 -- hard minimum-version enforcement looks at the LOADED
+        # version, not just on-disk. The force-reload above ensures these
+        # match for KeepLatest modules; the check below catches the case
+        # where Install-Module silently lost the race (offline tenant,
+        # PSGallery throttling) or some other code path imported an older
+        # version after Ensure-Module ran. Either way -- if the in-session
+        # version is below the declared minimum, throw with a clear message.
         if ($MinimumVersions.ContainsKey($mod) -and $MinimumVersions[$mod]) {
             $minV = try { [version]$MinimumVersions[$mod] } catch { $null }
             if ($minV) {
-                $reloaded = Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue |
-                            Sort-Object Version -Descending | Select-Object -First 1
-                $finalV = if ($reloaded) { try { [version]$reloaded.Version } catch { [version]'0.0.0' } } else { [version]'0.0.0' }
+                $loaded = Get-Module -Name $mod -ErrorAction SilentlyContinue |
+                          Sort-Object Version -Descending | Select-Object -First 1
+                $onDisk = Get-Module -ListAvailable -Name $mod -ErrorAction SilentlyContinue |
+                          Sort-Object Version -Descending | Select-Object -First 1
+                # Prefer the loaded version (that's what cmdlet calls will use).
+                # If nothing is loaded yet, fall back to the on-disk highest --
+                # PowerShell's auto-load picks that one on first cmdlet call.
+                $finalV = if ($loaded)  { try { [version]$loaded.Version } catch { [version]'0.0.0' } }
+                          elseif ($onDisk) { try { [version]$onDisk.Version } catch { [version]'0.0.0' } }
+                          else { [version]'0.0.0' }
                 if ($finalV -lt $minV) {
                     $errMsg = "{0} v{1} is below the engine's required minimum v{2}. The engine code calls cmdlet parameters that didn't exist in older versions. Fix: run 'Install-Module {0} -Force -AllowClobber -Scope AllUsers' (elevated) to force-pull the current PSGallery version, then re-run the engine. If PSGallery is unreachable, install the module manually from https://github.com/KnudsenMorten/{0}." -f $mod, $finalV, $minV
                     if ($Required) { _SayErr $errMsg; throw $errMsg }

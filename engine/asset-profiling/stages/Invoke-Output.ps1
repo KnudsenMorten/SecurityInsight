@@ -507,6 +507,82 @@ function Write-SIClassificationToLogAnalytics {
                                -DceResourceGroup $global:SI_DceResourceGroup `
                                -DcrResourceGroup $global:SI_DcrResourceGroup
 
+        # Step 1c: Active auth + RBAC probe (v2.2.256). Operator: "can we
+        # verify that auth is working as expected with cert".
+        # ---------------------------------------------------------------
+        # Two questions to answer in <5s, before we burn 240s waiting:
+        #   1. Does the cert-based SPN authentication produce a usable ARM
+        #      token RIGHT NOW? (separate from the earlier Get-AzDcrListAll
+        #      success -- that might be from a cached token; this proves
+        #      the current session can mint a fresh one)
+        #   2. Does the SPN hold a role that allows CREATING a DCR in the
+        #      target RG? Reader is enough for listing (which is why the
+        #      scope filter sees 83 cross-scope DCRs) but not for write.
+        #      Need "Monitoring Contributor" or higher.
+        # If either check fails, log loud + actionable but DO NOT abort
+        # (the engine still runs the JSON + Excel sinks; LA fails predictably).
+        try {
+            Write-Host ''
+            Write-SIInfo '----- auth + RBAC probe (v2.2.256) -----'
+
+            # (a) Token-mint probe
+            $_ctx = Get-AzContext -ErrorAction SilentlyContinue
+            if ($_ctx) {
+                Write-SIInfo ('  Az context : Account={0}  Type={1}  Tenant={2}' -f $_ctx.Account.Id, $_ctx.Account.Type, $_ctx.Tenant.Id)
+                try {
+                    $_tok = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/' -ErrorAction Stop
+                    $_ttl = $null
+                    if ($_tok.ExpiresOn) {
+                        try { $_ttl = [int](($_tok.ExpiresOn.UtcDateTime - [datetime]::UtcNow).TotalMinutes) } catch { $_ttl = $null }
+                    }
+                    Write-SIInfo ('  ARM token  : minted OK  (TTL ~{0} min)' -f ($(if ($null -ne $_ttl) { $_ttl } else { '?' })))
+                } catch {
+                    Write-Warning ('  ARM token  : MINT FAILED -- {0}' -f $_.Exception.Message)
+                    Write-Warning '  Cause is probably cert thumbprint/store mismatch, expired cert, or revoked SPN. LA ingest will fail.'
+                }
+            } else {
+                Write-Warning '  Az context : NOT CONNECTED -- Connect-AzAccount has not run in this session.'
+                Write-Warning '  Cause is probably an earlier auth failure; check Bootstrap-Auth.ps1 output.'
+            }
+
+            # (b) RBAC probe -- inspect role assignments for THIS SPN on target sub + RG
+            $_spnObjectId = if ($global:SI_SPN_ObjectId) { [string]$global:SI_SPN_ObjectId } else { '' }
+            if (-not $_spnObjectId) {
+                Write-Warning '  RBAC probe : $global:SI_SPN_ObjectId is not set -- cannot enumerate role assignments. Set it in custom.ps1 to enable this check.'
+            } else {
+                $_subScope = "/subscriptions/$($global:SI_AzSubscriptionId)"
+                $_rgScope  = "/subscriptions/$($global:SI_AzSubscriptionId)/resourceGroups/$($global:SI_DcrResourceGroup)"
+                try {
+                    $_assignments = @(Get-AzRoleAssignment -ObjectId $_spnObjectId -ErrorAction Stop |
+                                      Where-Object { $_.Scope -eq $_subScope -or $_.Scope -eq $_rgScope -or $_.Scope -eq '/' -or $_.Scope -like '/providers/Microsoft.Management/managementGroups/*' })
+                    if ($_assignments.Count -eq 0) {
+                        Write-Warning ('  RBAC probe : NO role assignments for SPN ObjectId {0} on target sub or RG.' -f $_spnObjectId)
+                        Write-Warning  '  CheckCreateUpdate will fail to create the DCR. Grant at minimum "Monitoring Contributor" on the DCR RG.'
+                    } else {
+                        Write-SIInfo  ('  RBAC probe : {0} role assignment(s) on target sub/RG for SPN ObjectId {1}:' -f $_assignments.Count, $_spnObjectId)
+                        foreach ($_a in $_assignments) {
+                            Write-SIInfo ('     - {0,-40} @ {1}' -f $_a.RoleDefinitionName, $_a.Scope)
+                        }
+                        # Heuristic: do any of the assigned roles include DCR-write capability?
+                        $_dcrWriters = @('Owner','Contributor','Monitoring Contributor','Data Collection Rule Contributor','Log Analytics Contributor')
+                        $_hasWriter  = @($_assignments | Where-Object { $_.RoleDefinitionName -in $_dcrWriters })
+                        if ($_hasWriter.Count -eq 0) {
+                            Write-Warning ('  RBAC probe : roles present grant READ only ({0}). CheckCreateUpdate needs WRITE -- assign one of: {1}.' -f (($_assignments.RoleDefinitionName | Sort-Object -Unique) -join ', '), ($_dcrWriters -join ', '))
+                        } else {
+                            Write-SIInfo  ('  RBAC probe : write-capable role found ({0}) -- DCR create should succeed.' -f (($_hasWriter.RoleDefinitionName | Sort-Object -Unique) -join ', '))
+                        }
+                    }
+                } catch {
+                    Write-Warning ('  RBAC probe : Get-AzRoleAssignment threw -- {0}' -f $_.Exception.Message)
+                    Write-Warning  '  SPN may lack Microsoft.Authorization/roleAssignments/read on target scope. Heuristic skipped; the CheckCreateUpdate captured output (Step 3) will reveal the actual ARM error.'
+                }
+            }
+            Write-SIInfo '----- end auth probe -----'
+            Write-Host ''
+        } catch {
+            Write-Warning ('auth+RBAC probe block threw unexpectedly -- {0}. Continuing.' -f $_.Exception.Message)
+        }
+
         # Step 2: schema sample (full dataset for type inference) + CollectionTime stamp.
         $schemaSample = @($flat | ForEach-Object {
             $_ | Add-Member -MemberType NoteProperty -Name CollectionTime -Value $RunContext.CollectionTime -Force -PassThru

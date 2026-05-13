@@ -99,11 +99,22 @@ function Invoke-SITagging {
         try {
             $auditTable = if ($global:SI_AssetTagActivityTable) { [string]$global:SI_AssetTagActivityTable } else { 'SI_AssetTagActivity' }
             $auditDcr   = if ($global:SI_AssetTagActivityDcr)   { [string]$global:SI_AssetTagActivityDcr }   else { 'dcr-si-assettag-activity' }
+            # v2.2.237 -- mirror Invoke-Output.ps1 auth resolution. Prefer SI_SPN_*
+            # (unified Bootstrap-Auth output) with cert OR secret; fall back to
+            # SI_LogIngest_* legacy globals; MI when SI_UAMI_ClientId is set.
+            $_appId   = if ($global:SI_SPN_AppId)           { $global:SI_SPN_AppId }           else { $global:SI_LogIngest_AppId }
+            $_secret  = if ($global:SI_SPN_Secret)          { $global:SI_SPN_Secret }          else { $global:SI_LogIngest_Secret }
+            $_tenant  = if ($global:SI_SPN_TenantId)        { $global:SI_SPN_TenantId }        else { $global:SI_LogIngest_TenantId }
+            $_certThumb = [string]$global:SI_SPN_CertThumbprint
+            $_certStore = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
             $useMi      = -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
+            $useCert    = -not $useMi -and -not [string]::IsNullOrWhiteSpace($_certThumb)
             $authParams = if ($useMi) {
                 @{ UseManagedIdentity = $true; ManagedIdentityClientId = $global:SI_UAMI_ClientId }
+            } elseif ($useCert) {
+                @{ AzAppId = $_appId; AzAppCertificateThumbprint = $_certThumb; AzAppCertificateStoreLocation = $_certStore; TenantId = $_tenant }
             } else {
-                @{ AzAppId = $global:SI_LogIngest_AppId; AzAppSecret = $global:SI_LogIngest_Secret; TenantId = $global:SI_LogIngest_TenantId }
+                @{ AzAppId = $_appId; AzAppSecret = $_secret; TenantId = $_tenant }
             }
 
             Write-SIInfo ('audit table : {0}_CL  /  DCR : {1}' -f $auditTable, $auditDcr)

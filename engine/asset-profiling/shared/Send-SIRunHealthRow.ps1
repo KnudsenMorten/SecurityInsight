@@ -69,15 +69,26 @@ function Send-SIRunHealthRow {
             Computer          = $hostName
         }
 
-        # Auth resolution mirrors Invoke-Output.ps1 (SPN-secret primary).
-        $spnAppId    = if ($global:SI_SPN_AppId)    { $global:SI_SPN_AppId }    else { $global:SI_LogIngest_AppId }
-        $spnSecret   = if ($global:SI_SPN_Secret)   { $global:SI_SPN_Secret }   else { $global:SI_LogIngest_Secret }
-        $spnTenantId = if ($global:SI_SPN_TenantId) { $global:SI_SPN_TenantId } else { $global:SI_LogIngest_TenantId }
-        $spnObjectId = if ($global:SI_SPN_ObjectId) { $global:SI_SPN_ObjectId } else { $global:SI_LogIngest_ObjectId }
+        # Auth resolution mirrors Invoke-Output.ps1: MI / SPN+Cert / SPN+Secret.
+        # v2.2.237 -- cert path added (AzLogDcrIngestPS module accepts cert directly).
+        $spnAppId      = if ($global:SI_SPN_AppId)    { $global:SI_SPN_AppId }    else { $global:SI_LogIngest_AppId }
+        $spnSecret     = if ($global:SI_SPN_Secret)   { $global:SI_SPN_Secret }   else { $global:SI_LogIngest_Secret }
+        $spnTenantId   = if ($global:SI_SPN_TenantId) { $global:SI_SPN_TenantId } else { $global:SI_LogIngest_TenantId }
+        $spnObjectId   = if ($global:SI_SPN_ObjectId) { $global:SI_SPN_ObjectId } else { $global:SI_LogIngest_ObjectId }
+        $spnCertThumb  = [string]$global:SI_SPN_CertThumbprint
+        $spnCertStore  = if ($global:SI_SPN_CertStoreLocation) { [string]$global:SI_SPN_CertStoreLocation } else { 'LocalMachine' }
 
-        $useMi = $global:SI_PreferUami -and -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
+        $useMi   = $global:SI_PreferUami -and -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
+        $useCert = -not $useMi -and -not [string]::IsNullOrWhiteSpace($spnCertThumb)
         $authParams = if ($useMi) {
             @{ UseManagedIdentity = $true; ManagedIdentityClientId = $global:SI_UAMI_ClientId }
+        } elseif ($useCert) {
+            @{
+                AzAppId                       = $spnAppId
+                AzAppCertificateThumbprint    = $spnCertThumb
+                AzAppCertificateStoreLocation = $spnCertStore
+                TenantId                      = $spnTenantId
+            }
         } else {
             @{ AzAppId = $spnAppId; AzAppSecret = $spnSecret; TenantId = $spnTenantId }
         }

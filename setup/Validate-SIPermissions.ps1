@@ -209,8 +209,10 @@ $RequiredApiPermissions = @(
     @{
         ResourceDisplayName = 'WindowsDefenderATP'
         ResourceAppId       = 'fc780465-2017-40d4-a0c5-307022471b92'
+        # v2.2.252 -- Machine.Read.All (READ only). v2.2 engine is read-only
+        # at collection time; tagging writeback is a separate solution.
         Permissions         = @(
-            'Machine.ReadWrite.All'
+            'Machine.Read.All'
         )
     }
 )

@@ -461,7 +461,13 @@ function Invoke-Phase-Spn {
         @{
             ResourceDisplayName = 'WindowsDefenderATP'
             ResourceAppId       = 'fc780465-2017-40d4-a0c5-307022471b92'
-            Permissions         = @('Machine.ReadWrite.All')
+            # v2.2.252 -- Machine.Read.All (READ only). v2.2 is read-only at
+            # collection time -- the engine queries /api/machines for device
+            # inventory but NEVER writes back. Tagging stage logs WOULD-APPLY
+            # intent to SI_AssetTagActivity_CL; the actual tag writeback is a
+            # separate tagger solution outside v2.2 that requires its own SPN
+            # with Machine.ReadWrite.All. Don't request write here.
+            Permissions         = @('Machine.Read.All')
         }
     )
     $RequiredAzureRoles = @{

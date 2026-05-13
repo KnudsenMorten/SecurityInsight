@@ -2451,7 +2451,7 @@ The exact set the `Validate-SIPermissions.ps1` utility grants (and validates on 
 
 | Permission | Used by |
 |---|---|
-| `Machine.ReadWrite.All` | CriticalAssetTagging (set tags on devices) |
+| `Machine.Read.All` | Endpoint asset-profiling (`/api/machines` device inventory). v2.2 is read-only at collection time — tagging writeback is a separate solution and requires its own SPN with `Machine.ReadWrite.All`. |
 
 </details>
 

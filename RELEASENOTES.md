@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.257
+## v2.2.258
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
 - release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
 - release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
 - release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
@@ -33,13 +34,88 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.232 - RA engine defensive SPN name bridge (SI_SPN_* -> Spn*) (20bbb6a4)
 - release: SecurityInsight v2.2.231 - grant AdvancedHunting.Read.All on Microsoft Threat Protection (separate API from Graph) (f492944d)
 - release: SecurityInsight v2.2.230 - add RoleManagement.Read.Directory to default SPN Graph permissions (77646ecd)
-- release: SecurityInsight v2.2.229 - URGENT community SPN+cert login fix + Setup Wizard email/SSL serializer (b431a336)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.258 — AzLogDcrIngestPS v1.6.3 cert-auth bug workaround + clean-abort on DCR-create timeout
+
+After v2.2.256 + v2.2.257 confirmed the customer's auth and RBAC are both fine, the captured module output came back **empty** (`no module output captured -- CheckCreateUpdate returned silently`). That was the smoking gun — the module wasn't *erroring*, it was returning **without executing anything**.
+
+### Root cause — module v1.6.3 bug
+
+`AzLogDcrIngestPS v1.6.3` line 910 gates the entire create-or-update block on:
+
+```powershell
+If ( ($AzAppId) -and ($AzAppSecret) )
+    {
+        # ... create logic ...
+    }
+```
+
+When the SPN authenticates with a **certificate** (SI v2.2.243+'s default for cert-based installs), `$AzAppSecret` is empty. The `If` is false. The create block never runs. The function returns without throwing. No DCR. No output. No error.
+
+The inner functions (`Get-AzLogAnalyticsTableAzDataCollectionRuleStatus`, `CreateUpdate-AzLogAnalyticsCustomLogTableDcr`, `CreateUpdate-AzDataCollectionRuleLogIngestCustomLog`) all accept `-AzAppCertificateThumbprint` correctly. It's only the **outer combined function's gate** that's wrong.
+
+### Module fix (recommended, ships globally)
+
+`AzLogDcrIngestPS.psm1` line 910:
+
+```powershell
+# before
+If ( ($AzAppId) -and ($AzAppSecret) )
+
+# after
+If ( ($AzAppId) -and ( ($AzAppSecret) -or ($AzAppCertificateThumbprint) ) )
+```
+
+Publish as v1.6.4. SI engine will pick it up automatically on next `Ensure-Module` run.
+
+### Engine workaround (this release — so the customer doesn't wait)
+
+`Invoke-Output.ps1` Step 3 now branches on `$useCert`:
+
+- **Cert auth path** → bypass the broken `CheckCreateUpdate-TableDcr-Structure` entirely. Call the three working inner functions directly:
+  1. `Get-AzLogAnalyticsTableAzDataCollectionRuleStatus` — does the table+DCR already match the schema?
+  2. `CreateUpdate-AzLogAnalyticsCustomLogTableDcr` — create/update LA table.
+  3. `CreateUpdate-AzDataCollectionRuleLogIngestCustomLog` — create/update DCR.
+- **Secret / MI path** → unchanged; continues to call the canonical combined function.
+
+A diagnostic line prints when the workaround engages:
+
+```
+v2.2.258 cert workaround: bypassing CheckCreateUpdate-TableDcr-Structure
+(module v1.6.3 gate skips cert path); calling inner Create/Update helpers directly.
+```
+
+### Bonus fix — clean abort on timeout
+
+If the wait loop times out at 240s (DCR genuinely missing), the engine used to continue to `Post-AzLogAnalyticsLogIngestCustomLogDcrDce-Output` which then threw the confusing:
+
+```
+Cannot bind argument to parameter 'DcrImmutableId' because it is an empty string.
+```
+
+Replaced with a clean `return 'FAILED: DCR not created...'` so the operator sees the **real** root cause (the warnings + module trace above) instead of a downstream parameter-binding noise.
+
+### What the customer's next run with v2.2.258 should look like
+
+```
+[INFO] v2.2.258 cert workaround: bypassing CheckCreateUpdate-TableDcr-Structure...
+VERBOSE: Creating/updating DCR [ dcr-si-endpoint-profile ] with limited payload
+VERBOSE: PUT with -1-byte payload
+VERBOSE: received 2094-byte response of content type application/json
+VERBOSE: Updating DCR [ dcr-si-endpoint-profile ] with full schema
+VERBOSE: PUT with -1-byte payload
+VERBOSE: received 4546-byte response of content type application/json
+[INFO] DCR immutableId resolved after 15s: dcr-<guid>
+SUCCESS - data uploaded to LogAnalytics
+```
 
 ---
 

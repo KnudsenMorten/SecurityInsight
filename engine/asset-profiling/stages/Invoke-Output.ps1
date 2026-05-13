@@ -598,31 +598,84 @@ function Write-SIClassificationToLogAnalytics {
         })
 
         # Step 3: provision/update DCR + LA table.
-        # v2.2.250 -- capture the module's verbose/warning/error streams to a
-        # buffer instead of suppressing them outright. Successful runs the
-        # buffer is dropped; if the wait loop times out below, we DUMP the
-        # captured output so the operator can see WHY creation failed instead
-        # of staring at "immutableId not in ARG after 120s" with no clue.
+        # v2.2.258 -- AzLogDcrIngestPS v1.6.3 BUG WORKAROUND for cert auth.
+        # CheckCreateUpdate-TableDcr-Structure has this gate at line 910:
+        #     If ( ($AzAppId) -and ($AzAppSecret) ) { ...create logic... }
+        # When the SPN authenticates with a certificate (SI v2.2.243+ default
+        # for cert-based installs), $AzAppSecret is empty -- the entire create
+        # block is skipped, function returns silently, no DCR is ever created.
+        # Wait loop then times out and Post-* fails with "DcrImmutableId is
+        # empty string". Module owner needs to publish v1.6.4 with the gate
+        # changed to: ($AzAppId) -and ( ($AzAppSecret) -or ($AzAppCertThumb) ).
+        #
+        # Workaround until v1.6.4 lands: when $useCert is true, skip
+        # CheckCreateUpdate and call its three inner functions directly
+        # (Get-AzLogAnalyticsTableAzDataCollectionRuleStatus +
+        # CreateUpdate-AzLogAnalyticsCustomLogTableDcr +
+        # CreateUpdate-AzDataCollectionRuleLogIngestCustomLog). All three
+        # already accept -AzAppCertificateThumbprint correctly.
         $_createOutput = $null
         try {
             $_createOutput = & {
                 $VerbosePreference = 'Continue'
                 $WarningPreference = 'Continue'
                 $ErrorActionPreference = 'Continue'
-                CheckCreateUpdate-TableDcr-Structure `
-                    -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
-                    @authParams `
-                    -DceName                                    $global:SI_DceName `
-                    -DcrName                                    $dcrName `
-                    -DcrResourceGroup                           $global:SI_DcrResourceGroup `
-                    -TableName                                  $tableName `
-                    -Data                                       $schemaSample `
-                    -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
-                    -AzLogDcrTableCreateFromAnyMachine          $true `
-                    -AzLogDcrTableCreateFromReferenceMachine    @() 4>&1 3>&1 2>&1
-            } | Out-String
+                if ($useCert) {
+                    Write-Output "v2.2.258 cert workaround: bypassing CheckCreateUpdate-TableDcr-Structure (module v1.6.3 gate skips cert path); calling inner Create/Update helpers directly."
+                    # Step 3a -- check if table+DCR already exist with the same schema.
+                    $_schemaArr = Get-ObjectSchemaAsArray -Data $schemaSample
+                    $_needsCreate = $true
+                    try {
+                        $_needsCreate = [bool](Get-AzLogAnalyticsTableAzDataCollectionRuleStatus `
+                            -AzLogWorkspaceResourceId  $global:SI_WorkspaceResourceId `
+                            -TableName                 $tableName `
+                            -DcrName                   $dcrName `
+                            -SchemaSourceObject        $_schemaArr `
+                            @authParams)
+                    } catch {
+                        Write-Warning ("StructureCheck threw -- assuming create needed. Reason: {0}" -f $_.Exception.Message)
+                        $_needsCreate = $true
+                    }
+                    if ($_needsCreate) {
+                        # Step 3b -- create/update LA table.
+                        $_tableSchema = Get-ObjectSchemaAsHash -Data $schemaSample -ReturnType Table
+                        $null = CreateUpdate-AzLogAnalyticsCustomLogTableDcr `
+                            -AzLogWorkspaceResourceId  $global:SI_WorkspaceResourceId `
+                            -SchemaSourceObject        $_tableSchema `
+                            -TableName                 $tableName `
+                            @authParams
+                        # Step 3c -- create/update DCR.
+                        $_dcrSchema = Get-ObjectSchemaAsHash -Data $schemaSample -ReturnType DCR
+                        $null = CreateUpdate-AzDataCollectionRuleLogIngestCustomLog `
+                            -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
+                            -SchemaSourceObject                         $_dcrSchema `
+                            -DceName                                    $global:SI_DceName `
+                            -DcrName                                    $dcrName `
+                            -DcrResourceGroup                           $global:SI_DcrResourceGroup `
+                            -TableName                                  $tableName `
+                            -LogIngestServicePricipleObjectId           $global:SI_LogIngest_ObjectId `
+                            -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
+                            @authParams
+                    } else {
+                        Write-Output "Existing table+DCR already match schema -- no create/update needed."
+                    }
+                } else {
+                    # Secret or MI path -- use the canonical combined function.
+                    CheckCreateUpdate-TableDcr-Structure `
+                        -AzLogWorkspaceResourceId                   $global:SI_WorkspaceResourceId `
+                        @authParams `
+                        -DceName                                    $global:SI_DceName `
+                        -DcrName                                    $dcrName `
+                        -DcrResourceGroup                           $global:SI_DcrResourceGroup `
+                        -TableName                                  $tableName `
+                        -Data                                       $schemaSample `
+                        -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
+                        -AzLogDcrTableCreateFromAnyMachine          $true `
+                        -AzLogDcrTableCreateFromReferenceMachine    @()
+                }
+            } 4>&1 3>&1 2>&1 | Out-String
         } catch {
-            $_createOutput = ("CheckCreateUpdate-TableDcr-Structure threw a terminating exception: {0}" -f $_.Exception.Message)
+            $_createOutput = ("Step 3 threw a terminating exception: {0}" -f $_.Exception.Message)
         }
 
         # Step 4: re-sync caches after DCR provisioning. Newly-created DCR's
@@ -684,6 +737,13 @@ function Write-SIClassificationToLogAnalytics {
             Write-Warning "  - SPN missing 'Monitoring Contributor' on target sub or RG"
             Write-Warning "  - Module hit a same-named DCR via its internal ARM lookup that"
             Write-Warning "    bypasses our cache filter (file a bug + paste the module output above)"
+            # v2.2.258 -- abort the LA sink cleanly. Without this, the engine
+            # proceeds to Build-DataArrayToAlignWithSchema + Post-* which then
+            # throws "Cannot bind argument to parameter 'DcrImmutableId' because
+            # it is an empty string" (the new DCR doesn't exist so the cache
+            # lookup returns null). Confusing for the operator; the real cause
+            # is right above this line.
+            return ('FAILED: DCR ''{0}'' not created in target RG after {1}s -- see module output / RBAC probe above for root cause. LA sink skipped to prevent confusing "DcrImmutableId empty" downstream error.' -f $dcrName, $_waitMax)
         }
 
         # Re-apply scope filter after Step 4's cache re-sync -- Get-Az*ListAll

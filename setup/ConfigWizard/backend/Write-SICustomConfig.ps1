@@ -207,24 +207,70 @@ if ($Smtp -and $Smtp.Server) {
     $null = $sb.AppendLine("# ============================================================================")
     $null = $sb.AppendLine("# 5. SMTP  --  email dispatch")
     $null = $sb.AppendLine("# ============================================================================")
+    # v2.2.229 -- recipient-list serialization. The wizard frontend sometimes
+    # delivers MailTo/DetailedTo/SummaryTo as arrays of hashtables (shape
+    # @{ Email='foo@bar'; Name='Foo' }) instead of plain strings. The old
+    # "'$_'" cast ToString()'d the hashtable to its type name and produced
+    # `@('System.Collections.Hashtable',...)` in the customer file, breaking
+    # mail dispatch. This helper coerces either shape to a clean email string.
+    function _CfgEmailString {
+        param([Parameter()]$Item)
+        if ($null -eq $Item) { return $null }
+        if ($Item -is [hashtable] -or $Item -is [System.Collections.Specialized.OrderedDictionary]) {
+            foreach ($k in 'Email','Address','Mail','Value','Recipient','Upn') {
+                if ($Item.Contains($k) -and $Item[$k]) { return [string]$Item[$k] }
+            }
+            return $null
+        }
+        if ($Item -is [pscustomobject]) {
+            foreach ($k in 'Email','Address','Mail','Value','Recipient','Upn') {
+                $p = $Item.PSObject.Properties[$k]
+                if ($p -and $p.Value) { return [string]$p.Value }
+            }
+            return $null
+        }
+        $s = [string]$Item
+        if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+        if ($s -eq 'System.Collections.Hashtable') { return $null }
+        return $s
+    }
+
     $null = $sb.AppendLine("`$global:SendMail        = `$true")
-    if ($Smtp.MailTo)     { $null = $sb.AppendLine("`$global:MailTo          = @($(($Smtp.MailTo     | ForEach-Object { "'$_'" }) -join ','))") }
+    if ($Smtp.MailTo) {
+        $mailToList = @($Smtp.MailTo | ForEach-Object { _CfgEmailString $_ } | Where-Object { $_ })
+        if ($mailToList.Count -gt 0) {
+            $null = $sb.AppendLine("`$global:MailTo          = @($(($mailToList | ForEach-Object { "'$_'" }) -join ','))")
+        }
+    }
     if ($Smtp.Server)     { $null = $sb.AppendLine("`$global:SmtpServer      = '$($Smtp.Server)'") }
     if ($Smtp.Port)       { $null = $sb.AppendLine("`$global:SmtpPort        = $([int]$Smtp.Port)") }
     if ($Smtp.User)       { $null = $sb.AppendLine("`$global:SMTPUser        = '$($Smtp.User)'") }
     if ($Smtp.Password)   { $null = $sb.AppendLine("`$global:SMTPPassword    = '$($Smtp.Password)'") }
     if ($Smtp.From)       { $null = $sb.AppendLine("`$global:SMTPFrom        = '$($Smtp.From)'") }
-    $useSsl = if ($null -ne $Smtp.UseSsl) { [bool]$Smtp.UseSsl } else { $true }
+    # v2.2.229 -- port 25 is plain SMTP / opportunistic STARTTLS by convention;
+    # Send-MailMessage's -UseSsl flag is *implicit* TLS only and will fail the
+    # handshake against a port-25 listener. Force UseSSL=$false on port 25
+    # regardless of the wizard's UseSsl input. Operators who run a port-25
+    # listener with implicit TLS (rare) can edit the file by hand.
+    $portInt = if ($Smtp.Port) { [int]$Smtp.Port } else { 0 }
+    $useSsl  = if ($null -ne $Smtp.UseSsl) { [bool]$Smtp.UseSsl } else { $true }
+    if ($portInt -eq 25 -and $useSsl) {
+        $null = $sb.AppendLine("# Port 25 + UseSSL=`$true is incompatible with Send-MailMessage's implicit-TLS;")
+        $null = $sb.AppendLine("# auto-coerced to UseSSL=`$false. Switch to port 587 (STARTTLS) or 465 (implicit TLS) if you need encryption.")
+        $useSsl = $false
+    }
     $null = $sb.AppendLine("`$global:SMTP_UseSSL     = `$" + ($useSsl.ToString().ToLower()))
     if ($Smtp.DetailedTo) {
-        $list = ($Smtp.DetailedTo | ForEach-Object { "'$_'" }) -join ','
+        $detList = @($Smtp.DetailedTo | ForEach-Object { _CfgEmailString $_ } | Where-Object { $_ })
+        $list = ($detList | ForEach-Object { "'$_'" }) -join ','
         $null = $sb.AppendLine("`$global:RiskAnalysis_Detailed_SendMail = `$true")
         $null = $sb.AppendLine("`$global:RiskAnalysis_Detailed_To       = @($list)")
         $null = $sb.AppendLine("`$global:Mail_SecurityInsight_Detailed_SendMail = `$true")
         $null = $sb.AppendLine("`$global:Mail_SecurityInsight_Detailed_To       = @($list)")
     }
     if ($Smtp.SummaryTo) {
-        $list = ($Smtp.SummaryTo | ForEach-Object { "'$_'" }) -join ','
+        $sumList = @($Smtp.SummaryTo | ForEach-Object { _CfgEmailString $_ } | Where-Object { $_ })
+        $list = ($sumList | ForEach-Object { "'$_'" }) -join ','
         $null = $sb.AppendLine("`$global:RiskAnalysis_Summary_SendMail  = `$true")
         $null = $sb.AppendLine("`$global:RiskAnalysis_Summary_To        = @($list)")
         $null = $sb.AppendLine("`$global:Mail_SecurityInsight_Summary_SendMail = `$true")

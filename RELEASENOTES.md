@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.246
+## v2.2.247
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.247 - fix silent anonymous-mail failure (704a2513)
 - release: SecurityInsight v2.2.246 - propagate DCR/DCE scope filter to Schema + Tagging stages (1528059a)
 - release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
 - release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.220 - Device_Recommendations regression fix (column_ifexists wrapper restored) (31ebbe30)
 - release: SecurityInsight v2.2.219 - CVE Summary/Detailed: AssetTags exclusion filter actually fires (9f486787)
 - release: SecurityInsight v2.2.218 - CVE Detailed asset tier filter (default [0, 1, 2]) (31128734)
-- release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.247 — Fix silent anonymous-mail failure (Send-MailMessage → direct SmtpClient)
+
+Operator: "no email, fix" -- engine printed `[OK] anonymous mail sent` while no email arrived.
+
+**Root cause.** `Send-MailAnonymous` was calling `Send-MailMessage` without `-Credential`. Internally that cmdlet instantiates `System.Net.Mail.SmtpClient` with the .NET default `UseDefaultCredentials = $true`, which auto-attaches the current Windows account's NT credentials to the SMTP handshake. Several common relay configurations (Postfix `smtpd_relay_restrictions = permit_mynetworks, reject`; Exchange receive-connectors scoped to **Anonymous Users** with auth disabled) **silently reject** that credentialed connection and return a success response anyway -- the cmdlet doesn't throw, so the engine logs a phantom OK.
+
+**Fix.** `Send-MailAnonymous` now builds `System.Net.Mail.SmtpClient` directly:
+
+```powershell
+$smtp = New-Object System.Net.Mail.SmtpClient($SmtpServer, $Port)
+$smtp.EnableSsl              = [bool]$UseSsl
+$smtp.UseDefaultCredentials  = $false   # forces no NT-cred handshake
+$smtp.Credentials            = $null    # explicit anonymous
+$smtp.DeliveryMethod         = [System.Net.Mail.SmtpDeliveryMethod]::Network
+$smtp.Timeout                = 60000
+```
+
+Then a `System.Net.Mail.MailMessage` with explicit UTF-8 subject/body encoding, attachments handled with `try/finally` cleanup. `$smtp.Send($msg)` throws on transport-layer failure -- so any future relay rejection (530, network timeout) surfaces as a real engine error, not a green log lying about delivery.
+
+Affects every customer running with no `$global:SMTPUser` / `$global:SMTPPassword` (i.e. routed through an internal mail relay that accepts anonymous SMTP from trusted IPs).
 
 ---
 

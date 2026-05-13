@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.243
+## v2.2.244
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
 - release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
 - release: SecurityInsight v2.2.242 - docs audit + sync after v2.2.227-240 shipments (d9404922)
 - release: SecurityInsight v2.2.241 - README What's New table updated with v2.2.227 - v2.2.240 highlights (ef1ca6ed)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.217 - _ep EpJoinKey dedup (memory fix + server/IoT support) + Summary parity + Tier null-flow (3ddcca18)
 - release: SecurityInsight v2.2.216 - CVE Detailed/Summary code-review cleanup (38fdcd35)
 - release: SecurityInsight v2.2.215 - CVE Detailed: pre-collapse multi-NodeId at edge layer (871f88fd)
-- release: SecurityInsight v2.2.214 - CVE Detailed: collapse summarize by DeviceKey, not AssetName (9e66eda6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.244 — Module upgrade: drop the 24h throttle + add hard minimum-version check for `AzLogDcrIngestPS`
+
+Operator: "why this — remove 24h-throttle marker (in $env:TEMP\si-modcheck-AzLogDcrIngestPS.json) kicks in and prevents the re-probe" — and the follow-up "i always republish with +1 increments" + "1.6.3 must be present of azlogdcringestps".
+
+Two changes to `Ensure-Module` (synced across all 4 engine `_shared/` copies):
+
+### 1. 24h throttle removed
+
+v2.2.238's marker file in `$env:TEMP\si-modcheck-<mod>.json` was supposed to avoid spamming PSGallery, but `Find-Module` is one HTTPS call (<1s) and module-author publishes a fresh build same day — the throttle locked customers to stale versions for up to 24h, defeating the whole point of `KeepLatest`. Removed. PSGallery probe now runs every engine run unconditionally.
+
+Strict version comparison (`remote > local`) still wins — module-author workflow is "every publish bumps the version by at least +1 patch", so same-version on disk and gallery is already-current.
+
+### 2. Hard minimum-version enforcement
+
+New `-MinimumVersions` parameter on `Ensure-Module` (hashtable: module-name → version-string). After the on-disk probe + KeepLatest upgrade pass, if the loaded version is **still** below the declared minimum, throw a clear error:
+
+```
+AzLogDcrIngestPS v1.6.2 is below the engine's required minimum v1.6.3. The engine
+code calls cmdlet parameters that didn't exist in older versions. Fix: run
+'Install-Module AzLogDcrIngestPS -Force -AllowClobber -Scope AllUsers' (elevated)
+to force-pull the current PSGallery version, then re-run the engine.
+```
+
+Beats the previous failure mode (`A parameter cannot be found that matches parameter name 'AzAppCertificateStoreLocation'`) by a mile.
+
+`Ensure-SecurityInsightModules` now passes `@{ AzLogDcrIngestPS = '1.6.3' }` as the required minimum — that's the version where `-AzAppCertificateThumbprint` / `-AzAppCertificateStoreLocation` / `-UseManagedIdentity` / `-EnableCompression` landed in the public API.
+
+When PSGallery is unreachable AND the local version is below minimum, the throw still fires — operator gets a clear next-step instead of an undecipherable downstream error.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.278
+## v2.2.279
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
 - release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
 - release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
 - release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.252 - Machine.Read.All instead of Machine.ReadWrite.All for WDATP (e02c9297)
 - release: SecurityInsight v2.2.251 - DCR auto-rename length guard (>60 chars -> SHA1 hash fallback) (ef4ef053)
 - release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
-- release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.279 — `_Detailed` reports default to BucketCount=32; sub-bucket depth cap 4 → 6
+
+Operator's v2.2.277 run on Nordstern showed two follow-on issues after the sub-bucketing landed:
+
+1. The YAML `BucketCount: 64` declared on the heavy attack-paths reports in v2.2.277 wasn't taking effect — log said `Falling back to configured BucketCount=2`. Either customer pulled engine but not YAML, or their per-tenant `RiskAnalysis_Queries_Custom.yaml` overrode the report by name without the new field, dropping the locked default.
+2. Sub-bucketing recursed all the way to depth=4 (modulus 512) and STILL had one bucket index timing out. The depth cap = 4 default was reached with the slice still incomplete.
+
+Two engine-level changes that don't depend on the customer pulling new YAML:
+
+### (a) `_Detailed` reports default to BucketCount=32 (was 2)
+
+`Invoke-RiskAnalysis.ps1:6061`. Detailed reports emit one row per (asset, finding) tuple with no upstream dedup; cartesian blow-up is structural. Starting at 2 means 4-5 escalation rounds before converging. Default 32 + sub-bucketing handles the rest immediately on first run for most non-trivial tenants. Per-report YAML `BucketCount` still wins when set; customer can also override globally via `$global:SI_AutoBucketDefaultDetailed = N`.
+
+Detection logic: `$ReportNameFromTemplate -like '*_Detailed*'`.
+
+Summary reports unchanged (default still 2, per-report `BucketCount: 64` from v2.2.277 still applies on the heavy attack-paths Summary).
+
+### (b) Sub-bucket depth cap 4 → 6
+
+`Invoke-RiskAnalysis.ps1:6411`. Nordstern's run reached depth=4 (modulus = `BucketCount × 4^4` = 256× finer than original) with one slice still heavy. Bumping to depth=6 gives the recursive split modulus up to 4096× finer (e.g., starting at 32 → max effective bucket count 32×4096 = 131072 = $capBucket). Tunable via `$global:SI_AutoBucketSubDepthMax`.
+
+### Combined effect on Nordstern's case
+
+- Detailed report starts at BucketCount=32 (from default) or 64 (if YAML pulled) directly — no probe-fallback round.
+- Heavy slice gets up to 6 levels of recursive split before giving up.
+- Total time: ~3-5 min for the bulk + ~15-90 min for the heavy slice's recursive splits, compared to v2.2.277's depth-4-cap that gave up at ~75 min with data missing.
+
+### What's still pending
+
+The persistent hot slice on Nordstern (one bucket index always timing out at every modulus) suggests a single device or path with massive credential fan-out. Even at depth=6 (modulus = 131072), if that one device's tuple count exceeds the AH 900s window, sub-bucketing alone won't help. The architectural fix is YAML query rewrite (narrower target labels, pre-filter, etc.) — separate, riskier change deferred until needed.
 
 ---
 

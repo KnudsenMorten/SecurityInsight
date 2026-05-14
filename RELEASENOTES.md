@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.301
+## v2.2.302
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
 - release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
 - release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
 - release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
 - release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
 - release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
-- release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.302 — Stop auto-injecting stale-device filter into reports that don't have TargetNodeId/NodeId at injection point
+
+Operator log on a customer running v2.2.301 + Device_Recommendations_Summary still showed 0 rows. Hybrid pre-fetch fired correctly (`[hybrid] '_ep' snapshot reused from cache (24155 bytes)` — populated CL data inlined), AH returned in 42s, both buckets came back with 0 rows. The actual bug was upstream: an auto-injected stale-device filter dropping 100% of rows.
+
+### Bug
+
+`Resolve-StaleDeviceFilterBlock` (Invoke-RiskAnalysis.ps1) has a path-2 auto-injection that fires when:
+- Query has `__BUCKET_FILTER_BEGIN__` placeholder, AND
+- Query references `ExposureGraph(Nodes|Edges)` AND `"device"|"computer-account"|"microsoft.compute/virtualmachines"`
+
+The injected filter (`New-StaleDeviceFilterKql`) is shaped:
+```kql
+| where coalesce(tostring(column_ifexists('TargetNodeId','')), tostring(column_ifexists('NodeId',''))) in ((
+    ExposureGraphNodes | ... | project NodeId
+  ))
+```
+
+It assumes the row at injection point has a `TargetNodeId` or `NodeId` column. That holds for Attack_Paths reports (which key on EG TargetNodeId throughout). It does NOT hold for `Device_Recommendations_*`, which is keyed on `DeviceId`/`DI_AadDeviceId`/`DeviceKey` (MDE-side TVM+DeviceInfo) and only joins EG to read `IsCustomerFacing`. At the injection point neither `TargetNodeId` nor `NodeId` exists.
+
+When neither column exists, `column_ifexists` returns `""`, `coalesce` returns `""`, then `"" in ((subquery returning NodeIds))` evaluates to `false` for every row → 100% silent drop. The auto-injection trigger only checked whether the query *mentions* EG + device labels, not whether the column contract is actually present at the injection point.
+
+### Fix
+
+Add a precondition to path-2 auto-injection: skip when neither `TargetNodeId` nor `NodeId` is referenced anywhere in the query body. Logs `[stale-device] <ReportName>: auto-injection skipped (...)` so the operator sees what happened. Path-1 (explicit `__STALE_DEVICE_FILTER__` placeholder in YAML) is unchanged — opt-in per report still works for Attack_Paths.
+
+### Affected
+
+- `Device_Recommendations_Summary` / `Device_Recommendations_Detailed` — both pulled into auto-injection, both produced 0 rows on tenants where MDE was present and TVM data existed
+- Any other future report that joins EG only for an enrichment flag without keying on EG nodes — same trap was waiting
+
+### Verification
+
+After v2.2.302 the launcher log should show `[stale-device] Device_Recommendations_Summary: auto-injection skipped (query has no TargetNodeId/NodeId column at injection point; filter would drop every row)` instead of the misleading `auto-injected ... MaxAgeDays=30 Mode=strict` line. Rows then flow through normally.
 
 ---
 

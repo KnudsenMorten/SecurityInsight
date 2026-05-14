@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.292
+## v2.2.293
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
 - release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
 - release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
 - release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
@@ -33,13 +34,76 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
 - release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
 - release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
-- release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.293 — `Attack_Paths_Detailed_Device_*_Azure`: bucket on Device NodeId, not CVE NodeId
+
+Operator on Nordstern: even after v2.2.290 (additive cartesian rewrite) + v2.2.282/288 (stale-device filter), bucket 40 of 64 still 900s-times out and recurses into deep sub-bucketing. Pattern across multiple runs: one specific hash chain (`231` mod 256, `231` mod 1024, ...) consistently overflows.
+
+### Root cause
+
+The `__BUCKET_FILTER__` block was positioned BEFORE the `| project CVENodeId = SourceNodeId, ..., DeviceNodeId = TargetNodeId, ...` projection inside `DevicesWithCVEsBase`. At that point in the pipeline, the only available columns are raw `ExposureGraphEdges` columns (`SourceNodeId`, `TargetNodeId`, etc.) — NOT the projected `DeviceNodeId`. The composite-bucket-key resolver coalesces:
+
+```
+DeviceKey | NodeId | DeviceNodeId | AadDeviceId | DeviceId | MachineId | Id | SourceNodeId | TargetNodeId
+```
+
+and picks the **first non-empty**. `DeviceNodeId` doesn't exist yet at the bucket-filter position → the coalesce falls through to `SourceNodeId` (which IS present, holds the CVE NodeId).
+
+**Result**: bucketing was on CVE NodeId. A device with 160 CVEs spread its (CVE, Device) tuples across ~64 buckets. Each bucket then computed the FULL credential→identity→target cartesian for every device whose CVE landed there — the same heavy device was recomputed in many buckets, and bomb compounds.
+
+### Fix
+
+Moved the `__BUCKET_FILTER__` block to **AFTER** the `| project ... DeviceNodeId = TargetNodeId, ...` line. Now at the bucket-filter position, `DeviceNodeId` exists as a projected column and wins the composite-key coalesce ahead of `SourceNodeId`.
+
+```kql
+let DevicesWithCVEsBase = materialize(
+    ExposureGraphEdges
+    | where SourceNodeLabel == "Cve"
+    | where EdgeLabel == "affecting"
+    | where TargetNodeLabel in ("device","computer-account","microsoft.compute/virtualmachines")
+    | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
+    | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
+    | where not(_AssetTagsLower has_any (_excludedAssetTags))
+    //__STALE_DEVICE_FILTER_BEGIN__ ... END__
+    | project
+        CVENodeId       = SourceNodeId,
+        CVENodeName     = SourceNodeName,
+        DeviceNodeId    = TargetNodeId,           ← now exists at bucket-filter scope
+        DeviceNodeName  = TargetNodeName,
+        DeviceNodeLabel = TargetNodeLabel
+    //__BUCKET_FILTER_BEGIN__ ... END__         ← moved AFTER project
+);
+```
+
+### What this changes operationally
+
+Before (CVE-keyed):
+- 26 devices × N_CVE distribution → some CVEs concentrate certain devices in one bucket
+- Heavy devices (160 CVEs) appear in ~64 buckets
+- Bucket compute cost = sum across all buckets where the heavy device appears
+- Bomb device's full cartesian recomputed multiple times across the run
+
+After (Device-keyed):
+- ~total_devices/64 unique devices per bucket
+- Each device appears in EXACTLY one bucket
+- Heavy device's cartesian computed once, contained to its single bucket
+- Sub-bucketing on the heavy bucket isolates the bomb device cleanly into a 1-device sub-slice
+
+### Cache invalidation
+
+AutoBucket cache invalidates once (query body changed → new stable hash). First run after v2.2.293 will re-probe at floor 64, succeed, cache. Subsequent runs are cache hits.
+
+### Scope
+
+Applied to **only** `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` for now. The other 11 Attack_Paths reports + 8 Identity_Admin_LogonTo reports also have the same BUCKET_FILTER-before-project pattern but haven't been observed timing out. If those exhibit the same bomb pattern, apply the same fix per-report (trivial YAML edit).
 
 ---
 

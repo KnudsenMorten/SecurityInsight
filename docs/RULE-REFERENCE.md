@@ -380,6 +380,44 @@ All operator names are case-insensitive on both name AND value. Comparisons are 
 
 When **only the `.custom.yaml`** exists (no `.locked.yaml` sibling) -- typical for inherently tenant-specific rules like `AssetProfileByCmdbTag`, `AssetProfileByIPSubnet`, `AssetProfileByExtensionAttributes`, `AssetProfileByGroupMembership` -- the rule still loads fine; there's nothing to override.
 
+### How-to: full override of a shipped rule (worked example)
+
+You want to keep the engine's `ADDomainController` detection logic but stamp **your** `cmdbId` (`SVC-AD-PROD`) onto every matched DC, and add a tag for your CAB workflow. Two-step:
+
+1. Copy the locked file next to itself with a `.custom.yaml` suffix:
+   ```
+   asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/
+     ADDomainController.locked.yaml    (shipped baseline -- DO NOT edit)
+     ADDomainController.custom.yaml    (NEW -- your override, gitignored)
+   ```
+2. Inside `ADDomainController.custom.yaml`, keep the **exact same `id:`**, paste the full rule body, then change only what you want:
+   ```yaml
+   id:        ADDomainController          # MUST match the locked id
+   appliesTo: endpoint
+   osPlatformScope: [WindowsServer, Linux]
+   mode:      locked
+   purpose:   'Domain Controller'
+   category:  'Server Roles'
+   description: |
+     Customer override -- keeps shipped detection, adds CMDB stamp + DC-CAB tag.
+
+   detections:
+     - id: ADDomainController
+       detect:
+         any:
+           # ... paste the same `any:` list from the .locked.yaml verbatim ...
+       set:
+         Tier:     0
+         Purpose:  'Domain Controller'
+         Category: 'Server Roles'
+         Tags:     [ 'cab:domain-controllers' ]
+         cmdbId:   'SVC-AD-PROD'           # your CMDB foreign key
+   ```
+
+**Result on the next run**: the locked rule is suppressed, the custom rule fires for the same DCs, asset gets `Tier=0` + `Tags=['cab:domain-controllers']` + `cmdbId='SVC-AD-PROD'` (and Reconcile auto-stamps `cmdbName` / `cmdbCriticality` / `cmdbDataSensitivity` from your CMDB CSV). The `.custom.yaml` is gitignored so your override survives every release upgrade.
+
+> **`cmdbId` is silently ignored when CMDB is not configured.** The engine gates `set.cmdbId` / `set.cmdbName` propagation on `$global:SI_EnableCmdbProvider`. So a community customer running without ServiceNow / a CSV provider can leave the cmdb fields in custom rules — they're inert. Flip the global on and they activate.
+
 ---
 
 ## Loading order + dedup

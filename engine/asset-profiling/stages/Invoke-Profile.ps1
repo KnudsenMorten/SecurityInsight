@@ -141,8 +141,14 @@ function Invoke-SIProfile {
                 Purpose      = if ($set.Purpose)                { [string]$set.Purpose }        else { $null }
                 Category     = if ($set.Category)               { [string]$set.Category }       else { $null }
                 Tags         = if ($set.Tags)                   { @($set.Tags) }                else { @() }
-                cmdbId       = if ($set.cmdbId)                 { [string]$set.cmdbId }         else { $null }
-                cmdbName     = if ($set.cmdbName)               { [string]$set.cmdbName }       else { $null }
+                # v2.2.274 -- gate cmdb propagation on $global:SI_EnableCmdbProvider.
+                # When CMDB is not configured for the tenant, ignore set.cmdbId / set.cmdbName
+                # from rule Set blocks. Otherwise a locked rule that accidentally carries
+                # cmdbId=1 (placeholder/example data) would mis-stamp every matched asset
+                # with a fictional cmdb identity, polluting SI_*_Profile_CL.cmdbId across
+                # the whole tenant and inflating Reconcile mismatches.
+                cmdbId       = if ($global:SI_EnableCmdbProvider -and $set.cmdbId)   { [string]$set.cmdbId }   else { $null }
+                cmdbName     = if ($global:SI_EnableCmdbProvider -and $set.cmdbName) { [string]$set.cmdbName } else { $null }
             })
             # per-rule fire counter
             $rkey = ('{0}/{1}' -f $hit.RuleId, $hit.DetectionId)

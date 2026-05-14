@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.282
+## v2.2.283
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
 - release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
 - release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
 - release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
 - release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
 - release: SecurityInsight v2.2.254 - wizard DCR names aligned with engine -profile convention (6c3abca9)
-- release: SecurityInsight v2.2.253 - skip SI_StorageKey fetch+persist when OAuth-on-storage enabled (2e8a6edf)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.283 — Stale-device filter extended to `Identity_Admin_LogonTo_*` reports (8 more queries)
+
+Operator follow-up after v2.2.282 ship: "are there more queries where this could add value?". Audit found 8 additional heavy device-touching reports with the same EG-ghost-node cartesian risk:
+
+- `Identity_Admin_LogonTo_VulnerableDevice_Summary`
+- `Identity_Admin_LogonTo_VulnerableDevice_Detailed`
+- `Identity_Admin_LogonTo_InternetExposedDevice_Summary`
+- `Identity_Admin_LogonTo_InternetExposedDevice_Detailed`
+- `Identity_Admin_LogonTo_LowTierDevice_Summary`
+- `Identity_Admin_LogonTo_LowTierDevice_Detailed`
+- `Identity_EligibleAdmin_LogonTo_ExploitableDevice_Summary`
+- `Identity_EligibleAdmin_LogonTo_ExploitableDevice_Detailed`
+
+These query the inverse direction (admin-identity → device → finding) which is symmetric to Attack_Paths in cartesian-blast-radius terms. Same `__STALE_DEVICE_FILTER__` placeholder added above each report's `__BUCKET_FILTER__`. Engine resolver and globals unchanged from v2.2.282.
+
+Total reports now stale-filtered: **20** (12 Attack_Paths + 8 Identity_Admin_LogonTo).
 
 ---
 

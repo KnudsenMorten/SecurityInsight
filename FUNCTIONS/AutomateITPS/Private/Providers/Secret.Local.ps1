@@ -12,17 +12,16 @@ function Get-PlatformSecretLocal {
 
     $path = Get-LocalSecretFile
     if (-not (Test-Path -LiteralPath $path)) {
-        # v2.2.285 -- soft-fail: missing store/secret returns $null + warning
-        # rather than throwing. Symmetric with Get-PlatformSecretKeyVault.
-        # Keeps Layer 3 launcher-config loads non-fatal when optional secrets
-        # haven't been seeded yet.
-        Write-Warning ("Get-PlatformSecretLocal: store not found at {0} (returning `$null). Populate with Set-PlatformLocalSecret if you need this secret." -f $path)
+        # v2.2.291 -- downgrade to Write-Verbose. Same rationale as the KV
+        # provider: optional missing secrets on a fresh install shouldn't
+        # spam the launcher output. Run with -Verbose to surface these.
+        Write-Verbose ("Get-PlatformSecretLocal: store not found at {0} (returning `$null). Populate with Set-PlatformLocalSecret if you need this secret." -f $path)
         return $null
     }
 
     $store = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not ($store.PSObject.Properties.Name -contains $Name)) {
-        Write-Warning ("Get-PlatformSecretLocal: secret '{0}' not found in {1} (returning `$null)." -f $Name, $path)
+        Write-Verbose ("Get-PlatformSecretLocal: secret '{0}' not found in {1} (returning `$null)." -f $Name, $path)
         return $null
     }
 

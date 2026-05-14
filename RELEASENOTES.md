@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.300
+## v2.2.301
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
 - release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
 - release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
 - release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
 - release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
 - release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
-- release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.301 — Sweep all remaining off-scope `case()` defaults across Identity + CVE + Attack_Paths reports (same silent-drop as v2.2.300)
+
+Operator: "are there more of these in all queries?" — yes, many.
+
+After v2.2.300 fixed the 4 endpoint reports, audited the YAML for every `extend CriticalityTierLevel = case(...)` and `extend SecuritySeverity = case(...)` whose default value falls outside the report's filter scope (`Critical/High/Medium/Low - tier 0..3` and `Very High/High/Medium-High/Medium/Low`). Engine post-filter at Invoke-RiskAnalysis.ps1:6784 uses `Filter-ObjectsByColumn -IncludeBlank:$true` — blanks survive but any non-blank string outside scope is silently dropped.
+
+### Found and fixed (~25 sites)
+
+- **`SecuritySeverity = ... "Unknown"` default** — 2 CVE reports (lines 325 + 715, v2.2.216 origin). `Unknown` not in `SecuritySeverityScope` → every row with null/empty `FindingSeverity` was dropped. Default now `"Low"`.
+- **`CriticalityTierLevel = ... "Unknown - unmapped"` default in Identity reports** — ~19 Identity_* reports (lines 10507–13159, single-line `case()` form). Identities without a Tier value got dropped. Default now `"Low - tier 3"`.
+- **`TargetCriticalityTierLevel ... "Unknown - unmapped"` default in Attack_Paths Detailed** — line 9534. Unreachable in practice (preceded by `coalesce(Target_Tier_From_CL, 3)`) but normalized for consistency.
+- **`CriticalityTierLevel ... "Unknown - unmapped"` in Compromised_Device reports** — lines 22144 + 22255 (single-line, `where CriticalityTier <= 1` upstream makes default unreachable). Normalized.
+
+### Pattern to avoid going forward
+
+For any column referenced in `*Scope` (`CriticalityTierLevelScope`, `SecuritySeverityScope`): the `case()` default MUST be a value from that scope (or blank, which `IncludeBlank:$true` preserves). Anything else is a silent-drop trap. The "data-quality signaling via Unknown default" pattern looks correct in isolation but is incompatible with the engine's scope filter — it produces zero rows AND no signal.
+
+### Cache invalidation
+
+Query bodies changed → new stable hashes. AutoBucket caches invalidate.
 
 ---
 

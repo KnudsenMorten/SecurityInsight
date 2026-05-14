@@ -2101,6 +2101,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -2990,6 +2996,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -3648,6 +3660,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -4468,6 +4486,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -5102,6 +5126,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -5858,6 +5888,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -6454,6 +6490,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -7163,6 +7205,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -7788,6 +7836,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -8452,6 +8506,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -9139,6 +9199,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -9177,7 +9243,15 @@ Reports:
             //__BUCKET_FILTER_END__
         );
 
-        // Step 2  Credential edges from bucketed devices only
+        // Step 2  Credential edges from bucketed devices -- EXPLOIT-GRADE ONLY.
+        // v2.2.295 -- dropped "user", "serviceprincipal", "managedidentity" from
+        // the TargetNodeLabel set. Those are identity REFERENCES (account exists,
+        // user logged in here), not stealable credential material an attacker can
+        // exfiltrate. Mirrors Microsoft Defender ASM's attack-path classifier
+        // which only flags edges that contribute to a "Vulnerabilities + Lateral
+        // movement" risk-factor combination. This dramatically shrinks the
+        // cartesian (every device "contains" user accounts; few devices contain
+        // entra-userCookies or app-secrets).
         let CredEdges =
             DevicesWithCVEsBase
             | summarize by DeviceNodeId
@@ -9185,11 +9259,18 @@ Reports:
                 ExposureGraphEdges
                 | where EdgeLabel in ("contains","defined in","runs on","has credentials of","frequently logged in by")
                 | where TargetNodeLabel in (
-                    "user","serviceprincipal","managedidentity","entra-userCookie",
-                    "azure-active-directory-app-secret","user-azure-cli-secret",
-                    "azure-storage-shared-access-signature","azure-storage-connection-string",
-                    "azure-database-connection-string","azure-app-configuration-key",
-                    "azure-active-directory-user-credentials","service-principal-azure-cli-secret"
+                    // Exploit-grade: stealable cred material that authenticates as something
+                    "entra-userCookie",
+                    "azure-active-directory-app-secret",
+                    "azure-active-directory-user-credentials",
+                    "user-azure-cli-secret",
+                    "service-principal-azure-cli-secret",
+                    "azure-storage-shared-access-signature",
+                    "azure-storage-connection-string",
+                    "azure-database-connection-string",
+                    "azure-app-configuration-key"
+                    // NOT exploit-grade (dropped v2.2.295): "user", "serviceprincipal", "managedidentity"
+                    // -- these are identity references, not stealable credentials.
                 )
                 | project
                     SourceDeviceId      = SourceNodeId,
@@ -9506,13 +9587,24 @@ Reports:
                 TargetCriticalityRuleNames               = CriticalityRuleNames
           ) on $left.FinalTargetId == $right.TargetNodeId
 
-        // CL asset-metadata enrichment for the FINAL TARGET (cmdb fields only -- EG owns tier/path).
+        // CL asset-metadata enrichment for the FINAL TARGET. v2.2.295 -- TIER also
+        // comes from CL now (engine-computed Tier in SI_Azure_Profile_CL.Tier),
+        // overriding the EG-sourced TargetCriticalityTier from NodesSlim Target alias.
+        // Per project rule: tier ALWAYS sources from CL, never EG.
         | join kind=leftouter (_TargetCmdb) on $left.FinalTargetId == $right.Target_AzureResourceId_Guid
         | extend
-            cmdbId            = Target_cmdbId,
+            cmdbId              = Target_cmdbId,
             cmdbName            = Target_cmdbName,
             cmdbCriticality     = Target_cmdbCriticality,
             cmdbDataSensitivity = Target_cmdbDataSensitivity
+        | extend TargetCriticalityTier      = coalesce(Target_Tier_From_CL, 3)
+        | extend TargetCriticalityTierLevel = case(
+              TargetCriticalityTier == 0, "Critical - tier 0",
+              TargetCriticalityTier == 1, "High - tier 1",
+              TargetCriticalityTier == 2, "Medium - tier 2",
+              TargetCriticalityTier == 3, "Low - tier 3",
+              "Unknown - unmapped"
+          )
 
         // Step 10  Score and classify paths
         | extend TierEscalation =
@@ -9801,6 +9893,12 @@ Reports:
                 Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
                 Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
                 Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+                // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+                // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
+                // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
+                // which violated this rule -- now overridden post-cmdb-join below.
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))

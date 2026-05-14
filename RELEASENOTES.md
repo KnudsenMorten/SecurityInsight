@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.297
+## v2.2.298
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
 - release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
 - release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
 - release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
@@ -33,13 +34,23 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
 - release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
 - release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
-- release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.298 — Sanitize customer-name literals in internal provisioning script docs
+
+Two internal provisioning scripts had a real customer email/domain hardcoded in their `.PARAMETER` / `.EXAMPLE` doc blocks (in-place since v2.2.186):
+
+- `SOLUTIONS/PlatformConfiguration/INTERNAL/Provision/Set-PlatformDefaultsSmtp.ps1` — `svc-automation@fjernvarmefyn.dk` → `svc-automation@<your-domain>` (in `.PARAMETER SmtpFrom` and `.EXAMPLE`)
+- `SOLUTIONS/SecurityInsight/internal/New-SISolutionConfig.ps1` — `IT-Alerts@fjernvarmefyn.dk`, `stfvfsecurityinsight`, `oai-fvf-security-insight` → generic placeholders
+
+These are doc literals only (in script comment-help blocks); they are never executed and never written into any generated customer config. No runtime change.
 
 ---
 

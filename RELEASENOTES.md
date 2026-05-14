@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.284
+## v2.2.285
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
 - release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
 - release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
 - release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
 - release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
 - release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
-- release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.285 — `Get-PlatformSecretKeyVault` soft-fails on missing secret (no more Layer 3 halt)
+
+Operator follow-up after v2.2.284: shared-defaults defaults `$global:SI_UseStorageOAuth = $true` correctly, but Layer 3 still halts because the Ping customer's `SecurityInsight.custom.ps1` (carried over from an older install) directly calls `Get-PlatformSecret -Name 'SI-StorageKey'` without a try/catch:
+
+```
+[STEP]  Layer 3/5: SecurityInsight.custom.ps1 (solution-wide customer overrides)
+[ERROR] Failed to load layered config: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-ping-automateit-p'.
+```
+
+### Root cause
+
+`FUNCTIONS\AutomateITPS\Private\Providers\Secret.KeyVault.ps1` line 28:
+
+```powershell
+$secret = Get-AzKeyVaultSecret -VaultName ... -Name $Name -ErrorAction Stop
+if (-not $secret) { throw "Get-PlatformSecretKeyVault: secret '$Name' not found in vault '...'." }
+```
+
+When the secret simply doesn't exist in KV (very common for optional secrets like `SI-StorageKey`, `OpenAI-ApiKey`, `SI-Shodan-ApiKey` on a fresh install), the throw propagated through any caller that wasn't try/catch-wrapped — and halted the launcher's Layer 3 config load.
+
+### Fix
+
+`Get-PlatformSecretKeyVault` now **soft-fails**: emits a `Write-Warning` and returns `$null` instead of throwing. All existing callers continue to work:
+
+- Try/catch-wrapped callers (Shodan/OpenAI fetches in `New-SISolutionConfig.ps1` template, SMTP fetches in `Set-PlatformDefaultsSmtp.ps1`): catch never fires, `$null` returned, the `if (-not $global:X)` fall-through pattern still triggers fallback behaviour. **Identical net result.**
+- Unwrapped strict callers (e.g. legacy `SecurityInsight.custom.ps1` from before the cleanup, including Ping's current file): `$null` returned instead of throw, Layer 3 finishes loading, the launcher proceeds with OAuth-by-default storage auth (which doesn't need the missing key anyway).
+- Downstream uses (e.g. a Connect-AzAccount that gets `$null` for a cert thumbprint) will fail with a more actionable error than a KV stack trace mid-config-load.
+
+### Operator action
+
+Pull v2.2.285, re-run the failing launcher. Layer 3 now logs:
+
+```
+WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-ping-automateit-p' (returning $null).
+[OK]    loaded
+```
+
+Instead of halting. No customer-config edits needed.
 
 ---
 

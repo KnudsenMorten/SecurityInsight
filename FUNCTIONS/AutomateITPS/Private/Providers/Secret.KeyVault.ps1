@@ -25,7 +25,18 @@ function Get-PlatformSecretKeyVault {
     }
 
     $secret = Get-AzKeyVaultSecret -VaultName $Context.Tenant.KeyVaultName -Name $Name -ErrorAction Stop -WarningAction SilentlyContinue
-    if (-not $secret) { throw "Get-PlatformSecretKeyVault: secret '$Name' not found in vault '$($Context.Tenant.KeyVaultName)'." }
+    if (-not $secret) {
+        # v2.2.285 -- soft-fail when the secret simply doesn't exist in KV.
+        # Previously this threw, which propagated through Layer 3 (customer
+        # SecurityInsight.custom.ps1) and halted the launcher on a fresh
+        # install where optional secrets (SI-StorageKey, OpenAI-ApiKey,
+        # SI-Shodan-ApiKey) hadn't been seeded yet. Returning $null + warning
+        # lets the caller's `if (-not $global:X)` fall-through pattern work
+        # naturally; unwrapped strict callers get $null which propagates as
+        # a more actionable downstream error than a KV stack trace.
+        Write-Warning ("Get-PlatformSecretKeyVault: secret '{0}' not found in vault '{1}' (returning `$null)." -f $Name, $Context.Tenant.KeyVaultName)
+        return $null
+    }
 
     if ($AsPlainText) {
         $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secret.SecretValue)

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.298
+## v2.2.299
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
 - release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
 - release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
 - release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
@@ -33,13 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
 - release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
 - release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
-- release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.299 — Fix `IsExcludedByTag` null-filter dropping ALL Device_Recommendations + Device_Missing_CVEs rows
+
+Operator: Device_Recommendations report returns 0 rows when there should be many. Root cause: a leftouter-join semantic trap shared by 6 reports.
+
+### Bug
+
+After `| join kind=leftouter (_ep) on $left.DI_AadDeviceId == $right.AadDeviceId`, the `IsExcludedByTag` column EXISTS in the schema but its value is `null` for every TVM device that didn't match in CL. The downstream filter:
+
+```kql
+| where tobool(column_ifexists("IsExcludedByTag", false)) == false
+```
+
+is meant to drop only `IsExcludedByTag=true` rows, but `column_ifexists` returns the actual `null` (because the column does exist after the join), then `tobool(null) == null`, then `null == false` evaluates to `null`, then `where null` drops the row. Net effect: every unmatched TVM device gets silently filtered out. If many or all TVM devices are unmatched in CL (a common state on tenants whose Endpoint Profile engine hasn't run, or on freshly-onboarded customers), the report returns 0 rows.
+
+By contrast, line 1054 already coalesces correctly for `IsExcluded`:
+```kql
+| where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
+```
+
+### Fix
+
+Wrap the `IsExcludedByTag` filter the same way in all 6 affected reports:
+```kql
+| where tobool(coalesce(column_ifexists("IsExcludedByTag", false), false)) == false
+```
+
+`coalesce(null, false)` → `false` → `tobool(false) == false` → `true` → row kept. Only rows where CL explicitly set `IsExcludedByTag=true` are dropped now.
+
+### Affected reports (all 6 sites — 1 replace_all change)
+
+- `Device_Missing_CVEs_Summary` (line 303)
+- `Device_Missing_CVEs_Detailed` (line 697)
+- `Device_Recommendations_Summary` (line 1060)
+- `Device_Recommendations_Detailed` (line 1392)
+- `Azure_Recommendations_Summary` / variant (line 1625)
+- `Azure_Recommendations_Detailed` / variant (line 1890)
+
+### Cache invalidation
+
+Query body changed → new stable hash. AutoBucket cache invalidates once.
 
 ---
 

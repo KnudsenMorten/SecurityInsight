@@ -300,7 +300,7 @@ Reports:
                   isnotempty(tostring(column_ifexists("AssetType_From_CL",""))), tostring(column_ifexists("AssetType_From_CL","")),
                   isnotempty(tostring(column_ifexists("AssetLabel",""))),        tostring(column_ifexists("AssetLabel","")),
                   "Endpoint")
-              | where tobool(column_ifexists("IsExcludedByTag", false)) == false
+              | where tobool(coalesce(column_ifexists("IsExcludedByTag", false), false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=1.0 so you see real per-row signals without engine substitution.
               //__WEIGHTED_FACTORS_BEGIN__
@@ -694,7 +694,7 @@ Reports:
                   isnotempty(tostring(column_ifexists("AssetType_From_CL",""))), tostring(column_ifexists("AssetType_From_CL","")),
                   isnotempty(tostring(column_ifexists("AssetLabel",""))),        tostring(column_ifexists("AssetLabel","")),
                   "Endpoint")
-              | where tobool(column_ifexists("IsExcludedByTag", false)) == false
+              | where tobool(coalesce(column_ifexists("IsExcludedByTag", false), false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
               //__WEIGHTED_FACTORS_BEGIN__
@@ -1057,7 +1057,7 @@ Reports:
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
               //__BUCKET_FILTER_END__
-              | where tobool(column_ifexists("IsExcludedByTag", false)) == false
+              | where tobool(coalesce(column_ifexists("IsExcludedByTag", false), false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
               //__WEIGHTED_FACTORS_BEGIN__
@@ -1389,7 +1389,7 @@ Reports:
               //__BUCKET_FILTER_BEGIN__
               | where 1 == 1
               //__BUCKET_FILTER_END__
-              | where tobool(column_ifexists("IsExcludedByTag", false)) == false
+              | where tobool(coalesce(column_ifexists("IsExcludedByTag", false), false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
               // Portal-paste default below emits a readable Detailed text + Factor=100 (basis-100, 100 = 1.0x = no lift).
               //__WEIGHTED_FACTORS_BEGIN__
@@ -1622,7 +1622,7 @@ Reports:
               | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AzureResourceId_Guid", ""), column_ifexists("AzureResourceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure")
-              | where tobool(column_ifexists("IsExcludedByTag", false)) == false
+              | where tobool(coalesce(column_ifexists("IsExcludedByTag", false), false)) == false
               // Weighted-factor block. Engine substitutes from riskscore_weighted.schema.custom.json -> weightedRiskFactors.azure.fields[].
               //__WEIGHTED_FACTORS_BEGIN__
               | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
@@ -1887,7 +1887,7 @@ Reports:
               | extend AssetName = coalesce(column_ifexists("AssetName", ""), column_ifexists("AssetName_From_CL", ""))
               | extend AssetId   = coalesce(column_ifexists("AssetId", ""),   column_ifexists("AssetId_From_CL", ""),   column_ifexists("AzureResourceId_Guid", ""), column_ifexists("AzureResourceId", ""))
               | extend AssetType = coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure")
-              | where tobool(column_ifexists("IsExcludedByTag", false)) == false
+              | where tobool(coalesce(column_ifexists("IsExcludedByTag", false), false)) == false
               //__WEIGHTED_FACTORS_BEGIN__
               | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift

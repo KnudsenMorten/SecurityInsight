@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.274
+## v2.2.275
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
 - release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
 - release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
 - release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
 - release: SecurityInsight v2.2.247 - anonymous-mail diagnostic logging, never lie about success (bae363f7)
 - release: SecurityInsight v2.2.247 - fix silent anonymous-mail failure (704a2513)
-- release: SecurityInsight v2.2.246 - propagate DCR/DCE scope filter to Schema + Tagging stages (1528059a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.275 — Customer-data policy + override how-to lifted into the README, with detailed POLICY callout in the canonical YAML template
+
+Operator follow-up after v2.2.274 ("docs means README, that's where people read"; "structure how-to into a single chapter where relevant"). Changes are docs-only — no engine code touched.
+
+### README — new § 7.5 "How-to: override a Locked rule (and what NEVER goes in Locked)"
+
+Inserted under chapter 7 "The YAML Concept (Locked + Custom)" since that's the existing chapter where rule-customization how-tos belong. Three things in one section:
+
+1. **Customer-data policy table** — five categories of data that must NEVER ship in `*.locked.yaml` (cmdb keys, IP/CIDR, tenant-specific hostnames, tenant/sub/RG IDs, internal SamAccountName/UPN literals), with the engine-gate behaviour explained per-category (cmdb is silent-gated; CIDR has no static gate so a leak fires on whoever's IP matches).
+
+2. **Worked override example** — the full `ADDomainController.locked.yaml` → `.custom.yaml` pattern end-to-end (id-match + paste detect block + customise set), so a customer can copy-paste and adapt.
+
+3. **Cross-references** — to the canonical template + RULE-REFERENCE.md for the full grammar.
+
+TOC + chapter numbering updated; the existing "What a release upgrade does" + "AssetTagName naming convention" sections renumbered to 7.6 / 7.7.
+
+### `_TEMPLATE.custom.sample.yaml` — top-of-file POLICY callout
+
+Box-drawing-character ASCII callout at the top of the canonical annotated template lists every category of customer data that's banned from Locked. Inline comments at the `ipInRange` cidrs and `set.cmdbId` blocks reinforce the same rule with the engine-gate detail (cmdb is `$global:SI_EnableCmdbProvider`-gated; CIDR is not — a Locked CIDR fires on anyone whose IP happens to match).
+
+### Audit confirmation
+
+Re-grep across all 546 `*.locked.yaml` files in `asset-profiling-enrichment/`:
+
+- cmdb key leak: ZERO (the v2.2.274 ADDomainController fix was the only one)
+- IP literal / cidrRanges in locked: ZERO
+
+So the policy is now both documented AND verified clean across the shipped baseline.
 
 ---
 

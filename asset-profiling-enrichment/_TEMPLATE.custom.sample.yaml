@@ -16,6 +16,47 @@
 # the loader explicitly skips. It exists only as documentation.
 # ============================================================================
 #
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║  POLICY -- WHERE CUSTOMER-SPECIFIC DATA GOES                             ║
+# ╠══════════════════════════════════════════════════════════════════════════╣
+# ║                                                                          ║
+# ║  *.locked.yaml = SHIPPED BASELINE.                                       ║
+# ║                  Re-pulled on every release upgrade. Belongs in the      ║
+# ║                  public repo. UNIVERSAL detection logic only.            ║
+# ║                                                                          ║
+# ║  *.custom.yaml = TENANT-SPECIFIC OVERRIDE.                               ║
+# ║                  Gitignored. Survives upgrades. ALL customer data goes   ║
+# ║                  here.                                                   ║
+# ║                                                                          ║
+# ║  NEVER put any of these in a *.locked.yaml file:                         ║
+# ║                                                                          ║
+# ║    1. cmdbId / cmdbName / cmdbCriticality / cmdbDataSensitivity          ║
+# ║       -- foreign keys into YOUR CMDB. Different per tenant.              ║
+# ║       Engine gates these on $global:SI_EnableCmdbProvider, so a leak     ║
+# ║       in a locked file would silently mis-stamp every matched asset     ║
+# ║       in every customer's tenant.                                        ║
+# ║                                                                          ║
+# ║    2. IPv4 / IPv6 / CIDR ranges (cidrs:, IP literals in egKustoQuery)    ║
+# ║       -- production subnets. Network topology is per-tenant. A locked    ║
+# ║       CIDR pins the rule to ONE customer's network and silently fails    ║
+# ║       to fire (or worse, fires accidentally) for everyone else.          ║
+# ║                                                                          ║
+# ║    3. Hostnames / FQDNs / DNS suffixes that aren't generic patterns      ║
+# ║       -- e.g. `(?i)^pdc\d` is fine (universal naming convention),        ║
+# ║       `(?i)^acme-corp-pdc01\.acme\.local$` is NOT (customer literal).    ║
+# ║                                                                          ║
+# ║    4. Tenant IDs / subscription IDs / resource group names               ║
+# ║    5. AD group SIDs / Entra object IDs                                   ║
+# ║    6. Internal service-account SamAccountName / UPN literals             ║
+# ║                                                                          ║
+# ║  When you need ANY of the above, drop a sibling `<RuleId>.custom.yaml`   ║
+# ║  with the same `id:` and put your customer values in there. The custom   ║
+# ║  file FULLY OVERRIDES the locked file (engine dedups by id; custom       ║
+# ║  always wins -- see RULE-REFERENCE.md "Locked vs. custom" + "How-to:     ║
+# ║  full override of a shipped rule" for the worked example).               ║
+# ║                                                                          ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
 # ----------------------------------------------------------------------------
 # QUICK SYNTAX REFERENCE -- every detect kind, with required + optional params
 # ----------------------------------------------------------------------------
@@ -213,6 +254,14 @@ detections:
         # ----- ipInRange (endpoint, azure) --------------------------------
         # CIDR test against ALL known IP carriers (MDE/EG/Entra/ARM/AD/CMDB).
         # Single hit fires the kind. Optional `fields:` restricts the scan.
+        #
+        # *** CIDRs ARE TENANT-SPECIFIC -- never ship them in a *.locked.yaml ***
+        # *** file. Put your real prod / DC / management subnets ONLY in the  ***
+        # *** sibling *.custom.yaml. The CIDRs below are illustrative ranges  ***
+        # *** for documentation; copy this rule + replace with your subnets   ***
+        # *** in your custom file. (Engine has no static gate for IPs -- the  ***
+        # *** rule fires on anyone whose IP happens to match, so a leaked     ***
+        # *** locked CIDR can mis-tier other tenants.)                        ***
         - kind: ipInRange
           cidrs: ['10.100.1.0/24', '10.100.2.0/24']
 
@@ -233,6 +282,14 @@ detections:
       # *** They come from the CMDB CSV via the cmdbId lookup -- single       ***
       # *** source of truth. Setting them inline causes drift between rule    ***
       # *** and CSV.                                                          ***
+      #
+      # *** TENANT-SPECIFIC -- never ship cmdbId in a *.locked.yaml file.     ***
+      # *** Engine GATES propagation on $global:SI_EnableCmdbProvider, so a   ***
+      # *** locked-rule cmdbId is silently ignored when CMDB isn't configured ***
+      # *** -- but customers WHO HAVE CMDB enabled would suddenly get YOUR    ***
+      # *** placeholder cmdbId stamped on every matched asset, polluting     ***
+      # *** their SI_*_Profile_CL.cmdbId. Always put cmdbId in the custom    ***
+      # *** file only.                                                       ***
       cmdbId: '1'
 
 

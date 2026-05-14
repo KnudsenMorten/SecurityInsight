@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.299
+## v2.2.300
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
 - release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
 - release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
 - release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
 - release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
 - release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
-- release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.300 — Fix `"Unknown - unmapped"` CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage
+
+Operator: Device_Recommendations still returns 0 rows after v2.2.299. Azure_Recommendations works (different join shape, well-populated CL). Root cause is unrelated to v2.2.299's IsExcludedByTag fix — it's a downstream engine post-filter interacting with a v2.2.217 case() default.
+
+### Bug
+
+The 4 endpoint reports (`Device_Missing_CVEs_Summary`, `Device_Missing_CVEs_Detailed`, `Device_Recommendations_Summary`, `Device_Recommendations_Detailed`) leftouter-join `_ep` (`SI_Endpoint_Profile_CL`) on `DI_AadDeviceId == AadDeviceId`. When a TVM device has no CL match, `Tier_From_SI_CL` is `null`, then:
+
+```kql
+| extend CriticalityTier = Tier_From_SI_CL
+| extend CriticalityTierLevel = case(
+    CriticalityTier == 0, "Critical - tier 0",
+    ...
+    CriticalityTier == 3, "Low - tier 3",
+    "Unknown - unmapped")     // v2.2.217 default
+```
+
+The engine then post-filters every report by `CriticalityTierLevelScope` (Invoke-RiskAnalysis.ps1 line 6784, `Filter-ObjectsByColumn -IncludeBlank:$true`). The scope lists only `Critical/High/Medium/Low - tier 0..3`. `"Unknown - unmapped"` is non-blank and not in scope → every unmapped row dropped. On a customer where a large fraction of endpoint TVM devices don't match CL (fresh onboarding, partial Endpoint Profile run, server/Linux devices without AadDeviceId), the report returns 0 rows — silently.
+
+v2.2.217 chose `"Unknown - unmapped"` deliberately to surface data-quality gaps instead of downgrading to Low. But the engine then drops these rows entirely — worse than the silent-downgrade it was trying to avoid: operator gets 0 rows AND no signal at all.
+
+### Fix
+
+Change the case() default from `"Unknown - unmapped"` back to `"Low - tier 3"` in all 4 endpoint reports (1 replace_all). Unmapped devices now appear in the report as Low-tier, visible to the operator, instead of being silently filtered out. Stale `// v2.2.217 ...` comments above each case() removed since they describe the now-reverted behavior.
+
+If we want true data-quality signaling later, the right shape is to either (a) add `"Unknown - unmapped"` to the report's `CriticalityTierLevelScope` so it survives the filter, or (b) emit the unmapped count as a separate run-health metric. Both out of scope for this hotfix.
+
+### Cache invalidation
+
+Query body changed → new stable hash. AutoBucket cache invalidates once.
 
 ---
 

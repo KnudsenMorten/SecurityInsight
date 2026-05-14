@@ -2540,29 +2540,16 @@ function Resolve-StaleDeviceFilterBlock {
         [Parameter(Mandatory)][string]$Query,
         [Parameter(Mandatory)][string]$ReportName
     )
-    $blockRx   = [regex]::Escape($script:_StaleDeviceFilterBeginMark) + '(?<body>.*?)' + [regex]::Escape($script:_StaleDeviceFilterEndMark)
-    $bodyMatch = [regex]::Match($Query, $blockRx, [System.Text.RegularExpressions.RegexOptions]::Singleline)
-    if (-not $bodyMatch.Success) { return $Query }
 
-    # Mode: 'strict' (DEFAULT, active) | 'lenient' | 'off'. v2.2.287 -- default
-    # was 'off' in v2.2.282/283, contradicting the design intent ("filter must
-    # be active by default; opt out only if needed"). Now defaults to 'strict':
-    # drops EG device nodes with stale OR null lastSeen so the cartesian shrinks
-    # automatically without operator action. Opt-out: set
-    # $global:SI_RA_StaleDeviceFilter = 'off' in SecurityInsight.custom.ps1.
+    # Mode: 'strict' (DEFAULT, active) | 'lenient' | 'off'.
     $mode = 'strict'
     if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RA_StaleDeviceFilter)) {
         $modeRaw = ([string]$global:SI_RA_StaleDeviceFilter).Trim().ToLowerInvariant()
         if ($modeRaw -in @('lenient','strict','off')) { $mode = $modeRaw }
     }
-    if ($mode -eq 'off') {
-        # Off -- leave no-op block. Don't log per-report; would spam.
-        return $Query
-    }
+    if ($mode -eq 'off') { return $Query }
 
-    # Threshold from the existing solution-wide freshness global. If unset
-    # or non-positive, fall back to a sensible default of 30 days (matches
-    # asset-profiling default).
+    # Threshold from existing solution-wide freshness global; default 30.
     $maxAge = 30
     if ($null -ne $global:SI_ActiveStaleDays) {
         try {
@@ -2571,12 +2558,60 @@ function Resolve-StaleDeviceFilterBlock {
         } catch { }
     }
 
-    $newBody  = ([Environment]::NewLine +
-                 (New-StaleDeviceFilterKql -MaxAgeDays $maxAge -Mode $mode) +
-                 [Environment]::NewLine + '              ')
-    $newBlock = ($script:_StaleDeviceFilterBeginMark + $newBody + $script:_StaleDeviceFilterEndMark)
-    $result   = $Query.Replace($bodyMatch.Value, $newBlock)
-    Write-Info ("[stale-device] {0}: applied MaxAgeDays={1} Mode={2}" -f $ReportName, $maxAge, $mode)
+    # Path 1 -- explicit placeholder block present (locked YAML carries it).
+    $blockRx   = [regex]::Escape($script:_StaleDeviceFilterBeginMark) + '(?<body>.*?)' + [regex]::Escape($script:_StaleDeviceFilterEndMark)
+    $bodyMatch = [regex]::Match($Query, $blockRx, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if ($bodyMatch.Success) {
+        $newBody  = ([Environment]::NewLine +
+                     (New-StaleDeviceFilterKql -MaxAgeDays $maxAge -Mode $mode) +
+                     [Environment]::NewLine + '              ')
+        $newBlock = ($script:_StaleDeviceFilterBeginMark + $newBody + $script:_StaleDeviceFilterEndMark)
+        $result   = $Query.Replace($bodyMatch.Value, $newBlock)
+        Write-Info ("[stale-device] {0}: applied MaxAgeDays={1} Mode={2}" -f $ReportName, $maxAge, $mode)
+        return $result
+    }
+
+    # Path 2 -- v2.2.288 auto-injection. Customer custom YAML often overrides
+    # a locked report body WITHOUT carrying the new __STALE_DEVICE_FILTER__
+    # placeholder, so explicit substitution alone misses those overrides.
+    # Auto-inject the filter ABOVE the first __BUCKET_FILTER_BEGIN__ line
+    # when the query (a) has a bucket filter (i.e. it's a heavy report we
+    # plan to bucket-partition) AND (b) actually touches ExposureGraph
+    # device/computer-account/VM nodes (the cartesian-bomb shape).
+    $bucketBeginMark = '//__BUCKET_FILTER_BEGIN__'
+    $bucketIdx = $Query.IndexOf($bucketBeginMark)
+    if ($bucketIdx -lt 0) { return $Query }   # nothing to anchor to
+
+    $touchesEgDevice = ($Query -match 'ExposureGraph(Nodes|Edges)') -and
+                       ($Query -match '"device"|"computer-account"|"microsoft\.compute/virtualmachines"')
+    if (-not $touchesEgDevice) { return $Query }
+
+    # Find start of the line that contains the bucket-begin mark + capture its indent.
+    $lineStart = $Query.LastIndexOf("`n", $bucketIdx)
+    if ($lineStart -lt 0) { $lineStart = 0 } else { $lineStart++ }
+    $indent = ''
+    $j = $lineStart
+    while ($j -lt $Query.Length -and ($Query[$j] -eq ' ' -or $Query[$j] -eq "`t")) {
+        $indent += $Query[$j]; $j++
+    }
+
+    $filterKql = New-StaleDeviceFilterKql -MaxAgeDays $maxAge -Mode $mode
+    # Re-indent the filter to match the bucket-filter line's indent.
+    $filterLines = $filterKql -split "(`r`n|`n)" | Where-Object { $_ -ne '' -and $_ -notmatch '^\r?\n$' }
+    $rebuilt = New-Object System.Text.StringBuilder
+    foreach ($ln in $filterLines) {
+        $stripped = $ln.TrimStart()
+        if ([string]::IsNullOrWhiteSpace($stripped)) { continue }
+        [void]$rebuilt.Append($indent).Append($stripped).Append([Environment]::NewLine)
+    }
+    $reindented = $rebuilt.ToString()
+
+    $injection = ($indent + $script:_StaleDeviceFilterBeginMark + [Environment]::NewLine +
+                  $reindented +
+                  $indent + $script:_StaleDeviceFilterEndMark + [Environment]::NewLine)
+
+    $result = $Query.Insert($lineStart, $injection)
+    Write-Info ("[stale-device] {0}: auto-injected (no placeholder in YAML) MaxAgeDays={1} Mode={2}" -f $ReportName, $maxAge, $mode)
     return $result
 }
 

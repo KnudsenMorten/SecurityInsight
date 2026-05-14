@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.294
+## v2.2.295
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
 - release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
 - release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
 - release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
@@ -33,13 +34,66 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
 - release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
 - release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
-- release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.295 — Mirror Microsoft ASM filtering: exploit-grade creds only + authoritative target tier from CL
+
+Operator showed Defender ASM portal: only **2 attack paths** in Nordstern's tenant for "Device with high severity vulnerabilities allows lateral movement to Azure". Our query was computing millions of cartesian tuples vs Microsoft's algorithm narrowing to exactly 2. Two structural bugs identified and both fixed.
+
+### Bug 1 — credential edge filter included non-exploit-grade labels
+
+`CredEdges` (Step 2) joined `ExposureGraphEdges` with `TargetNodeLabel in ("user","serviceprincipal","managedidentity", entra-userCookie, ...secrets...)`. The first three (`user`, `serviceprincipal`, `managedidentity`) are **identity references**, not stealable credentials:
+
+| Label | Stealable? |
+|---|---|
+| `user` | ❌ Entra user account record (not a credential) |
+| `serviceprincipal` | ❌ SPN account record (not a credential) |
+| `managedidentity` | ❌ MI key never leaves Azure plane |
+| `entra-userCookie` | ✅ session cookie cached on device |
+| `azure-active-directory-app-secret` | ✅ SPN client secret |
+| `azure-active-directory-user-credentials` | ✅ user password/refresh token |
+| `user-azure-cli-secret` | ✅ Azure CLI cached cred |
+| `service-principal-azure-cli-secret` | ✅ SPN CLI cached cred |
+| `azure-storage-shared-access-signature` | ✅ SAS token |
+| `azure-storage-connection-string` | ✅ key-embedded conn string |
+| `azure-database-connection-string` | ✅ DB creds in conn string |
+| `azure-app-configuration-key` | ✅ App Config access key |
+
+The first 3 are extremely common (every device "contains" user accounts via logon history); the bottom 9 are rare (real exploit credentials). Including the top 3 inflated the cartesian by orders of magnitude. ASM's algorithm only walks edges to actual stealable cred material.
+
+**Fix**: `CredEdges` now restricts `TargetNodeLabel in (9 exploit-grade labels)` — `user`/`serviceprincipal`/`managedidentity` dropped.
+
+### Bug 2 — `TargetCriticalityTier` was sourced from EG, violating the project rule
+
+Per the project's authoritative tier rule (`feedback_si_ra_tier_source.md`): *"CriticalityTier ALWAYS sources from `SI_*_Profile_CL.Tier` (engine-computed). Never coalesce in EG criticalityLevel even though v2.1 did."*
+
+The Detailed query's Step 9 enrichment joined `NodesSlim` aliased as Target and used `TargetCriticalityTier = CriticalityTier` from `NodeProperties.criticalityLevelProps[0].criticalityLevel` — i.e., EG's own criticality assessment. That is **not** the customer's authoritative tier from `SI_Azure_Profile_CL.Tier`.
+
+Result: TierEscalation calculations + AttackPathPriorityScore were computed against EG's tier (often null or 3 for everything), making the scoring unreliable.
+
+**Fix**:
+- `_TargetCmdb` projection now includes `Target_Tier_From_CL = toint(column_ifexists("Tier", int(null)))` (added to all 12 Attack_Paths reports for consistency)
+- After the cmdb join in Step 9, the Detailed_Device_*_Azure query overrides `TargetCriticalityTier = coalesce(Target_Tier_From_CL, 3)` and recomputes `TargetCriticalityTierLevel` accordingly. The downstream scoring now sees the correct tier.
+
+### Combined effect (expected)
+
+For Nordstern's tenant:
+- Cartesian shrinks dramatically (most edges from devices were `user`/`serviceprincipal`/`managedidentity`-typed; dropping them removes 80-95% of the cred set)
+- Tier escalation now computes against authoritative CL Tier, not EG's possibly-null assessment
+- Output rows should converge toward what ASM's portal shows (small N)
+
+If bucket 40 still 900s-times out after this, it's a sign the remaining exploit-grade-cred chain alone exceeds AH's compute ceiling for the bomb device — at which point we're at the genuine structural limit and the only remaining moves are operator-side device exclusion or a fundamentally different query shape.
+
+### Cache invalidation
+
+Query body changed → new stable hash. AutoBucket cache invalidates once, re-probes at floor 64.
 
 ---
 

@@ -6058,7 +6058,16 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     # Per-Report ReportTemplate.UseBucketFilter / BucketCount may still narrow
     # behaviour for a specific report; those legacy fields remain honoured.
     $effectiveUseBucket   = $true
-    $effectiveBucketCount = 2
+    # v2.2.279 -- *_Detailed reports default to 32 (was 2). Detailed reports emit
+    # one row per (asset, finding) tuple with no upstream dedup, so cartesian
+    # blow-up is structural -- starting at 2 means 4-5 escalation rounds before
+    # converging on most non-trivial tenants. Default 32 + sub-bucketing on
+    # residual heavy buckets reaches a working count immediately on first run
+    # for the vast majority of cases. Per-report YAML BucketCount still wins;
+    # customer can also drop with $global:SI_AutoBucketDefaultDetailed.
+    $effectiveBucketCount = if ($ReportNameFromTemplate -like '*_Detailed*' -or $ReportNameFromTemplate -like '*_Detailed_*') {
+        if ($global:SI_AutoBucketDefaultDetailed) { [int]$global:SI_AutoBucketDefaultDetailed } else { 32 }
+    } else { 2 }
     $effectivePlaceholder = '__BUCKET_FILTER__'
 
     if ($Entry.PSObject.Properties['UseBucketFilter'] -and $Entry.UseBucketFilter -ne $null) {
@@ -6426,7 +6435,11 @@ while (-not $bucketRunSucceeded) {
   # heavy slice to 1/16384 of total). This preserves the successful buckets'
   # results entirely; we never re-run them.
   if ($failedBucketIndices.Count -gt 0) {
-      $subDepthMax = if ($null -ne $global:SI_AutoBucketSubDepthMax) { [int]$global:SI_AutoBucketSubDepthMax } else { 4 }
+      # v2.2.279 -- depth cap raised 4 -> 6 (modulus up to 4096 x original
+      # BucketCount). Customer's Nordstern run hit the depth=4 cap with one
+      # slice still timing out; deeper splits give the recursive partition
+      # more room before giving up. Tunable via $global:SI_AutoBucketSubDepthMax.
+      $subDepthMax = if ($null -ne $global:SI_AutoBucketSubDepthMax) { [int]$global:SI_AutoBucketSubDepthMax } else { 6 }
       $subFanOut   = if ($null -ne $global:SI_AutoBucketSubFanOut)   { [int]$global:SI_AutoBucketSubFanOut }   else { 4 }
       Write-Warn2 ("AutoBucket sub-bucketing pass: {0} bucket(s) timed out at BucketCount={1}; splitting each into {2} sub-buckets per pass (max depth {3}). Successful buckets retained ({4} rows so far)." -f `
         $failedBucketIndices.Count, $bucketCountToUse, $subFanOut, $subDepthMax, $ResultAll.Count)

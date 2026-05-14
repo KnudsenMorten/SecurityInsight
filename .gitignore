@@ -15,6 +15,15 @@ config/SecurityInsight.custom.ps1
 launcher/*/LauncherConfig.custom.ps1
 
 # ---------------------------------------------------------------------------
+#  Developer-only experimental queries -- NEVER sync to customers
+# ---------------------------------------------------------------------------
+# RiskAnalysis_Queries_Dev.yaml lets a developer stage problematic queries
+# locally (engine merges it BETWEEN locked and custom). Customers must never
+# pull this file via the public-mirror publish workflow.
+risk-analysis-detection/RiskAnalysis_Queries_Dev.yaml
+risk-analysis-detection/dev/RiskAnalysis_Queries_Dev.yaml
+
+# ---------------------------------------------------------------------------
 #  Run output -- regenerated each run, no value in git
 # ---------------------------------------------------------------------------
 logs/

@@ -5260,8 +5260,10 @@ if ([bool]$global:AutomationFramework) {
     #------------------------------------------------------------------------------------------------------------
     # The locked YAML is centrally maintained.
     # Customers can optionally add/override in the custom YAML.
+    # Developers can stage experimental queries in the dev YAML (gitignored, not synced to customers).
     if ($null -eq $global:ReportSettingsFileLocked) { $global:ReportSettingsFileLocked = "RiskAnalysis_Queries_Locked.yaml" }
     if ($null -eq $global:ReportSettingsFileCustom) { $global:ReportSettingsFileCustom = "RiskAnalysis_Queries_Custom.yaml" }
+    if ($null -eq $global:ReportSettingsFileDev)    { $global:ReportSettingsFileDev    = "RiskAnalysis_Queries_Dev.yaml" }
     $global:RiskDefinitionsCsvPath = (Join-Path $global:SettingsPath "riskscore.index.custom.csv")
 
 } else {
@@ -5383,6 +5385,7 @@ if ([bool]$global:AutomationFramework) {
     #------------------------------------------------------------------------------------------------------------
     if ($null -eq $global:ReportSettingsFileLocked) { $global:ReportSettingsFileLocked = "RiskAnalysis_Queries_Locked.yaml" }
     if ($null -eq $global:ReportSettingsFileCustom) { $global:ReportSettingsFileCustom = "RiskAnalysis_Queries_Custom.yaml" }
+    if ($null -eq $global:ReportSettingsFileDev)    { $global:ReportSettingsFileDev    = "RiskAnalysis_Queries_Dev.yaml" }
     $global:RiskDefinitionsCsvPath = (Join-Path $global:SettingsPath "riskscore.index.custom.csv")
 }
 
@@ -5608,6 +5611,10 @@ function Merge-ReportSettings {
   }
   $lockedPath = _ResolveCatalogYaml $global:ReportSettingsFileLocked 'locked'
   $customPath = _ResolveCatalogYaml $global:ReportSettingsFileCustom 'custom'
+  # v2.2.303 -- optional dev YAML for developer-only experimental queries.
+  # Gitignored on purpose; not synced to customers via the publish workflow.
+  # Merged BETWEEN locked and custom: locked -> dev -> custom (custom wins last).
+  $devPath    = _ResolveCatalogYaml $global:ReportSettingsFileDev    'dev'
 
   if (-not (Test-Path -LiteralPath $lockedPath)) {
     throw "Locked YAML not found: $lockedPath"
@@ -5618,23 +5625,31 @@ function Merge-ReportSettings {
     throw "Locked YAML was empty or could not be parsed: $lockedPath"
   }
 
+  $devYaml    = Read-YamlFileOrNull -Path $devPath
   $customYaml = Read-YamlFileOrNull -Path $customPath
 
-  $global:Report_Settings_raw = Merge-ReportSettings -LockedSettings $lockedYaml -CustomSettings $customYaml
+  # locked -> dev (dev overrides locked on name conflict)
+  $afterDev = Merge-ReportSettings -LockedSettings $lockedYaml -CustomSettings $devYaml
+  # afterDev -> custom (custom overrides anything below)
+  $global:Report_Settings_raw = Merge-ReportSettings -LockedSettings $afterDev -CustomSettings $customYaml
   $global:Report_Settings     = ConvertTo-PSObjectDeep $global:Report_Settings_raw
 
   $lockedReportCount = @($lockedYaml.Reports).Count
   $lockedTplCount    = @($lockedYaml.ReportTemplates).Count
+  $devReportCount    = if ($devYaml) { @($devYaml.Reports).Count } else { 0 }
+  $devTplCount       = if ($devYaml) { @($devYaml.ReportTemplates).Count } else { 0 }
   $customReportCount = if ($customYaml) { @($customYaml.Reports).Count } else { 0 }
   $customTplCount    = if ($customYaml) { @($customYaml.ReportTemplates).Count } else { 0 }
   $mergedReportCount = @($global:Report_Settings_raw.Reports).Count
   $mergedTplCount    = @($global:Report_Settings_raw.ReportTemplates).Count
 
-  Write-Info ("YAML merge: Locked Reports={0}, Locked Templates={1}, Custom Reports={2}, Custom Templates={3}, Merged Reports={4}, Merged Templates={5}" -f `
-    $lockedReportCount, $lockedTplCount, $customReportCount, $customTplCount, $mergedReportCount, $mergedTplCount)
+  Write-Info ("YAML merge: Locked Reports={0}/{1}, Dev Reports={2}/{3}, Custom Reports={4}/{5}, Merged Reports={6}/{7}" -f `
+    $lockedReportCount, $lockedTplCount, $devReportCount, $devTplCount, $customReportCount, $customTplCount, $mergedReportCount, $mergedTplCount)
 
-  if ($customYaml) { Write-Ok "report settings loaded (locked + custom merged; custom wins on name conflicts)" }
-  else { Write-Ok "report settings loaded (locked only; custom file missing/empty)" }
+  $sources = @('locked')
+  if ($devYaml)    { $sources += 'dev (developer-only, gitignored)' }
+  if ($customYaml) { $sources += 'custom (customer override, wins last)' }
+  Write-Ok ("report settings loaded ({0})" -f ($sources -join ' + '))
 } catch { Write-Err2 "failed to read/parse report settings yaml: $($_.Exception.Message)"; throw }
 Tick "yaml load"
 

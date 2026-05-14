@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.271
+## v2.2.272
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
 - release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
 - release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
 - release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.246 - propagate DCR/DCE scope filter to Schema + Tagging stages (1528059a)
 - release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
 - release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
-- release: SecurityInsight v2.2.243 - cert store auto-detect (LM vs CU) + wizard installs to LocalMachine (c030abe6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.272 — AutoBucket escalates on 900s timeout instead of skipping; routing diagnostic for the Endpoint_Detailed bug
+
+Two independent issues from Nordstern's v2.2.269 run.
+
+### 1. AutoBucket gives up too early on heavy queries (Nordstern Attack_Paths_*_Device_with_high_severity_*_Azure)
+
+`Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` and the matching Detailed timed out at 900s on every retry × every bucket — the engine then skipped remaining buckets in the report and moved on, leaving the AutoBucket cache pinned to `=> 2` forever. Operator confirmed the agreed default is `AutoBucketCount=$true` + `AutoBucketMax=131072` (and the customer log shows both are set correctly), so the engine should have escalated on its own.
+
+The bug was the v2.2.198 transient-platform-error branch in `Invoke-RiskAnalysis.ps1:6201`. When `$script:_LastGraphHuntingAllTimedOut` flipped true (every inner attempt hit the 900s HttpClient ceiling), the branch set `$script:_AutoBucketSkipRemainingBuckets=$true` immediately — it never checked whether escalation was still possible. So a too-large bucket could not trigger doubling.
+
+v2.2.272 inverts the priority: when `_LastGraphHuntingAllTimedOut` is true, **escalate first** (set `$needEscalation=$true` and re-run the whole report at `2 × bucketCountToUse`); only fall back to `_AutoBucketSkipRemainingBuckets` when the next escalation step would exceed `$capBucket`. The cap log line names `$capBucket` explicitly so operators see the ceiling.
+
+Effect on Nordstern: the two failing reports retry with 4, 8, 16... buckets until each fits the 900s window. The AutoBucket cache stores the working count for the next run.
+
+### 2. Routing diagnostic — Endpoint_ActiveCompromise_Detected_Detailed routed to AH despite probe saying CL not in AH
+
+In Nordstern's run, `Endpoint_ActiveCompromise_Detected_Detailed` (only `SI_Endpoint_Profile_CL`, no XDR tables) probed the table → got "NOT queryable from AH" → set `$available=$false` → should have entered the LA-direct branch and printed "Query touches only Log Analytics tables". Instead, the AH-submission catch handler (`Invoke-RiskAnalysis.ps1:1833-1837`) fired with the schema-not-found warnings, proving the AH path actually ran. Operator pre-confirmed the workspace + table + SPN-cert read access are all correct (`SI_Endpoint_Profile_CL` exists in `log-platform-management-securityinsight-p`, returns rows on direct query).
+
+Static read of the routing logic (`Invoke-RiskAnalysis.ps1:1398-1703`) doesn't reveal how `$available=$false` could become "AH submission". Three Write-Diag breadcrumbs added so the next failing run pinpoints the actual flow:
+
+```
+[route] CL probe done: available=False | clHits=[SI_Endpoint_Profile_CL] | hasEG=False
+[route] LA-direct submission entered. wsResId=<id> hasXdr=False crossLetLen=0
+[route] AH submission entered for query containing SI_*_CL -- either EG-hybrid path resolved CL, or LA-direct branch was bypassed.
+```
+
+If on the next run the first two appear but the third also appears, the LA-direct call is throwing post-routing and falling through to AH (most likely path). If only the first + third appear, the `if (-not $available)` check is being skipped (control-flow bug). Either way the next paste makes it diagnosable in seconds.
+
+No behavioural change for healthy paths — diagnostics are emitted at the existing decision points only.
 
 ---
 

@@ -1491,6 +1491,11 @@ function Invoke-GraphHuntingQuery {
                 if (-not (Test-AdvancedHuntingHasTable -TableName $clTbl)) { $available = $false; break }
             }
         }
+        # v2.2.272 -- diagnostic breadcrumb. Class 1 routing bug (Nordstern):
+        # Endpoint_ActiveCompromise_Detected_Detailed had probe say "NOT in AH" yet
+        # AH submission still happened. Log the routing decision so the next run
+        # tells us which branch actually fired.
+        Write-Diag ("[route] CL probe done: available={0} | clHits=[{1}] | hasEG={2}" -f $available, ($clTableHits -join ','), $queryReferencesEG)
         if (-not $available) {
             # same fallback as LA-ingest path. Resolution order:
             # RA-specific (SI_RiskAnalysis_*, for split-workspace setups) -> v2.2 unified
@@ -1651,6 +1656,9 @@ function Invoke-GraphHuntingQuery {
 
             $finalQuery = if ($crossWorkspaceLet) { $crossWorkspaceLet + "`n" + $Query } else { $Query }
             [void](Save-RARenderedQuery -Query $finalQuery -Tag 'la-direct')
+            # v2.2.272 -- diagnostic. Confirm we actually got HERE on routes that the
+            # probe said should be LA-direct.
+            Write-Diag ("[route] LA-direct submission entered. wsResId={0} hasXdr={1} crossLetLen={2}" -f $wsResId, $hasXdrTables, $crossWorkspaceLet.Length)
 
             # NO @() wrap on the call below. Invoke-LogAnalyticsKqlQuery returns the rows
             # array via `,@($resp.Results)` (comma-protected so PowerShell emits it as ONE
@@ -1713,6 +1721,11 @@ function Invoke-GraphHuntingQuery {
     $script:_LastGraphHuntingAllTimedOut = $true
 
     [void](Save-RARenderedQuery -Query $Query -Tag 'ah')
+    # v2.2.272 -- diagnostic. If a query that referenced SI_*_CL ends up here, log
+    # how it got past the LA-direct branch (Class 1 routing-bug Nordstern paste).
+    if ($Query -match '\bSI_[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z][A-Za-z0-9]*)*_CL\b') {
+        Write-Diag ("[route] AH submission entered for query containing SI_*_CL -- either EG-hybrid path resolved CL, or LA-direct branch was bypassed.")
+    }
 
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         Ensure-GraphAuth -MaxAgeMinutes $ReconnectMaxAgeMinutes
@@ -6201,16 +6214,28 @@ while (-not $bucketRunSucceeded) {
               elseif (Test-IsTransientPlatformError $_) {
                   # v2.2.198 -- if the inner function reports every attempt timed out
                   # at the 900s HttpClient ceiling, this isn't transient -- the query
-                  # genuinely can't run within Graph's deadline on this tenant. One
-                  # full inner-retry exhaustion (4 x 900s = 1h) is enough evidence;
-                  # don't pay another 3 outer x 4 inner x 900s = 12 hours per bucket
-                  # x N remaining buckets. Skip bucket, set per-report skip flag.
+                  # genuinely can't run within Graph's deadline on this tenant.
+                  # v2.2.272 -- BEFORE giving up, ESCALATE bucket count (smaller per-bucket
+                  # workload). Only when escalation has already reached $capBucket do we
+                  # fall back to the v2.2.198 skip-remaining behaviour. This unblocks heavy
+                  # EG-path-expansion reports on large estates (Nordstern Attack_Paths_*_
+                  # Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure)
+                  # that previously got stuck at cached BucketCount=2 forever.
                   if ($script:_LastGraphHuntingAllTimedOut) {
-                      Write-Err2 ("bucket {0}/{1}: query timed out at 900s on every attempt -- deterministic Graph-side timeout, not transient. Skipping this bucket AND remaining buckets in this report. Error: {2}" -f `
-                        $bucketNo, $bucketCountToUse, $errMsg)
-                      $bucketAttemptDone                          = $true
-                      $resp                                       = $null
-                      $script:_AutoBucketSkipRemainingBuckets     = $true
+                      if ($bucketCountToUse -lt $capBucket) {
+                          $lastBucketRunError = $errMsg
+                          Write-Warn2 ("bucket {0}/{1}: query timed out at 900s on every attempt -- bucket too large. Escalating bucket count and restarting this report. Error: {2}" -f `
+                            $bucketNo, $bucketCountToUse, $errMsg)
+                          $needEscalation     = $true
+                          $bucketAttemptDone  = $true
+                          $resp               = $null
+                      } else {
+                          Write-Err2 ("bucket {0}/{1}: query timed out at 900s on every attempt AND already at AutoBucketMax cap ({2}) -- deterministic Graph-side timeout, no further escalation possible. Skipping this bucket AND remaining buckets in this report. Error: {3}" -f `
+                            $bucketNo, $bucketCountToUse, $capBucket, $errMsg)
+                          $bucketAttemptDone                          = $true
+                          $resp                                       = $null
+                          $script:_AutoBucketSkipRemainingBuckets     = $true
+                      }
                   }
                   elseif ($bucketAttempt -ge $bucketTransientRetries) {
                       Write-Err2 ("bucket {0}/{1}: transient platform error after {2} retry attempt(s) -- skipping bucket and continuing. Error: {3}" -f `

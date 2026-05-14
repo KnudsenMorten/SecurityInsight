@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.275
+## v2.2.276
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
 - release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
 - release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
 - release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
@@ -33,13 +34,37 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
 - release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
 - release: SecurityInsight v2.2.247 - anonymous-mail diagnostic logging, never lie about success (bae363f7)
-- release: SecurityInsight v2.2.247 - fix silent anonymous-mail failure (704a2513)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.276 — `502 Bad Gateway` from nginx now classified as deterministic "query too large" + visible "retrying now" log line
+
+Operator's v2.2.273 run reached `BucketCount=8` after fail-fast escalation, then bucket 8/8 hit `[UnknownError] : 502 Bad Gateway` from the nginx in front of `/security/runHuntingQuery`. The retry path was firing but the engine was silent during the inter-attempt sleep + the next AH call (which can take its full 900s before returning), so the operator couldn't tell if anything was happening. Worst case: 4 retries × up to 900s each = ~1h burned per bucket on the same fail.
+
+### Root cause
+
+`502 Bad Gateway` from the nginx upstream means the AH backend produced a response too large for nginx to proxy. Same root cause as `TaskCanceled@900s` (HttpClient ceiling) — query is genuinely too big. Retrying the identical query just burns time. Should escalate bucket count immediately.
+
+### Fix
+
+`Invoke-GraphHuntingQuery` catch handler now classifies BOTH `TaskCanceledException` AND `502 Bad Gateway` as the deterministic "query too large" pattern (`$isDeterministicTooLarge`). Both fail-fast on attempt 1 and set `$script:_LastGraphHuntingAllTimedOut = $true` so the outer AutoBucket loop's escalation logic kicks in (4× jump per v2.2.273).
+
+Additional small UX fix: a `Write-Info "Retrying attempt N/4 now (call may take up to 900s)..."` line prints AFTER the inter-attempt `Start-Sleep` and BEFORE the actual call. So when the next attempt takes its full 900s, the operator can see the engine is alive and trying — not hung.
+
+### Effect on Nordstern's Attack_Paths_Detailed bucket 8/8 case
+
+- Pre-276: `502` → 4 retries × up to 900s = up to 1h on the failing bucket → bucket marked failed → cache stays at 8.
+- Post-276: `502` → fail-fast → outer escalation BucketCount 8 → 32 → continues until success or `$capBucket=131072`.
+
+### Detection regex
+
+`$msg -match '502 Bad Gateway' -or $msg -match '\[UnknownError\][^<]*<html>'` — matches both the literal "502 Bad Gateway" string AND the `[UnknownError] : <html>...` shape that the Microsoft.Graph SDK wraps the nginx response in.
 
 ---
 

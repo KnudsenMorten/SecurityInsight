@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.280
+## v2.2.281
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
 - release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
 - release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
 - release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
@@ -33,13 +34,60 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.254 - wizard DCR names aligned with engine -profile convention (6c3abca9)
 - release: SecurityInsight v2.2.253 - skip SI_StorageKey fetch+persist when OAuth-on-storage enabled (2e8a6edf)
 - release: SecurityInsight v2.2.252 - Machine.Read.All instead of Machine.ReadWrite.All for WDATP (e02c9297)
-- release: SecurityInsight v2.2.251 - DCR auto-rename length guard (>60 chars -> SHA1 hash fallback) (ef4ef053)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.281 — AutoBucket respects YAML `BucketCount` as the probe floor (no more "starts at 1 even though I said 64")
+
+Operator: "but it starts with =1". The customer's `RiskAnalysis_Queries_Custom.yaml` declares `BucketCount: 64` on the heaviest attack-path reports, yet the engine still logged `AutoBucket probing 'X' with bucketCount=1` and walked the exponential ladder (1, 2, 4, 8, 16, 32, 64) — five wasted ~900s probe attempts before reaching the configured floor on every run.
+
+### Root cause
+
+`Get-OptimalBucketCount` always initialised its exponential probe at `$try = 1`, treating the per-report `BucketCount` value as a *cap input* (via `$capBucket` / `MaxBucketCount`) rather than as a starting **floor**. Cache lookups and memo lookups also returned cached values below the YAML floor, so even with a warm cache the engine could run with bucketCount=2 against a YAML that explicitly said 64.
+
+### Fix
+
+`Get-OptimalBucketCount` gains an optional `-MinBucketCount` parameter. The call site (the AutoBucket invocation in the main per-report loop) passes the resolved per-report `effectiveBucketCount` — which is the YAML `BucketCount` when set, otherwise the engine default (32 for `*_Detailed*` reports per v2.2.279, else 2).
+
+Inside `Get-OptimalBucketCount`:
+
+- Exponential probe starts at `$try = $MinBucketCount` (was `1`).
+- Binary-search lower bound is clamped to `>= $MinBucketCount` so the engine doesn't walk back down past the YAML floor.
+- Memo and disk-cache hits below the floor are ignored with a `[INFO] AutoBucket cache hit ... ignored (below YAML floor N; re-probing from floor)` line, then the floor is re-probed. Cached values **at or above** the floor are still honoured as before.
+
+### What the customer sees now
+
+Run with locked `BucketCount: 64` on Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure:
+
+```
+[INFO] AutoBucket probing 'Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure|1140929756' with bucketCount=64
+... query runs once at 64 ...
+[INFO] AutoBucket chosen for 'Attack_Paths_...|1140929756': 64
+```
+
+Versus the v2.2.280 sequence the customer was watching:
+
+```
+[INFO] AutoBucket probing '...' with bucketCount=1       ← ~15min wasted
+[INFO] AutoBucket probing '...' with bucketCount=2       ← ~15min wasted
+[INFO] AutoBucket probing '...' with bucketCount=4       ← ~15min wasted
+[INFO] AutoBucket probing '...' with bucketCount=8       ← ~15min wasted
+[INFO] AutoBucket probing '...' with bucketCount=16      ← ~15min wasted
+[INFO] AutoBucket probing '...' with bucketCount=32      ← ~15min wasted
+[INFO] AutoBucket probing '...' with bucketCount=64      ← finally
+```
+
+That's ~90 minutes saved on a single first-run report when the operator already knew the right starting count.
+
+### Operator note
+
+If a custom YAML overrides a report by name but **omits** `BucketCount`, the engine falls back to either the locked YAML's value (if any) or the engine's per-shape default (32 for `*_Detailed*`, 2 otherwise). To raise the floor for a single tenant, declare `BucketCount: 64` (or higher) in the custom YAML override of that report.
 
 ---
 

@@ -5824,21 +5824,28 @@ function Get-OptimalBucketCount {
     [Parameter(Mandatory=$true)][string]$QueryKey,
     [Parameter(Mandatory=$false)][string[]]$LegacyKeys,
     [Parameter(Mandatory=$true)][int]$MaxBucketCount,
-    [Parameter(Mandatory=$true)][scriptblock]$ProbeScript
+    [Parameter(Mandatory=$true)][scriptblock]$ProbeScript,
+    [Parameter(Mandatory=$false)][int]$MinBucketCount = 1
   )
 
   if ($MaxBucketCount -lt 1) { return 1 }
+  if ($MinBucketCount -lt 1) { $MinBucketCount = 1 }
+  if ($MinBucketCount -gt $MaxBucketCount) { $MinBucketCount = $MaxBucketCount }
 
-  # Memo
+  # Memo. Honour only if >= floor; otherwise re-probe (user raised the floor
+  # via YAML BucketCount, so a smaller cached value is stale).
   if ($script:AutoBucketMemo.ContainsKey($QueryKey)) {
-    return [int]$script:AutoBucketMemo[$QueryKey]
+    $memoVal = [int]$script:AutoBucketMemo[$QueryKey]
+    if ($memoVal -ge $MinBucketCount) { return $memoVal }
   }
   if ($LegacyKeys) {
     foreach ($lk in $LegacyKeys) {
       if (-not [string]::IsNullOrWhiteSpace($lk) -and $script:AutoBucketMemo.ContainsKey($lk)) {
         $val = [int]$script:AutoBucketMemo[$lk]
-        $script:AutoBucketMemo[$QueryKey] = $val
-        return $val
+        if ($val -ge $MinBucketCount) {
+          $script:AutoBucketMemo[$QueryKey] = $val
+          return $val
+        }
       }
     }
   }
@@ -5853,10 +5860,12 @@ function Get-OptimalBucketCount {
     $cached = Get-CacheValue -Cache $cache -Key $QueryKey
     if ($null -ne $cached) {
       $ci = [int]$cached
-      if ($ci -ge 1 -and $ci -le $MaxBucketCount) {
+      if ($ci -ge $MinBucketCount -and $ci -le $MaxBucketCount) {
         Write-Info ("AutoBucket cache hit: '{0}' => {1}" -f $QueryKey, $ci)
         $script:AutoBucketMemo[$QueryKey] = $ci
         return $ci
+      } elseif ($ci -lt $MinBucketCount) {
+        Write-Info ("AutoBucket cache hit '{0}' => {1} ignored (below YAML floor {2}; re-probing from floor)" -f $QueryKey, $ci, $MinBucketCount)
       }
     }
 
@@ -5867,7 +5876,7 @@ function Get-OptimalBucketCount {
         $cached2 = Get-CacheValue -Cache $cache -Key $lk
         if ($null -ne $cached2) {
           $ci2 = [int]$cached2
-          if ($ci2 -ge 1 -and $ci2 -le $MaxBucketCount) {
+          if ($ci2 -ge $MinBucketCount -and $ci2 -le $MaxBucketCount) {
             Write-Info ("AutoBucket cache hit (legacy): '{0}' => {1}" -f $lk, $ci2)
             # Migrate in-memory to new key
             $script:AutoBucketMemo[$QueryKey] = $ci2
@@ -5887,7 +5896,7 @@ function Get-OptimalBucketCount {
     # Fallback for old cache formats (cap in key) and other key mismatches
     if ($cache -is [hashtable]) {
       $fallback = Get-AutoBucketCacheFallbackValue -Cache $cache -QueryKey $QueryKey -MaxBucketCount $MaxBucketCount
-      if ($null -ne $fallback) {
+      if ($null -ne $fallback -and [int]$fallback -ge $MinBucketCount) {
         Write-Info ("AutoBucket cache fallback: '{0}' => {1}" -f $QueryKey, $fallback)
         $script:AutoBucketMemo[$QueryKey] = [int]$fallback
         return [int]$fallback
@@ -5895,9 +5904,14 @@ function Get-OptimalBucketCount {
     }
   }
 
-  # Exponential probe: 1,2,4,8...
-  $try = 1
-  $lastFail = 0
+  # Exponential probe: starts at MinBucketCount (configured YAML floor), then
+  # doubles. Probing below the YAML-declared floor wastes one ~900s attempt
+  # per ramp-up step and confuses operators ("why is it starting at 1 when I
+  # said 64?"). The probe still ESCALATES (doubles) past the floor when the
+  # configured count itself overflows.
+  $try = $MinBucketCount
+  $lastFail = $MinBucketCount - 1
+  if ($lastFail -lt 0) { $lastFail = 0 }
   $firstOk = 0
 
   while ($try -le $MaxBucketCount) {
@@ -6194,7 +6208,13 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
           }
 
           try {
-            $bucketCountToUse = Get-OptimalBucketCount -QueryKey $queryKey -LegacyKeys @($legacyKey) -MaxBucketCount $capBucket -ProbeScript $probe
+            # v2.2.281 -- pass YAML BucketCount as the AutoBucket probe FLOOR. Without
+            # this AutoBucket starts every probe at bucketCount=1 and doubles upward,
+            # so an explicit `BucketCount: 64` in YAML still costs five wasted ~900s
+            # probe attempts (1, 2, 4, 8, 16, 32) before reaching the configured count.
+            # The floor lets a tenant operator say "you don't need to try less than 64"
+            # while still allowing escalation past 64 when 64 itself overflows.
+            $bucketCountToUse = Get-OptimalBucketCount -QueryKey $queryKey -LegacyKeys @($legacyKey) -MaxBucketCount $capBucket -MinBucketCount $effectiveBucketCount -ProbeScript $probe
           } catch {
             Write-Warn2 ("AutoBucket failed for report '{0}'. Falling back to configured BucketCount={1}. Error: {2}" -f `
               $ReportName, $effectiveBucketCount, $_.Exception.Message)

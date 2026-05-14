@@ -135,8 +135,9 @@
    - 7.2 [Merge flow](#merge-flow)
    - 7.3 [Three things you do in Custom](#three-things-you-do-in-custom)
    - 7.4 [Concrete example](#concrete-example)
-   - 7.5 [What a release upgrade does to your YAML](#what-a-release-upgrade-does-to-your-yaml)
-   - 7.6 [`AssetTagName` naming convention](#assettagname-naming-convention)
+   - 7.5 [How-to — override a Locked rule (and what NEVER goes in Locked)](#how-to--override-a-locked-rule-and-what-never-goes-in-locked)
+   - 7.6 [What a release upgrade does to your YAML](#what-a-release-upgrade-does-to-your-yaml)
+   - 7.7 [`AssetTagName` naming convention](#assettagname-naming-convention)
 8. [Appendix](#appendix) — reference + technical detail
    - 8.1 [Permissions catalog](#permissions-catalog)
    - 8.2 [Bucketing — beating the 30k row ceiling](#bucketing--beating-the-30k-row-ceiling)
@@ -2268,7 +2269,62 @@ ReportTemplates:
 Running `-Detailed` now sends the email to `vuln-team@` and `audit@` regardless of what `$global:MailTo` says.
 </details>
 
-### 7.5 What a release upgrade does to your YAML
+### 7.5 How-to — override a Locked rule (and what NEVER goes in Locked)
+
+> **Rule of thumb**: anything that's specific to **your** tenant lives in **Custom only**. Locked files ship in the public repo and are re-pulled on every upgrade — leaking customer data into Locked silently affects every other deployment that pulls the next release.
+
+#### Customer-data policy — what NEVER goes in a Locked file
+
+The engine **refuses to fire** some of these when CMDB isn't enabled, but several have NO static gate — a leaked Locked CIDR will fire on whoever's IP happens to match. So just keep them out:
+
+| ❌ Never in Locked | Why | Where it goes |
+|---|---|---|
+| `cmdbId`, `cmdbName`, `cmdbCriticality`, `cmdbDataSensitivity` | Foreign keys into **your** CMDB. Different per tenant. Engine gates on `$global:SI_EnableCmdbProvider` (v2.2.274+) — silently ignored when CMDB is off, so a Locked leak is invisible until a customer enables CMDB and gets your fictional id stamped on their assets. | `<RuleId>.custom.yaml` `set:` block |
+| IPv4 / IPv6 / CIDR ranges (`cidrs:`, IP literals inside `egKustoQuery`) | Production subnets are tenant-specific. **No engine gate** — the rule fires on whoever's IP happens to match. A Locked CIDR can mis-tier other tenants' workstations. | `<RuleId>.custom.yaml` `detect:` block |
+| Tenant-specific hostnames / FQDNs / DNS suffixes | E.g. `(?i)^pdc\d` (universal naming) is FINE for Locked; `(?i)^acme-corp-pdc01\.acme\.local$` (customer literal) is NOT. | `<RuleId>.custom.yaml` `detect:` block |
+| Tenant IDs / subscription IDs / RG names / AD group SIDs / Entra object IDs | Inherently per-tenant. | `<RuleId>.custom.yaml` |
+| Internal SamAccountName / UPN literals (e.g. `svc-ad-prod@acme.local`) | Per-tenant identity. Use generic patterns or group memberships in Locked. | `<RuleId>.custom.yaml` |
+
+#### Override workflow (worked example)
+
+You want to keep the engine's `ADDomainController` detection logic but stamp **your** `cmdbId` (`SVC-AD-PROD`) onto every matched DC, and add a tag for your CAB workflow. Two-step:
+
+1. Drop a sibling `.custom.yaml` next to the locked file (`asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/`):
+   ```
+   ADDomainController.locked.yaml    (shipped baseline -- DO NOT edit)
+   ADDomainController.custom.yaml    (NEW -- your override, gitignored)
+   ```
+2. In `ADDomainController.custom.yaml`, keep the **exact same `id:`**, paste the full rule body, then change only what you want:
+   ```yaml
+   id:        ADDomainController          # MUST match the locked id
+   appliesTo: endpoint
+   osPlatformScope: [WindowsServer, Linux]
+   mode:      locked
+   purpose:   'Domain Controller'
+   category:  'Server Roles'
+   description: |
+     Customer override -- keeps shipped detection, adds CMDB stamp + DC-CAB tag.
+
+   detections:
+     - id: ADDomainController
+       detect:
+         any:
+           # ... paste the same `any:` list from the .locked.yaml verbatim ...
+       set:
+         Tier:     0
+         Purpose:  'Domain Controller'
+         Category: 'Server Roles'
+         Tags:     [ 'cab:domain-controllers' ]
+         cmdbId:   'SVC-AD-PROD'           # your CMDB foreign key
+   ```
+
+The engine deduplicates by `id` and the `.custom.yaml` always wins (see `Get-SIRuleSet.ps1:265-284`). Locked is suppressed entirely. On the next run every matched DC gets `Tier=0` + `Tags=['cab:domain-controllers']` + `cmdbId='SVC-AD-PROD'` (and Reconcile auto-stamps `cmdbName` / `cmdbCriticality` / `cmdbDataSensitivity` from your CMDB CSV when `$global:SI_EnableCmdbProvider=$true`).
+
+The full annotated grammar with every `detect:` kind + the inline POLICY callout is in [`asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml`](asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml). Detect-kind reference + override semantics are in [`docs/RULE-REFERENCE.md`](docs/RULE-REFERENCE.md).
+
+---
+
+### 7.6 What a release upgrade does to your YAML
 
 ```mermaid
 flowchart TB
@@ -2290,7 +2346,7 @@ flowchart TB
 **Locked is replaced; Custom is sacred.** Your edits survive every upgrade. The only time you touch Custom during an upgrade is if the RELEASE NOTES point out that a template you overrode has an updated schema — then you re-apply your override against the new Locked definition.
 
 <a id="66-critical-asset-tagging-mode-and-scope"></a><a id="critical-asset-tagging-mode-and-scope"></a>
-### 7.6 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
+### 7.7 `AssetTagName` naming convention — `<stem>--tier<N>--SI` + stem-based merge
 
 [⤴ Back to top](#top)
 

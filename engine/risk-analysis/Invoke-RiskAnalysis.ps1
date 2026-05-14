@@ -45,6 +45,18 @@ if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          {
 if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
 if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
 
+# v2.2.278 -- ALSO bridge from the internal-AutomateIT framework's HighPriv_Modern_*_Azure
+# globals, populated by Connect-Platform on internal/AutomateIT installs. Without
+# this bridge, internal customers using SPN+cert auth would see Connect-GraphHighPriv
+# fall through to the secret branch on every reconnect (`$global:SpnCertificateThumbprint`
+# stays empty even though Connect-Platform set $global:HighPriv_Modern_CertificateThumbprint_Azure).
+# Same pattern: only set $Spn* if it's not already populated, so SI_SPN_* > HighPriv_*
+# precedence (community customer overrides win).
+if ($global:HighPriv_Modern_TenantID                       -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:HighPriv_Modern_TenantID }
+if ($global:HighPriv_Modern_ApplicationID_Azure            -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:HighPriv_Modern_ApplicationID_Azure }
+if ($global:HighPriv_Modern_ApplicationSecret_Azure        -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:HighPriv_Modern_ApplicationSecret_Azure }
+if ($global:HighPriv_Modern_CertificateThumbprint_Azure    -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:HighPriv_Modern_CertificateThumbprint_Azure }
+
 # ----------------------------------------------------------------------
 #  Module dependencies -- centralized helper under _shared/
 # ----------------------------------------------------------------------

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.277
+## v2.2.278
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
 - release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
 - release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
 - release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
@@ -33,13 +34,54 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.251 - DCR auto-rename length guard (>60 chars -> SHA1 hash fallback) (ef4ef053)
 - release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
 - release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
-- release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.278 — Internal-AutomateIT cert auth: bridge `HighPriv_Modern_*_Azure` globals into `$Spn*` so Graph reconnect uses cert (not secret)
+
+Operator's v2.2.277 run on Nordstern (internal-AutomateIT install, SPN+cert via `Connect-Platform`) showed the Graph 45-minute reconnect printing `Connecting to Microsoft Graph (app+secret)...` even though the customer is on cert. The branch logic in `Connect-GraphHighPriv` (line 480) is correct — it picks cert when `$global:SpnCertificateThumbprint` is non-empty. Bug was the bridge: only `$global:SI_SPN_CertThumbprint` was being copied into `$global:SpnCertificateThumbprint` (community-launcher naming). Internal-AutomateIT uses `$global:HighPriv_Modern_CertificateThumbprint_Azure` (set by `Connect-Platform`), which the bridge didn't see. Cert thumbprint stayed `$null` → Connect-GraphHighPriv fell through to secret branch on every reconnect → reconnect would fail for any customer running cert without a secret as fallback.
+
+### Fix
+
+Added a second bridge block to all 5 engines that already had the SI_SPN_* bridge:
+
+```powershell
+# Existing community bridge
+if ($global:SI_SPN_CertThumbprint -and -not $global:SpnCertificateThumbprint) {
+    $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint
+}
+# v2.2.278 — internal-AutomateIT bridge (Connect-Platform sets these)
+if ($global:HighPriv_Modern_CertificateThumbprint_Azure -and -not $global:SpnCertificateThumbprint) {
+    $global:SpnCertificateThumbprint = [string]$global:HighPriv_Modern_CertificateThumbprint_Azure
+}
+# (same pattern for TenantId, AppId, ClientSecret)
+```
+
+Precedence: `SI_SPN_*` > `HighPriv_Modern_*_Azure` (community customer overrides win when both are present).
+
+### Files touched (5)
+
+- `engine/risk-analysis/Invoke-RiskAnalysis.ps1`
+- `engine/asset-profiling/Invoke-SIEngineRun.ps1`
+- `engine/asset-tagging/AssetTagging.ps1`
+- `engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1`
+- `engine/publicip/Invoke-PublicIpScanner.ps1`
+
+### Effect
+
+Both flavours now work end-to-end with SPN+cert:
+- Community: `$global:SI_SPN_CertThumbprint = '...'` in custom.ps1 → auto-bridged to `$global:SpnCertificateThumbprint` → `Connect-GraphHighPriv` picks cert path
+- Internal AutomateIT: `Connect-Platform` sets `$global:HighPriv_Modern_CertificateThumbprint_Azure` → auto-bridged to `$global:SpnCertificateThumbprint` → same cert path
+
+### Sub-bucketing (v2.2.277) confirmed working
+
+Same operator log confirmed v2.2.277 sub-bucketing fires correctly: `[sub-bucket] depth=1 parent=1/2 sub=4/4 timed out -- queueing for further split (depth 2)` — recursive split is happening as designed.
 
 ---
 

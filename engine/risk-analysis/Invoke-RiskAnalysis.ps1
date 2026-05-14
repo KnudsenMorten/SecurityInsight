@@ -2541,8 +2541,12 @@ function Resolve-StaleDeviceFilterBlock {
         [Parameter(Mandatory)][string]$ReportName
     )
 
-    # Mode: 'strict' (DEFAULT, active) | 'lenient' | 'off'.
-    $mode = 'strict'
+    # Mode: 'off' (DEFAULT, no-op) | 'lenient' | 'strict'.
+    # v2.2.306 -- defaulted to 'off' globally. Stale-device filter was misanchoring
+    # against graph-match query shapes (and arguably adds no value: EG itself only
+    # snapshots recently-seen device nodes). Customer can opt back in by setting
+    # `$global:SI_RA_StaleDeviceFilter = 'strict'` in custom.ps1 if they want it.
+    $mode = 'off'
     if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RA_StaleDeviceFilter)) {
         $modeRaw = ([string]$global:SI_RA_StaleDeviceFilter).Trim().ToLowerInvariant()
         if ($modeRaw -in @('lenient','strict','off')) { $mode = $modeRaw }
@@ -6279,8 +6283,14 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     # residual heavy buckets reaches a working count immediately on first run
     # for the vast majority of cases. Per-report YAML BucketCount still wins;
     # customer can also drop with $global:SI_AutoBucketDefaultDetailed.
+    # v2.2.306 -- Detailed default lowered from 32 to 2. The 32 default was a blanket
+    # assumption that all Detailed reports cartesian-explode (4-hop EG path expansion
+    # historically did). Graph-match shape doesn't cartesian, so 32 buckets x ~55s
+    # each just to return ~32 rows = 30 min of pure overhead. AutoBucket can still
+    # escalate past 2 if the probe shows compute hitting AH's ceiling. Customer can
+    # override via $global:SI_AutoBucketDefaultDetailed or per-report BucketCount.
     $effectiveBucketCount = if ($ReportNameFromTemplate -like '*_Detailed*' -or $ReportNameFromTemplate -like '*_Detailed_*') {
-        if ($global:SI_AutoBucketDefaultDetailed) { [int]$global:SI_AutoBucketDefaultDetailed } else { 32 }
+        if ($global:SI_AutoBucketDefaultDetailed) { [int]$global:SI_AutoBucketDefaultDetailed } else { 2 }
     } else { 2 }
     $effectivePlaceholder = '__BUCKET_FILTER__'
 

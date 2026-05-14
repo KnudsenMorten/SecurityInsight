@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.279
+## v2.2.280
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
 - release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
 - release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
 - release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
@@ -33,13 +34,49 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.253 - skip SI_StorageKey fetch+persist when OAuth-on-storage enabled (2e8a6edf)
 - release: SecurityInsight v2.2.252 - Machine.Read.All instead of Machine.ReadWrite.All for WDATP (e02c9297)
 - release: SecurityInsight v2.2.251 - DCR auto-rename length guard (>60 chars -> SHA1 hash fallback) (ef4ef053)
-- release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.280 — Visible heartbeats before AH + LA query submissions ("not hung — waiting on backend")
+
+Operator: "is it possible to show progress... just hangs here for long time... people don't know what is happening". Customer log on v2.2.279 showed the engine going silent for up to 15 minutes between `[hybrid] '_TargetCmdb' snapshot inlined as datatable` and the next log line whenever a query submission was waiting on its full HttpClient ceiling (TaskCanceled@900s pattern).
+
+### Fix
+
+Added stopwatch-bracketed log lines around both long-running submission calls in `Invoke-GraphHuntingQuery`:
+
+**Advanced Hunting submission** (`Invoke-RiskAnalysis.ps1:1749`):
+```
+[INFO] submitting query to advanced hunting (attempt 1/4; may take up to 900s if too large)...
+... query runs ...
+[INFO] advanced hunting returned in 12.4s
+```
+Or when the call times out:
+```
+[INFO] submitting query to advanced hunting (attempt 1/4; may take up to 900s if too large)...
+[ERR]  Query failed deterministically (TaskCanceled@900s ...)
+```
+
+**Log Analytics direct submission** (`Invoke-RiskAnalysis.ps1:1696`):
+```
+[INFO] submitting query to Log Analytics direct (may take several minutes for large workspaces)...
+... query runs ...
+[INFO] Log Analytics returned in 2.9s
+```
+
+### What this means for the operator
+
+- "Is the engine hung?" → No, it just submitted to AH and is awaiting response. Compare timestamp of the "submitting" line to current clock.
+- "Why is this report taking so long?" → Each "submitting" / "returned in" pair shows real per-call duration. Easy to spot the slow ones.
+- "How close is the 900s timeout?" → Time since "submitting" line tells you directly.
+
+No behavioural change — purely observability.
 
 ---
 

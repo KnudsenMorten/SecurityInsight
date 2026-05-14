@@ -15648,6 +15648,9 @@ Reports:
         | extend ConfigurationId   = "IDENTITY-DEVICE-001"
         // CL identity-metadata enrichment (cmdb only). Detection logic above unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
@@ -15803,6 +15806,9 @@ Reports:
                                            + iff(MaxCvssScore >= 9.0, 1, 0)
         // CL identity-metadata enrichment (cmdb only). Detection logic above is unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
@@ -15961,6 +15967,9 @@ Reports:
         | extend ConfigurationId   = "IDENTITY-DEVICE-002"
         // CL identity-metadata enrichment (cmdb only). Detection logic above unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
@@ -16124,6 +16133,9 @@ Reports:
         | extend ConfigurationId   = "IDENTITY-DEVICE-003"
         // CL identity-metadata enrichment (cmdb only). Detection logic above unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
@@ -16287,6 +16299,9 @@ Reports:
         | extend ConfigurationId   = "IDENTITY-DEVICE-004"
         // CL identity-metadata enrichment (cmdb only). Detection logic above unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
@@ -16781,6 +16796,9 @@ Reports:
                                            + iff(DeviceRiskScore in ("High","Critical"), 1, 0)
         // CL identity-metadata enrichment (cmdb only). Detection logic above is unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
@@ -16933,6 +16951,9 @@ Reports:
                                            + iff(DeviceRiskScore in ("High","Critical"), 1, 0)
         // CL identity-metadata enrichment (cmdb only). Detection logic above is unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
@@ -17719,6 +17740,9 @@ Reports:
                                            + iff(IsInKit == true, 1, 0)
         // CL identity-metadata enrichment (cmdb only). Detection logic above is unchanged.
         | extend DeviceKey = UserNodeId | extend PrimaryEntityId = UserNodeId
+        //__STALE_DEVICE_FILTER_BEGIN__
+        | where 1 == 1
+        //__STALE_DEVICE_FILTER_END__
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__

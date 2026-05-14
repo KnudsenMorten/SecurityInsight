@@ -1768,10 +1768,18 @@ function Invoke-GraphHuntingQuery {
             $msg = $_.Exception.Message
 
             $isTaskCanceled = ($_.Exception -is [System.Threading.Tasks.TaskCanceledException]) -or ($msg -match 'A task was canceled')
+            # v2.2.276 -- 502 Bad Gateway from nginx (in front of /security/runHuntingQuery)
+            # is the SAME deterministic "query too big" pattern as TaskCanceled. nginx
+            # responds 502 when the upstream AH backend produces a response too large
+            # for nginx to proxy. Retrying the identical query just burns 4 more
+            # attempts (each up to 900s) on the same fail. Classify it like
+            # TaskCanceled so the AutoBucket escalation kicks in immediately.
+            $is502BadGateway = ($msg -match '502 Bad Gateway' -or $msg -match '\[UnknownError\][^<]*<html>')
+            $isDeterministicTooLarge = $isTaskCanceled -or $is502BadGateway
             # v2.2.198 -- any non-timeout failure means this call is NOT a clean
             # deterministic-timeout pattern, so the outer AutoBucket loop should
             # treat subsequent buckets as still worth trying.
-            if (-not $isTaskCanceled) { $script:_LastGraphHuntingAllTimedOut = $false }
+            if (-not $isDeterministicTooLarge) { $script:_LastGraphHuntingAllTimedOut = $false }
             $looksAuth      = ($msg -match 'InvalidAuthenticationToken|Access token|Authentication|Unauthorized|401')
             $looksThrottle  = ($msg -match 'Too Many Requests|429|throttl|temporar')
 
@@ -1876,14 +1884,19 @@ if ($looksAuth) {
                 throw
             }
 
-            # v2.2.273 -- fail-fast on TaskCanceledException. The 4x900s retry pattern
-            # was useful when timeouts looked transient, but in practice when AH hits
-            # the HttpClient ceiling (900s) it means the query is genuinely too big.
-            # Retrying just burns 3 more hours per bucket on the same fail. Bubble
-            # up after the FIRST timeout so the AutoBucket escalation in the outer
-            # loop can re-run with a higher bucket count immediately.
-            if ($isTaskCanceled) {
-                Write-Err2 ("Query timed out at HttpClient ceiling ({0}s) on first attempt -- bypassing retries (deterministic 'query too large' pattern). Will let AutoBucket escalation handle." -f 900)
+            # v2.2.273 / v2.2.276 -- fail-fast on deterministic "query too large"
+            # patterns. The 4x900s retry pattern was useful when timeouts looked
+            # transient, but in practice when AH hits the HttpClient ceiling (900s)
+            # OR nginx returns 502 (upstream response too large for nginx to proxy),
+            # the query is genuinely too big. Retrying burns hours on identical
+            # fails. Bubble up after the FIRST occurrence so the AutoBucket
+            # escalation in the outer loop can re-run with a higher bucket count
+            # immediately. The script:_LastGraphHuntingAllTimedOut flag is the
+            # signal the outer bucket loop reads.
+            if ($isDeterministicTooLarge) {
+                $reason = if ($isTaskCanceled) { 'TaskCanceled@900s (HttpClient ceiling)' } else { '502 Bad Gateway (nginx upstream-response-too-large)' }
+                Write-Err2 ("Query failed deterministically ({0}) on attempt {1} -- bypassing retries. AutoBucket escalation will resize the report at higher bucket count." -f $reason, $attempt)
+                $script:_LastGraphHuntingAllTimedOut = $true
                 throw
             }
 
@@ -1893,6 +1906,11 @@ if ($looksAuth) {
 
                 Write-Warn2 ("Query failed (attempt {0}/{1}). Waiting {2}s then retrying... {3}" -f $attempt, $MaxRetries, $sleepSec, $msg)
                 Start-Sleep -Seconds $sleepSec
+                # v2.2.276 -- visible "now retrying" line so operators can tell
+                # the engine isn't hung when the next attempt takes its full 900s
+                # before returning. Without this the log goes silent for up to
+                # 15 min between "Waiting 2s" and the next attempt's outcome.
+                Write-Info ("Retrying attempt {0}/{1} now (call may take up to 900s)..." -f ($attempt + 1), $MaxRetries)
                 continue
             }
 

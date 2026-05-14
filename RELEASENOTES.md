@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.303
+## v2.2.304
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
 - release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
 - release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
 - release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
 - release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
 - release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
-- release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.304 — Update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev)
+
+v2.2.303's Pre-Publish Gate (Pester `DocConsistency`) failed:
+```
+[-] README claims same total report count as YAML
+   -> Expected 118, but got 120.
+[-] docs catalog count matches YAML
+   -> Expected 116, but got 118.
+```
+
+Locked YAML report count went from 118 → 116 when v2.2.303 moved both `Attack_Paths_*_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` reports into the Dev tier. README + docs still claimed the pre-move counts.
+
+Updated:
+- `README.md` line 174 (mermaid diagram): `120 attacker-centric KQL reports` → `116`
+- `README.md` line 1662 (engine inventory table): `**118 reports** (59 Summary + 59 Detailed, fully paired)` → `**116 reports** (58 Summary + 58 Detailed, fully paired)`
+- `docs/risk-analysis-detection.md` line 5: `**118 reports**` → `**116 reports**`
+
+No engine or YAML changes; doc-only.
 
 ---
 

@@ -1694,7 +1694,15 @@ function Invoke-GraphHuntingQuery {
             # against the SI workspace alone -- raw query, no let. Cleaner than failing
             # the whole report when LA can resolve the table itself.
             try {
+                # v2.2.280 -- visible heartbeat before the LA call. Same silent-gap
+                # problem as the AH path: large LA-direct queries can sit for
+                # minutes before returning, and operators saw the engine appear
+                # to hang.
+                Write-Info "submitting query to Log Analytics direct (may take several minutes for large workspaces)..."
+                $_laSw = [System.Diagnostics.Stopwatch]::StartNew()
                 $rows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $wsResId -Query $finalQuery
+                $_laSw.Stop()
+                Write-Info ("Log Analytics returned in {0:F1}s" -f $_laSw.Elapsed.TotalSeconds)
             } catch {
                 # Cross-workspace failures surface as generic BadRequest (the inner
                 # SemanticError isn't always propagated through the LA REST layer).
@@ -1750,7 +1758,16 @@ function Invoke-GraphHuntingQuery {
         Ensure-GraphAuth -MaxAgeMinutes $ReconnectMaxAgeMinutes
 
         try {
+            # v2.2.280 -- visible heartbeat BEFORE the AH submission. Without
+            # this, operators saw the engine go silent for up to 15 min between
+            # "snapshot inlined" and the next log line whenever a query took its
+            # full HttpClient ceiling (TaskCanceled@900s pattern). Print start
+            # + duration so progress is observable.
+            Write-Info ("submitting query to advanced hunting (attempt {0}/{1}; may take up to 900s if too large)..." -f $attempt, $MaxRetries)
+            $_ahSw = [System.Diagnostics.Stopwatch]::StartNew()
             $ahResp = Start-MgBetaSecurityHuntingQuery -Query $Query -ErrorAction Stop
+            $_ahSw.Stop()
+            Write-Info ("advanced hunting returned in {0:F1}s" -f $_ahSw.Elapsed.TotalSeconds)
 
             # 2-phase post-augment: when Resolve-ProfileAugmentPlan stripped cmdb let/join/
             # extend from the query, the AH rows lack those columns. Convert the Graph

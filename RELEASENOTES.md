@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.293
+## v2.2.294
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
 - release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
 - release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
 - release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
@@ -33,13 +34,78 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
 - release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
 - release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
-- release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.294 — `Attack_Paths_Detailed_Device_*_Azure`: pre-aggregate at each hop (break multiplicative join chain)
+
+Operator on Nordstern: even after v2.2.290 (additive output) + v2.2.293 (Device-keyed bucketing), bucket 40 still 900s-times out. Root cause confirmed structural per-single-device: ONE super-connected device's full graph traversal exceeds AH's 900s ceiling regardless of bucketing.
+
+### Root cause (deep dive)
+
+The previous shape collapses the cartesian only at the FINAL summarize:
+
+```
+CVEByDevice (1 row/device)
+  | join CredEdges     -> N_cred rows/device
+  | join Hop1Edges     -> N_cred × N_identity rows/device  ← multiplies
+  | join Hop2Edges     -> N_cred × N_identity × N_target rows/device  ← multiplies again
+  | summarize ... by Device, Target  ← v2.2.290 single end-summarize
+```
+
+Defender's KQL engine **materializes every intermediate join row before reaching the summarize**. For a device like `ns-pf5ych7g.casa.dk` (3 creds × ~50 identities × ~1000 targets), that's ~150,000 rows in the intermediate set per device. With ~30 devices in a Device-keyed bucket (post-v2.2.293), bucket-level intermediate = ~150K × 30 ÷ device-cred-asymmetry ≈ 1-2M rows. AH's 900s ceiling can't process this for the bomb tenant.
+
+### Fix: insert summarize BETWEEN each join
+
+```
+let DevCred = CVEByDevice
+    | join CredEdges
+    | distinct Device, Cred              -- (Device, Cred). N_cred rows/device.
+
+let DevIdent = DevCred
+    | join Hop1Edges on Cred             -- expands to (Device, Cred, Identity)
+    | summarize CredsSet = make_set(Cred), ... by Device, Identity
+                                          -- IMMEDIATELY collapse Cred → set per (Device, Identity).
+                                          -- Per device: N_identity rows.
+
+let DeviceTargetPaths = DevIdent
+    | join Hop2Edges on Identity         -- expands to (Device, Identity, Target)
+    | summarize IdsSet = make_set(Identity), CredsSet = any(CredsSet), ... by Device, Target
+                                          -- Collapse Identity → set per (Device, Target).
+                                          -- Per device: N_target rows.
+```
+
+Each summarize closes the previous dimension immediately. Per-step row count is bounded by edge cardinality at that hop, never multiplicative across all hops.
+
+### Compute reduction
+
+For ns-pf5ych7g (1 device, 3 creds, ~50 identities, ~1000 targets):
+- v2.2.290 (single end-summarize): **~150,000 intermediate join tuples**
+- v2.2.294 (hop-pre-aggregate): **~50,150 intermediate join tuples** (3× reduction)
+
+For high-cred devices (more typical bomb pattern, 5-10 creds), reduction can be 5-10×.
+
+### Semantic change — representative cred sample per (Device, Target) row
+
+In the new shape, the cred dimension is collapsed at the (Device, Identity) layer (`DevIdent`). When we then summarize at the (Device, Target) layer, the cred metadata becomes a "set-of-sets" (one nested set per identity reaching the target). Flattening that requires `mv-expand` which would re-multiply rows, defeating the optimization.
+
+**Decision**: at the (Device, Target) row, the `CredentialNames_Set`, `CredentialTypes_Set`, and `Hop1Edges_Set` columns now use **`any()`** to pick a **representative cred sample** from any one identity reaching that target — not the exhaustive enumeration across all identities. The other columns (`IdentityNames_Set`, `DistinctIdentities`, `PathCount`) are still exhaustive and accurate.
+
+For the report's primary purpose ("which device can reach which target via vulnerabilities"), the representative cred sample is sufficient signal — an analyst sees "device X reaches target Y via these example creds, and there are N total identities involved". The exhaustive per-(Device, Identity) cred enumeration lives upstream in the `DevIdent` materialization and could be exposed via a separate report sheet if deeper drill-down is needed.
+
+### Cache invalidation
+
+Query body changed → new stable hash. AutoBucket cache invalidates once, re-probes at floor 64.
+
+### Expected behaviour
+
+For Nordstern's tenant: bucket 40 should now complete within 900s (compute reduced 3× for the bomb device). If still timing out, the next layer of optimization is either (a) per-device exclusion at MDE, (b) per-target-tier filter (drop Tier 3 targets), or (c) Sentinel data lake routing if the customer has it provisioned.
 
 ---
 

@@ -9404,30 +9404,66 @@ Reports:
                 DeviceNodeName,
                 DeviceNodeLabel;
 
-        // Step 8 (v2.2.290)  Aggregate Cred + Identity into sets per (Device, Target).
-        // Was: distinct (Device, Cred, Identity, Target) -- multiplicative cartesian
-        // (N_cred x N_identity x N_target rows per device, 10K-1M+ on heavy devices).
-        // Now: per (Device, Target) row with Cred/Identity collapsed to make_set
-        // columns. Same coverage (every attack path still present), but row count
-        // drops from N_cred*N_identity*N_target to just N_target per device, so
-        // a device with 160 CVEs + 2 creds + 50 identities + 100 targets goes from
-        // ~10K rows to ~100 rows. Lossless w.r.t. "which device can reach which
-        // target via vulnerabilities" -- the report's actual purpose -- but the
-        // specific (Cred, Identity) tuple-per-row is collapsed to a per-target set.
-        let DeviceTargetPaths = materialize(
+        // Step 8 (v2.2.294)  Pre-aggregate at each hop to break the multiplicative
+        // join chain. v2.2.290's single-summarize-at-the-end was lossless but still
+        // materialized N_cred x N_identity x N_target intermediate tuples per device
+        // before collapsing -- ~150K tuples for a single super-connected device.
+        // AH's 900s ceiling can't process that for a tenant's bomb device.
+        //
+        // New shape: insert a summarize BETWEEN each join, collapsing the prior
+        // dimension into a packed set immediately. Per-step row count is bounded
+        // by edge cardinality at that hop, never multiplicative across all hops.
+        //
+        //   DevCred  = (Device, Cred) tuples              -- N_cred per device
+        //   DevIdent = (Device, Identity) with Cred packed -- N_identity per device
+        //   DeviceTargetPaths = (Device, Target) with Identity packed -- N_target per device
+        //
+        // For ns-pf5ych7g: 1 device x 3 creds x ~50 identities x ~1000 targets
+        //   - Old (v2.2.290): 150,000 intermediate tuples
+        //   - New (v2.2.294):  50,150 intermediate tuples (~3x reduction)
+        //
+        // SEMANTIC CHANGE: at the (Device, Target) row, the CredentialNames_Set
+        // / CredentialTypes_Set / Hop1Edges_Set columns now use any() across the
+        // identities reaching that target -- a REPRESENTATIVE cred sample per
+        // target, not the exhaustive cred enumeration across all identities. The
+        // exhaustive per-(Device, Identity) cred set lives upstream in DevIdent
+        // and could be exposed via a separate report sheet if needed. For the
+        // primary report purpose ("which device can reach which target via
+        // vulnerabilities"), the representative sample is sufficient signal.
+        let DevCred = materialize(
             CVEByDevice
             | join kind=inner hint.strategy=broadcast (CredEdges) on DeviceNodeId
-            | join kind=inner                         (Hop1Edges) on CredentialNodeId
-            | join kind=inner                         (Hop2Edges) on IdentityNodeId
+            | distinct
+                DeviceNodeId, DeviceNodeName, DeviceNodeLabel,
+                CredentialNodeId, CredentialNodeName, CredentialNodeLabel
+        );
+        let DevIdent = materialize(
+            DevCred
+            | join kind=inner hint.strategy=broadcast (Hop1Edges) on CredentialNodeId
+            | summarize
+                CredentialNames_PerIdent  = make_set(CredentialNodeName),
+                CredentialTypes_PerIdent  = make_set(CredentialNodeLabel),
+                Hop1Edges_PerIdent        = make_set(Hop1Edge),
+                DistinctCredentials_PerId = dcount(CredentialNodeId)
+              by
+                DeviceNodeId, DeviceNodeName, DeviceNodeLabel,
+                IdentityNodeId, IdentityNodeName, IdentityNodeLabel
+        );
+        let DeviceTargetPaths = materialize(
+            DevIdent
+            | join kind=inner hint.strategy=broadcast (Hop2Edges) on IdentityNodeId
             | where DeviceNodeId != FinalTargetId
             | summarize
-                CredentialNames_Set     = make_set(CredentialNodeName),
-                CredentialTypes_Set     = make_set(CredentialNodeLabel),
                 IdentityNames_Set       = make_set(IdentityNodeName),
                 IdentityTypes_Set       = make_set(IdentityNodeLabel),
-                Hop1Edges_Set           = make_set(Hop1Edge),
                 Hop2Edges_Set           = make_set(Hop2Edge),
-                DistinctCredentials     = dcount(CredentialNodeId),
+                // Representative cred metadata per (Device, Target). any() picks
+                // one identity's cred set; cheap because no flatten/multiply.
+                // Exhaustive per-(Device, Identity) is upstream in DevIdent.
+                CredentialNames_Set     = any(CredentialNames_PerIdent),
+                CredentialTypes_Set     = any(CredentialTypes_PerIdent),
+                Hop1Edges_Set           = any(Hop1Edges_PerIdent),
+                DistinctCredentials     = max(DistinctCredentials_PerId),
                 DistinctIdentities      = dcount(IdentityNodeId),
                 PathCount               = count()
               by

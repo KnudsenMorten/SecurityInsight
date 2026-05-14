@@ -314,15 +314,12 @@ Reports:
               // IsInExploitKit,IsZeroDay,Description,ReferenceUrl}). Per-row
               // bag_merge + ~10 dynamic-property lookups -> ~10 typed column reads.
               | extend Impact = FindingCvssScore
-              // v2.2.216 -- default "Unknown" instead of "Low". A null/empty
-              // FindingSeverity should NOT be silently downgraded to Low; surface it
-              // as Unknown so operators can see the data-quality gap.
               | extend SecuritySeverity = case(
                   tolower(FindingSeverity) == "critical", "Very High",
                   tolower(FindingSeverity) == "high",     "High",
                   tolower(FindingSeverity) == "medium",   "Medium",
                   tolower(FindingSeverity) == "low",      "Low",
-                  "Unknown")
+                  "Low")
               // v2.2.216 -- dropped `where FindingLabel contains "CVE"`. _Findings
               // already filters NodeLabel startswith "cve" + Categories has_any
               // ("vulnerability_finding"), so every row entering this stage matches.
@@ -704,15 +701,12 @@ Reports:
               // IsInExploitKit,IsZeroDay,Description,ReferenceUrl}). Per-row
               // bag_merge + ~10 dynamic-property lookups -> ~10 typed column reads.
               | extend Impact = FindingCvssScore
-              // v2.2.216 -- default "Unknown" instead of "Low". A null/empty
-              // FindingSeverity should NOT be silently downgraded to Low; surface it
-              // as Unknown so operators can see the data-quality gap.
               | extend SecuritySeverity = case(
                   tolower(FindingSeverity) == "critical", "Very High",
                   tolower(FindingSeverity) == "high",     "High",
                   tolower(FindingSeverity) == "medium",   "Medium",
                   tolower(FindingSeverity) == "low",      "Low",
-                  "Unknown")
+                  "Low")
               // v2.2.216 -- dropped `where FindingLabel contains "CVE"`. _Findings
               // already filters NodeLabel startswith "cve" + Categories has_any
               // ("vulnerability_finding"), so every row entering this stage matches.
@@ -9537,7 +9531,7 @@ Reports:
               TargetCriticalityTier == 1, "High - tier 1",
               TargetCriticalityTier == 2, "Medium - tier 2",
               TargetCriticalityTier == 3, "Low - tier 3",
-              "Unknown - unmapped"
+              "Low - tier 3"
           )
 
         // Step 10  Score and classify paths
@@ -10510,7 +10504,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
         | extend RF_P_Privileged = iff(IsPrivileged == true, 1, 0)
         | extend RF_P_StaleLogin = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
@@ -10655,7 +10649,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend RF_P_Privileged       = iff(IsPrivileged == true, 1, 0)
         | extend RF_P_NeverLoggedIn    = iff(LastSignInDays == -1, 1, 0)
@@ -10802,7 +10796,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend SecurityDomain     = "Identity"
         | extend Category           = "Account Lifecycle"
@@ -10938,7 +10932,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend RF_P_NeverLoggedIn = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_VeryStale     = iff(LastSignInDays > 365 or (LastSignInDays == -1 and CreatedDays > 365), 1, 0)
@@ -11080,7 +11074,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_NeverLoggedIn    = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_Tier0            = iff(CriticalityTier == 0, 1, 0)
@@ -11226,7 +11220,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend SecurityDomain     = "Identity"
         | extend Category           = "Workload Identities"
@@ -11357,7 +11351,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         | extend RF_P_AlreadyExpired = iff(HasExpired == true, 1, 0)
         | extend RF_P_ExpiresVerySoon = iff(ExpiryDays >= 0 and ExpiryDays <= 7, 1, 0)
@@ -11502,7 +11496,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend RF_P_Privileged    = iff(Tier <= 1, 1, 0)
         | extend RF_P_HasSecret     = iff(HasExpiringCredentials == true, 1, 0)
@@ -11647,7 +11641,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_Tier0            = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA            = iff(MfaIsRegistered == false, 1, 0)
@@ -11789,7 +11783,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(CSA_AssetTier, ADTier, Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
@@ -11931,7 +11925,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_NoMFA           = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_OldPassword     = iff(toint(column_ifexists("PasswordLastChangedDays", -1)) > 365, 1, 0)
@@ -12073,7 +12067,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_Tier0             = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NotVerified       = iff(PublisherVerified == false, 1, 0)
@@ -12220,7 +12214,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
@@ -12362,7 +12356,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         | extend RF_P_NeverChanged = iff(toint(column_ifexists("PasswordLastChangedDays", -1)) == -1, 1, 0)
         | extend RF_P_VeryOld      = iff(toint(column_ifexists("PasswordLastChangedDays", -1)) > 730, 1, 0)
@@ -12506,7 +12500,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend RF_P_NotVerified    = iff(PublisherVerified == false, 1, 0)
         | extend RF_P_NoOwner        = iff(IsOrphanSPN == true, 1, 0)
@@ -12650,7 +12644,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_AtRisk          = iff(tostring(column_ifexists("MDI_RiskState", "")) == "atRisk", 1, 0)
         | extend RF_P_Tier01          = iff(CriticalityTier <= 1, 1, 0)
@@ -12824,7 +12818,7 @@ Reports:
         | join kind=inner NonTrustedSignins on Upn
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_Tier0          = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_Frequent       = iff(NonTrustedSigninCount > 5, 1, 0)
@@ -13001,7 +12995,7 @@ Reports:
         | join kind=inner NonTrustedSignins on Upn
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity      = "High"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Sign-in Behaviour"
@@ -13162,7 +13156,7 @@ Reports:
         | join kind=inner NonTrustedSignins on Upn
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity    = "High"
         | extend RF_P_Privileged     = iff(IsPrivileged == true, 1, 0)
         | extend RF_P_Tier0          = iff(CriticalityTier == 0, 1, 0)
@@ -13921,7 +13915,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
@@ -14219,7 +14213,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium-High"
         
         | extend RF_P_Tier0           = iff(CriticalityTier == 0, 1, 0)
@@ -14394,7 +14388,7 @@ Reports:
         | join kind=inner InteractiveSignins on Upn
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity    = "Medium-High"
         | extend RF_P_Privileged     = iff(IsPrivileged == true, 1, 0)
         | extend RF_P_Tier0          = iff(CriticalityTier == 0, 1, 0)
@@ -14542,7 +14536,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         
         | extend RF_P_Tier01            = iff(CriticalityTier <= 1, 1, 0)
@@ -14691,7 +14685,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         
         | extend SecuritySeverity = "High"
         
@@ -14841,7 +14835,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
@@ -15258,7 +15252,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
@@ -15407,7 +15401,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium-High"
         
         | extend RF_P_Tier0  = iff(CriticalityTier == 0, 1, 0)
@@ -15552,7 +15546,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         
         | extend RF_P_Privileged    = iff(Tier <= 1, 1, 0)
@@ -15715,7 +15709,7 @@ Reports:
         | join kind=inner VulnerableDevices on $left.TargetNodeId == $right.DeviceNodeId
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity     = "Medium-High"
         | extend RF_P_Tier0           = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_Internet        = iff(IsInternetFacing == true, 1, 0)
@@ -15883,7 +15877,7 @@ Reports:
         | join kind=inner VulnerableDevices on $left.TargetNodeId == $right.DeviceNodeId
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity      = "Medium-High"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Privileged Access"
@@ -16034,7 +16028,7 @@ Reports:
         | join kind=inner InternetExposedDevices on $left.TargetNodeId == $right.DeviceNodeId
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity    = "High"
         | extend RF_P_Tier0          = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_HasCVEs        = iff(HasCVEs == true, 1, 0)
@@ -16366,7 +16360,7 @@ Reports:
         | join kind=inner ExploitableDevices on $left.TargetNodeId == $right.DeviceNodeId
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity     = "High"
         | extend RF_P_Tier0           = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_Verified        = iff(IsVerified == true, 1, 0)
@@ -16520,7 +16514,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
@@ -16688,7 +16682,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         
         | extend SecuritySeverity = "High"
         
@@ -16873,7 +16867,7 @@ Reports:
         | join kind=inner InternetExposedDevices on $left.TargetNodeId == $right.DeviceNodeId
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity      = "High"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Privileged Access"
@@ -17167,7 +17161,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
         | extend RF_P_Privileged = iff(IsPrivileged == true, 1, 0)
         | extend RF_P_StaleLogin = iff(LastSignInDays > 90 or LastSignInDays == -1, 1, 0)
@@ -17496,7 +17490,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Very High"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Sign-in Behaviour"
@@ -17633,7 +17627,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium-High"
         
         | extend RF_P_Tier0           = iff(CriticalityTier == 0, 1, 0)
@@ -17817,7 +17811,7 @@ Reports:
         | join kind=inner ExploitableDevices on $left.TargetNodeId == $right.DeviceNodeId
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity      = "High"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Privileged Access"
@@ -17957,7 +17951,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
@@ -18123,7 +18117,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         
         | extend RF_P_Tier01            = iff(CriticalityTier <= 1, 1, 0)
@@ -18293,7 +18287,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_AtRisk          = iff(tostring(column_ifexists("MDI_RiskState", "")) == "atRisk", 1, 0)
         | extend RF_P_Tier01          = iff(CriticalityTier <= 1, 1, 0)
@@ -18459,7 +18453,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_Tier0             = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NotVerified       = iff(PublisherVerified == false, 1, 0)
@@ -18797,7 +18791,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium-High"
         
         | extend RF_P_Tier0  = iff(CriticalityTier == 0, 1, 0)
@@ -18966,7 +18960,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         
         | extend RF_P_Tier0       = iff(CriticalityTier == 0, 1, 0)
@@ -19134,7 +19128,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_NoMFA           = iff(MfaIsRegistered == false, 1, 0)
         | extend RF_P_OldPassword     = iff(toint(column_ifexists("PasswordLastChangedDays", -1)) > 365, 1, 0)
@@ -19298,7 +19292,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         | extend RF_P_Tier0            = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA            = iff(MfaIsRegistered == false, 1, 0)
@@ -19462,7 +19456,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         | extend RF_P_NeverChanged = iff(toint(column_ifexists("PasswordLastChangedDays", -1)) == -1, 1, 0)
         | extend RF_P_VeryOld      = iff(toint(column_ifexists("PasswordLastChangedDays", -1)) > 730, 1, 0)
@@ -19802,7 +19796,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         | extend RF_P_AlreadyExpired = iff(HasExpired == true, 1, 0)
         | extend RF_P_ExpiresVerySoon = iff(ExpiryDays >= 0 and ExpiryDays <= 7, 1, 0)
@@ -19971,7 +19965,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend RF_P_NotVerified    = iff(PublisherVerified == false, 1, 0)
         | extend RF_P_NoOwner        = iff(IsOrphanSPN == true, 1, 0)
@@ -20140,7 +20134,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend RF_P_Privileged    = iff(Tier <= 1, 1, 0)
         | extend RF_P_HasSecret     = iff(HasExpiringCredentials == true, 1, 0)
@@ -20310,7 +20304,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         
         | extend RF_P_Privileged    = iff(Tier <= 1, 1, 0)
@@ -20828,7 +20822,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "High"
         
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
@@ -21001,7 +20995,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity      = "Medium-High"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Identity Lifecycle"
@@ -21136,7 +21130,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity      = "High"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Sign-in Behaviour"
@@ -21275,7 +21269,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(CSA_AssetTier, ADTier, Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Medium"
         | extend RF_P_Tier0         = iff(CriticalityTier == 0, 1, 0)
         | extend RF_P_NoMFA         = iff(MfaIsRegistered == false, 1, 0)
@@ -21442,7 +21436,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = "Low"
         | extend RF_P_NeverLoggedIn = iff(LastSignInDays == -1, 1, 0)
         | extend RF_P_VeryStale     = iff(LastSignInDays > 365 or (LastSignInDays == -1 and CreatedDays > 365), 1, 0)
@@ -21606,7 +21600,7 @@ Reports:
         | extend CriticalityTier = toint(coalesce(Tier, 2))
         | extend CriticalityTierLevel =
             case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1",
-                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 2, "Medium - tier 2",   CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity      = "Medium"
         | extend SecurityDomain        = "Identity"
         | extend Category              = "Admin Account Hygiene"
@@ -21723,7 +21717,7 @@ Reports:
             case(CriticalityTier == 0, "Critical - tier 0",
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
-                 CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity =
             case(IsHighRiskPort == 1 and CriticalityTier == 0, "Very High",
                  IsHighRiskPort == 1, "High",
@@ -21841,7 +21835,7 @@ Reports:
             case(CriticalityTier == 0, "Critical - tier 0",
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
-                 CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity =
             case(IsHighRiskPort == 1 and CriticalityTier == 0, "Very High",
                  IsHighRiskPort == 1, "High",
@@ -21941,7 +21935,7 @@ Reports:
             case(CriticalityTier == 0, "Critical - tier 0",
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
-                 CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = iff(CriticalityTier == 0, "Very High", "High")
         | extend SecurityDomain    = "PublicIP"
         | extend Category          = "External Exposure"
@@ -22052,7 +22046,7 @@ Reports:
             case(CriticalityTier == 0, "Critical - tier 0",
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
-                 CriticalityTier == 3, "Low - tier 3", "Unknown - unmapped")
+                 CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
         | extend SecuritySeverity = iff(CriticalityTier == 0, "Very High", "High")
         | extend SecurityDomain    = "PublicIP"
         | extend Category          = "External Exposure"
@@ -22147,7 +22141,7 @@ Reports:
           | where tobool(column_ifexists("IsCompromisedRecently", false)) == true
           | extend CriticalityTier = toint(coalesce(Tier, 99))
           | where CriticalityTier <= 1
-          | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", "Unknown - unmapped")
+          | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", "Low - tier 3")
           | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", "Medium")
           | extend SecurityDomain    = "Endpoint"
           | extend Category          = "Active Threats"
@@ -22258,7 +22252,7 @@ Reports:
           | where tobool(column_ifexists("IsCompromisedRecently", false)) == true
           | extend CriticalityTier = toint(coalesce(Tier, 99))
           | where CriticalityTier <= 1
-          | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", "Unknown - unmapped")
+          | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", "Low - tier 3")
           | extend SecuritySeverity = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", "Medium")
           | extend SecurityDomain    = "Endpoint"
           | extend Category          = "Active Threats"

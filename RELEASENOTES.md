@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.302
+## v2.2.303
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
 - release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
 - release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
 - release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
 - release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
 - release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
-- release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.303 — Add `RiskAnalysis_Queries_Dev.yaml` developer-only YAML tier; move broken Attack_Paths_Device_*_Azure into Dev with native graph-match shape
+
+### New: Dev YAML tier (developer-only, gitignored, not synced to customers)
+
+Engine now loads an optional `RiskAnalysis_Queries_Dev.yaml` between locked and custom:
+- `locked` (centrally maintained, ships to customers)
+- `dev` (developer-only experimental queries, gitignored, NEVER synced)
+- `custom` (per-customer overrides, wins last)
+
+Lets a developer move a problematic locked query into Dev for iteration without breaking customers. Dev is added to both `.gitignore` files (root + SecurityInsight/) so it cannot leak via the public-mirror publish workflow.
+
+Engine load:
+```
+[INFO] YAML merge: Locked Reports=N1/T1, Dev Reports=N2/T2, Custom Reports=N3/T3, Merged Reports=N/T
+[OK]   report settings loaded (locked + dev (developer-only, gitignored) + custom (customer override, wins last))
+```
+
+### Moved out of locked (broken under cartesian shape)
+
+`Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` and the Detailed variant moved from locked YAML into `RiskAnalysis_Queries_Dev.yaml`. Both also removed from the locked `RiskAnalysis_Detailed` / `RiskAnalysis_Summary` ReportTemplates so customer runs are clean (no dangling references). The Detailed body has been REWRITTEN around KQL `make-graph` + `graph-match` (the native graph-walk operators), eliminating the device cartesian explosion that 900s-timed-out bucket 40 in v2.2.295/296. Cmdb fields + Tier are still sourced from `SI_Azure_Profile_CL` via the engine's hybrid pre-fetch path (`_TargetCmdb` let-binding); per project rule `CriticalityTier ALWAYS sources from CL.Tier`.
+
+Dev YAML also ships a `RiskAnalysis_Detailed_test` template referencing both reports, so the developer can run just the experimental queries with `-ReportTemplate RiskAnalysis_Detailed_test`.
+
+### Why moved (not fixed in-place)
+
+Cartesian shape's bomb-device timeout was structural for the legacy query and unsolved by v2.2.295 (cred-label restriction) and v2.2.296 (priv-esc-vuln entry gate) — both over-filtered to 0. The `make-graph` rewrite is fundamentally different (graph traversal vs join chain) and needs operator validation against ASM portal output before promoting back to Locked. Staging in Dev keeps customer runs clean during the rewrite.
 
 ---
 

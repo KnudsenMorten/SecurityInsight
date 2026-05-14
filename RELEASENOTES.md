@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.285
+## v2.2.286
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.286 - Get-PlatformSecretLocal also soft-fails (parity with KeyVault) (2b40bfc5)
 - release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
 - release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
 - release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
@@ -33,13 +34,25 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
 - release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
 - release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
-- release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.286 — `Get-PlatformSecretLocal` also soft-fails (full "no missing value should halt" parity across providers)
+
+Operator: "no missing values should result in halt". v2.2.285 fixed the KeyVault provider; this release applies the same soft-fail pattern to the **Local DPAPI provider** (`Get-PlatformSecretLocal`) so behaviour is symmetric:
+
+- Missing store file → `Write-Warning` + return `$null` (was: throw)
+- Secret not present in store → `Write-Warning` + return `$null` (was: throw)
+
+`Get-PlatformSecret` dispatcher continues to throw on **config errors** (malformed Context, unknown provider, 'None' provider explicitly chosen) — those represent setup bugs the operator wants to know about immediately, not optional-secret omissions.
+
+After v2.2.286, the framework principle is: **a missing optional secret never halts a launcher's config load.** Customer code can still strict-check by testing `if (-not $value) { throw "MyApp: required secret X is missing" }` at the point of use, where the error message can be specific to what the secret is for.
 
 ---
 

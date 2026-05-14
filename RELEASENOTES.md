@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.304
+## v2.2.305
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
 - release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
 - release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
 - release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
 - release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
 - release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
-- release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.305 — Fix Pester `RaReportCount` over-counting templates as reports (publish-gate stuck after v2.2.304)
+
+v2.2.304 set README to 116 (correct YAML report count after v2.2.303 moved 2 reports to Dev). Pester gate still failed:
+```
+[-] README claims same total report count as YAML
+   -> Expected 118, because README (116) vs YAML (118) drift, but got 116.
+```
+
+Root cause: `$script:RaReportCount` (SI-PrePublish.Tests.ps1:49) is regex-derived as `[regex]::Matches(rawYaml, '(?m)^\s+- ReportName:').Count`. That counts `- ReportName:` entries in BOTH the `Reports[]` and `ReportTemplates[]` sections — each template uses the same `- ReportName: <template-name>` syntax. With 116 reports + 2 templates → false-positive 118. Has been masked for a long time because previously `reports + templates` happened to equal whatever number README claimed; once Dev moves shifted things, the over-count surfaced.
+
+Fix: scope the regex to the section BEFORE the `ReportTemplates:` line:
+```powershell
+$rawYaml = Get-Content -Raw -LiteralPath $script:RaYaml
+$reportsSection = ($rawYaml -split '(?m)^ReportTemplates:')[0]
+$script:RaReportCount = ([regex]::Matches($reportsSection, '(?m)^\s+- ReportName:')).Count
+```
+
+Now both tests use the actual `Reports[]` count (116). README + docs already at 116 (correct) → gate passes.
 
 ---
 

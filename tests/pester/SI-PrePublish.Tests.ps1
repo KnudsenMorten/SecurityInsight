@@ -46,7 +46,13 @@ BeforeAll {
     # Authoritative report count: count `- ReportName:` entries directly. ConvertFrom-Yaml
     # on Linux (GitHub Actions runner) sometimes undercounts vs the literal entry count.
     # Both should agree; if they don't, use the regex-derived total as truth.
-    $script:RaReportCount = ([regex]::Matches((Get-Content -Raw -LiteralPath $script:RaYaml), '(?m)^\s+- ReportName:')).Count
+    # v2.2.305 -- scope to the Reports section only. ReportTemplates[] entries also use
+    # `- ReportName:` syntax (each template names itself that way), so a flat count
+    # over the whole file overcounts by the template count -- e.g. 116 reports + 2
+    # templates = 118 false-positive total, breaking README/docs drift checks.
+    $rawYaml = Get-Content -Raw -LiteralPath $script:RaYaml
+    $reportsSection = ($rawYaml -split '(?m)^ReportTemplates:')[0]
+    $script:RaReportCount = ([regex]::Matches($reportsSection, '(?m)^\s+- ReportName:')).Count
 }
 
 # ============================================================================

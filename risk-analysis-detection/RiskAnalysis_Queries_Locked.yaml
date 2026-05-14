@@ -7659,6 +7659,13 @@
         EG provides path detection (VulnerableDevice -> Credential -> Identity -> AzureTarget) + scoring + tier;
         SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
         joined on the FINAL TARGET via AzureResourceId_Guid (= EG NodeId hex).
+      # v2.2.277 -- 4-hop EG path expansion (Device -> CVE -> Credential -> Identity ->
+      # AzureTarget) is the single heaviest report family in the catalog. Default
+      # BucketCount=2 is pathologically wrong here; observed at scale it took 5+
+      # escalation rounds (15min each + restart cost) to reach a working count.
+      # Start at 64 directly. Customer can override per-tenant via .custom.yaml.
+      # Engine sub-bucketing handles any remaining heavy buckets without restart.
+      BucketCount: 64
       SecurityDomain: Endpoint
       CategoryInputName: Category
       SubcategoryInputName: Subcategory
@@ -9010,6 +9017,12 @@
         prioritized by FINAL TARGET business impact. EG drives path detection (VulnerableDevice -> Credential -> Identity -> AzureTarget) +
         scoring + tier; SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
         joined on the FINAL TARGET via AzureResourceId_Guid (= EG NodeId hex).
+      # v2.2.277 -- per-row Detailed variant of the 4-hop EG path expansion. No
+      # `take 50000` row caps in this query (every row preserved), so it's even
+      # heavier than the Summary. Start at BucketCount=64 to avoid the multi-hour
+      # escalation ramp-up. Engine sub-bucketing handles any residual heavy
+      # buckets losslessly via hash%(T*K) splits. Customer can override.
+      BucketCount: 64
       SecurityDomain: Endpoint
       CategoryInputName: Category
       SubcategoryInputName: Subcategory

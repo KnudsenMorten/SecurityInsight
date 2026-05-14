@@ -2066,6 +2066,26 @@ function New-BucketFilterKql {
   }
 }
 
+function New-SubBucketFilterKql {
+  # v2.2.277 -- emits a KQL filter for sub-bucket j of K within parent bucket N
+  # at parent total T. Produces the same hash-modulo filter as New-BucketFilterKql
+  # but at modulus T*K with index N + j*T. Math: a row in parent bucket N
+  # satisfies hash%T == N, i.e. hash = T*q + N for some q. Then hash%(T*K) =
+  # N + T*(q % K), so the K possible values are {N, N+T, N+2T, ..., N+(K-1)T}.
+  # Picking sub-index j selects exactly 1/K of the parent-N rows. Lossless;
+  # K sub-buckets together = the original parent bucket.
+  param(
+    [int]$ParentBucketCount,
+    [int]$ParentBucketIndex,
+    [int]$SubBucketCount,
+    [int]$SubBucketIndex,
+    [string]$ReportName = ''
+  )
+  $newCount = $ParentBucketCount * $SubBucketCount
+  $newIndex = $ParentBucketIndex + ($SubBucketIndex * $ParentBucketCount)
+  return (New-BucketFilterKql -BucketCount $newCount -BucketIndex $newIndex -ReportName $ReportName)
+}
+
 # ----------------------------------------------------------------------------
 # Per-report exclude-list mechanism.
 #
@@ -6175,6 +6195,11 @@ while (-not $bucketRunSucceeded) {
   Write-Info ("query contains placeholder '{0}' and bucketing is enabled. Using {1} bucket(s)." -f $effectivePlaceholder,$bucketCountToUse)
 
   $needEscalation = $false
+  # v2.2.277 -- track buckets that timed out at 900s deterministically. Instead
+  # of throwing away ALL successful buckets and restarting at higher bucket
+  # count (the v2.2.272 escalation), record failed indices and sub-bucket only
+  # those after the main loop. Lossless; preserves successful buckets' rows.
+  $failedBucketIndices = New-Object System.Collections.Generic.List[int]
 
   for ($b = 0; $b -lt $bucketCountToUse; $b++) {
 
@@ -6261,20 +6286,24 @@ while (-not $bucketRunSucceeded) {
                   # Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure)
                   # that previously got stuck at cached BucketCount=2 forever.
                   if ($script:_LastGraphHuntingAllTimedOut) {
-                      if ($bucketCountToUse -lt $capBucket) {
-                          $lastBucketRunError = $errMsg
-                          Write-Warn2 ("bucket {0}/{1}: query timed out at 900s on every attempt -- bucket too large. Escalating bucket count and restarting this report. Error: {2}" -f `
-                            $bucketNo, $bucketCountToUse, $errMsg)
-                          $needEscalation     = $true
-                          $bucketAttemptDone  = $true
-                          $resp               = $null
-                      } else {
-                          Write-Err2 ("bucket {0}/{1}: query timed out at 900s on every attempt AND already at AutoBucketMax cap ({2}) -- deterministic Graph-side timeout, no further escalation possible. Skipping this bucket AND remaining buckets in this report. Error: {3}" -f `
-                            $bucketNo, $bucketCountToUse, $capBucket, $errMsg)
-                          $bucketAttemptDone                          = $true
-                          $resp                                       = $null
-                          $script:_AutoBucketSkipRemainingBuckets     = $true
-                      }
+                      # v2.2.277 -- ADAPTIVE SUB-BUCKETING. The v2.2.272 behavior
+                      # restarted the whole report at 4x bucket count when ANY
+                      # bucket timed out, throwing away all already-completed
+                      # buckets. Worse: at scale (e.g. Nordstern 100K-edge tenants)
+                      # the escalation never converges -- each level just shifts
+                      # WHICH single bucket happens to be the heavy one, and the
+                      # restart cost compounds (~30 min/level x many levels = days).
+                      # New strategy: record this bucket index, continue with the
+                      # next bucket, and after the main loop split JUST the failed
+                      # buckets into K=4 sub-buckets via hash%(T*K) filtering.
+                      # Sub-buckets that also time out get recursively split (depth
+                      # cap 4, controllable via $global:SI_AutoBucketSubDepthMax).
+                      # Lossless; preserves successful buckets' rows entirely.
+                      Write-Warn2 ("bucket {0}/{1}: 900s deterministic timeout -- queueing for sub-bucket pass after main loop completes (won't restart whole report). Error: {2}" -f `
+                        $bucketNo, $bucketCountToUse, $errMsg)
+                      [void]$failedBucketIndices.Add($b)
+                      $bucketAttemptDone = $true
+                      $resp              = $null
                   }
                   elseif ($bucketAttempt -ge $bucketTransientRetries) {
                       Write-Err2 ("bucket {0}/{1}: transient platform error after {2} retry attempt(s) -- skipping bucket and continuing. Error: {3}" -f `
@@ -6375,7 +6404,75 @@ while (-not $bucketRunSucceeded) {
       continue
   }
 
-  # Success: all buckets executed without deterministic overflow/timeout
+  # v2.2.277 -- ADAPTIVE SUB-BUCKETING PASS. After the main bucket loop has
+  # attempted every bucket index, any indices that hit the deterministic 900s
+  # timeout (TaskCanceled or 502) are queued in $failedBucketIndices. Split
+  # each into K=4 sub-buckets via hash%(T*K) filter (= 1/K of the parent
+  # bucket's rows per sub-query, lossless). Sub-buckets that ALSO time out
+  # get recursively split up to depth $subDepthMax (default 4 = up to 256x
+  # finer than the original BucketCount, so a 64-bucket start can shrink a
+  # heavy slice to 1/16384 of total). This preserves the successful buckets'
+  # results entirely; we never re-run them.
+  if ($failedBucketIndices.Count -gt 0) {
+      $subDepthMax = if ($null -ne $global:SI_AutoBucketSubDepthMax) { [int]$global:SI_AutoBucketSubDepthMax } else { 4 }
+      $subFanOut   = if ($null -ne $global:SI_AutoBucketSubFanOut)   { [int]$global:SI_AutoBucketSubFanOut }   else { 4 }
+      Write-Warn2 ("AutoBucket sub-bucketing pass: {0} bucket(s) timed out at BucketCount={1}; splitting each into {2} sub-buckets per pass (max depth {3}). Successful buckets retained ({4} rows so far)." -f `
+        $failedBucketIndices.Count, $bucketCountToUse, $subFanOut, $subDepthMax, $ResultAll.Count)
+
+      # BFS queue: each item = @{ N = parent-index; T = parent-total; D = current-depth }
+      $subQueue = New-Object System.Collections.Generic.Queue[object]
+      foreach ($idx in $failedBucketIndices) {
+          $subQueue.Enqueue(@{ N = [int]$idx; T = [int]$bucketCountToUse; D = 1 })
+      }
+
+      while ($subQueue.Count -gt 0) {
+          $item    = $subQueue.Dequeue()
+          $pN      = [int]$item.N
+          $pT      = [int]$item.T
+          $depth   = [int]$item.D
+          $newT    = $pT * $subFanOut
+
+          for ($j = 0; $j -lt $subFanOut; $j++) {
+              $subN       = $pN + ($j * $pT)
+              $subFilter  = New-SubBucketFilterKql -ParentBucketCount $pT -ParentBucketIndex $pN -SubBucketCount $subFanOut -SubBucketIndex $j -ReportName $ReportName
+              $subQuery   = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $subFilter
+
+              Write-Info ("[sub-bucket] depth={0} parent={1}/{2}: running sub {3}/{4} (effective index {5}/{6})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subN, $newT)
+              $script:_LastGraphHuntingAllTimedOut = $true   # reset; Invoke-GraphHuntingQuery flips it false on non-timeout failure or success
+              try {
+                  $subResp = Invoke-GraphHuntingQuery -Query $subQuery -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes -MaxRetries $global:GraphQueryMaxRetries
+
+                  $subRows = @()
+                  if ($null -ne $subResp -and $subResp -is [pscustomobject] -and $subResp.PSObject.Properties['_SIDirectRows']) {
+                      $subRows = @($subResp._SIDirectRows)
+                  } elseif ($null -ne $subResp -and $null -ne $subResp.Results -and $null -ne $subResp.Results.AdditionalProperties) {
+                      try {
+                          $subRows = @(ConvertTo-PSObjectDeep $subResp.Results.AdditionalProperties -StripOData -CastPrimitiveArrays)
+                      } catch {
+                          Write-Err2 ("[sub-bucket] result conversion failed for sub {0}/{1} (parent={2}/{3} depth={4}): {5}" -f ($j + 1), $subFanOut, $pN, $pT, $depth, $_.Exception.Message)
+                      }
+                  }
+                  Write-Info ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4}: {5} rows" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subRows.Count)
+                  foreach ($row in $subRows) { $ResultAll += ,$row }
+              } catch {
+                  $subErr = $_.Exception.Message
+                  if ($script:_LastGraphHuntingAllTimedOut -and $depth -lt $subDepthMax) {
+                      Write-Warn2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} timed out -- queueing for further split (depth {5})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, ($depth + 1))
+                      $subQueue.Enqueue(@{ N = $subN; T = $newT; D = ($depth + 1) })
+                  } elseif ($script:_LastGraphHuntingAllTimedOut) {
+                      Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} timed out at MAX DEPTH {5} -- giving up on this slice (rows in this sub-bucket NOT included). Error: {6}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $depth, $subErr)
+                  } else {
+                      Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} failed (non-timeout): {5}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subErr)
+                  }
+              }
+          }
+      }
+      Write-Info ("[sub-bucket] pass complete; total rows after sub-bucketing: {0}" -f $ResultAll.Count)
+  }
+
+  # Success: all buckets executed (sub-bucketing pass handled any deterministic
+  # timeouts). Even if some sub-bucket slices were given up at max depth, the
+  # report is considered "as complete as possible" -- no point restarting.
   $bucketRunSucceeded = $true
 }
 

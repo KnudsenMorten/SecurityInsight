@@ -344,17 +344,13 @@ Reports:
                   iff(RF_P_ExploitSignals  == 1, dynamic(["ExploitSignals"]),     dynamic([])),
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]),   dynamic([])),
                   iff(RF_P_LegacyEoS       == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))), ";")
-              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
-              // through to the case() default below, surfacing as "Unknown - unmapped"
-              // instead of silently downgrading to Low (Tier 3). Same data-quality-
-              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
               | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
                   CriticalityTier == 2, "Medium - tier 2",
                   CriticalityTier == 3, "Low - tier 3",
-                  "Unknown - unmapped")
+                  "Low - tier 3")
               | extend SecurityDomain    = "Endpoint"
               | extend ConfigurationName = "Update vulnerable software"
               | extend ConfigurationId   = "CVE"
@@ -739,10 +735,6 @@ Reports:
                   iff(RF_P_ExploitSignals  == 1, dynamic(["ExploitSignals"]),     dynamic([])),
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]),   dynamic([])),
                   iff(RF_P_LegacyEoS       == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))), ";")
-              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
-              // through to the case() default below, surfacing as "Unknown - unmapped"
-              // instead of silently downgrading to Low (Tier 3). Same data-quality-
-              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
               | extend CriticalityTier = Tier_From_SI_CL
               // v2.2.218 -- asset tier filter (Detailed only). Drops endpoint-level
               // CVE rows whose owning device's CL-computed Tier is outside the filter
@@ -765,7 +757,7 @@ Reports:
                   CriticalityTier == 1, "High - tier 1",
                   CriticalityTier == 2, "Medium - tier 2",
                   CriticalityTier == 3, "Low - tier 3",
-                  "Unknown - unmapped")
+                  "Low - tier 3")
               | extend SecurityDomain    = "Endpoint"
               | extend ConfigurationName = "Update vulnerable software"
               // ConfigurationId carries the per-row CVE id so (AssetName, ConfigurationId) is unique per row.
@@ -1065,17 +1057,13 @@ Reports:
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
-              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
-              // through to the case() default below, surfacing as "Unknown - unmapped"
-              // instead of silently downgrading to Low (Tier 3). Same data-quality-
-              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
               | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
                   CriticalityTier == 2, "Medium - tier 2",
                   CriticalityTier == 3, "Low - tier 3",
-                  "Unknown - unmapped")
+                  "Low - tier 3")
               | extend SecurityDomain = "Endpoint"
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RF_P_LegacyEoS       = iff(UnsupportedOSDetected == true, 1, 0)
@@ -1397,17 +1385,13 @@ Reports:
               | extend RiskScore_Weight_Factor   = 100   // basis-100, 100 = 1.0x = no lift
               | extend RiskFactor_Weight         = 100
               //__WEIGHTED_FACTORS_END__
-              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
-              // through to the case() default below, surfacing as "Unknown - unmapped"
-              // instead of silently downgrading to Low (Tier 3). Same data-quality-
-              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
               | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
                   CriticalityTier == 2, "Medium - tier 2",
                   CriticalityTier == 3, "Low - tier 3",
-                  "Unknown - unmapped")
+                  "Low - tier 3")
               | extend SecurityDomain = "Endpoint"
               | extend RF_P_InternetExposed = iff(EG_IsCustomerFacing == true, 1, 0)
               | extend RF_P_LegacyEoS       = iff(UnsupportedOSDetected == true, 1, 0)
@@ -1664,17 +1648,13 @@ Reports:
                   tolower(Severity) == "medium",   7.0,
                   tolower(Severity) == "low",      3.0,
                   0.0)
-              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
-              // through to the case() default below, surfacing as "Unknown - unmapped"
-              // instead of silently downgrading to Low (Tier 3). Same data-quality-
-              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
               | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
                   CriticalityTier == 2, "Medium - tier 2",
                   CriticalityTier == 3, "Low - tier 3",
-                  "Unknown - unmapped")
+                  "Low - tier 3")
               | extend SecurityDomain    = "Azure"
               | extend Category          = tostring(FindingLabel)
               | extend ConfigurationName = tostring(FindingName)
@@ -1926,17 +1906,13 @@ Reports:
                   tolower(Severity) == "medium",   7.0,
                   tolower(Severity) == "low",      3.0,
                   0.0)
-              // v2.2.217 -- dropped the , 3 fallback so unmapped devices flow null
-              // through to the case() default below, surfacing as "Unknown - unmapped"
-              // instead of silently downgrading to Low (Tier 3). Same data-quality-
-              // gap pattern as the v2.2.216 SecuritySeverity Low -> Unknown fix.
               | extend CriticalityTier = Tier_From_SI_CL
               | extend CriticalityTierLevel = case(
                   CriticalityTier == 0, "Critical - tier 0",
                   CriticalityTier == 1, "High - tier 1",
                   CriticalityTier == 2, "Medium - tier 2",
                   CriticalityTier == 3, "Low - tier 3",
-                  "Unknown - unmapped")
+                  "Low - tier 3")
               | extend SecurityDomain    = "Azure"
               | extend Category          = tostring(FindingLabel)
               | extend ConfigurationName = tostring(FindingName)

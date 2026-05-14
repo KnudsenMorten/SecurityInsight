@@ -9158,15 +9158,23 @@ Reports:
             //__STALE_DEVICE_FILTER_BEGIN__
             | where 1 == 1
             //__STALE_DEVICE_FILTER_END__
-            //__BUCKET_FILTER_BEGIN__
-            | where 1 == 1
-            //__BUCKET_FILTER_END__
             | project
                 CVENodeId       = SourceNodeId,
                 CVENodeName     = SourceNodeName,
                 DeviceNodeId    = TargetNodeId,
                 DeviceNodeName  = TargetNodeName,
                 DeviceNodeLabel = TargetNodeLabel
+            // v2.2.293 -- bucket-filter MOVED here (after the project) so the
+            // composite key resolver sees the projected DeviceNodeId column FIRST
+            // (it's earlier in the coalesce chain than SourceNodeId/TargetNodeId).
+            // Result: bucketing is on Device NodeId, not CVE NodeId. Each device
+            // lands in EXACTLY one bucket instead of being recomputed across many
+            // buckets (one per CVE that affects it). Heavy/super-connected devices
+            // get isolated to one bucket then sub-bucketed efficiently, instead of
+            // contaminating every bucket they appear in.
+            //__BUCKET_FILTER_BEGIN__
+            | where 1 == 1
+            //__BUCKET_FILTER_END__
         );
 
         // Step 2  Credential edges from bucketed devices only

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.286
+## v2.2.287
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.287 - stale-device filter defaults to strict (was off, contradicted v2.2.282 intent) (3095b0bb)
 - release: SecurityInsight v2.2.286 - Get-PlatformSecretLocal also soft-fails (parity with KeyVault) (2b40bfc5)
 - release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
 - release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
@@ -33,13 +34,39 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
 - release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
 - release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
-- release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.287 — Stale-device filter default flip: `'strict'` (active) instead of `'off'`
+
+Self-caught bug. v2.2.282/283 shipped with the stale-device filter resolver defaulting to `'off'` when `$global:SI_RA_StaleDeviceFilter` was unset, contradicting the design intent ("filter must be active by default; opt out only if needed"). Operator confirmed via launcher log on v2.2.283 that no `[INFO] [stale-device] ...` line was emitted on the heavy report.
+
+### Fix
+
+`Resolve-StaleDeviceFilterBlock` now initialises `$mode = 'strict'` (was `'off'`) before consulting `$global:SI_RA_StaleDeviceFilter`. The global still wins when explicitly set to any of `'strict'|'lenient'|'off'`.
+
+### What changes in operator behaviour
+
+- **Customers who haven't set `$global:SI_RA_StaleDeviceFilter`** (the common case): every Attack_Paths and Identity_Admin_LogonTo report now logs `[INFO] [stale-device] <ReportName>: applied MaxAgeDays=30 Mode=strict` and the EG ghost devices are dropped from the cartesian.
+- **Customers who set it explicitly to `'lenient'` or `'off'`**: behaviour unchanged.
+
+### Verifying the filter is firing
+
+Look for the `[INFO] [stale-device]` line above the `[INFO] AutoBucket ...` line per Attack_Paths report. If present, the filter is active. If absent, the placeholder block wasn't found in the YAML — confirm the report is one of the 20 stale-filtered names (12 Attack_Paths + 8 Identity_Admin_LogonTo from v2.2.282/283).
+
+### Opt out
+
+```powershell
+$global:SI_RA_StaleDeviceFilter = 'off'
+```
+
+in `SecurityInsight.custom.ps1`. Or `'lenient'` to keep devices with null `lastSeen` (treat as live, drop only known-old).
 
 ---
 

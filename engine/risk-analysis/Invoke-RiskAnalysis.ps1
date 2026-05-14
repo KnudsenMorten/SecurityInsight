@@ -2544,11 +2544,16 @@ function Resolve-StaleDeviceFilterBlock {
     $bodyMatch = [regex]::Match($Query, $blockRx, [System.Text.RegularExpressions.RegexOptions]::Singleline)
     if (-not $bodyMatch.Success) { return $Query }
 
-    # Mode: 'off' (default) | 'lenient' | 'strict'. 'off' means no-op (skip).
-    $mode = 'off'
+    # Mode: 'strict' (DEFAULT, active) | 'lenient' | 'off'. v2.2.287 -- default
+    # was 'off' in v2.2.282/283, contradicting the design intent ("filter must
+    # be active by default; opt out only if needed"). Now defaults to 'strict':
+    # drops EG device nodes with stale OR null lastSeen so the cartesian shrinks
+    # automatically without operator action. Opt-out: set
+    # $global:SI_RA_StaleDeviceFilter = 'off' in SecurityInsight.custom.ps1.
+    $mode = 'strict'
     if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RA_StaleDeviceFilter)) {
         $modeRaw = ([string]$global:SI_RA_StaleDeviceFilter).Trim().ToLowerInvariant()
-        if ($modeRaw -in @('lenient','strict')) { $mode = $modeRaw }
+        if ($modeRaw -in @('lenient','strict','off')) { $mode = $modeRaw }
     }
     if ($mode -eq 'off') {
         # Off -- leave no-op block. Don't log per-report; would spam.

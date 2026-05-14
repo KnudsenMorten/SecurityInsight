@@ -45,38 +45,78 @@ function Invoke-SIHuntingQuery {
             Write-Warning 'Invoke-SIHuntingQuery: LogAnalytics route needs $global:SI_WorkspaceResourceId or -WorkspaceResourceId.'
             return @()
         }
-        try {
-            # Get-AzOperationalInsightsWorkspace -ResourceId is NOT
-            # a valid parameter on PS 5.1. Parse the ARM ID + use -ResourceGroupName -Name.
-            if ($targetWs -notmatch '^/subscriptions/(?<sub>[^/]+)/resourceGroups/(?<rg>[^/]+)/providers/Microsoft\.OperationalInsights/workspaces/(?<name>[^/]+)$') {
-                throw "Workspace ResourceId malformed: $targetWs"
-            }
-            $sub = $matches.sub; $rg = $matches.rg; $name = $matches.name
-            Write-Verbose ("Invoke-SIHuntingQuery (LA): targeting {0}" -f $targetWs)
-            # restore the caller's Az context after the query so a
-            # cross-sub workspace lookup doesn't silently rebind the rest of the
-            # engine run to the workspace's subscription.
-            $prevCtx = Get-AzContext
-            $ctxChanged = $false
-            if (-not $prevCtx -or $prevCtx.Subscription.Id -ne $sub) {
-                Set-AzContext -SubscriptionId $sub -WarningAction SilentlyContinue | Out-Null
-                $ctxChanged = $true
-            }
-            try {
-                $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $rg -Name $name -ErrorAction Stop
-                $resp = Invoke-AzOperationalInsightsQuery -WorkspaceId $ws.CustomerId.Guid -Query $Query -ErrorAction Stop
-                return @($resp.Results)
-            } finally {
-                if ($ctxChanged -and $prevCtx) {
-                    Set-AzContext -Context $prevCtx -WarningAction SilentlyContinue | Out-Null
-                }
-            }
-        } catch {
-            $msg = $_.Exception.Message
-            if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-            Write-Warning ('Invoke-SIHuntingQuery (LA): {0}' -f $msg)
+        if ($targetWs -notmatch '^/subscriptions/(?<sub>[^/]+)/resourceGroups/(?<rg>[^/]+)/providers/Microsoft\.OperationalInsights/workspaces/(?<name>[^/]+)$') {
+            Write-Warning ("Invoke-SIHuntingQuery (LA): Workspace ResourceId malformed: {0}" -f $targetWs)
             return @()
         }
+        $sub = $matches.sub; $rg = $matches.rg; $name = $matches.name
+        Write-Verbose ("Invoke-SIHuntingQuery (LA): targeting {0}" -f $targetWs)
+
+        # v2.2.289 -- retry loop. Transient LA backend errors (BadRequest from
+        # query-time race conditions, throttling, schema-state hiccups) used to
+        # drop the row from the profile-build pipeline. Retry up to 3 times
+        # with exponential backoff (1s, 3s, 7s) before giving up. Hard schema
+        # errors will still fail consistently across all attempts -- they get
+        # logged with the response body and query preview, same as before.
+        $maxRetries = if ($null -ne $global:SI_LAQueryMaxRetries) {
+            [int]$global:SI_LAQueryMaxRetries
+        } else { 3 }
+        if ($maxRetries -lt 1) { $maxRetries = 1 }
+
+        $attempt = 0
+        $lastMsg = $null
+        while ($attempt -lt $maxRetries) {
+            $attempt++
+            try {
+                $prevCtx = Get-AzContext
+                $ctxChanged = $false
+                if (-not $prevCtx -or $prevCtx.Subscription.Id -ne $sub) {
+                    Set-AzContext -SubscriptionId $sub -WarningAction SilentlyContinue | Out-Null
+                    $ctxChanged = $true
+                }
+                try {
+                    $ws = Get-AzOperationalInsightsWorkspace -ResourceGroupName $rg -Name $name -ErrorAction Stop
+                    $resp = Invoke-AzOperationalInsightsQuery -WorkspaceId $ws.CustomerId.Guid -Query $Query -ErrorAction Stop
+                    if ($attempt -gt 1) {
+                        Write-Verbose ("Invoke-SIHuntingQuery (LA): succeeded on attempt {0}/{1}" -f $attempt, $maxRetries)
+                    }
+                    return @($resp.Results)
+                } finally {
+                    if ($ctxChanged -and $prevCtx) {
+                        Set-AzContext -Context $prevCtx -WarningAction SilentlyContinue | Out-Null
+                    }
+                }
+            } catch {
+                $msg = $_.Exception.Message
+                if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                    $msg = $_.ErrorDetails.Message
+                } elseif ($_.Exception.Response) {
+                    $stream = $null; $reader = $null
+                    try {
+                        $stream = $_.Exception.Response.GetResponseStream()
+                        $reader = New-Object System.IO.StreamReader($stream)
+                        $body = $reader.ReadToEnd()
+                        if ($body) { $msg = ('{0} | body: {1}' -f $msg, $body) }
+                    } catch {
+                    } finally {
+                        if ($reader) { try { $reader.Dispose() } catch {} }
+                        if ($stream) { try { $stream.Dispose() } catch {} }
+                    }
+                }
+                $lastMsg = $msg
+                if ($attempt -lt $maxRetries) {
+                    $delay = @(1, 3, 7)[[Math]::Min($attempt - 1, 2)]
+                    Write-Warning ("Invoke-SIHuntingQuery (LA) attempt {0}/{1} failed: {2} -- retrying in {3}s" -f $attempt, $maxRetries, $msg, $delay)
+                    Start-Sleep -Seconds $delay
+                }
+            }
+        }
+
+        # All retries exhausted -- log final message + query preview
+        Write-Warning ("Invoke-SIHuntingQuery (LA): {0} consecutive attempts failed. Last error: {1}" -f $maxRetries, $lastMsg)
+        $qPreview = if ($Query.Length -gt 500) { $Query.Substring(0, 500) + '... [truncated]' } else { $Query }
+        Write-Warning ('Invoke-SIHuntingQuery (LA): failing query (first 500 chars): {0}' -f $qPreview)
+        return @()
     }
 
     # DefenderGraph (default)

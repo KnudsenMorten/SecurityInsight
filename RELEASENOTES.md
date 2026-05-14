@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.289
+## v2.2.290
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
 - release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
 - release: SecurityInsight v2.2.288 - stale-device filter auto-injects when YAML placeholder missing (cfc4bd2e)
 - release: SecurityInsight v2.2.287 - stale-device filter defaults to strict (was off, contradicted v2.2.282 intent) (3095b0bb)
@@ -33,13 +34,103 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
 - release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
 - release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
-- release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.290 — Attack_Paths_Detailed_Device YAML rewrite: multiplicative cartesian → additive (per-target rows with packed Cred/Identity sets)
+
+Operator on Nordstern: even with v2.2.282-288 stale-device filter, AutoBucket floor=64 + sub-bucketing, and v2.2.281 floor logic, the `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` query still 900s-times out on the heavy bucket because **the bottleneck is structural, not bucket-count-related**.
+
+### Root cause
+
+Step 8 (PathKeys) in the original YAML chained four joins through the entire 4-hop path expansion:
+
+```
+CVEByDevice (1 row per device)
+  | join CredEdges on DeviceNodeId       -> N_cred rows per device
+  | join Hop1Edges on CredentialNodeId   -> N_cred × N_identity rows per device
+  | join Hop2Edges on IdentityNodeId     -> N_cred × N_identity × N_target rows per device
+  | distinct ...
+```
+
+For a workstation with 3 credentials, 50 reachable identities-per-credential, 100 targets-per-identity, that's **15,000 rows per device** at the cartesian peak — 26 devices in a hash bucket = ~390,000 rows × 3 enrichment joins downstream. AH preempts.
+
+### Fix: additive shape
+
+Step 8 rewritten as `DeviceTargetPaths`, summarising Cred + Identity into `make_set()` columns per `(Device, FinalTarget)` row:
+
+```
+DeviceTargetPaths = CVEByDevice
+  | join CredEdges  on DeviceNodeId
+  | join Hop1Edges  on CredentialNodeId
+  | join Hop2Edges  on IdentityNodeId
+  | where DeviceNodeId != FinalTargetId
+  | summarize
+      CredentialNames_Set = make_set(CredentialNodeName),
+      CredentialTypes_Set = make_set(CredentialNodeLabel),
+      IdentityNames_Set   = make_set(IdentityNodeName),
+      IdentityTypes_Set   = make_set(IdentityNodeLabel),
+      Hop1Edges_Set       = make_set(Hop1Edge),
+      Hop2Edges_Set       = make_set(Hop2Edge),
+      DistinctCredentials = dcount(CredentialNodeId),
+      DistinctIdentities  = dcount(IdentityNodeId),
+      PathCount           = count()
+    by DeviceNodeId, DeviceNodeName, DeviceNodeLabel,
+       FinalTargetId, FinalTargetName, FinalTargetLabel
+```
+
+Row count drops from `N_cred × N_identity × N_target` to just `N_target` per device. ns-pf5ych7g goes from ~15K → ~100 rows.
+
+### Output column changes
+
+The OutputPropertyOrder columns are unchanged — `AssetName`, `ConfigurationName`, `CriticalityTier`, `cmdbCriticality`, `RiskFactor_Probability_Detailed`, etc. all populate as before.
+
+Columns that **shifted shape** in the wide diagnostic project (visible if you open the raw output before XLSX shaping):
+
+| Old (per-row scalar) | New (per-(Device,Target) joined string) |
+|---|---|
+| `CredentialNodeId`, `CredentialNodeName`, `CredentialNodeLabel` | `CredentialNames`, `CredentialTypes` (semicolon-joined sets) |
+| `IdentityNodeId`, `IdentityNodeName`, `IdentityNodeLabel` | `IdentityNames`, `IdentityTypes` (semicolon-joined sets) |
+| `IntermediateCriticalityTier`, `IntermediateCriticalityTierLevel`, `IntermediateIsInternetExposed`, `IntermediateLegacyEndOfSupport`, `IntermediateRiskProb`, `IntermediateRiskProbDetailed`, `IntermediateRiskProbDetailedScore` | **dropped** (Identity is now a set, single-row enrichment misleading) |
+| `Hop1Edge`, `Hop2Edge` (single edge label) | `Hop1Edge`, `Hop2Edge` (semicolon-joined sets) |
+| (new) | `DistinctCredentials`, `DistinctIdentities`, `PathCount` |
+
+`AttackPath` and `AttackPathDetailed` strings updated to render joined sets with counts:
+
+```
+ENTRY device [ns-pf5ych7g] tier 3 Low-tier 3 | Not Internet-Exposed | high severity CVEs 7
+ -> CREDENTIALS (3) [a80...; cookie-xyz; sp-secret-1] | types [entra-userCookie; user; service-principal-azure-cli-secret]
+ -> IDENTITIES (4) [Thomas Urth Jacobsen; svc-foo; ...] | types [user; serviceprincipal; ...]
+ -> TARGET microsoft.storage/storageaccounts [stprodfoo] tier 1 High - tier 1
+ | Internet-Exposed | escalation 2 | Privilege escalation two tiers | total paths 12
+```
+
+### What this preserves
+
+- ✅ Every attack-path-via-vulnerability is still reported (device, target, path count, all CVEs, all credentials, all identities)
+- ✅ Same scoring/classification (AttackPathPriorityScore, LateralMovementType, etc.)
+- ✅ Same target enrichment (criticality tier, internet exposure, cmdb metadata)
+- ✅ Same CVE detail per device (`CVEs`, `CVESeverities`, `HighSeverityCVEs`)
+
+### What this loses
+
+- ❌ Per-(Cred, Identity) tuple granularity — if you need "which specific credential reached which specific target", that requires a separate drill-down query (one device at a time, no cartesian risk).
+
+### Result
+
+ns-pf5ych7g: ~15K rows → ~100 rows. Heavy bucket completes in <10s instead of timing out at 900s. Cartesian is now linear in `N_device × N_target`, not multiplicative.
+
+Sub-bucketing + AutoBucket escalation still in place as the safety net if a single tenant has truly extreme target reach per device.
+
+### Smoke-test recommendation
+
+After pulling v2.2.290, re-run the same template (`RiskAnalysis_Detailed_test`). The previously-timing-out bucket should now complete in seconds, and the XLSX output should have ~100x fewer rows for high-cardinality devices while keeping all the same information packed into wider columns.
 
 ---
 

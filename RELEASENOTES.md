@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.287
+## v2.2.288
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.288 - stale-device filter auto-injects when YAML placeholder missing (cfc4bd2e)
 - release: SecurityInsight v2.2.287 - stale-device filter defaults to strict (was off, contradicted v2.2.282 intent) (3095b0bb)
 - release: SecurityInsight v2.2.286 - Get-PlatformSecretLocal also soft-fails (parity with KeyVault) (2b40bfc5)
 - release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
 - release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
 - release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
-- release: SecurityInsight v2.2.258 - workaround AzLogDcrIngestPS v1.6.3 cert-auth gate bug (1ae6b559)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.288 — Stale-device filter auto-injects when customer YAML lacks the placeholder
+
+Operator on v2.2.287 launcher log: "i dont see the filter". Even with the v2.2.287 default flip to `'strict'`, the `[INFO] [stale-device] ...` line still didn't appear on Nordstern's run.
+
+### Root cause
+
+`RiskAnalysis_Queries_Custom.yaml` carries customer overrides of report bodies by name. When merged with the locked YAML "custom wins on name conflicts" — so for any report Nordstern overrode (Summary + Detailed of `Attack_Paths_*_Device_*_Azure`), the customer's body shipped without the new `__STALE_DEVICE_FILTER__` placeholder I added in v2.2.282 to the locked YAML. `Resolve-StaleDeviceFilterBlock` looked for the placeholder, didn't find it, and bailed early without applying the filter.
+
+### Fix
+
+`Resolve-StaleDeviceFilterBlock` now has two execution paths:
+
+1. **Explicit placeholder substitution** (unchanged) — when `__STALE_DEVICE_FILTER_BEGIN__ ... __STALE_DEVICE_FILTER_END__` is present in the report body. Logs `applied`.
+2. **Auto-injection** (v2.2.288) — when no placeholder is found BUT the report body contains `__BUCKET_FILTER_BEGIN__` AND references `ExposureGraphNodes|ExposureGraphEdges` AND mentions device/computer-account/VM labels. Engine inserts the filter directly above the bucket-filter line, matching the indent of the bucket-filter line so it slots in cleanly. Logs `auto-injected (no placeholder in YAML)`.
+
+This catches both shapes:
+- Locked YAML with the placeholder → Path 1
+- Customer custom YAML override without the placeholder → Path 2
+
+### Verifying
+
+After pulling v2.2.288, expect to see one of these per Attack_Paths / Identity_Admin_LogonTo report:
+
+```
+[INFO] [stale-device] <ReportName>: applied MaxAgeDays=30 Mode=strict
+```
+
+or
+
+```
+[INFO] [stale-device] <ReportName>: auto-injected (no placeholder in YAML) MaxAgeDays=30 Mode=strict
+```
+
+The `auto-injected` variant is normal when your custom YAML overrides the report body without the placeholder — no action needed.
+
+### Cache invalidation note
+
+Auto-injecting modifies the query body which changes the AutoBucket stable-hash key, invalidating the cached optimal bucket count for the affected reports. First run after v2.2.288 will re-probe (starting at the YAML BucketCount floor per v2.2.281), then cache the new value. Subsequent runs are cache hits as before.
 
 ---
 

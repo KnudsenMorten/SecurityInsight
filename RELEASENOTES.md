@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.283
+## v2.2.284
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
 - release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
 - release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
 - release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.257 - copy-pastable RBAC remediation in probe output (00b89968)
 - release: SecurityInsight v2.2.256 - active auth + RBAC probe before CheckCreateUpdate (46675b69)
 - release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
-- release: SecurityInsight v2.2.254 - wizard DCR names aligned with engine -profile convention (6c3abca9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.284 — `$global:SI_UseStorageOAuth = $true` is the default in shared-defaults (fresh installs no longer halt on missing `SI-StorageKey`)
+
+Operator: "after running initialize-formvm and try to run the launcher for internal it fails. reason: the parm `$global:SI_UseStorageOAuth = $true` is missing from custom file. make that parm default, so launchers don't halt when si_storagekey doesn't exist".
+
+### Root cause
+
+Layer 2 (`SecurityInsight.shared-defaults.ps1`) didn't set `$global:SI_UseStorageOAuth`, and the per-launcher resolver defaulted to `$false` when neither CLI flag nor global was present:
+
+```powershell
+$effectiveUseStorageOAuth = $false
+if ($cliBound.ContainsKey('UseStorageOAuth')) {
+    $effectiveUseStorageOAuth = [bool]$UseStorageOAuth
+} elseif ($global:SI_UseStorageOAuth) {
+    $effectiveUseStorageOAuth = [bool]$global:SI_UseStorageOAuth
+}
+```
+
+A fresh customer install (`Initialize-PlatformVm.ps1` -> `New-SISolutionConfig.ps1`) generates a `SecurityInsight.custom.ps1` that doesn't include the `$global:SI_UseStorageOAuth = $true` line — there was no reason to template it because OAuth-by-default was the documented policy. But without it, the launcher's local default kicked in (`$false`), the engine tried to fetch `SI_StorageKey` from KV, and the missing secret halted Layer 3.
+
+### Fix
+
+`SecurityInsight.shared-defaults.ps1` (Layer 2 — loads BEFORE customer custom Layer 3) now sets:
+
+```powershell
+$global:SI_UseStorageOAuth     = $true
+```
+
+Customer can still opt out by setting `$global:SI_UseStorageOAuth = $false` in their `SecurityInsight.custom.ps1` if they want key-auth on staging storage (requires `SI-StorageKey` secret in KV).
+
+### Operator action
+
+Pull v2.2.284, re-run the failing internal launcher. No customer-config changes needed.
 
 ---
 

@@ -47,6 +47,18 @@ $global:DcrResourceGroup       = 'rg-dcr-securityinsight'
 # --- Region (used when the engine has to create any missing infra) ---
 $global:Location               = 'westeurope'
 
+# --- Storage authentication mode (default = OAuth, NOT key) ---
+# v2.2.284 -- pre-OAuth-default behaviour was: missing $global:SI_UseStorageOAuth
+# fell through to $false, which then required SI_StorageKey to be present in
+# the customer custom file. Fresh installs from Initialize-PlatformVm.ps1 don't
+# set either, so the launcher halted at the first SI_StorageKey lookup.
+# Defaulting to $true here means OAuth is the canonical staging-storage auth
+# path -- the SPN's "Storage Blob Data Contributor" role on the staging
+# account is sufficient and SI_StorageKey is never read or persisted.
+# Customer can still opt out by setting $global:SI_UseStorageOAuth = $false
+# in SecurityInsight.custom.ps1 (Layer 3, loads after this file).
+$global:SI_UseStorageOAuth     = $true
+
 # --- Subscription ---
 # INTERNAL (AF) mode: the platform-defaults.ps1 layer sets
 # $global:MainLogAnalyticsWorkspaceSubId; Initialize-LauncherConfig derives

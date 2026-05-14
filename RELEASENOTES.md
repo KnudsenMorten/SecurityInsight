@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.291
+## v2.2.292
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
 - release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
 - release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
 - release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.265 - drop redundant Risk-based Security Exposure Insight banner (cef8a154)
 - release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
 - release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
-- release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.292 — Fix `TimeGenerated` → `Timestamp` on AH-table filters in `Device_Recommendations_*` reports
+
+Operator: `Device_Recommendations_Summary` and `Device_Recommendations_Detailed` queries threw `where TimeGenerated column name not found` when routed to Advanced Hunting.
+
+### Root cause
+
+Log Analytics workspace tables use `TimeGenerated` as the universal time column. Microsoft Defender XDR Advanced Hunting tables use **`Timestamp`** instead. The Device_Recommendations YAML queries reference both shapes:
+
+| Table | Engine | Time column |
+|---|---|---|
+| `SI_Endpoint_Profile_CL` | LA | `TimeGenerated` ✅ |
+| `DeviceInfo` | XDR AH | **`Timestamp`** (was incorrectly `TimeGenerated`) |
+| `DeviceTvmSecureConfigurationAssessment` | XDR AH | **`Timestamp`** (was incorrectly `TimeGenerated`) |
+
+When the engine routes a mixed query to AH (because of XDR-only table presence), the AH backend rejects `DeviceInfo | where TimeGenerated >= ago(...)` because `TimeGenerated` doesn't exist on AH-side `DeviceInfo`. Customers running on workspaces without LA-mirrored Defender data were getting the column-not-found error.
+
+### Fix
+
+8 `TimeGenerated` → `Timestamp` swaps in the locked YAML, all in the `Device_Recommendations_Summary` and `Device_Recommendations_Detailed` report bodies:
+
+| Line | Where | Before | After |
+|---|---|---|---|
+| 952 | DeviceInfo | `\| where TimeGenerated >= ago(lookback)` | `\| where Timestamp >= ago(lookback)` |
+| 953 | DeviceInfo | `\| summarize arg_max(TimeGenerated, *) by DeviceId` | `\| summarize arg_max(Timestamp, *) by DeviceId` |
+| 977 | DeviceTvm... | `\| where TimeGenerated >= ago(lookback)` | `\| where Timestamp >= ago(lookback)` |
+| 1008 | TVM_Base post-join | `\| summarize arg_max(TimeGenerated, *) by DeviceId, ConfigurationId` | `\| summarize arg_max(Timestamp, *) by DeviceId, ConfigurationId` |
+| 1266 | DeviceInfo (Detailed) | `\| where TimeGenerated >= ago(lookback)` | `\| where Timestamp >= ago(lookback)` |
+| 1267 | DeviceInfo (Detailed) | `\| summarize arg_max(TimeGenerated, *) by DeviceId` | `\| summarize arg_max(Timestamp, *) by DeviceId` |
+| 1291 | DeviceTvm (Detailed) | `\| where TimeGenerated >= ago(lookback)` | `\| where Timestamp >= ago(lookback)` |
+| 1338 | TVM_Base post-join (Detailed) | `\| summarize arg_max(TimeGenerated, *) by DeviceId, ConfigurationId` | `\| summarize arg_max(Timestamp, *) by DeviceId, ConfigurationId` |
+
+CL-table filters (`SI_Endpoint_Profile_CL | where TimeGenerated > ago(8d)`, `SI_Identity_Profile_CL | where TimeGenerated > ago(8d)`, etc.) **left unchanged** — those run via the hybrid pre-fetch on LA where `TimeGenerated` is correct.
+
+### Audit done
+
+Ran an exhaustive scan of the locked YAML for any other AH-table reference paired with `TimeGenerated` — only the 8 lines above were affected. All other `TimeGenerated` references (122 of them) are on `_CL` tables and are correct.
 
 ---
 

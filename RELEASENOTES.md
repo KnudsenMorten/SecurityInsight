@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.295
+## v2.2.296
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
 - release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
 - release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
 - release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
@@ -33,13 +34,54 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
 - release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
 - release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
-- release: SecurityInsight v2.2.266 - drop RBAC visibility line from LA-ingest auth probe (45979cf9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.296 — Fix v2.2.295 LA pre-fetch regression + add EG priv-esc-vuln entry-point gate to `Attack_Paths_Detailed_Device_*_Azure`
+
+Two changes, both targeting the bomb-device timeout chain on Nordstern's `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` report.
+
+### Bug — `int(null)` default in `Target_Tier_From_CL` broke LA pre-fetch (regression from v2.2.295)
+
+v2.2.295 added the projection:
+```kql
+Target_Tier_From_CL = toint(column_ifexists("Tier", int(null)))
+```
+
+The hybrid pre-fetch path runs this against Log Analytics directly to fetch `_TargetCmdb` as an inline datatable. LA's KQL parser rejects `int(null)` as a `column_ifexists` default with `BadArgumentError / SemanticError` (`'project' operator: Failed to resolve scalar expression`). The engine then fell back to inlining the **whole** `SI_Azure_Profile_CL` table (1586 rows × wide schema), which exceeded AH's nginx body cap of ~1MB and got rejected with `413 Request Entity Too Large`. Cascade: every Attack_Paths report that used the new projection failed before reaching AH.
+
+**Fix**: replaced `int(null)` with `0` in all 12 `_TargetCmdb` projections. Tier 0 means "Critical" in our scheme, but the post-cmdb-join override `coalesce(Target_Tier_From_CL, 3)` already lifts genuinely-missing-from-CL devices to tier 3 (lowest), so the literal-`0`-as-default doesn't survive into scoring.
+
+### Optimization — entry-point filter on `DevicesWithCVEsBase`
+
+ASM's portal shows 2 attack paths because Microsoft only walks paths that start from devices EG has *itself* classified as priv-esc-vulnerable (the `highRiskVulnerabilityInsights.vulnerableToPrivilegeEscalation.hasHighOrCritical` flag on the device's NodeProperties). Our v2.2.290+ shape walked from any device with any CVE — typically 70-80% of the fleet.
+
+The Detailed_Device_*_Azure query now adds an entry-point filter immediately after the `TargetNodeLabel in (device, computer-account, microsoft.compute/virtualmachines)` clause:
+
+```kql
+| where TargetNodeId in ((
+    ExposureGraphNodes
+    | where NodeLabel in ("device","computer-account","microsoft.compute/virtualmachines")
+    | where tobool(todynamic(NodeProperties).rawData.highRiskVulnerabilityInsights.vulnerableToPrivilegeEscalation.hasHighOrCritical) == true
+    | project NodeId
+  ))
+```
+
+This is the same gate ASM uses to flag attack-path candidates. Expected impact: source-device set shrinks from ~all-devices-with-any-CVE to the small subset EG already flagged. Combined with v2.2.295's exploit-grade cred filter and authoritative-tier-from-CL override, the cartesian for bucket 40 should fall well below AH's 900s ceiling.
+
+### Cache invalidation
+
+Query body changed → new stable hash. AutoBucket cache invalidates once, re-probes at floor 64.
+
+### Onboarding doc — cert-preferred custom.ps1 example
+
+`INTERNAL/onboard-internal-AutomateIT.md` now documents `$global:SI_SPN_CertThumbprint` as the preferred auth path (no plaintext secret on disk), with the secret-and-KV pattern shown as Option B.
 
 ---
 

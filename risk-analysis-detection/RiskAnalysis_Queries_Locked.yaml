@@ -2106,7 +2106,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -3001,7 +3001,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -3665,7 +3665,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -4491,7 +4491,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -5131,7 +5131,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -5893,7 +5893,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -6495,7 +6495,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -7210,7 +7210,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -7841,7 +7841,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -8511,7 +8511,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -9204,7 +9204,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))
@@ -9217,6 +9217,19 @@ Reports:
             | where SourceNodeLabel == "Cve"
             | where EdgeLabel == "affecting"
             | where TargetNodeLabel in ("device","computer-account","microsoft.compute/virtualmachines")
+            // v2.2.296 -- ENTRY-POINT FILTER. Restrict source devices to those EG itself
+            // has classified as having priv-esc-vulnerable insight (matches the report
+            // intent: "high severity vulnerabilities allows lateral movement"). This
+            // mirrors what Microsoft Defender ASM uses to flag attack-path candidates.
+            // Without this, every device with ANY CVE (typically 70-80% of the fleet)
+            // enters the cred/identity/target cartesian; with it, only devices EG flags
+            // as actually priv-esc-vulnerable do. Major cartesian shrink.
+            | where TargetNodeId in ((
+                ExposureGraphNodes
+                | where NodeLabel in ("device","computer-account","microsoft.compute/virtualmachines")
+                | where tobool(todynamic(NodeProperties).rawData.highRiskVulnerabilityInsights.vulnerableToPrivilegeEscalation.hasHighOrCritical) == true
+                | project NodeId
+              ))
             // Drop assets matching engine-substituted _excludedAssetTags + MDE IsExcluded flag. This filter runs over a pure ExposureGraph shape (no SI_Endpoint_Profile_CL join on this branch) so AssetTags is NOT available as a flat column here -- column_ifexists keeps the line safe. AssetTags from EG node properties is reconstructed below from rawData.deviceManualTags+deviceDynamicTags+tags.tags. IsExcluded is also kept wrapped (MDE-side, not on every join arm).
             | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
             | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
@@ -9898,7 +9911,7 @@ Reports:
                 // never coalesce in EG criticalityLevel. The NodesSlim Target alias used to
                 // populate TargetCriticalityTier from EG's NodeProperties.criticalityLevel
                 // which violated this rule -- now overridden post-cmdb-join below.
-                Target_Tier_From_CL          = toint(column_ifexists("Tier", int(null))),
+                Target_Tier_From_CL          = toint(column_ifexists("Tier", 0)),
                   AssetName_From_CL      = tostring(column_ifexists("AssetName", "")),
                   AssetId_From_CL        = tostring(column_ifexists("AssetId", "")),
                   AssetType_From_CL      = tostring(column_ifexists("AssetType", ""))

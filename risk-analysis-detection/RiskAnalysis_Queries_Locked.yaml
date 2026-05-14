@@ -1,4 +1,4 @@
-﻿Reports:
+Reports:
     - ReportName: Device_Missing_CVEs_Summary
       ReportPurpose: This report highlights overdue endpoint CVEs older than 40 days, excluding out-of-scope assets, and prioritizes
         them using asset criticality, tag-based tiering, and exploit and exposure risk factors to focus remediation on the most
@@ -2122,6 +2122,9 @@
                 ))
 
             | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -3007,6 +3010,9 @@
                 ))
 
             | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -3662,6 +3668,9 @@
                 ))
 
             | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -4479,6 +4488,9 @@
                 ))
 
             | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -5116,6 +5128,9 @@
 
             // Bucket filter support
             // DeviceKey is used for bucket filtering and distinct counting
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -5863,6 +5878,9 @@
                 ))
 
             | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -6463,6 +6481,9 @@
                 ))
 
             | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -7162,6 +7183,9 @@
                 ))
 
             | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -7777,6 +7801,9 @@
             | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
             | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
             | where not(_AssetTagsLower has_any (_excludedAssetTags))
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -8455,6 +8482,9 @@
                 "service-principal-azure-cli-secret",
                 "entra-usercookie"
             )
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -9125,6 +9155,9 @@
             | where tobool(coalesce(column_ifexists("IsExcluded", false), false)) == false
             | extend _AssetTagsLower = tolower(coalesce(column_ifexists("AssetTags",""),""))
             | where not(_AssetTagsLower has_any (_excludedAssetTags))
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__
@@ -9735,6 +9768,9 @@
                 "service-principal-azure-cli-secret",
                 "entra-usercookie"
             )
+            //__STALE_DEVICE_FILTER_BEGIN__
+            | where 1 == 1
+            //__STALE_DEVICE_FILTER_END__
             //__BUCKET_FILTER_BEGIN__
             | where 1 == 1
             //__BUCKET_FILTER_END__

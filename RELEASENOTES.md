@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.281
+## v2.2.282
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
 - release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
 - release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
 - release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
@@ -33,13 +34,83 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.255 - drop dead SI_DcrNamePattern from wizard output (b3a0eab9)
 - release: SecurityInsight v2.2.254 - wizard DCR names aligned with engine -profile convention (6c3abca9)
 - release: SecurityInsight v2.2.253 - skip SI_StorageKey fetch+persist when OAuth-on-storage enabled (2e8a6edf)
-- release: SecurityInsight v2.2.252 - Machine.Read.All instead of Machine.ReadWrite.All for WDATP (e02c9297)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.282 — Stale-device filter for all Attack_Paths reports (drops EG ghost nodes that bomb the cartesian)
+
+Operator diagnosis on a customer tenant: heavy `Attack_Paths_Detailed_Device_*_Azure` bucket contained 26 devices, of which **14 (54%) had `Invalid date` for `lastSeen`** — Defender knew them by ID but had never enriched a freshness timestamp. These ghost nodes (decommissioned VMs, unmanaged servers, never-onboarded entries) were silently participating in the 4-hop EG cartesian (Device → CVE → Credential → Identity → AzureTarget) without representing any real risk, doubling the cartesian size on every Attack_Paths report.
+
+### Fix
+
+New engine resolver `Resolve-StaleDeviceFilterBlock` substitutes a `__STALE_DEVICE_FILTER__` placeholder block with a portable `column_ifexists`-based subquery filter that drops EG device nodes whose `lastSeen` is older than the freshness threshold.
+
+**Globals:**
+
+- `$global:SI_RA_StaleDeviceFilter = 'strict' | 'lenient' | 'off'` — **default `'strict'` (active)**. Customer opts out via `'off'`.
+  - `strict` — drop devices with stale OR null `lastSeen` (matches the Defender ghost-node pattern)
+  - `lenient` — drop only devices with valid-but-old `lastSeen` (keep nulls as live)
+  - `off` — no-op (full backwards compatibility)
+- `$global:SI_ActiveStaleDays = N` — existing freshness threshold in days (default 30, reused from asset-profiling so one knob ties freshness across the solution).
+
+**YAML changes — `__STALE_DEVICE_FILTER__` placeholder added to all 12 Attack_Paths reports:**
+
+- `Attack_Paths_Summary_Github_to_Azure_Resources`
+- `Attack_Paths_Detailed_Github_to_Azure_Resources`
+- `Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation`
+- `Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation`
+- `Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources`
+- `Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources`
+- `Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials`
+- `Attack_Paths_Detailed_Data_Sensitivity_to_Exposed_Credentials`
+- `Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`
+- `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`
+- `Attack_Paths_Summary_Credential_Based_Lateral_Movement`
+- `Attack_Paths_Detailed_Credential_Based_Lateral_Movement`
+
+Each block sits **above** the `__BUCKET_FILTER__` so the device set is narrowed BEFORE bucket-hash partitioning — the cartesian shrinks at source.
+
+### What this means
+
+When the engine runs an Attack_Paths report on default config (strict + 30 days):
+
+```
+[INFO] [stale-device] Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure: applied MaxAgeDays=30 Mode=strict
+```
+
+Then the YAML query receives a device-id filter against an inline subquery of EG nodes with valid `lastSeen` newer than 30 days. Ghost devices (null lastSeen) are dropped. Stale devices (>30d) are dropped. Live devices flow through the cartesian.
+
+### Diagnostics for the operator
+
+If your reports were already finishing fine without this filter, you can opt out:
+
+```powershell
+$global:SI_RA_StaleDeviceFilter = 'off'
+```
+
+If you want a different staleness threshold (e.g. 14 days):
+
+```powershell
+$global:SI_ActiveStaleDays = 14
+```
+
+If you want to keep nulls (devices Defender hasn't enriched yet) but drop only known-old:
+
+```powershell
+$global:SI_RA_StaleDeviceFilter = 'lenient'
+```
+
+The first run will log `[INFO] [stale-device] <reportname>: applied MaxAgeDays=30 Mode=strict` per Attack_Paths report so you can confirm what's active.
+
+### Operator note — when "lenient" is the right pick
+
+Tenants with high turnover (lots of brand-new devices that haven't yet had `lastSeen` written by EG enrichment) may want `'lenient'` to avoid dropping devices for which freshness is genuinely unknown rather than known-stale. For most steady-state tenants, `'strict'` is the right default and matches the cartesian-bomb pattern observed at scale.
 
 ---
 

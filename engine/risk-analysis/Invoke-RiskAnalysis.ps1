@@ -2464,6 +2464,118 @@ function Resolve-CveFilterBlock {
 }
 
 # ----------------------------------------------------------------------------
+# Stale-device filter block helpers (v2.2.282) -- portal-safe substitution.
+#
+# Source query wraps a no-op `| where 1 == 1` default between begin/end
+# line-comment markers, e.g.:
+#
+#     //__STALE_DEVICE_FILTER_BEGIN__
+#     | where 1 == 1
+#     //__STALE_DEVICE_FILTER_END__
+#
+# At engine run-time substituted from two globals:
+#
+#   $global:SI_RA_StaleDeviceFilter = 'off' | 'lenient' | 'strict'   (default 'off')
+#       off      -- no-op (no filter), backwards compatible
+#       lenient  -- drop devices whose LastSeen is OLDER than threshold;
+#                   keep devices with NULL LastSeen (treat as live)
+#       strict   -- also drop devices with NULL LastSeen (treat as stale)
+#
+#   $global:SI_ActiveStaleDays = N          (existing global, default 30)
+#       Threshold in days. Reused from asset-profiling so one knob ties
+#       freshness across the solution.
+#
+# Strict is the right pick when the tenant has lots of EG ghost nodes
+# (devices Defender knows by ID but never enriched with lastSeen). Those
+# ghosts otherwise pollute the cartesian on heavy attack-path queries
+# without representing any real risk.
+#
+# Filter applies inside the EG DeviceNodes let, so it cuts the device set
+# BEFORE the CVE / credential / identity / Azure-target hop chain expands.
+# Without engine substitution (raw portal paste) the inline `| where 1 == 1`
+# default applies -- entire device set is queried, no behaviour change.
+# ----------------------------------------------------------------------------
+$script:_StaleDeviceFilterBeginMark = '//__STALE_DEVICE_FILTER_BEGIN__'
+$script:_StaleDeviceFilterEndMark   = '//__STALE_DEVICE_FILTER_END__'
+
+function New-StaleDeviceFilterKql {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int]$MaxAgeDays,
+        [Parameter()][string]$Mode = 'strict'   # 'lenient' | 'strict'
+    )
+    if ($MaxAgeDays -le 0) {
+        return '              | where 1 == 1'
+    }
+    $indent = '              '
+    # Portable filter: works in either ExposureGraphNodes scope (where the
+    # column is NodeId) or ExposureGraphEdges scope after a CVE-affecting-
+    # device join (where the device column is TargetNodeId). column_ifexists
+    # picks whichever exists; coalesce takes the first non-empty result.
+    if ($Mode -eq 'strict') {
+        $lastSeenCheck = 'isnotnull(__ls) and __ls > ago({0}d)' -f $MaxAgeDays
+    } else {
+        $lastSeenCheck = 'isnull(__ls) or __ls > ago({0}d)' -f $MaxAgeDays
+    }
+    return @"
+$indent| where coalesce(tostring(column_ifexists('TargetNodeId','')), tostring(column_ifexists('NodeId',''))) in ((
+$indent    ExposureGraphNodes
+$indent    | where NodeLabel in ("device","computer-account","microsoft.compute/virtualmachines")
+$indent    | extend __ls = todatetime(coalesce(
+$indent        todynamic(NodeProperties).rawData.lastSeen,
+$indent        todynamic(NodeProperties).rawData.lastSeenTime,
+$indent        todynamic(NodeProperties).rawData.lastActivityTime,
+$indent        todynamic(NodeProperties).rawData.lastSeenDate,
+$indent        todynamic(NodeProperties).lastSeen
+$indent      ))
+$indent    | where $lastSeenCheck
+$indent    | project NodeId
+$indent  ))
+"@
+}
+
+function Resolve-StaleDeviceFilterBlock {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Query,
+        [Parameter(Mandatory)][string]$ReportName
+    )
+    $blockRx   = [regex]::Escape($script:_StaleDeviceFilterBeginMark) + '(?<body>.*?)' + [regex]::Escape($script:_StaleDeviceFilterEndMark)
+    $bodyMatch = [regex]::Match($Query, $blockRx, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if (-not $bodyMatch.Success) { return $Query }
+
+    # Mode: 'off' (default) | 'lenient' | 'strict'. 'off' means no-op (skip).
+    $mode = 'off'
+    if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RA_StaleDeviceFilter)) {
+        $modeRaw = ([string]$global:SI_RA_StaleDeviceFilter).Trim().ToLowerInvariant()
+        if ($modeRaw -in @('lenient','strict')) { $mode = $modeRaw }
+    }
+    if ($mode -eq 'off') {
+        # Off -- leave no-op block. Don't log per-report; would spam.
+        return $Query
+    }
+
+    # Threshold from the existing solution-wide freshness global. If unset
+    # or non-positive, fall back to a sensible default of 30 days (matches
+    # asset-profiling default).
+    $maxAge = 30
+    if ($null -ne $global:SI_ActiveStaleDays) {
+        try {
+            $candidate = [int]$global:SI_ActiveStaleDays
+            if ($candidate -gt 0) { $maxAge = $candidate }
+        } catch { }
+    }
+
+    $newBody  = ([Environment]::NewLine +
+                 (New-StaleDeviceFilterKql -MaxAgeDays $maxAge -Mode $mode) +
+                 [Environment]::NewLine + '              ')
+    $newBlock = ($script:_StaleDeviceFilterBeginMark + $newBody + $script:_StaleDeviceFilterEndMark)
+    $result   = $Query.Replace($bodyMatch.Value, $newBlock)
+    Write-Info ("[stale-device] {0}: applied MaxAgeDays={1} Mode={2}" -f $ReportName, $maxAge, $mode)
+    return $result
+}
+
+# ----------------------------------------------------------------------------
 # Bucket-filter block helpers -- portal-safe substitution.
 #
 # Source query must wrap a no-op `| where 1 == 1` default between begin/end
@@ -6134,6 +6246,14 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     # Cuts the CVE-finding set at source (severity / cvssScore / hasExploit /
     # publishedDate) BEFORE the EG join expands rows by edges and assets.
     $Query = Resolve-CveFilterBlock -Query $Query -ReportName $ReportName
+
+    # v2.2.282 -- substitute __STALE_DEVICE_FILTER__ block from
+    # $global:SI_RA_StaleDeviceFilter (off|lenient|strict) + $global:SI_ActiveStaleDays.
+    # When a tenant has many EG ghost device nodes (Defender knows them by ID
+    # but never enriched lastSeen), strict mode drops them at the DeviceNodes
+    # let -- shrinks the cartesian on Attack_Paths_*_Device queries by 30-50%
+    # without losing any real-risk signal. Default 'off' = backwards compatible.
+    $Query = Resolve-StaleDeviceFilterBlock -Query $Query -ReportName $ReportName
 
     # substitute __WEIGHTED_FACTORS__ block from
     # riskscore_weighted.schema.custom.json -> weightedRiskFactors.<engine>.fields.

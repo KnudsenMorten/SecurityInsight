@@ -833,6 +833,13 @@ function Resolve-ProfileCLLetBlocks {
             $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows)
             Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, $rowCount, $datatableLet.Length)
             $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
+            # v2.2.273 -- track the largest CL snapshot row count seen for this query
+            # so AutoBucket can pre-bias initial bucket count for heavy reports
+            # (avoids the 2 -> 4 -> 16 -> 64 escalation grind on first run when we
+            # already know the snapshot is huge).
+            if ($null -eq $script:_LastHybridSnapshotRowCount -or $rowCount -gt [int]$script:_LastHybridSnapshotRowCount) {
+                $script:_LastHybridSnapshotRowCount = [int]$rowCount
+            }
         }
         $modified = $modified.Replace($fullBlock, $datatableLet)
     }
@@ -1869,13 +1876,22 @@ if ($looksAuth) {
                 throw
             }
 
-if ($attempt -lt $MaxRetries) {
+            # v2.2.273 -- fail-fast on TaskCanceledException. The 4x900s retry pattern
+            # was useful when timeouts looked transient, but in practice when AH hits
+            # the HttpClient ceiling (900s) it means the query is genuinely too big.
+            # Retrying just burns 3 more hours per bucket on the same fail. Bubble
+            # up after the FIRST timeout so the AutoBucket escalation in the outer
+            # loop can re-run with a higher bucket count immediately.
+            if ($isTaskCanceled) {
+                Write-Err2 ("Query timed out at HttpClient ceiling ({0}s) on first attempt -- bypassing retries (deterministic 'query too large' pattern). Will let AutoBucket escalation handle." -f 900)
+                throw
+            }
+
+            if ($attempt -lt $MaxRetries) {
                 $sleepSec = if ($looksThrottle) { [math]::Min(60, 5 * $attempt) }
-                            elseif ($isTaskCanceled) { [math]::Min(90, 15 * $attempt) }
                             else { [math]::Min(20, 2 * $attempt) }
 
-                $reason = if ($isTaskCanceled) { "Likely Graph client timeout (TaskCanceledException)" } else { "Query failed" }
-                Write-Warn2 ("{0} (attempt {1}/{2}). Waiting {3}s then retrying... {4}" -f $reason, $attempt, $MaxRetries, $sleepSec, $msg)
+                Write-Warn2 ("Query failed (attempt {0}/{1}). Waiting {2}s then retrying... {3}" -f $attempt, $MaxRetries, $sleepSec, $msg)
                 Start-Sleep -Seconds $sleepSec
                 continue
             }
@@ -6128,6 +6144,11 @@ $lastBucketRunError = $null
 # report run so other reports start clean.
 $script:_AutoBucketSkipRemainingBuckets = $false
 
+# v2.2.273 -- per-report snapshot row tracker, reset here so the AutoBucket
+# escalation logic only sees CL snapshot sizes from THIS report (not a leak
+# from a prior heavier report).
+$script:_LastHybridSnapshotRowCount = 0
+
 while (-not $bucketRunSucceeded) {
 
   # Reset results on each (re)run so we don't keep partial data from a failing bucket count
@@ -6314,8 +6335,20 @@ while (-not $bucketRunSucceeded) {
           break
       }
 
-      # Growth strategy: prefer doubling (4->8) but ensure it increases at least +1.
-      $nextBucket = [Math]::Min($capBucket, [Math]::Max(($bucketCountToUse * 2), ($bucketCountToUse + 1)))
+      # v2.2.273 -- 4x growth (was 2x), but ALSO consider the largest CL snapshot
+      # row count seen during this report. Heuristic: at ~500 rows per bucket the
+      # AH backend completes within the 900s ceiling for typical EG-path-expansion
+      # joins, so a 100K-row snapshot wants ~200 buckets immediately rather than
+      # grinding through 8 -> 32 -> 128 -> 512.
+      $snapshotJump = 0
+      if ($script:_LastHybridSnapshotRowCount -and [int]$script:_LastHybridSnapshotRowCount -gt 0) {
+          $snapshotJump = [int][Math]::Ceiling([int]$script:_LastHybridSnapshotRowCount / 500.0)
+      }
+      $jumpCandidates = @(($bucketCountToUse * 4), ($bucketCountToUse + 1), $snapshotJump)
+      $nextBucket = [Math]::Min($capBucket, ($jumpCandidates | Measure-Object -Maximum).Maximum)
+      if ($snapshotJump -gt 0 -and $snapshotJump -ge ($bucketCountToUse * 4)) {
+          Write-Info ("AutoBucket escalation jump informed by snapshot size ({0} rows / 500 = {1} buckets)" -f $script:_LastHybridSnapshotRowCount, $snapshotJump)
+      }
 
       Write-Warn2 ("AutoBucket escalation: rerunning report '{0}' with BucketCount {1} -> {2}" -f `
         $ReportName, $bucketCountToUse, $nextBucket)

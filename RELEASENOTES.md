@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.272
+## v2.2.273
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
 - release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
 - release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
 - release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
@@ -33,13 +34,40 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.247 - fix silent anonymous-mail failure (704a2513)
 - release: SecurityInsight v2.2.246 - propagate DCR/DCE scope filter to Schema + Tagging stages (1528059a)
 - release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
-- release: SecurityInsight v2.2.244 - drop 24h module-update throttle + hard minimum-version check (AzLogDcrIngestPS >= 1.6.3) (5367644c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.273 — Fail-fast on 900s timeouts + 4x escalation jump + snapshot-aware sizing (sub-hour discovery instead of days)
+
+v2.2.272 unblocked Nordstern's Attack_Paths_*_Device_with_high_severity_*_Azure but the discovery cost was still impractical: 4 inner retries × 900s = 1 hour per bucket failure, multiplied by 9 escalation steps to reach ~1000 buckets = ~9 hours. Across 126 reports that compounds into days.
+
+Three changes:
+
+### 1. Fail-fast on TaskCanceledException (`Invoke-RiskAnalysis.ps1:1872`)
+
+`Invoke-GraphHuntingQuery` previously retried 4×900s on every `TaskCanceledException` (the deterministic HttpClient timeout pattern). Retries don't help when the query is genuinely too big — they just burn 3 more hours per bucket on identical failures. Now: first `TaskCanceledException` re-throws immediately, letting the outer AutoBucket escalation handle the resize.
+
+Cuts per-step discovery cost from ~1h → ~15min (single 900s timeout).
+
+### 2. 4x escalation jump (`Invoke-RiskAnalysis.ps1:6293`)
+
+Bucket-count growth was `bucketCountToUse * 2` (9 steps: 2 → 1024). Bumped to `* 4` (5 steps: 2 → 2048). Combined with fail-fast, worst-case escalation discovery is now ~75min instead of ~9h.
+
+### 3. Snapshot-row-aware initial jump (`Invoke-RiskAnalysis.ps1:6293-6305`)
+
+`Resolve-ProfileCLLetBlocks` now exposes the largest CL-snapshot row count seen during the current report (`$script:_LastHybridSnapshotRowCount`, reset per report). The escalation logic picks the LARGEST of `bucketCountToUse * 4`, `+1`, and `ceil(snapshotRows / 500)`. So a 100K-row snapshot escalates straight to 200 buckets on the first timeout instead of grinding 2 → 8 → 32 → 128 → 512. A 424-row snapshot (Nordstern's `_TargetCmdb`) still goes 2 → 8 (snapshot heuristic is 1 bucket; max wins so the 4x rule applies).
+
+Heuristic of 500 rows/bucket is calibrated for typical 4-hop EG-path-expansion + CL-join workloads at the AH 900s ceiling. Will tune per-real-world feedback.
+
+### Cache behaviour unchanged
+
+AutoBucket cache (`autobucket-cache.json`) still stores the working bucket count after escalation succeeds (lines 6378-6390). Subsequent runs start at the cached count directly — escalation only fires on first-run or after invalidation.
 
 ---
 

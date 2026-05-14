@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.296
+## v2.2.297
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
 - release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
 - release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
 - release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.270 - stage every rendered query, all routing paths (0e54eea6)
 - release: SecurityInsight v2.2.269 - revert v2.2.268 CL-snapshot bucketing (11d7a7f8)
 - release: SecurityInsight v2.2.268 - CL-snapshot bucketing in RA hybrid path (4391dd0a)
-- release: SecurityInsight v2.2.267 - Bootstrap-Auth supports SPN+cert end-to-end (internal/AutomateIT mode no longer requires secret) (50591ba9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.297 — Strip inline `//` comments from `_TargetCmdb` projection (LA pre-fetch SYN0002 fix)
+
+v2.2.296 still failed LA pre-fetch with:
+```
+BadArgumentError / SyntaxError / SYN0002
+"Query could not be parsed at '' on line [9,92]"
+```
+on workspace `log-platform-management-securityinsight-p`.
+
+Root cause: v2.2.295 added a 5-line `//` comment block **between two `project` columns** inside the `_TargetCmdb` CTE:
+
+```kql
+| project
+    Target_AzureResourceId_Guid = ...,
+    Target_cmdbDataSensitivity  = ...,
+    // v2.2.295 -- authoritative target Tier from CL Profile (engine-computed).
+    // Per project rule: CriticalityTier ALWAYS sources from SI_*_Profile_CL.Tier;
+    // ... (5 lines)
+    Target_Tier_From_CL = ...,
+```
+
+Defender XDR's KQL parser tolerated this; **Log Analytics' KQL parser rejects it** with SYN0002 because the comments sit inside the `project` operator's expression list. The hybrid pre-fetch routes `_TargetCmdb` to LA directly, so the parser fails → fallback to whole-table inline → 1MB+ → AH `413 Request Entity Too Large`. Same cascade as v2.2.296 was meant to fix; the v2.2.296 `int(null)→0` change was beneficial but didn't address this orthogonal SYN0002 trigger.
+
+**Fix**: stripped the entire 5-line comment block from all 12 `_TargetCmdb` projections. The rule (authoritative tier from CL only, never EG) is still enforced — it's just documented above the `let _TargetCmdb =` line in the YAML rather than inline in the KQL body.
+
+**Going forward**: no `//` comments inside KQL operator argument lists in any of our YAML, since the engine routes pure-CL queries to LA directly and LA's parser is the strict one.
+
+### Cache invalidation
+
+Query body changed → new stable hash. AutoBucket cache invalidates once.
 
 ---
 

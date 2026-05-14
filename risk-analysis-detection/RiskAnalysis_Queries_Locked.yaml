@@ -8346,6 +8346,551 @@ Reports:
             TotalIssues desc,
             AssetCount desc
 
+    - ReportName: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+      ReportPurpose: Vulnerable-device-to-Azure-target attack paths prioritized by FINAL TARGET business impact.
+        EG provides path detection (VulnerableDevice -> Credential -> Identity -> AzureTarget) + scoring + tier;
+        SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
+        joined on the FINAL TARGET via AzureResourceId_Guid (= EG NodeId hex).
+      # v2.2.305 -- BucketCount removed; let AutoBucket calculate from default
+      # (2) and escalate only if needed. Graph-match shape doesn't cartesian-
+      # explode like the v2.2.277 4-hop join chain did, so the pre-set 64 is
+      # wasteful (~35s overhead per empty bucket).
+      SecurityDomain: Endpoint
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
+      - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
+      - RiskScoreTotal_Weighted
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - ImpactedAssetCount
+      - UniqueIssues
+      - TotalIssuesImpactedAssets
+      - ImpactedAssetsList
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
+      SortBy:
+      - RiskScoreTotal_Weighted
+      ReportQuery:
+      - |-
+        // v2.2.306 -- Summary variant of the graph-match shape used by the Detailed
+        // sibling. Same make-graph + graph-match traversal; instead of one row per
+        // (entry-device, target) path the output aggregates by (Subcategory, cmdb*)
+        // bucket. Bucket placeholder is INSIDE VulnerableDevices (before make-graph)
+        // so partitioning shrinks the graph SEED, not just the output rows -- scales
+        // sub-linearly to 100K+ source devices.
+        let _TargetCmdb =
+            SI_Azure_Profile_CL
+            | where TimeGenerated > ago(8d)
+            | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+            | project
+                Target_AzureResourceId_Guid = tostring(column_ifexists("AzureResourceId_Guid", "")),
+                Target_cmdbName             = tostring(column_ifexists("cmdbName", "")),
+                Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
+                Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
+                Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                Target_Tier_From_CL         = toint(column_ifexists("Tier", 0)),
+                Target_AssetName_From_CL    = tostring(column_ifexists("AssetName", "")),
+                Target_AssetId_From_CL      = tostring(column_ifexists("AssetId", "")),
+                Target_AssetType_From_CL    = tostring(column_ifexists("AssetType", ""))
+            | where Target_AzureResourceId_Guid != "";
+
+        // Source-device Tier from SI_Endpoint_Profile_CL (the entry-point device's
+        // engine-computed tier). Joined post-graph-match on AadDeviceId so the
+        // CriticalityTier on each attack path reflects the SOURCE device's
+        // criticality (e.g. Tier 0 admin workstation vs Tier 3 user laptop).
+        let _SourceTier =
+            SI_Endpoint_Profile_CL
+            | where TimeGenerated > ago(8d)
+            | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+            | project
+                Source_AadDeviceId = tostring(column_ifexists("AadDeviceId", "")),
+                Source_AssetName   = tostring(column_ifexists("AssetName", "")),
+                Source_Tier        = toint(column_ifexists("Tier", 0))
+            | where Source_AadDeviceId != "";
+
+        let VulnerableDevices = ExposureGraphNodes
+        | where set_has_element(Categories, "device")
+        | where NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+        // Source-side bucket filter -- partitions 1M-device tenants BEFORE make-graph.
+        //__BUCKET_FILTER_BEGIN__
+        | where 1 == 1
+        //__BUCKET_FILTER_END__
+        | project NodeId, NodeName, NodeLabel, Categories, NodeProperties;
+        let Identities = ExposureGraphNodes
+        | where set_has_element(Categories, "identity")
+        | project NodeId, NodeName, NodeLabel, Categories;
+        let Credentials = ExposureGraphNodes
+        | where set_has_element(Categories, "secret")
+        | project NodeId, NodeName, NodeLabel, Categories;
+        let AzureNodes = ExposureGraphNodes
+        | where set_has_element(Categories, "environmentAzure")
+        | project NodeId, NodeName, NodeLabel, Categories;
+        let RelevantNodes = union VulnerableDevices, Credentials, Identities, AzureNodes;
+
+        // Source-device enrichment: derive multi-signal RiskFactor_Probability from EG.
+        // Mirrors the pattern in the v2.2.290 cartesian Summary -- combines
+        // EG.riskFactors[] count + isCustomerFacing + legacy-OS into a single int +
+        // detailed string. Joined post-graph-match on EntryPointDeviceId == NodeId.
+        let _LegacyWindowsOSPlatforms = dynamic(["WindowsServer2008","WindowsServer2008R2","WindowsServer2012","WindowsServer2012R2","Windows7","Windows8","Windows8.1"]);
+        let _LegacyMacOSMajorVersions = dynamic([10,11,12]);
+        let _LegacyLinuxMatchers = dynamic(["CentOS 7","Ubuntu 18.04","Debian 10","RHEL 7","SLES 12"]);
+        let _DeviceEnrichment = VulnerableDevices
+        | extend RawData = todynamic(NodeProperties).rawData
+        | extend IsInternetExposed = tobool(coalesce(RawData.isCustomerFacing, todynamic(NodeProperties).raw.isCustomerFacing, false))
+        | extend AssetOSPlatform     = tostring(coalesce(RawData.osPlatform, RawData.platform, RawData.operatingSystem, RawData.os))
+        | extend AssetOSVersion      = tostring(coalesce(RawData.osVersion, RawData.version, RawData.operatingSystemVersion))
+        | extend AssetOSDistribution = tostring(coalesce(RawData.osDistribution, RawData.distribution))
+        | extend MacMajor = toint(extract(@"^(\d+)", 1, AssetOSVersion))
+        | extend IsLegacyWindows = iff(AssetOSPlatform in~ (_LegacyWindowsOSPlatforms), 1, 0)
+        | extend IsLegacyMacOS   = iff(tolower(AssetOSPlatform) has "mac" and MacMajor in~ (_LegacyMacOSMajorVersions), 1, 0)
+        | extend IsLegacyLinux   = iff(tolower(AssetOSPlatform) has "linux" and (AssetOSDistribution has_any (_LegacyLinuxMatchers) or AssetOSVersion has_any (_LegacyLinuxMatchers)), 1, 0)
+        | extend LegacyEndOfSupport = iff(IsLegacyWindows == 1 or IsLegacyMacOS == 1 or IsLegacyLinux == 1, 1, 0)
+        | extend RiskFactorsArray = todynamic(coalesce(RawData.risk.riskFactors, todynamic(NodeProperties).risk.riskFactors, dynamic([])))
+        | extend RiskFactorsArray = iff(isnull(RiskFactorsArray), dynamic([]), RiskFactorsArray)
+        | mv-apply rf = RiskFactorsArray on (
+            where isnotempty(trim(" ", tostring(rf)))
+            | summarize RiskFactorSet = make_set(tostring(rf))
+          )
+        | extend RiskFactorSet = coalesce(RiskFactorSet, dynamic([]))
+        | extend RF_P_RiskFactorsCount = array_length(RiskFactorSet)
+        | extend RF_P_InternetExposed  = iff(IsInternetExposed == true, 1, 0)
+        | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
+        | extend Source_RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
+        | extend Source_RiskFactor_Probability_Detailed = strcat_array(array_sort_asc(array_concat(
+            RiskFactorSet,
+            iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])),
+            iff(RF_P_LegacyEoS == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))
+          )), ";")
+        | project NodeId, Source_RiskFactor_Probability, Source_RiskFactor_Probability_Detailed;
+
+        let _Paths = ExposureGraphEdges
+        | where EdgeLabel in~ (
+            "contains",
+            "has credentials of", "frequently logged in by",
+            "can authenticate as",
+            "member of",
+            "has role on"
+          )
+        | make-graph SourceNodeId --> TargetNodeId with RelevantNodes on NodeId
+        | graph-match (Device)-[devEdge]->(CredOrIdent)-[bridge*0..3]->(Principal)-[role]->(RoleScope)-[inherit*0..2]->(AzureAsset)
+            where set_has_element(Device.Categories, "device")
+              and Device.NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+              and (set_has_element(CredOrIdent.Categories, "secret") or set_has_element(CredOrIdent.Categories, "identity"))
+              and set_has_element(AzureAsset.Categories, "environmentAzure")
+              and AzureAsset.NodeLabel in~ ("microsoft.resources/subscriptions", "microsoft.storage/storageaccounts")
+              and devEdge.EdgeLabel in~ ("contains", "has credentials of", "frequently logged in by")
+              and role.EdgeLabel =~ "has role on"
+            project
+                EntryPointDeviceId = Device.NodeId,
+                EntryPointDevice   = Device.NodeName,
+                // Capture the source device's aadDeviceId so we can leftouter-join
+                // SI_Endpoint_Profile_CL for the source-device Tier.
+                EntryPointAadDeviceId = tostring(Device.NodeProperties.rawData.aadDeviceId),
+                // EG stores maxCvssScore as standard 0-10 CVSS (already on the true scale).
+                // Thresholds downstream use 9/7/5/3 boundaries.
+                MaxCvssScore       = todouble(Device.NodeProperties.rawData.highRiskVulnerabilityInsights.maxCvssScore),
+                FirstHopLabel      = CredOrIdent.NodeLabel,
+                DeviceEdge         = devEdge.EdgeLabel,
+                TargetAzureAssetId = AzureAsset.NodeId,
+                TargetAzureAsset   = AzureAsset.NodeName,
+                TargetLabel        = AzureAsset.NodeLabel
+        | extend TargetType = case(
+            TargetLabel == "microsoft.resources/subscriptions", "Subscription",
+            TargetLabel == "microsoft.storage/storageaccounts", "Storage account",
+            TargetLabel)
+        | extend AttackPathName = strcat(
+            "Device with high severity vulnerabilities allows lateral movement to Azure ",
+            iff(TargetType == "Subscription", "subscription", "storage account"));
+
+        // CMDB + Tier enrichment from CL on FINAL TARGET.
+        _Paths
+        | join kind=leftouter (_TargetCmdb) on $left.TargetAzureAssetId == $right.Target_AzureResourceId_Guid
+        | extend cmdbId = Target_cmdbId, cmdbName = Target_cmdbName, cmdbCriticality = Target_cmdbCriticality, cmdbDataSensitivity = Target_cmdbDataSensitivity, Target_Tier_Aliased = Target_Tier_From_CL
+        // EG-derived multi-signal source-device probability (RiskFactorsCount + InternetExposed + LegacyEoS).
+        | join kind=leftouter (_DeviceEnrichment) on $left.EntryPointDeviceId == $right.NodeId
+        // Source-device Tier from SI_Endpoint_Profile_CL (CriticalityTier reflects the
+        // SOURCE entry-point device, not the final Azure target -- a vulnerable Tier 0
+        // workstation is the bigger threat than a vulnerable Tier 3 user laptop).
+        | join kind=leftouter (_SourceTier) on $left.EntryPointAadDeviceId == $right.Source_AadDeviceId
+        | extend CriticalityTier = coalesce(toint(Source_Tier), 3)
+        | extend CriticalityTierLevel = case(
+            CriticalityTier == 0, "Critical - tier 0",
+            CriticalityTier == 1, "High - tier 1",
+            CriticalityTier == 2, "Medium - tier 2",
+            "Low - tier 3")
+        | extend SecurityDomain = "Endpoint"
+        | extend Category       = "AttackPath_VulnerableDeviceToAzure"
+        | extend Subcategory    = TargetType
+        | extend ConfigurationName = AttackPathName
+        | extend ConfigurationId   = AttackPathName
+        // Aggregate to (Subcategory x cmdb*) buckets -- one row per attack-path category
+        // per target-criticality combo, with impacted-asset list rolled up.
+        | summarize
+            Impact          = max(MaxCvssScore),
+            ImpactedAssetCount        = dcount(EntryPointDeviceId),
+            UniqueIssues              = dcount(TargetAzureAssetId),
+            TotalIssuesImpactedAssets = count(),
+            ImpactedAssetsList        = make_set(EntryPointDevice),
+            IssueList                 = make_set(TargetAzureAsset),
+            EntryVectorTypes          = make_set(FirstHopLabel),
+            DeviceEdgeTypes           = make_set(DeviceEdge),
+            // EG-derived multi-signal source-device probability aggregation.
+            Max_Source_RiskFactor_Probability         = max(toint(Source_RiskFactor_Probability)),
+            All_Source_RiskFactor_Probability_Detailed = make_set(Source_RiskFactor_Probability_Detailed)
+            by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+               CriticalityTier, CriticalityTierLevel,
+               cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity
+        | extend SecuritySeverity = case(
+            Impact >= 9.0, "Very High",
+            Impact >= 7.0, "High",
+            Impact >= 5.0, "Medium-High",
+            Impact >= 3.0, "Medium",
+            "Low")
+        | extend AssetName = strcat_array(ImpactedAssetsList, "; ")
+        | extend AssetId   = strcat_array(IssueList, "; ")
+        | extend AssetType = Subcategory
+        // Consequence = 0 (engine auto-derives tokens). Probability = aggregated source-device
+        // EG signal count (max across all paths in this group). No CVSS bonus -- CVSS already
+        // contributes via Impact -> SecuritySeverity -> engine's consBase.
+        | extend RiskFactor_Consequence          = 0
+        | extend RiskFactor_Probability          = coalesce(Max_Source_RiskFactor_Probability, 0)
+        | extend RiskFactor_Probability_Detailed = strcat_array(All_Source_RiskFactor_Probability_Detailed, ";")
+        // Engine weighted-factor block (cmdbCriticality * cmdbDataSensitivity multiplier).
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
+        | project SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+                  AssetName, AssetId, AssetType, Impact, SecuritySeverity,
+                  CriticalityTier, CriticalityTierLevel,
+                  RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed,
+                  RiskScore_Weight_Detailed, RiskScore_Weight_Factor, RiskFactor_Weight,
+                  cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity,
+                  ImpactedAssetCount, UniqueIssues, TotalIssuesImpactedAssets,
+                  ImpactedAssetsList, IssueList
+        | sort by RiskScore_Weight_Factor desc, RiskFactor_Probability desc, CriticalityTier asc, ImpactedAssetCount desc
+
+    - ReportName: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+      ReportPurpose: Per-row detail of credential-driven attack paths from vulnerable devices to Azure targets,
+        prioritized by FINAL TARGET business impact. EG drives path detection (VulnerableDevice -> Credential -> Identity -> AzureTarget) +
+        scoring + tier; SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
+        joined on the FINAL TARGET via AzureResourceId_Guid (= EG NodeId hex).
+      # v2.2.306 -- bucket placeholder positioned INSIDE the VulnerableDevices
+      # let-binding (BEFORE make-graph). Each bucket then starts with 1/N source
+      # devices -> make-graph operates on a smaller seed -> graph-match walks a
+      # smaller subgraph -> compute scales sub-linearly with bucket count.
+      # Critical for scaling to 1M+ devices. AutoBucket calculates from default.
+      SecurityDomain: Endpoint
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      SecuritySeverityInputName: SecuritySeverity
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      RiskScoreOutputName: RiskScoreTotal
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - AssetName
+      - AssetId
+      - AssetType
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
+      - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
+      - RiskScoreTotal_Weighted
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - IssueList
+      - MoreDetails
+      - AssetDetectedInReportName
+      SortBy:
+      - RiskScoreTotal_Weighted
+      ReportQuery:
+      - |-
+        // v2.2.303 -- graph-match shape (replaces v2.2.295 cartesian).
+        // Pure-EG core, then CMDB + Tier enrichment from SI_Azure_Profile_CL.
+        // The engine pre-fetches _TargetCmdb via the hybrid LA-direct path
+        // and inlines it as a datatable, so this query stays missing-table
+        // tolerant on tenants without Sentinel data lake.
+        let _TargetCmdb =
+            SI_Azure_Profile_CL
+            | where TimeGenerated > ago(8d)
+            | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+            | project
+                Target_AzureResourceId_Guid = tostring(column_ifexists("AzureResourceId_Guid", "")),
+                Target_cmdbName             = tostring(column_ifexists("cmdbName", "")),
+                Target_cmdbId               = tostring(column_ifexists("cmdbId", "")),
+                Target_cmdbCriticality      = tostring(column_ifexists("cmdbCriticality", "")),
+                Target_cmdbDataSensitivity  = tostring(column_ifexists("cmdbDataSensitivity", "")),
+                Target_Tier_From_CL         = toint(column_ifexists("Tier", 0)),
+                Target_AssetName_From_CL    = tostring(column_ifexists("AssetName", "")),
+                Target_AssetId_From_CL      = tostring(column_ifexists("AssetId", "")),
+                Target_AssetType_From_CL    = tostring(column_ifexists("AssetType", ""))
+            // Use `!= ""` (not `isnotempty`) on purpose: the engine's 2-phase
+            // post-augment plan regex matches `where isnotempty(<rkey>)` exactly
+            // and would strip the let+join+extend, but its single-extend match
+            // only captures the FIRST alias column, leaving downstream extends
+            // referencing missing columns. Falling back to legacy hybrid pre-
+            // fetch + inline keeps all 4 cmdb extends + the Tier coalesce intact.
+            | where Target_AzureResourceId_Guid != "";
+
+        let VulnerableDevices = ExposureGraphNodes
+        | where set_has_element(Categories, "device")
+        | where NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+        // Bucket filter at SOURCE -- partitions 1M-device tenants into shards
+        // BEFORE make-graph constructs the graph. Engine substitutes
+        // `__bucket_key = coalesce(DeviceKey, NodeId, ...)`. NodeId exists natively
+        // on ExposureGraphNodes so anchor resolves cleanly.
+        //__BUCKET_FILTER_BEGIN__
+        | where 1 == 1
+        //__BUCKET_FILTER_END__
+        | project NodeId, NodeName, NodeLabel, Categories, NodeProperties;
+        let Identities = ExposureGraphNodes
+        | where set_has_element(Categories, "identity")
+        | project NodeId, NodeName, NodeLabel, Categories;
+        let Credentials = ExposureGraphNodes
+        | where set_has_element(Categories, "secret")
+        | project NodeId, NodeName, NodeLabel, Categories;
+        let AzureNodes = ExposureGraphNodes
+        | where set_has_element(Categories, "environmentAzure")
+        | project NodeId, NodeName, NodeLabel, Categories;
+        let RelevantNodes = union VulnerableDevices, Credentials, Identities, AzureNodes;
+
+        // Source-device enrichment: derive multi-signal RiskFactor_Probability from EG.
+        // Mirrors the pattern in the v2.2.290 cartesian Summary -- combines
+        // EG.riskFactors[] count + isCustomerFacing + legacy-OS into a single int +
+        // detailed string. Joined post-graph-match on EntryPointDeviceId == NodeId.
+        let _LegacyWindowsOSPlatforms = dynamic(["WindowsServer2008","WindowsServer2008R2","WindowsServer2012","WindowsServer2012R2","Windows7","Windows8","Windows8.1"]);
+        let _LegacyMacOSMajorVersions = dynamic([10,11,12]);
+        let _LegacyLinuxMatchers = dynamic(["CentOS 7","Ubuntu 18.04","Debian 10","RHEL 7","SLES 12"]);
+        let _DeviceEnrichment = VulnerableDevices
+        | extend RawData = todynamic(NodeProperties).rawData
+        | extend IsInternetExposed = tobool(coalesce(RawData.isCustomerFacing, todynamic(NodeProperties).raw.isCustomerFacing, false))
+        | extend AssetOSPlatform     = tostring(coalesce(RawData.osPlatform, RawData.platform, RawData.operatingSystem, RawData.os))
+        | extend AssetOSVersion      = tostring(coalesce(RawData.osVersion, RawData.version, RawData.operatingSystemVersion))
+        | extend AssetOSDistribution = tostring(coalesce(RawData.osDistribution, RawData.distribution))
+        | extend MacMajor = toint(extract(@"^(\d+)", 1, AssetOSVersion))
+        | extend IsLegacyWindows = iff(AssetOSPlatform in~ (_LegacyWindowsOSPlatforms), 1, 0)
+        | extend IsLegacyMacOS   = iff(tolower(AssetOSPlatform) has "mac" and MacMajor in~ (_LegacyMacOSMajorVersions), 1, 0)
+        | extend IsLegacyLinux   = iff(tolower(AssetOSPlatform) has "linux" and (AssetOSDistribution has_any (_LegacyLinuxMatchers) or AssetOSVersion has_any (_LegacyLinuxMatchers)), 1, 0)
+        | extend LegacyEndOfSupport = iff(IsLegacyWindows == 1 or IsLegacyMacOS == 1 or IsLegacyLinux == 1, 1, 0)
+        | extend RiskFactorsArray = todynamic(coalesce(RawData.risk.riskFactors, todynamic(NodeProperties).risk.riskFactors, dynamic([])))
+        | extend RiskFactorsArray = iff(isnull(RiskFactorsArray), dynamic([]), RiskFactorsArray)
+        | mv-apply rf = RiskFactorsArray on (
+            where isnotempty(trim(" ", tostring(rf)))
+            | summarize RiskFactorSet = make_set(tostring(rf))
+          )
+        | extend RiskFactorSet = coalesce(RiskFactorSet, dynamic([]))
+        | extend RF_P_RiskFactorsCount = array_length(RiskFactorSet)
+        | extend RF_P_InternetExposed  = iff(IsInternetExposed == true, 1, 0)
+        | extend RF_P_LegacyEoS        = iff(LegacyEndOfSupport == 1, 1, 0)
+        | extend Source_RiskFactor_Probability = RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS
+        | extend Source_RiskFactor_Probability_Detailed = strcat_array(array_sort_asc(array_concat(
+            RiskFactorSet,
+            iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]), dynamic([])),
+            iff(RF_P_LegacyEoS == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))
+          )), ";")
+        | project NodeId, Source_RiskFactor_Probability, Source_RiskFactor_Probability_Detailed;
+
+        let _Paths = ExposureGraphEdges
+        | where EdgeLabel in~ (
+            "contains",
+            "has credentials of", "frequently logged in by",
+            "can authenticate as",
+            "member of",
+            "has role on"
+          )
+        | make-graph SourceNodeId --> TargetNodeId with RelevantNodes on NodeId
+        | graph-match (Device)-[devEdge]->(CredOrIdent)-[bridge*0..3]->(Principal)-[role]->(RoleScope)-[inherit*0..2]->(AzureAsset)
+            where set_has_element(Device.Categories, "device")
+              and Device.NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+              and (set_has_element(CredOrIdent.Categories, "secret") or set_has_element(CredOrIdent.Categories, "identity"))
+              and set_has_element(AzureAsset.Categories, "environmentAzure")
+              and AzureAsset.NodeLabel in~ ("microsoft.resources/subscriptions", "microsoft.storage/storageaccounts")
+              and devEdge.EdgeLabel in~ ("contains", "has credentials of", "frequently logged in by")
+              and role.EdgeLabel =~ "has role on"
+            project
+                EntryPointDeviceId = Device.NodeId,
+                EntryPointDevice   = Device.NodeName,
+                // Capture the source device's aadDeviceId so we can leftouter-join
+                // SI_Endpoint_Profile_CL for the source-device Tier.
+                EntryPointAadDeviceId = tostring(Device.NodeProperties.rawData.aadDeviceId),
+                // EG stores maxCvssScore as standard 0-10 CVSS (already on the true scale).
+                // Thresholds downstream use 9/7/5/3 boundaries.
+                MaxCvssScore       = todouble(Device.NodeProperties.rawData.highRiskVulnerabilityInsights.maxCvssScore),
+                FirstHopNode       = CredOrIdent.NodeName,
+                FirstHopLabel      = CredOrIdent.NodeLabel,
+                FirstHopCategories = CredOrIdent.Categories,
+                DeviceEdge         = devEdge.EdgeLabel,
+                ReachedIdentity    = Principal.NodeName,
+                RoleScopeName      = RoleScope.NodeName,
+                RoleScopeLabel     = RoleScope.NodeLabel,
+                TargetAzureAssetId = AzureAsset.NodeId,
+                TargetAzureAsset   = AzureAsset.NodeName,
+                TargetLabel        = AzureAsset.NodeLabel
+        | extend EntryVector = case(
+                DeviceEdge =~ "contains" and FirstHopLabel == "entra-userCookie",                       "Entra session cookie",
+                DeviceEdge =~ "contains" and FirstHopLabel == "azure-active-directory-app-secret",      "AAD app secret",
+                DeviceEdge =~ "contains" and FirstHopLabel == "azure-active-directory-user-credentials", "Cached AAD user credentials",
+                DeviceEdge =~ "contains" and FirstHopLabel == "azure-storage-shared-access-signature",  "SAS token",
+                DeviceEdge =~ "contains" and FirstHopLabel == "azure-storage-connection-string",        "Storage connection string",
+                DeviceEdge =~ "contains" and FirstHopLabel == "azure-database-connection-string",       "DB connection string",
+                DeviceEdge =~ "contains" and FirstHopLabel == "azure-app-configuration-key",            "App Configuration key",
+                DeviceEdge =~ "contains" and FirstHopLabel == "github-personal-access-token",           "GitHub PAT",
+                DeviceEdge =~ "contains" and FirstHopLabel == "openai-api-key",                         "OpenAI API key",
+                DeviceEdge =~ "contains" and FirstHopLabel == "user-azure-cli-secret",                  "Cached Azure CLI token",
+                DeviceEdge =~ "contains",                                                                strcat("Other secret: ", tostring(FirstHopLabel)),
+                DeviceEdge =~ "has credentials of",                                                      "Owner / cached credential",
+                DeviceEdge =~ "frequently logged in by",                                                 "Interactive logon",
+                tostring(DeviceEdge))
+        | summarize
+                EntryVectors      = make_set(EntryVector),
+                DeviceEdges       = make_set(DeviceEdge),
+                CredentialNodes   = make_set(iff(set_has_element(FirstHopCategories, "secret"), FirstHopNode, ""), 10),
+                FirstHopLabels    = make_set(FirstHopLabel),
+                ReachedIdentities = make_set(ReachedIdentity),
+                ViaRoleScope      = take_any(RoleScopeName),
+                ViaRoleScopeType  = take_any(RoleScopeLabel),
+                MaxCvssScore      = max(MaxCvssScore)
+            by EntryPointDeviceId, EntryPointDevice, TargetAzureAssetId, TargetAzureAsset, TargetLabel
+        | extend CredentialNodes = set_difference(CredentialNodes, dynamic([""]))
+        | extend TargetType = case(
+            TargetLabel == "microsoft.resources/subscriptions", "Subscription",
+            TargetLabel == "microsoft.storage/storageaccounts", "Storage account",
+            TargetLabel)
+        | extend AttackPathName = strcat(
+            "Device with high severity vulnerabilities allows lateral movement to Azure ",
+            iff(TargetType == "Subscription", "subscription", "storage account"));
+
+        // CMDB + Tier enrichment from SI_Azure_Profile_CL on FINAL TARGET (AzureAsset.NodeId == AzureResourceId_Guid).
+        // SINGLE multi-assignment extend on purpose: the engine's 2-phase post-augment
+        // regex matches `| extend a=b, c=d, ...` as one statement and captures all alias
+        // columns. Multiple separate `| extend` lines lose all but the first, breaking
+        // the downstream column references on the AH side.
+        _Paths
+        | join kind=leftouter (_TargetCmdb) on $left.TargetAzureAssetId == $right.Target_AzureResourceId_Guid
+        | extend cmdbId = Target_cmdbId, cmdbName = Target_cmdbName, cmdbCriticality = Target_cmdbCriticality, cmdbDataSensitivity = Target_cmdbDataSensitivity, Target_Tier_Aliased = Target_Tier_From_CL
+        // EG-derived multi-signal source-device probability (RiskFactorsCount + InternetExposed + LegacyEoS).
+        | join kind=leftouter (_DeviceEnrichment) on $left.EntryPointDeviceId == $right.NodeId
+        // Per project rule: CriticalityTier ALWAYS sources from SI_Azure_Profile_CL.Tier.
+        // Use the aliased column (populated either by the engine's post-AH augment OR
+        // by the legacy hybrid-pre-fetch inline datatable -- both paths populate it).
+        | extend CriticalityTier = coalesce(toint(Target_Tier_Aliased), 3)
+        | extend CriticalityTierLevel = case(
+            CriticalityTier == 0, "Critical - tier 0",
+            CriticalityTier == 1, "High - tier 1",
+            CriticalityTier == 2, "Medium - tier 2",
+            "Low - tier 3")
+        | extend SecurityDomain = "Endpoint"
+        | extend Category       = "AttackPath_VulnerableDeviceToAzure"
+        | extend Subcategory    = TargetType
+        | extend ConfigurationName = AttackPathName
+        | extend ConfigurationId   = strcat(EntryPointDevice, "->", TargetAzureAsset)
+        | extend AssetName = coalesce(Target_AssetName_From_CL, TargetAzureAsset)
+        | extend AssetId   = coalesce(Target_AssetId_From_CL,   TargetAzureAssetId)
+        | extend AssetType = coalesce(Target_AssetType_From_CL, TargetType)
+        | extend Impact = MaxCvssScore
+        | extend SecuritySeverity = case(
+            MaxCvssScore >= 9.0, "Very High",
+            MaxCvssScore >= 7.0, "High",
+            MaxCvssScore >= 5.0, "Medium-High",
+            MaxCvssScore >= 3.0, "Medium",
+            "Low")
+        // RiskFactor_Consequence stays 0 -- engine auto-derives tokens (Tier0BlastRadius,
+        // BusinessCriticalAsset, RestrictedDataAccess) from CriticalityTier + cmdb fields
+        // when the report's RiskFactor_Consequence_Detailed is empty.
+        | extend RiskFactor_Consequence          = 0
+        // RiskFactor_Probability = COUNT of EG-derived risk signals on the source device,
+        // ADDED ON TOP of the engine's probBase (which comes from CriticalityTierLevel
+        // via riskscore.index.custom.csv). Do NOT add CVSS here -- CVSS already drives
+        // SecuritySeverity -> consBase, so adding it again would double-count.
+        | extend RiskFactor_Probability          = coalesce(toint(Source_RiskFactor_Probability), 0)
+        | extend RiskFactor_Probability_Detailed = coalesce(tostring(Source_RiskFactor_Probability_Detailed), "")
+        // Engine weighted-factor block. Substituted at run time from
+        // riskscore_weighted.schema.custom.json -> weightedRiskFactors.endpoint.fields[].
+        // Default stub below = no lift (Factor=100). Real schema multiplies cmdbCriticality
+        // * cmdbDataSensitivity (basis-100, e.g. Critical*Restricted -> 150*175/100 = 262.5).
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = iff(isnotempty(cmdbCriticality), strcat("cmdbCriticality=", tostring(cmdbCriticality)), "")
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
+        | project SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+                  AssetName, AssetId, AssetType, Impact, SecuritySeverity,
+                  CriticalityTier, CriticalityTierLevel,
+                  RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed,
+                  RiskScore_Weight_Detailed, RiskScore_Weight_Factor, RiskFactor_Weight,
+                  cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity,
+                  EntryPointDevice, EntryVectors, ReachedIdentities, TargetAzureAsset,
+                  ViaRoleScope, ViaRoleScopeType, MaxCvssScore, CredentialNodes
+        | sort by EntryPointDevice asc, TargetAzureAsset asc
+
     - ReportName: Attack_Paths_Detailed_Credential_Based_Lateral_Movement
       ReportPurpose: Per-row detail of credential-driven lateral-movement paths to Azure and Endpoint targets,
         prioritized by FINAL TARGET business impact. EG drives path detection (SourceAsset -> Credential -> Identity -> AzureTarget) +
@@ -23465,6 +24010,7 @@ ReportTemplates:
       - Name: Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation
       - Name: Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources
       - Name: Attack_Paths_Detailed_Data_Sensitivity_to_Exposed_Credentials
+      - Name: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
       - Name: Attack_Paths_Detailed_Credential_Based_Lateral_Movement
       - Name: Identity_PrivilegedSPN_NoLogin180Days_Detailed
       - Name: Identity_PrivilegedUser_SignIn_NonTrustedLocation_Detailed
@@ -23527,6 +24073,7 @@ ReportTemplates:
       - Name: Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
       - Name: Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
       - Name: Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials
+      - Name: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
       - Name: Attack_Paths_Summary_Credential_Based_Lateral_Movement
       - Name: Identity_NoMFA_Summary
       - Name: Identity_StaleUser_NoLogin180Days_Summary

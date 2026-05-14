@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.305
+## v2.2.306
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
 - release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
 - release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
 - release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
@@ -33,13 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
 - release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
 - release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
-- release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.306 — Promote `Attack_Paths_*_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` (Summary + Detailed) back to Locked with native `make-graph` shape
+
+Both reports rewritten in v2.2.303 around KQL `make-graph` + `graph-match` (replacing the v2.2.290 4-hop cartesian shape that 900s-timed-out bucket 40 on bomb devices). Iterated in Dev YAML across v2.2.303 → v2.2.305; now promoted back to Locked.
+
+### Shape
+
+- **Source-side bucket placeholder** (inside `VulnerableDevices` let, before `make-graph`) → bucketing partitions the graph SEED, not just output rows → scales sub-linearly to 100K+ devices
+- **EG-only graph traversal** (`make-graph SourceNodeId --> TargetNodeId with RelevantNodes on NodeId` + `graph-match (Device)-[devEdge]->(CredOrIdent)-[bridge*0..3]->(Principal)-[role]->(RoleScope)-[inherit*0..2]->(AzureAsset)`) → no cartesian explosion
+- **CMDB enrichment** via hybrid pre-fetch from `SI_Azure_Profile_CL` (FINAL TARGET) — `cmdbId/Name/Criticality/DataSensitivity` populated post-graph
+- **Source-device Tier** from `SI_Endpoint_Profile_CL` keyed on `aadDeviceId` — feeds `CriticalityTier` (per project rule: ALWAYS from CL.Tier, never EG)
+- **EG multi-signal probability** (`RF_P_RiskFactorsCount + RF_P_InternetExposed + RF_P_LegacyEoS`) → `RiskFactor_Probability` adjustment on top of engine's `probBase`
+- **CVSS-driven SecuritySeverity** thresholded on raw EG `maxCvssScore` (0-10 scale): >=9 Very High, >=7 High, >=5 Medium-High, >=3 Medium, else Low
+- **WEIGHTED_FACTORS placeholder** for cmdb multiplier (cmdbCriticality × cmdbDataSensitivity, basis-100, max 2.62×)
+- **`UseBucketFilter`** stays at engine default true; `BucketCount` left to AutoBucket (starts at 2, escalates if needed)
+
+### Validated against ASM portal
+
+Detailed returns 32 rows in 2 buckets × ~45s each on Nordstern's tenant — exact match with Defender ASM portal's "Device with high severity vulnerabilities allows lateral movement to Azure" attack-path count (32 paths).
+
+### Engine fixes shipped alongside
+
+- v2.2.302: stop auto-injecting stale-device filter into reports without `TargetNodeId/NodeId` at injection point
+- v2.2.305: `RaReportCount` Pester regex scoped to Reports[] section only (no longer over-counts templates)
+- This release: stale-device default switched from `'strict'` to `'off'` engine-wide (was misanchoring against graph-match output and dropping rows; was never a load-bearing filter — EG itself only snapshots recently-seen device nodes). Customer can opt back in via `$global:SI_RA_StaleDeviceFilter = 'strict'`.
+- This release: `*_Detailed*` AutoBucket default lowered from 32 → 2 (the 32 was a cartesian-shape assumption; graph-match doesn't need it; AutoBucket still escalates on probe failure)
+
+### Doc counts
+
+- README: 116 → 118 (mermaid + engine inventory table)
+- docs/risk-analysis-detection.md: 116 → 118
+- 59 Summary + 59 Detailed pairs
 
 ---
 

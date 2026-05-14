@@ -171,7 +171,7 @@ flowchart TB
         P1[Collect → Classify → Tier 0–3 per asset, with proofs]
     end
     subgraph RA ["2. Risk Analysis"]
-        R1[116 attacker-centric KQL reports<br/>across Endpoint, Identity, Azure, PublicIP]
+        R1[118 attacker-centric KQL reports<br/>across Endpoint, Identity, Azure, PublicIP]
     end
     subgraph OUT ["3. Outputs"]
         direction LR
@@ -1659,7 +1659,7 @@ The `Push-PreviewBundle.ps1` helper bundles the dev tree + `AutomateITPS` / `Aut
 | **asset-profiling** | `engine/asset-profiling/` | Identity + Endpoint + Azure → flat-column LA Profile tables. **559** enrichment rules merged from `*.locked.yaml` + `*.custom.yaml` per domain. Tier engine = pure MIN-of-SIRules (no static defaults — every signal becomes a rule entry; engine reduces). | `SI_IdentityAssets_Profile_CL`, `SI_EndpointAssets_Profile_CL`, `SI_AzureAssets_Profile_CL` |
 | **privilege-tier-classifier** | `engine/privilege-tier-classifier/` | AI-driven classifier for ambiguous Entra roles / scopes / app permissions. Reads `privilege-tier-catalog/privilege-tier-catalog.locked.json`. | Updates `Tier` on Identity profile rows |
 | **publicip** | `engine/publicip/` | Shodan scanner for Tier 0/1 public IPs. Detects open ports + CVEs on internet-exposed assets. | `SI_VulnerabilityPIP_CL` |
-| **risk-analysis** | `engine/risk-analysis/` | **116 reports** (58 Summary + 58 Detailed, fully paired) across 4 security domains (Endpoint, Identity, Azure, PublicIP). EG-primary RA pattern: queries source from Microsoft Exposure Graph (nodes + edges), join `SI_*_Profile_CL` only for Tier / CMDB enrichment. 3-layer score model (RiskScoreTotal → RiskScore_Weight_Factor → RiskScoreTotal_Weighted). | `SI_RiskAnalysis_Summary_CL`, `SI_RiskAnalysis_Detailed_CL` |
+| **risk-analysis** | `engine/risk-analysis/` | **118 reports** (59 Summary + 59 Detailed, fully paired) across 4 security domains (Endpoint, Identity, Azure, PublicIP). EG-primary RA pattern: queries source from Microsoft Exposure Graph (nodes + edges), join `SI_*_Profile_CL` only for Tier / CMDB enrichment. 3-layer score model (RiskScoreTotal → RiskScore_Weight_Factor → RiskScoreTotal_Weighted). | `SI_RiskAnalysis_Summary_CL`, `SI_RiskAnalysis_Detailed_CL` |
 
 **Configuration pattern across all engines:** every rule YAML has a `.locked.yaml` (engine-shipped, never edited by customer) and matching `.custom.yaml` (customer-owned, gitignored). The two merge by `id`; Custom wins on conflict and adds new entries. Provider connectors are pluggable under `asset-profiling-providers/<provider>/` — currently `entra/` (built-in) and `servicenow-cmdb/` (read-only CSV pull).
 

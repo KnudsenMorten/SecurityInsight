@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.288
+## v2.2.289
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
 - release: SecurityInsight v2.2.288 - stale-device filter auto-injects when YAML placeholder missing (cfc4bd2e)
 - release: SecurityInsight v2.2.287 - stale-device filter defaults to strict (was off, contradicted v2.2.282 intent) (3095b0bb)
 - release: SecurityInsight v2.2.286 - Get-PlatformSecretLocal also soft-fails (parity with KeyVault) (2b40bfc5)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
 - release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
 - release: SecurityInsight v2.2.260 - bump AzLogDcrIngestPS minimum to 1.6.5 (MI now end-to-end) (087702df)
-- release: SecurityInsight v2.2.259 - bump AzLogDcrIngestPS minimum to 1.6.4 (d67867e0)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.289 — `Invoke-SIHuntingQuery` (LA route) retries transient failures + dumps query preview
+
+Operator: "WARNING: Invoke-SIHuntingQuery (LA): Operation returned an invalid status code 'BadRequest' — i see this occasionally" + "maybe a retry so we dont loose data".
+
+### Two problems addressed
+
+**1. Useless error message** — the bare `BadRequest` surfaces nothing about which KQL the LA backend rejected. The DefenderGraph branch of the same function already reads `ErrorDetails.Message` and falls back to the response stream body; the LA branch did neither.
+
+**2. Single attempt drops the row** — when `Invoke-SIHuntingQuery (LA)` is called per-row from `Build-SIAzureProfileRow` (Phase 8/9 Output stage; 1236 rows on Nordstern's last run), one transient backend hiccup means one missing profile row downstream. No retry meant data loss on every transient.
+
+### Fix
+
+`Invoke-SIHuntingQuery (LA)` now:
+
+- **Retries up to 3 attempts** (configurable via `$global:SI_LAQueryMaxRetries`) with exponential backoff: **1s → 3s → 7s**. Hard schema errors will still fail consistently across all 3 attempts.
+- **Extracts richer error detail** on each failure: `ErrorDetails.Message` first, then response stream body, then bare exception message.
+- **Logs each retry attempt** with the attempt number + the extracted error so operators can see whether the failure pattern is transient (varying messages) or deterministic (same message across all attempts — implies real KQL bug).
+- **On final exhaustion**, dumps the first 500 chars of the failing query so operators can identify exactly which call broke.
+
+### Operator behaviour
+
+A transient BadRequest now looks like:
+
+```
+WARNING: Invoke-SIHuntingQuery (LA) attempt 1/3 failed: BadRequest | body: <details> -- retrying in 1s
+[OK]    (succeeds on attempt 2, no further warning, row included in profile)
+```
+
+A persistent failure now looks like:
+
+```
+WARNING: Invoke-SIHuntingQuery (LA) attempt 1/3 failed: <reason> -- retrying in 1s
+WARNING: Invoke-SIHuntingQuery (LA) attempt 2/3 failed: <reason> -- retrying in 3s
+WARNING: Invoke-SIHuntingQuery (LA): 3 consecutive attempts failed. Last error: <reason>
+WARNING: Invoke-SIHuntingQuery (LA): failing query (first 500 chars): <kql>
+```
+
+Customer can tune retry count via `$global:SI_LAQueryMaxRetries = N` in `SecurityInsight.custom.ps1` (default 3).
 
 ---
 

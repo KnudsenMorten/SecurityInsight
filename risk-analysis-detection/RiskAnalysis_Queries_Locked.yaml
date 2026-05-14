@@ -949,8 +949,8 @@ Reports:
           // Step 1  Latest DeviceInfo per device (for AadDeviceId mapping + DeviceName for the impacted-asset list).
           let DeviceInfoLatest =
               DeviceInfo
-              | where TimeGenerated >= ago(lookback)
-              | summarize arg_max(TimeGenerated, *) by DeviceId
+              | where Timestamp >= ago(lookback)
+              | summarize arg_max(Timestamp, *) by DeviceId
               | project
                   DeviceId,
                   DI_DeviceName  = DeviceName,
@@ -974,7 +974,7 @@ Reports:
           // Controls listed in excludeForWindowsServer are excluded only for Windows Server devices.
           let TVM_Base =
               DeviceTvmSecureConfigurationAssessment
-              | where TimeGenerated >= ago(lookback)
+              | where Timestamp >= ago(lookback)
               | where iff(onlyApplicable, IsApplicable == 1, true)
               | where not (ConfigurationId in (_excludedConfigurationIds))
               | join kind=leftouter (
@@ -1005,7 +1005,7 @@ Reports:
                   ImpactInt == 8,  "Medium-High",
                   ImpactInt >= 5,  "Medium",
                   "Low")
-              | summarize arg_max(TimeGenerated, *) by DeviceId, ConfigurationId
+              | summarize arg_max(Timestamp, *) by DeviceId, ConfigurationId
               | where IsCompliant == false
               | lookup CategoryLookup on Category
               | lookup SubCategoryLookup on Subcategory
@@ -1263,8 +1263,8 @@ Reports:
           // Step 1  Latest DeviceInfo per device (DeviceName + AadDeviceId mapping + OS for display).
           let DeviceInfoLatest =
               DeviceInfo
-              | where TimeGenerated >= ago(lookback)
-              | summarize arg_max(TimeGenerated, *) by DeviceId
+              | where Timestamp >= ago(lookback)
+              | summarize arg_max(Timestamp, *) by DeviceId
               | project
                   DeviceId,
                   DI_DeviceName  = DeviceName,
@@ -1288,7 +1288,7 @@ Reports:
           // Step 3  Load TVM secure configuration data and KB enrichment.
           let TVM_Base =
               DeviceTvmSecureConfigurationAssessment
-              | where TimeGenerated >= ago(lookback)
+              | where Timestamp >= ago(lookback)
               | where iff(onlyApplicable, IsApplicable == 1, true)
               | where not (ConfigurationId in (_excludedConfigurationIds))
               | join kind=leftouter (
@@ -1335,7 +1335,7 @@ Reports:
                       ImpactInt == 8,  "Important baseline security hardening; reduces attack surface and lateral movement.",
                       ImpactInt >= 5,  "Security best practice; helps reduce exposure but less frequently exploited.",
                       "Hardening / hygiene controls; helps, but attackers less likely to target.")
-              | summarize arg_max(TimeGenerated, *) by DeviceId, ConfigurationId
+              | summarize arg_max(Timestamp, *) by DeviceId, ConfigurationId
               | where IsCompliant == false
               | lookup CategoryLookup on Category
               | lookup SubCategoryLookup on Subcategory

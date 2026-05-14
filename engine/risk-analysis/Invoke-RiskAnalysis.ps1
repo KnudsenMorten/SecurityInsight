@@ -2586,6 +2586,22 @@ function Resolve-StaleDeviceFilterBlock {
                        ($Query -match '"device"|"computer-account"|"microsoft\.compute/virtualmachines"')
     if (-not $touchesEgDevice) { return $Query }
 
+    # v2.2.302 -- the auto-injected filter assumes the row at injection point has a
+    # 'TargetNodeId' or 'NodeId' column (filter shape:
+    # `coalesce(column_ifexists('TargetNodeId',''), column_ifexists('NodeId','')) in ((NodeIds))`).
+    # If neither column reference appears in the query body, those column_ifexists
+    # calls return "", coalesce returns "", and `"" in ((subquery))` is false for
+    # every row -> 100% silent drop. Reports like Device_Recommendations_Summary
+    # join EG only for IsCustomerFacing and don't carry TargetNodeId/NodeId at the
+    # injection point -- the filter produced 0 rows on every run for those tenants.
+    # Skip auto-injection when neither column is referenced; the placeholder-based
+    # path 1 remains opt-in for reports that explicitly carry __STALE_DEVICE_FILTER__.
+    $hasNodeKeyContract = ($Query -match '\bTargetNodeId\b') -or ($Query -match '\bNodeId\b')
+    if (-not $hasNodeKeyContract) {
+        Write-Info ("[stale-device] {0}: auto-injection skipped (query has no TargetNodeId/NodeId column at injection point; filter would drop every row)" -f $ReportName)
+        return $Query
+    }
+
     # Find start of the line that contains the bucket-begin mark + capture its indent.
     $lineStart = $Query.LastIndexOf("`n", $bucketIdx)
     if ($lineStart -lt 0) { $lineStart = 0 } else { $lineStart++ }

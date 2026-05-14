@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.290
+## v2.2.291
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
 - release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
 - release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
 - release: SecurityInsight v2.2.288 - stale-device filter auto-injects when YAML placeholder missing (cfc4bd2e)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.264 - silence DCE/DCR scope-filter chatter (f07cd8fd)
 - release: SecurityInsight v2.2.263 - terse auth probe + AllUsers-only KeepLatest + min-version always throws (f6ce9b5d)
 - release: SecurityInsight v2.2.262 - bump AzLogDcrIngestPS minimum to 1.6.7 (MI live) (022218d6)
-- release: SecurityInsight v2.2.261 - force-reload KeepLatest modules so session matches disk (a1058095)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.291 — Silence the "secret X not found in vault Y" warnings on missing optional secrets
+
+Operator: "i hate the warning about platformsecurity missing in keyvault, remove it".
+
+v2.2.285/286 changed `Get-PlatformSecretKeyVault` and `Get-PlatformSecretLocal` from `throw` to `Write-Warning + return $null` to keep Layer 3 launcher-config loads non-fatal. But the warning fired on every optional secret that wasn't seeded yet (SI-StorageKey on OAuth-default tenants, Shodan/OpenAI keys when those features are off, Smtp-User/Smtp-Password before mail is wired up), polluting normal launcher output:
+
+```
+WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-User' not found in vault 'kv-ns-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-Password' not found in vault 'kv-ns-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-ns-automateit-p' (returning $null).
+```
+
+### Fix
+
+Both providers now use `Write-Verbose` instead of `Write-Warning` for the missing-secret path. Normal runs are clean; operators who need to debug a missing-secret scenario can pass `-Verbose` or set `$VerbosePreference = 'Continue'`.
+
+No behaviour change otherwise — `$null` is still returned, callers using `if (-not $global:X)` fall-through patterns still work, soft-fail invariant preserved.
 
 ---
 

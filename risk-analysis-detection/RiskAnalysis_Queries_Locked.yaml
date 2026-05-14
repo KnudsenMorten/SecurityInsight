@@ -9396,22 +9396,42 @@ Reports:
                 DeviceNodeName,
                 DeviceNodeLabel;
 
-        // Step 8  Assemble full path keys
-        let PathKeys =
+        // Step 8 (v2.2.290)  Aggregate Cred + Identity into sets per (Device, Target).
+        // Was: distinct (Device, Cred, Identity, Target) -- multiplicative cartesian
+        // (N_cred x N_identity x N_target rows per device, 10K-1M+ on heavy devices).
+        // Now: per (Device, Target) row with Cred/Identity collapsed to make_set
+        // columns. Same coverage (every attack path still present), but row count
+        // drops from N_cred*N_identity*N_target to just N_target per device, so
+        // a device with 160 CVEs + 2 creds + 50 identities + 100 targets goes from
+        // ~10K rows to ~100 rows. Lossless w.r.t. "which device can reach which
+        // target via vulnerabilities" -- the report's actual purpose -- but the
+        // specific (Cred, Identity) tuple-per-row is collapsed to a per-target set.
+        let DeviceTargetPaths = materialize(
             CVEByDevice
-            | join kind=inner hint.strategy=broadcast (CredEdges)   on DeviceNodeId
-            | join kind=inner                         (Hop1Edges)   on CredentialNodeId
-            | join kind=inner                         (Hop2Edges)   on IdentityNodeId
+            | join kind=inner hint.strategy=broadcast (CredEdges) on DeviceNodeId
+            | join kind=inner                         (Hop1Edges) on CredentialNodeId
+            | join kind=inner                         (Hop2Edges) on IdentityNodeId
             | where DeviceNodeId != FinalTargetId
-            | distinct
-                DeviceNodeId,     DeviceNodeName,     DeviceNodeLabel,
-                CredentialNodeId, CredentialNodeName, CredentialNodeLabel,
-                IdentityNodeId,   IdentityNodeName,   IdentityNodeLabel,
-                Hop1Edge,         Hop2Edge,
-                FinalTargetId,    FinalTargetName,    FinalTargetLabel;
+            | summarize
+                CredentialNames_Set     = make_set(CredentialNodeName),
+                CredentialTypes_Set     = make_set(CredentialNodeLabel),
+                IdentityNames_Set       = make_set(IdentityNodeName),
+                IdentityTypes_Set       = make_set(IdentityNodeLabel),
+                Hop1Edges_Set           = make_set(Hop1Edge),
+                Hop2Edges_Set           = make_set(Hop2Edge),
+                DistinctCredentials     = dcount(CredentialNodeId),
+                DistinctIdentities      = dcount(IdentityNodeId),
+                PathCount               = count()
+              by
+                DeviceNodeId, DeviceNodeName, DeviceNodeLabel,
+                FinalTargetId, FinalTargetName, FinalTargetLabel
+        );
 
-        // Step 9  Enrich paths with node metadata using explicit project aliases
-        PathKeys
+        // Step 9  Enrich (Device, Target) rows with source/target metadata + CVE list.
+        // Intermediate-identity enrichment removed: Identity is now a set, not a
+        // single row, so per-identity columns would only carry the first one's
+        // values -- misleading. Identity tier info is implicit via reachability.
+        DeviceTargetPaths
         | join kind=leftouter hint.strategy=broadcast (CVEByDevice) on DeviceNodeId
         | join kind=leftouter hint.strategy=broadcast (
             NodesSlim
@@ -9426,18 +9446,6 @@ Reports:
                 SourceDeviceRiskProbDetailed     = RiskFactor_Probability_Detailed,
                 SourceDeviceRiskProbDetailedScore = RiskFactor_Probability_DetailedScore
           ) on $left.DeviceNodeId == $right.SourceDeviceId
-        | join kind=leftouter hint.strategy=broadcast (
-            NodesSlim
-            | project
-                IntermediateNodeId                = AssetNodeId,
-                IntermediateCriticalityTier       = CriticalityTier,
-                IntermediateCriticalityTierLevel  = CriticalityTierLevel,
-                IntermediateIsInternetExposed     = IsInternetExposed,
-                IntermediateLegacyEndOfSupport    = LegacyEndOfSupport,
-                IntermediateRiskProb              = RiskFactor_Probability,
-                IntermediateRiskProbDetailed      = RiskFactor_Probability_Detailed,
-                IntermediateRiskProbDetailedScore = RiskFactor_Probability_DetailedScore
-          ) on $left.IdentityNodeId == $right.IntermediateNodeId
         | join kind=leftouter hint.strategy=broadcast (
             NodesSlim
             | project
@@ -9519,11 +9527,21 @@ Reports:
         | extend RiskFactor_Probability_DetailedScore = TargetRiskFactor_Probability_DetailedScore
         | extend InternetExposureTarget = iff(TargetIsInternetExposed == true, "Internet-Exposed", "Not Internet-Exposed")
         | extend InternetExposureSource = iff(SourceDeviceIsInternetExposed == true, "Internet-Exposed", "Not Internet-Exposed")
+        // v2.2.290 -- flatten the make_set columns to joined strings for the
+        // AttackPath narrative + final project. Multiple credentials/identities
+        // reaching the same target are shown as semicolon-joined lists.
+        | extend
+            CredentialTypes     = strcat_array(array_sort_asc(CredentialTypes_Set), "; "),
+            CredentialNames     = strcat_array(array_sort_asc(CredentialNames_Set), "; "),
+            IdentityTypes       = strcat_array(array_sort_asc(IdentityTypes_Set),   "; "),
+            IdentityNames       = strcat_array(array_sort_asc(IdentityNames_Set),   "; "),
+            Hop1Edge            = strcat_array(array_sort_asc(Hop1Edges_Set),       "; "),
+            Hop2Edge            = strcat_array(array_sort_asc(Hop2Edges_Set),       "; ")
         | extend AttackPath =
             strcat(
                 DeviceNodeLabel, " [", DeviceNodeName, "] -> ",
-                CredentialNodeLabel, " [", CredentialNodeName, "] -> ",
-                IdentityNodeLabel, " [", IdentityNodeName, "] -> ",
+                "[", CredentialTypes, "] -> ",
+                "[", IdentityNames, "] -> ",
                 FinalTargetLabel, " [", FinalTargetName, "]"
             )
         | extend AttackPathDetailed =
@@ -9532,13 +9550,16 @@ Reports:
                 "tier ", tostring(SourceDeviceCriticalityTier), " ", tostring(SourceDeviceCriticalityLevel),
                 " | ", InternetExposureSource,
                 " | high severity CVEs ", tostring(HighSeverityCVEs),
-                " -> CREDENTIAL ", CredentialNodeLabel, " [", CredentialNodeName, "] ",
-                " -> IDENTITY ", IdentityNodeLabel, " [", IdentityNodeName, "] ",
+                " -> CREDENTIALS (", tostring(DistinctCredentials), ") [", CredentialNames, "]",
+                " | types [", CredentialTypes, "]",
+                " -> IDENTITIES (", tostring(DistinctIdentities), ") [", IdentityNames, "]",
+                " | types [", IdentityTypes, "]",
                 " -> TARGET ", FinalTargetLabel, " [", FinalTargetName, "] ",
                 "tier ", tostring(TargetCriticalityTier), " ", tostring(TargetCriticalityTierLevel),
                 " | ", InternetExposureTarget,
                 " | escalation ", tostring(TierEscalation),
-                " | ", LateralMovementType
+                " | ", LateralMovementType,
+                " | total paths ", tostring(PathCount)
             )
         // Per-row identity columns expected by engine dedup (AssetName, ConfigurationName/Id).
         // ConfigurationId carries the FINAL TARGET id so (AssetName, ConfigurationId) is unique per row.
@@ -9606,19 +9627,17 @@ Reports:
             FirstCVESeverity,
             CVEs,
             CVESeverities,
-            CredentialNodeId,
-            CredentialNodeName,
-            CredentialNodeLabel,
-            IdentityNodeId,
-            IdentityNodeName,
-            IdentityNodeLabel,
-            IntermediateCriticalityTier,
-            IntermediateCriticalityTierLevel,
-            IntermediateIsInternetExposed,
-            IntermediateLegacyEndOfSupport,
-            IntermediateRiskProb,
-            IntermediateRiskProbDetailed,
-            IntermediateRiskProbDetailedScore,
+            // v2.2.290 -- packed columns (joined sets per (Device, Target) row)
+            // replace the previous per-row CredentialNodeId/Name/Label and
+            // IdentityNodeId/Name/Label columns. Intermediate-identity columns
+            // dropped (Identity is now a set, not a single-row enrichment target).
+            CredentialNames,
+            CredentialTypes,
+            IdentityNames,
+            IdentityTypes,
+            DistinctCredentials,
+            DistinctIdentities,
+            PathCount,
             FinalTargetId,
             FinalTargetName,
             FinalTargetLabel,

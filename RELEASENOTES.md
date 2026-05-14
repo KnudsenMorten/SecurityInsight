@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.276
+## v2.2.277
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
 - release: SecurityInsight v2.2.276 - 502 Bad Gateway = deterministic too-large + visible retry log (a39ff94a)
 - release: SecurityInsight v2.2.275 - customer-data policy + override how-to in README + canonical template POLICY callout (8d1fcebd)
 - release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
@@ -33,13 +34,52 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.250 - capture CheckCreateUpdate output + extend wait to 240s (e079dfb1)
 - release: SecurityInsight v2.2.249 - auto-rename DCR on cross-scope collision + persist to custom.ps1 (76e52b33)
 - release: SecurityInsight v2.2.248 - bump (v2.2.247 tag was already published with wrong fix) (f33878fb)
-- release: SecurityInsight v2.2.247 - anonymous-mail diagnostic logging, never lie about success (bae363f7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.277 — Adaptive sub-bucketing replaces escalate-and-restart; `BucketCount: 64` declared on heavy attack-paths reports
+
+Operator's v2.2.276 run on Nordstern showed the escalate-and-restart strategy doesn't converge: at every bucket count level (2 → 8 → 32 → 128 → 512 → 2048 → 8192...), exactly ONE bucket times out, the report restarts at 4× higher count, and the cycle repeats. Each level burns ~30 min (200+ buckets at 3s each + 1× 900s timeout). Across the catalog this compounds to days-long runs.
+
+Operator pushed back on two related ideas: (a) skipping a failed bucket would lose data, (b) `take 50000` row caps would also lose data. Both rejected. The right design preserves every row.
+
+### Adaptive sub-bucketing
+
+When a bucket times out at the deterministic 900s ceiling (TaskCanceled or 502, per v2.2.276), the engine now records the bucket index in `$failedBucketIndices` and **continues with the next bucket** instead of restarting the whole report. After the main bucket loop completes, a sub-bucketing pass splits each failed bucket index N into K=4 sub-buckets via the math:
+
+```
+parent: hash(__bucket_key) % T == N
+sub:    hash(__bucket_key) % (T*K) == N + j*T   for j in 0..K-1
+```
+
+Mathematically equivalent to "row was in bucket N of T AND now in sub-bucket j of K within that bucket" — losslessly partitions the heavy bucket into K pieces. Sub-buckets that ALSO time out get recursively split (BFS queue, depth cap 4 = up to 256× finer than the original BucketCount). Successful buckets' rows are retained the entire time; we never re-run them.
+
+Tunable globals:
+- `$global:SI_AutoBucketSubFanOut` (default 4) — K, the split factor per pass
+- `$global:SI_AutoBucketSubDepthMax` (default 4) — recursion depth ceiling
+
+Effect on Nordstern's case: BucketCount=64 → ~63 buckets succeed in ~3min total → 1 bucket times out → split into 4 sub-buckets at modulus 256 → likely all 4 succeed → done. **Total ~5-15 min, lossless, 100% data preserved.** Compared to the v2.2.276 escalation spiral that was ~hours-to-days.
+
+### `BucketCount: 64` on the two heavy attack-paths reports
+
+Default `BucketCount=2` is fine for typical reports but pathologically wrong for the 4-hop EG path-expansion family (Device → CVE → Credential → Identity → AzureTarget). Two reports updated in `RiskAnalysis_Queries_Locked.yaml`:
+
+- `Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`
+- `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`
+
+Both now declare `BucketCount: 64` so they start at the right size directly. Customer can override per-tenant in their `.custom.yaml`. The engine sub-bucketing handles any residual heavy buckets without restarting.
+
+### What didn't change
+
+- `take 50000` row caps in the Summary version's KQL stay as-is (they were the v2.2.240 safety net against query-engine OOM; the Summary's `summarize ... by` dedups upstream so the loss surface is small). The Detailed version was never given those caps and won't get them — sub-bucketing is the right tool there.
+- Overflow errors (`Test-IsBucketOverflowError`) still trigger full report-level escalation (those benefit from a wholesale restart at higher bucket count). Only TaskCanceled / 502 deterministic-too-large patterns route to sub-bucketing.
+- `$global:AutoBucketMax = 131072` unchanged.
 
 ---
 

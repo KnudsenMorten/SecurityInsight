@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.273
+## v2.2.274
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.274 - cmdb gating + locked-rule cmdb leak fix + override how-to (3e366d3b)
 - release: SecurityInsight v2.2.273 - fail-fast + 4x escalation + snapshot-aware sizing (21520cf6)
 - release: SecurityInsight v2.2.272 - AutoBucket timeout-escalate + routing diagnostics (07c7b091)
 - release: SecurityInsight v2.2.271 - RA + PublicIP LA-ingest honour cert auth (5e04d34a)
@@ -33,13 +34,36 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.247 - anonymous-mail diagnostic logging, never lie about success (bae363f7)
 - release: SecurityInsight v2.2.247 - fix silent anonymous-mail failure (704a2513)
 - release: SecurityInsight v2.2.246 - propagate DCR/DCE scope filter to Schema + Tagging stages (1528059a)
-- release: SecurityInsight v2.2.245 - per-engine DCR overrides + always-on sub/RG scope filter (0b4a3c71)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.274 — `set.cmdbId` honoured only when CMDB provider is enabled + locked-rule cmdb leak fix + RULE-REFERENCE override how-to
+
+Operator caught a bug: a locked detection rule (`ADDomainController.locked.yaml`) was shipping `cmdbId: 1` and `cmdbDataSensitivity: 'Restricted'` in its `set:` block. The engine was stamping that placeholder cmdbId onto every Domain Controller it matched in every customer tenant, regardless of whether the customer had a CMDB provider configured.
+
+### Three fixes bundled
+
+**1. Engine gates cmdb propagation on `$global:SI_EnableCmdbProvider`** (`engine/asset-profiling/stages/Invoke-Profile.ps1:144`).
+
+When `$global:SI_EnableCmdbProvider` is `$false` or `$null`, the engine now ignores `set.cmdbId` and `set.cmdbName` from rule Set blocks. The downstream propagation at line 207-216 (which stamps the rule's cmdbId onto the asset's top-level fields) gets a `null` from the match record and silently skips. Net effect: cmdb fields in custom rules are inert until the operator opts in via `$global:SI_EnableCmdbProvider = $true`.
+
+**2. Locked baseline rule scrubbed** (`asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/ADDomainController.locked.yaml`).
+
+`cmdbId: 1` and `cmdbDataSensitivity: 'Restricted'` removed from the locked file with an inline comment explaining the policy: per-tenant cmdb info never goes into a shipped baseline rule. Audit confirmed this was the only locked file with the leak.
+
+**3. Docs how-to expanded** (`docs/RULE-REFERENCE.md` § Locked vs. custom).
+
+New worked-example sub-section walks through the override pattern: copy `ADDomainController.locked.yaml` → `ADDomainController.custom.yaml`, keep the same `id:`, paste the `any:` detection list verbatim, then customise `set:` with your own `cmdbId` + `Tags`. Engine dedups by `id` and the `.custom.yaml` always wins. Includes the gating note so customers without CMDB know cmdb fields are safe to leave in custom rules.
+
+### Operator action
+
+If you've been running with the locked-leak `cmdbId=1` in your `SI_Endpoint_Profile_CL`, your DCs will lose that placeholder cmdbId on the next Profile run. If you actually want cmdbId stamped on DCs, drop a `ADDomainController.custom.yaml` next to the locked file with your real cmdbId in the `set:` block (see RULE-REFERENCE.md for the template).
 
 ---
 

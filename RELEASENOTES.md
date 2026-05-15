@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.306
+## v2.2.307
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
 - release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
 - release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
 - release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
 - release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
 - release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
-- release: SecurityInsight v2.2.277 - adaptive sub-bucketing + BucketCount=64 on heavy attack-paths (bc168071)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.307 — `Attack_Paths_*_Device_*_Azure`: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target
+
+v2.2.306 shipped both reports with `AssetName/AssetId/AssetType` populated from the FINAL TARGET (Azure storage account / subscription) and `cmdb*` from the target's `SI_Azure_Profile_CL` row. That was wrong — the report family is "Device with high severity vulnerabilities allows lateral movement to Azure", so the analyzed asset IS the source device, not the Azure resource it could reach.
+
+### Fix
+
+- `_SourceTier` let-binding renamed to `_SourceCmdb` and expanded to project `Source_AssetName / AssetId / AssetType / cmdbId / cmdbName / cmdbCriticality / cmdbDataSensitivity` from `SI_Endpoint_Profile_CL` (alongside `Source_Tier`)
+- `cmdbId / cmdbName / cmdbCriticality / cmdbDataSensitivity` extends now sourced from `Source_*` (was `Target_*`)
+- `AssetName / AssetId / AssetType` extends now sourced from `Source_*` with `EntryPointDevice` / `EntryPointAadDeviceId` / `"Device"` fallbacks (was `Target_*`)
+- Azure-target context preserved in dedicated columns (`TargetAzureAsset`, `TargetAzureAssetId`, `TargetType`) — used in the impact narrative but not the canonical asset identity
+- WEIGHTED_FACTORS multiplier (cmdbCriticality × cmdbDataSensitivity) now amplifies the score by SOURCE device's business criticality, not the target's
+- Summary's `summarize ... by cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity` aggregates by source-device cmdb (so rows roll up by which source-device profile they share)
+
+### Effect
+
+A row representing "vulnerable workstation `dons-ekn-dt-01` can reach storage account `st2linkitsi`" now reports `AssetName=dons-ekn-dt-01`, `AssetId=<aad-device-guid>`, `AssetType=Device`. The Azure target is still in `TargetAzureAsset / TargetAzureAssetId / TargetType` for the impact narrative. CriticalityTier reflects the workstation's tier (Tier 0 admin device = high alarm; Tier 3 user laptop = lower priority).
 
 ---
 

@@ -8432,18 +8432,26 @@ Reports:
                 Target_AssetType_From_CL    = tostring(column_ifexists("AssetType", ""))
             | where Target_AzureResourceId_Guid != "";
 
-        // Source-device Tier from SI_Endpoint_Profile_CL (the entry-point device's
-        // engine-computed tier). Joined post-graph-match on AadDeviceId so the
-        // CriticalityTier on each attack path reflects the SOURCE device's
-        // criticality (e.g. Tier 0 admin workstation vs Tier 3 user laptop).
-        let _SourceTier =
+        // Source-device profile from SI_Endpoint_Profile_CL (the entry-point device).
+        // Joined post-graph-match on AadDeviceId. Drives:
+        //  - CriticalityTier (per project rule: ALWAYS from CL.Tier, never EG)
+        //  - cmdbCriticality / cmdbDataSensitivity for the WEIGHTED multiplier
+        //  - AssetName / AssetId / AssetType -- the row IS about THIS device's risk;
+        //    the Azure asset reached is the impacted destination, not the analyzed asset.
+        let _SourceCmdb =
             SI_Endpoint_Profile_CL
             | where TimeGenerated > ago(8d)
             | summarize arg_max(CollectionTime, *) by PrimaryEntityId
             | project
-                Source_AadDeviceId = tostring(column_ifexists("AadDeviceId", "")),
-                Source_AssetName   = tostring(column_ifexists("AssetName", "")),
-                Source_Tier        = toint(column_ifexists("Tier", 0))
+                Source_AadDeviceId         = tostring(column_ifexists("AadDeviceId", "")),
+                Source_AssetName           = tostring(column_ifexists("AssetName", "")),
+                Source_AssetId             = tostring(column_ifexists("AssetId", "")),
+                Source_AssetType           = tostring(column_ifexists("AssetType", "")),
+                Source_Tier                = toint(column_ifexists("Tier", 0)),
+                Source_cmdbId              = tostring(column_ifexists("cmdbId", "")),
+                Source_cmdbName            = tostring(column_ifexists("cmdbName", "")),
+                Source_cmdbCriticality     = tostring(column_ifexists("cmdbCriticality", "")),
+                Source_cmdbDataSensitivity = tostring(column_ifexists("cmdbDataSensitivity", ""))
             | where Source_AadDeviceId != "";
 
         let VulnerableDevices = ExposureGraphNodes
@@ -8546,11 +8554,17 @@ Reports:
         | extend cmdbId = Target_cmdbId, cmdbName = Target_cmdbName, cmdbCriticality = Target_cmdbCriticality, cmdbDataSensitivity = Target_cmdbDataSensitivity, Target_Tier_Aliased = Target_Tier_From_CL
         // EG-derived multi-signal source-device probability (RiskFactorsCount + InternetExposed + LegacyEoS).
         | join kind=leftouter (_DeviceEnrichment) on $left.EntryPointDeviceId == $right.NodeId
-        // Source-device Tier from SI_Endpoint_Profile_CL (CriticalityTier reflects the
-        // SOURCE entry-point device, not the final Azure target -- a vulnerable Tier 0
-        // workstation is the bigger threat than a vulnerable Tier 3 user laptop).
-        | join kind=leftouter (_SourceTier) on $left.EntryPointAadDeviceId == $right.Source_AadDeviceId
-        | extend CriticalityTier = coalesce(toint(Source_Tier), 3)
+        // Source-device profile from SI_Endpoint_Profile_CL. CriticalityTier + cmdb +
+        // canonical Asset columns ALL reflect the SOURCE entry-point device -- the
+        // analyzed asset for this attack-path family is the vulnerable device, not the
+        // Azure target. Azure target is preserved in dedicated columns (TargetAzureAsset,
+        // TargetAzureAssetId, TargetType) for the impact narrative.
+        | join kind=leftouter (_SourceCmdb) on $left.EntryPointAadDeviceId == $right.Source_AadDeviceId
+        | extend CriticalityTier      = coalesce(toint(Source_Tier), 3)
+        | extend cmdbId               = Source_cmdbId
+        | extend cmdbName             = Source_cmdbName
+        | extend cmdbCriticality      = Source_cmdbCriticality
+        | extend cmdbDataSensitivity  = Source_cmdbDataSensitivity
         | extend CriticalityTierLevel = case(
             CriticalityTier == 0, "Critical - tier 0",
             CriticalityTier == 1, "High - tier 1",
@@ -8852,9 +8866,9 @@ Reports:
         | extend Subcategory    = TargetType
         | extend ConfigurationName = AttackPathName
         | extend ConfigurationId   = strcat(EntryPointDevice, "->", TargetAzureAsset)
-        | extend AssetName = coalesce(Target_AssetName_From_CL, TargetAzureAsset)
-        | extend AssetId   = coalesce(Target_AssetId_From_CL,   TargetAzureAssetId)
-        | extend AssetType = coalesce(Target_AssetType_From_CL, TargetType)
+        | extend AssetName = coalesce(Source_AssetName, EntryPointDevice)
+        | extend AssetId   = coalesce(Source_AssetId,   EntryPointAadDeviceId, EntryPointDeviceId)
+        | extend AssetType = coalesce(Source_AssetType, "Device")
         | extend Impact = MaxCvssScore
         | extend SecuritySeverity = case(
             MaxCvssScore >= 9.0, "Very High",

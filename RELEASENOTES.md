@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.307
+## v2.2.308
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
 - release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
 - release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
 - release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
@@ -33,13 +34,18 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
 - release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
 - release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
-- release: SecurityInsight v2.2.278 - bridge HighPriv_Modern_*_Azure into $Spn* (internal-AutomateIT cert auth) (60fe589e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.308 — Sanitize remaining customer-name literals in `INTERNAL/New-SISolutionConfig.ps1` .EXAMPLE block
+
+`SOLUTIONS/SecurityInsight/INTERNAL/New-SISolutionConfig.ps1` `.EXAMPLE` block still had real customer literals (`stfvfsecurityinsight`, `IT-Alerts@fjernvarmefyn.dk`, `oai-fvf-security-insight`) in the doc-comment. Same pattern as v2.2.298 cleanup; never executed (comment-help block only) so no runtime change. Replaced with generic placeholders.
 
 ---
 

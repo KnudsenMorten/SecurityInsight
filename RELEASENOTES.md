@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.308
+## v2.2.309
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
 - release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
 - release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
 - release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
@@ -33,13 +34,42 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
 - release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
 - release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
-- release: SecurityInsight v2.2.279 - Detailed BucketCount default 32 + sub-bucket depth cap 6 (a5cce17e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.309 — Fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department / OU contains apostrophe, space, `+` or `%`
+
+Customer-reported failure on community VM: Identity engine completed sign-in batching + classification (8963 users, 4502 principals matched, 11037 items processed) and then **failed Phase 4/9 ENRICH** after ~44 min with `Invoke-RestMethod : The remote server returned an error: (400) Bad Request` at `Get-SIAppGroupRecord` → `TypeProfileCache.ps1:253`.
+
+### Root cause
+
+`ConvertTo-SISafeKey` (`engine/asset-profiling/storage/StorageContext.ps1:130`) replaces only `/ \ # ?` + control chars (0x00-0x1F, 0x7F-0x9F) before embedding the value into the Table REST URL:
+
+```
+https://<acct>.table.core.windows.net/<Tbl>(PartitionKey='<pk>',RowKey='<rk>')
+```
+
+`'` is OData's string-literal delimiter. When the identity engine's cluster key (`identity:<ENTRA_Department-or-OU>:<hex>`) contained a raw apostrophe — typical for customer department / OU names like `"Tom's Team"`, `"O'Brien Group"`, `"Børn's Center"` — the literal terminated early and Azure Table Storage rejected the request with HTTP 400. The Azure container test never hit this because the test tenant had clean department names.
+
+### Fix
+
+Expanded the replace class in `ConvertTo-SISafeKey` to also map `'`, `"`, space, `+`, and `%` to `_`:
+
+```powershell
+($Key -replace '[/\\#?''"+% \u0000-\u001f\u007f-\u009f]', '_').ToLowerInvariant()
+```
+
+`'` / `"` neutralizes the OData-delimiter break. Space + `+` neutralizes URL parser ambiguity (space → `+` → ambiguous with literal `+`). `%` neutralizes invalid URL-encoded sequences. Mapping stays deterministic + lowercase + human-debuggable in Storage Explorer.
+
+### Scope
+
+Single hot-path helper used by 6 call sites: `Get/Set-SIAssetTypeProfile`, `Get/Set-SIAppGroupRecord`, asset-id fingerprint keys. All six benefit. Asset IDs (Azure resource IDs) didn't trigger this in practice, but anything derived from user-supplied display names (department, OU, app group label) was exposed.
 
 ---
 

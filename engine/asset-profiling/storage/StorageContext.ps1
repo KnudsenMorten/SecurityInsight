@@ -124,12 +124,18 @@ function ConvertTo-SIRfc1123Date {
 }
 
 # Azure Table key constraints: cannot contain / \ # ? control chars (0x00-0x1F,
-# 0x7F-0x9F). Azure resource IDs are full of slashes, so we transform the raw
-# AssetId into a safe key by replacing those chars with '_'. The mapping is
-# deterministic, lowercase, and human-debuggable in Storage Explorer.
+# 0x7F-0x9F). We also strip apostrophe ('), double-quote ("), space, +, and %
+# even though Table accepts them in keys -- our REST URL form
+#   /Tbl(PartitionKey='pk',RowKey='rk')
+# uses ' as the OData literal delimiter, so a raw ' inside the key terminates
+# the literal early and the server returns 400 Bad Request. Space/+ break URL
+# parsing (space->+, + ambiguous), and % invalidates URL-encoded sequences.
+# Hit in the wild on Identity engine when ENTRA_Department / OU contained
+# names like "Tom's Team" or "Borns Center" (Danish o-stroke).
+# The mapping is deterministic, lowercase, and human-debuggable in Storage Explorer.
 function ConvertTo-SISafeKey {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Key)
-    return ($Key -replace '[/\\#?\u0000-\u001f\u007f-\u009f]', '_').ToLowerInvariant()
+    return ($Key -replace '[/\\#?''"+% \u0000-\u001f\u007f-\u009f]', '_').ToLowerInvariant()
 }
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.309
+## v2.2.310
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
 - release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
 - release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
 - release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
@@ -33,13 +34,40 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
 - release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
 - release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
-- release: SecurityInsight v2.2.280 - visible heartbeat before AH + LA submissions (b169eba4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.310 — `Write-SICustomConfig.ps1` + `Setup-SecurityInsight-Unattended.ps1`: refuse to silently overwrite a live `config/SecurityInsight.custom.ps1`
+
+Operator ran a container/sicont-flavour bootstrap from the same repo checkout that held a live internal-VM `SecurityInsight.custom.ps1` (with `SI_EnableCmdbProvider = $true`, real workspace, mail config, etc). The pre-v2.2.310 default backed up the file to `*.bak.<timestamp>` and overwrote with the sicont template. Next VM-launcher RA run shipped a report with every `cmdbId / cmdbName / cmdbCriticality / cmdbDataSensitivity` column blank — operator had no warning that the config had been rewritten under them.
+
+### Fix
+
+`Write-SICustomConfig.ps1`:
+- New `-Force` switch. **Default is now SAFE**: if the target file exists, the script throws with a clear message naming the file + the backup path that *would* have been written.
+- Old "backup-and-clobber" behaviour preserved via `-Force` (re-onboarding, tenant migration, deliberate rewrite).
+
+`Setup-SecurityInsight-Unattended.ps1`:
+- New `-ForceConfigOverwrite` switch that propagates `-Force` to `Write-SICustomConfig`. Default off.
+- Unattended runs from a fresh checkout (no pre-existing custom file) still work the same — the gate only fires when there's something to lose.
+
+### Operator playbook
+
+| Situation | What to do |
+|---|---|
+| First-time install (no custom.ps1 yet) | Run as before. Gate doesn't fire. |
+| Re-onboarding / wizard re-run / tenant migration | Pass `-ForceConfigOverwrite` |
+| Container-flavour bootstrap from a repo that ALSO holds a VM-flavour config | Use a separate repo checkout. Don't pass `-Force`. |
+
+### Why this matters
+
+The wiped file is technically recoverable (the `*.bak.<ts>` is right next to it), but only if the operator notices before the next engine run uses the new (wrong) workspace + storage. By default we should make the destructive action opt-in.
 
 ---
 

@@ -60,7 +60,15 @@ param(
     [Parameter()]          [hashtable]$Shodan,
     [Parameter()]          [hashtable]$Cmdb,
     [Parameter()]          [switch]$EnableJsonSink,
-    [Parameter()]          [string]$DefenderWorkspaceResourceId
+    [Parameter()]          [string]$DefenderWorkspaceResourceId,
+
+    # Refuse to overwrite an existing custom.ps1 unless caller is explicit.
+    # Backup-and-clobber was the v2.2.x default; in practice a container-flavour
+    # bootstrap silently rewrote a live VM operator's customizations, leaving
+    # only a *.bak.<ts> to find later. Default is now SAFE: bail with a
+    # clear message + the backup path that WOULD have been written. Pass
+    # -Force to keep the original (rewrite) behaviour.
+    [Parameter()]          [switch]$Force
 
     # v2.3 single-template: emits resolved values directly. v2.2 Bridged mode
     # (referenced $global:HighPriv_Modern_* from v1 Connect_Azure chain) is gone --
@@ -392,6 +400,14 @@ $content = $sb.ToString()
 # ---------- Backup + write ----------
 $backup = $null
 if (Test-Path -LiteralPath $OutputPath) {
+    if (-not $Force) {
+        # Guarded refusal -- the existing file may be a live operator's VM
+        # config; silently backing it up + overwriting (the pre-v2.2.310 default)
+        # is what wiped an internal-VM custom file during a container-flavour
+        # bootstrap. Caller must pass -Force to acknowledge the rewrite.
+        $wouldBackup = "$OutputPath.bak.{0:yyyyMMdd-HHmmss}" -f (Get-Date)
+        throw ("Refusing to overwrite existing $OutputPath. Pass -Force to rewrite (a backup would be created at $wouldBackup). If this file is a live VM-flavour config that a container/sicont bootstrap is about to clobber, ABORT now and rerun the bootstrap against a different repo checkout or use -OutputPath to write somewhere else.")
+    }
     $backup = "$OutputPath.bak.{0:yyyyMMdd-HHmmss}" -f (Get-Date)
     _Step "backup existing custom file -> $backup"
     Copy-Item -LiteralPath $OutputPath -Destination $backup -Force

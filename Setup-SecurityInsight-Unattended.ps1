@@ -76,6 +76,15 @@
     # Community install with a custom config path:
     .\Setup-SecurityInsight-Unattended.ps1 -ConfigPath D:\customers\acme.json -Flavour Community
 
+.EXAMPLE
+    # Community install -- non-interactive variant. If Az PS + Microsoft Graph
+    # are already connected in this shell (any SPN with sufficient privilege --
+    # Modern SPN works), the Community block skips Connect-AzAccount/MgGraph
+    # browser flow and reuses the existing context. Lets unattended Community
+    # deploys run from a SYSTEM scheduled task or CI agent without prompts.
+    Connect-Platform   # or any Connect-AzAccount + Connect-MgGraph pair
+    .\Setup-SecurityInsight-Unattended.ps1 -Flavour Community -Container_Enabled
+
 .NOTES
     Status: v2.2.151 -- new in this release.
     Developed by Morten Knudsen, Microsoft MVP | https://mortenknudsen.net
@@ -90,7 +99,13 @@ param(
     [Parameter()] [string]$NamingSuffix,
     [Parameter()] [switch]$EntraDiag_Enabled,
     [Parameter()] [switch]$Container_Enabled,
-    [Parameter()] [switch]$SkipPhase1
+    [Parameter()] [switch]$SkipPhase1,
+    # Default = REFUSE to overwrite an existing config/SecurityInsight.custom.ps1.
+    # Pre-v2.2.310 silently backed up + overwrote, which in practice wiped a live
+    # internal-VM config when an operator ran a sicont/container-flavour bootstrap
+    # from the same repo checkout. Pass -ForceConfigOverwrite to opt into the old
+    # rewrite-with-backup behaviour (re-onboarding, tenant migration, etc.).
+    [Parameter()] [switch]$ForceConfigOverwrite
 )
 
 $ErrorActionPreference = 'Stop'
@@ -249,24 +264,50 @@ _Info ("location     : {0}" -f $cfg.Sub.Location)
 _Info ("RG / WS / DCE / Storage : {0} / {1} / {2} / {3}" -f $cfg.Resources.ResourceGroupName, $cfg.Resources.WorkspaceName, $cfg.Resources.DceName, $cfg.Resources.StorageAccountName)
 Write-Host ""
 
-# ----------- Community flavour: interactive browser auth -----------
+# ----------- Community flavour: auth (reuse existing context if present, else browser) -----------
 if ($cfg.Flavour -eq 'Community') {
-    _Banner "Interactive auth (browser)"
-    _Step ("Connect-AzAccount -Tenant {0} -Subscription {1}" -f $cfg.Sub.TenantId, $cfg.Sub.SubscriptionId)
     Import-Module Az.Accounts -ErrorAction Stop
-    $null = Connect-AzAccount -Tenant $cfg.Sub.TenantId -Subscription $cfg.Sub.SubscriptionId -ErrorAction Stop
-    _Ok "Az PS connected"
-
-    _Step ("Connect-MgGraph -TenantId {0} (browser)" -f $cfg.Sub.TenantId)
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-    $null = Connect-MgGraph -TenantId $cfg.Sub.TenantId -NoWelcome -ErrorAction Stop
-    _Ok "Microsoft Graph connected"
+
+    $azCtxExisting = Get-AzContext -ErrorAction SilentlyContinue
+    $mgCtxExisting = Get-MgContext -ErrorAction SilentlyContinue
+
+    if ($azCtxExisting -and $azCtxExisting.Subscription.Id -eq $cfg.Sub.SubscriptionId -and $mgCtxExisting -and $mgCtxExisting.TenantId -eq $cfg.Sub.TenantId) {
+        _Banner "Reusing existing Az + Mg context (non-interactive Community deploy)"
+        _Ok ("Az PS  : {0} (sub {1})" -f $azCtxExisting.Account.Id, $azCtxExisting.Subscription.Id)
+        _Ok ("MgGraph: {0} (tenant {1})" -f $mgCtxExisting.Account, $mgCtxExisting.TenantId)
+    } else {
+        _Banner "Interactive auth (browser)"
+        _Step ("Connect-AzAccount -Tenant {0} -Subscription {1}" -f $cfg.Sub.TenantId, $cfg.Sub.SubscriptionId)
+        $null = Connect-AzAccount -Tenant $cfg.Sub.TenantId -Subscription $cfg.Sub.SubscriptionId -ErrorAction Stop
+        _Ok "Az PS connected"
+
+        _Step ("Connect-MgGraph -TenantId {0} (browser)" -f $cfg.Sub.TenantId)
+        $null = Connect-MgGraph -TenantId $cfg.Sub.TenantId -NoWelcome -ErrorAction Stop
+        _Ok "Microsoft Graph connected"
+    }
 
     if ($cfg.Container.Enabled) {
-        _Step "az login (interactive) -- Container Apps Job phase needs it"
-        $null = & az login --tenant $cfg.Sub.TenantId --output none 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "az login (interactive) failed" }
-        $null = & az account set --subscription $cfg.Sub.SubscriptionId 2>&1
+        # az CLI: try existing context first; if missing, try SPN secret from cfg.Auth_Community.Secret (set via SI_SPN_Secret env)
+        $azCliOk = $false
+        try {
+            $null = & az account show --output none 2>&1
+            if ($LASTEXITCODE -eq 0) { $azCliOk = $true }
+        } catch { }
+        if (-not $azCliOk) {
+            $cliSecret = $null
+            if ($cfg.Auth_Community.PSObject.Properties['Secret']) { $cliSecret = $cfg.Auth_Community.Secret }
+            if (-not $cliSecret -and $env:SI_SPN_Secret)            { $cliSecret = $env:SI_SPN_Secret }
+            $cliAppId = $env:SI_SPN_AppId
+            if ($cliSecret -and $cliAppId) {
+                $null = & az login --service-principal --tenant $cfg.Sub.TenantId --username $cliAppId --password $cliSecret --output none 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "az login (SPN secret) failed -- check SI_SPN_AppId / SI_SPN_Secret env vars" }
+            } else {
+                $null = & az login --tenant $cfg.Sub.TenantId --output none 2>&1
+                if ($LASTEXITCODE -ne 0) { throw "az login (interactive) failed and no SPN secret available" }
+            }
+            $null = & az account set --subscription $cfg.Sub.SubscriptionId 2>&1
+        }
         _Ok ("az CLI signed in (sub {0})" -f $cfg.Sub.SubscriptionId)
     }
 }
@@ -425,6 +466,7 @@ try {
         Spn   = $spnOut
         Infra = $infraOut
     }
+    if ($ForceConfigOverwrite) { $cfgArgs.Force = $true }
     $cfgOut = & $cmdletWriteConfig @cfgArgs
     $phaseStatus.config = 'ok'
 } catch {

@@ -1976,7 +1976,7 @@ function Export-AISummaryWorksheet {
     -TableName $tableName -AutoFilter -FreezeTopRow -BoldTopRow -ClearSheet -PassThru
 
   $ws = $excel.Workbook.Worksheets[$safeSheet]
-  $ws.Cells.AutoFitColumns()
+  if (-not $IsLinux) { $ws.Cells.AutoFitColumns() }   # System.Drawing.Common unavailable on Linux containers
   for ($col = 1; $col -le $ws.Dimension.Columns; $col++) {
     if ($ws.Column($col).Width -gt 90) { $ws.Column($col).Width = 90 }
   }
@@ -4100,7 +4100,12 @@ function Calculate-RiskScore {
                     $tmp2['UniqueIssues'] = [int]$uniqueIssues
                 }
                 if (-not $tmp2.Contains('TotalIssuesImpactedAssets') -or [string]::IsNullOrWhiteSpace([string]$tmp2['TotalIssuesImpactedAssets'])) {
-                    $tmp2['TotalIssuesImpactedAssets'] = [int]$totalIssues
+                    # Per-row scope: count of assets impacted by THIS row's issue.
+                    # Pre-v2.2.311 used $totalIssues (whole-report row count), which
+                    # made TII identical on every row and meaningless when each row
+                    # already represents one ConfigurationId x criticality bucket.
+                    $iacVal = if ($tmp2.Contains('ImpactedAssetCount')) { [int]$tmp2['ImpactedAssetCount'] } else { 1 }
+                    $tmp2['TotalIssuesImpactedAssets'] = $iacVal
                 }
             }
             # ImpactedAssetsList + IssueList: Summary-only aggregate lists. YAML
@@ -4131,7 +4136,14 @@ function Calculate-RiskScore {
                 $tmp2['ImpactedAssetsList'] = $existingImpacted
                 if ($tmp2.Contains('ImpactedAssets')) { $tmp2.Remove('ImpactedAssets') }
                 if (-not $tmp2.Contains('IssueList') -or $null -eq $tmp2['IssueList']) {
-                    $tmp2['IssueList'] = $issuesDetails
+                    # Per-row scope: use THIS row's ConfigurationId. Pre-v2.2.311
+                    # stamped $issuesDetails (whole-report aggregate of distinct
+                    # ConfigurationName values), which produced multi-KB cells of
+                    # every recommendation name on every row. ConfigurationId is
+                    # the stable identifier operators asked for; ConfigurationName
+                    # still ships in its own column.
+                    $rowCfgId = if ($tmp2.Contains('ConfigurationId')) { [string]$tmp2['ConfigurationId'] } else { '' }
+                    $tmp2['IssueList'] = if ([string]::IsNullOrWhiteSpace($rowCfgId)) { @() } else { @($rowCfgId) }
                 }
             } else {
                 # Detailed report: IssueList = single ConfigurationName for THIS row's
@@ -4702,12 +4714,17 @@ function Export-Worksheet {
   $safeSheet = $SheetName.Substring(0, [Math]::Min(31, $SheetName.Length)) -replace '[:\\/?*\[\]]','_'
   $tableName = ($safeSheet -replace '\W','_')
 
+  # AutoSize/AutoFitColumns trigger System.Drawing.Common which is unavailable
+  # in PS7-on-Linux containers (even with libgdiplus). Skip the auto-fit pass
+  # on Linux; widths fall back to ImportExcel default (10).
+  $_canAutoFit = -not $IsLinux
+  $_autoSizeArgs = if ($_canAutoFit) { @{ AutoSize = $true } } else { @{} }
   if (-not $Rows -or $Rows.Count -eq 0) {
     $excel = ([pscustomobject]@{ Info = 'No rows returned' }) |
       Export-Excel -Path $Path -WorksheetName $safeSheet -TableName $tableName -TableStyle $TableStyle `
-        -AutoSize -FreezeTopRow -BoldTopRow -ClearSheet -PassThru
+        @_autoSizeArgs -FreezeTopRow -BoldTopRow -ClearSheet -PassThru
     $ws = $excel.Workbook.Worksheets[$safeSheet]
-    $ws.Cells.AutoFitColumns()
+    if ($_canAutoFit) { $ws.Cells.AutoFitColumns() }
     # v2.2.226 -- enable WrapText on known multi-line columns so embedded
     # newlines (\r\n built by the MoreDetails post-process; IssueList /
     # RiskFactor_*_Detailed / ImpactedAssetsList aggregations) render as
@@ -4724,13 +4741,22 @@ function Export-Worksheet {
         'AssetDetectedInReportName'       = $true
         'CVSSDesc'                        = $true
     }
+    # Wider cap for known long-narrative columns -- 50 clipped CVSSDesc to ~1 sentence
+    # which forced operators to widen the column manually after open. 90 fits most
+    # CVSS descriptions in 2-3 wrapped lines.
+    $wideTargets = @{ 'CVSSDesc' = 90 }
     for ($col = 1; $col -le $ws.Dimension.Columns; $col++) {
-      if ($ws.Column($col).Width -gt 50) { $ws.Column($col).Width = 50 }
       $headerVal = [string]$ws.Cells[1, $col].Value
+      $maxWidth  = if ($headerVal -and $wideTargets.ContainsKey($headerVal)) { [int]$wideTargets[$headerVal] } else { 50 }
+      if ($ws.Column($col).Width -gt $maxWidth) { $ws.Column($col).Width = $maxWidth }
       if ($headerVal -and $wrapTargets.ContainsKey($headerVal)) {
         try { $ws.Column($col).Style.WrapText = $true } catch { }
       }
     }
+    # All cells top-aligned (ImportExcel default is center). Operators read
+    # left-to-right top-to-bottom; centered text in wrap-enabled cells creates
+    # the visual ambiguity of which row a wrapped line belongs to.
+    try { $ws.Cells.Style.VerticalAlignment = 'Top' } catch { }
     Close-ExcelPackage $excel
     $script:_sheetWritten[$safeSheet] = $true
     return
@@ -4803,7 +4829,7 @@ function Export-Worksheet {
       -TableName $tableName -AutoFilter -FreezeTopRow -BoldTopRow -ClearSheet -PassThru
 
     $ws = $excel.Workbook.Worksheets[$safeSheet]
-    $ws.Cells.AutoFitColumns()
+    if (-not $IsLinux) { $ws.Cells.AutoFitColumns() }   # Linux: System.Drawing.Common unavailable
     # v2.2.226 -- enable WrapText on known multi-line columns so embedded
     # newlines (\r\n built by the MoreDetails post-process; IssueList /
     # RiskFactor_*_Detailed / ImpactedAssetsList aggregations) render as
@@ -4820,13 +4846,18 @@ function Export-Worksheet {
         'AssetDetectedInReportName'       = $true
         'CVSSDesc'                        = $true
     }
+    # Wider cap for known long-narrative columns. See empty-rows branch above.
+    $wideTargets = @{ 'CVSSDesc' = 90 }
     for ($col = 1; $col -le $ws.Dimension.Columns; $col++) {
-      if ($ws.Column($col).Width -gt 50) { $ws.Column($col).Width = 50 }
       $headerVal = [string]$ws.Cells[1, $col].Value
+      $maxWidth  = if ($headerVal -and $wideTargets.ContainsKey($headerVal)) { [int]$wideTargets[$headerVal] } else { 50 }
+      if ($ws.Column($col).Width -gt $maxWidth) { $ws.Column($col).Width = $maxWidth }
       if ($headerVal -and $wrapTargets.ContainsKey($headerVal)) {
         try { $ws.Column($col).Style.WrapText = $true } catch { }
       }
     }
+    # All cells top-aligned (ImportExcel default is center). See empty-rows branch.
+    try { $ws.Cells.Style.VerticalAlignment = 'Top' } catch { }
     Close-ExcelPackage $excel
   } finally {
     [System.Threading.Thread]::CurrentThread.CurrentCulture = $_savedCulture

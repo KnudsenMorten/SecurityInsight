@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.310
+## v2.2.311
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
 - release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
 - release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
 - release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
 - release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
 - release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
-- release: SecurityInsight v2.2.281 - AutoBucket respects YAML BucketCount as probe floor (2bd26da8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.311 — RA Summary: per-row `IssueList` + `TotalIssuesImpactedAssets`; wider `CVSSDesc`; top-aligned cells
+
+### Bugs
+
+Operator on internal-VM RA Summary reported two columns "wrong":
+
+1. **`IssueList`** held a 2284-char concatenation of every recommendation name across the whole report — same long string broadcast onto every row, regardless of which `ConfigurationId` the row represented.
+2. **`TotalIssuesImpactedAssets`** was set to the report's total row count (e.g. 368 or sometimes the per-bucket count 108 repeating across 108 rows), not the per-row impacted-asset count.
+
+Root cause: `Invoke-RiskAnalysis.ps1:4047, 4078, 4102-4103, 4133-4134` built `$totalIssues` and `$issuesDetails` as **whole-report aggregates** (count of all output rows + `make_set` of every distinct `ConfigurationName`/`ConfigurationId`), then stamped the same values onto every Summary row when the YAML didn't project its own `IssueList`/`TotalIssuesImpactedAssets`. `Device_Recommendations_Summary` (and several others) doesn't project either column, so every row inherited the whole-report blob.
+
+### Fix
+
+Engine post-process now uses **per-row scope** for both Summary defaults:
+
+- `IssueList = @($row.ConfigurationId)` (was: whole-report `make_set(ConfigurationName)`). Operators requested the stable identifier; the human-readable `ConfigurationName` still ships in its own column.
+- `TotalIssuesImpactedAssets = $row.ImpactedAssetCount` (was: whole-report `$out.Count`). Each row represents one issue × N assets, so TII per row = the asset count.
+
+YAML reports that already project these columns (e.g. CVE Missing Devices Summary at line 358) are unaffected — the engine only fills when YAML left the column null.
+
+### Excel polish
+
+Two follow-up cosmetic issues on the same Summary xlsx:
+
+- `CVSSDesc` column was capped at width 50 (shared with the other long-narrative columns), which clipped CVE descriptions to ~1 sentence and forced operators to widen manually after open. Now capped at 90 via a per-column wide-targets map (room for ~2-3 wrapped lines without dominating the sheet).
+- All cells now top-aligned via `$ws.Cells.Style.VerticalAlignment = 'Top'`. ImportExcel's default is center-vertical; with WrapText enabled on multi-line columns, centered cells made it ambiguous which wrapped line belonged to which row.
+
+Both Excel changes apply to both the empty-rows code path (line 4710-4742) and the normal rows path (line 4807-4838).
 
 ---
 

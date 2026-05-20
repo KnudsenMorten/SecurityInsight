@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.317
+## v2.2.318
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
 - release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
 - release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
 - release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
 - release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
 - release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
-- release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.318 — `Update-SecurityInsight.ps1`: stop surfacing git's normal stderr lines as `NativeCommandError` red text
+
+### Bug
+
+Operator ran `..\..\Update-SecurityInsight.ps1` from `C:\CommunityTest\launcher\azure\`. Output:
+
+```
+[STEP] git pull --ff-only origin main
+git.exe : From https://github.com/KnudsenMorten/SecurityInsight
+At C:\CommunityTest\Update-SecurityInsight.ps1:104 char:19
++     $pullOutput = & git pull --ff-only origin main 2>&1
++                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (From https://gi...SecurityInsight:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+```
+
+The pull actually **succeeded** (banner showed `current: v2.2.317 (commit db992a7)` matching the latest tag, and `LASTEXITCODE` was 0). What surfaced as red error text was just git's normal "From `<URL>`" header — git writes that to STDERR regardless of success. `2>&1` merged the streams, and PowerShell 5.1 then treated each STDERR line as a `RemoteException` `ErrorRecord` and displayed it red **before** the script's own `LASTEXITCODE` check ran.
+
+### Fix
+
+One-line change at `Update-SecurityInsight.ps1:104`:
+
+```powershell
+# before
+$pullOutput = & git pull --ff-only origin main 2>&1
+# after
+$pullOutput = & git pull --ff-only origin main 2>&1 | ForEach-Object { "$_" }
+```
+
+`ForEach-Object { "$_" }` coerces each pipeline element (string OR `ErrorRecord`) to its string representation. PowerShell treats strings as normal pipeline data, not as errors, so the red `NativeCommandError` noise disappears. `LASTEXITCODE` is still the only reliable success check for native commands — kept as-is.
+
+### Operator impact
+
+- Pull output now displays in gray (consistent with the rest of the script's "informational" styling) instead of red.
+- No behavioral change — the script still hard-fails on `LASTEXITCODE != 0` with the same actionable hints.
 
 ---
 

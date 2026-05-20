@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.332
+## v2.2.333
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
 - release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
 - release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
 - release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
@@ -33,13 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
 - release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
 - release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
-- release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.333 — Extend `Resolve-ProfileAugmentPlan` regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with `where Target_AzureResourceId_Guid != ""` now activate 2-phase (where the summarize-by gate permits it)
+
+### Why
+
+v2.2.332's regex caught the defensive `where isnotempty(tostring(column_ifexists(...)))` form but missed the actual shape used in production Attack_Paths reports:
+
+```kql
+let _TargetCmdb =
+    SI_Azure_Profile_CL
+    | ...
+    | project Target_AzureResourceId_Guid = tostring(column_ifexists("AzureResourceId_Guid", "")), ...
+    | where Target_AzureResourceId_Guid != "";       <-- this is the actual terminator
+```
+
+The inequality `!= ""` is functionally equivalent to `isnotempty(...)` but syntactically different — regex didn't match → 2-phase planner produced zero plans → inline-datatable fallback → 413 on 15K-row simulation.
+
+### Fix
+
+`Resolve-ProfileAugmentPlan` let-block regex now accepts THREE shapes:
+
+| Shape | Example |
+|---|---|
+| bare-isnotempty | `where isnotempty(EpJoinKey)` |
+| defensive | `where isnotempty(tostring(column_ifexists("Col", "")))` |
+| inequality | `where Target_AzureResourceId_Guid != ""` |
+
+rkey is captured by whichever alternative fires.
+
+### Known limitation (still pending)
+
+Cross-domain Attack_Paths reports where alias cmdb columns (cmdbName, cmdbId, cmdbCriticality, cmdbDataSensitivity) are grouping keys in a downstream `summarize ... by ...` clause cannot use 2-phase post-augment — the join cannot be safely stripped because the cmdb cols become the grouping identity. The 2-phase safety gate correctly skips these, falling back to inline-datatable which still hits the 1MB nginx cap on 15K-row simulation. Affects:
+
+- Attack_Paths_Summary_Github_to_Azure_Resources
+- Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
+- Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
+- Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials
+- Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+- Attack_Paths_Summary_Credential_Based_Lateral_Movement
+
+These work on tenants whose CL snapshot stays under ~700KB per let-binding (typical for <5K assets). For larger tenants the proper fix is per-let bucket placeholders in the YAML (one `__BUCKET_FILTER_<letvar>__` block per let, each filtering the EG side by that let's join key). That's a structural change requiring 6+ YAML edits and is deferred to a future release. Operators on very large tenants can opt-in to fast-fail with `$global:AutoBucketReportCap = 256` to stop the engine burning cycles on these reports.
 
 ---
 

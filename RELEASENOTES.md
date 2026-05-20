@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.319
+## v2.2.320
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
 - release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
 - release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
 - release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
@@ -33,13 +34,77 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
 - release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
 - release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
-- release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.320 — PublicIP engine: `AssetTier` → String (fixes `InvalidTransformOutput` on existing DCRs); failure path now surfaces DCR/RG/sub/table context + Azure error body inline
+
+### Bug
+
+Customer ran `launcher.community-vm.ps1` on the PublicIP engine. Phase 3 ingest failed:
+
+```
+[ERROR] CheckCreateUpdate-TableDcr-Structure failed: The remote server returned an error: (400) Bad Request.
+…
+invoke-webrequest : {"error":{"code":"InvalidPayload","message":"Data collection rule is invalid","details":[{"code":"InvalidTransformOutput","message":"Types of transform output columns do not match the ones defined by the output stream: AssetTier [produced:'Int', output:'String']"}]}}
+```
+
+`Invoke-PublicIpScanner.ps1:541` (and the matching extra-source path at `:819`) emitted `AssetTier` as `[int]`. The existing DCR + table in this tenant's workspace had `AssetTier` typed as `String` (LA custom-table convention). Schema mismatch → DCR PUT 400 on every Phase 3 run.
+
+The comment claimed "Int -- matches existing DCR transform output type" — that was stale (presumably matched a long-gone deployment shape). Every existing customer with an older `SI_VulnerabilityPIP_CL` table hits this.
+
+### Fix A — engine emits String
+
+Cast through `[int]` first (validates numeric input) then to `[string]`:
+
+```powershell
+# before
+AssetTier         = [int]$t.AssetTier
+# after
+AssetTier         = [string][int]$t.AssetTier
+```
+
+Applied to both stamping sites (main asset loop at `:541` and extra-sources loop at `:819`). Existing tenants with String-typed columns will succeed on next run. Tenants who created the table after the buggy `[int]` window will need to delete the DCR + table once (the error block now tells them exactly which DCR/table to delete and where).
+
+### Fix B — failure path now actionable
+
+Pre-v2.2.320 error block:
+```
+[ERROR] CheckCreateUpdate-TableDcr-Structure failed: The remote server returned an error: (400) Bad Request.
+[ERROR] Cannot proceed without a valid DCR. Common causes:
+[ERROR]   1) Old DCR + table still exist in Azure -- delete BOTH first.
+[ERROR]   2) SPN lacks 'Contributor' (or 'Monitoring Contributor') on DCR resource group rg-securityinsight-community-v22.
+[ERROR]   3) Schema sample contains an invalid value (null/empty in a required column).
+```
+
+Operator: "would be great to include details like dcr name, rg name, sub name, etc". v2.2.320 expands the block to surface the full target context inline + Azure's actual error body (extracted via response-stream fallback when `$_.ErrorDetails.Message` is empty):
+
+```
+[ERROR] ----- target context -----
+[ERROR]   Subscription   : <sub-id>
+[ERROR]   Workspace      : <workspace-name>
+[ERROR]   Workspace RG   : <rg>
+[ERROR]   DCE            : <dce-name>
+[ERROR]   DCE RG         : <rg>
+[ERROR]   DCR            : <dcr-name>
+[ERROR]   DCR RG         : <rg>
+[ERROR]   Target table   : <table-name>
+[ERROR]   SPN AppId      : <appid>
+[ERROR] ----- Azure error body -----
+[ERROR]   {"error":{"code":"InvalidPayload","message":"Data collection rule is invalid","details":[{"code":"InvalidTransformOutput","message":"Types of transform output columns do not match the ones defined by the output stream: AssetTier [produced:'Int', output:'String']"}]}}
+[ERROR] ----- common causes -----
+[ERROR]   1) Schema drift -- existing DCR/table column type differs from engine's current row shape. Azure body usually says 'InvalidTransformOutput: <col> produced:X, output:Y'. Delete BOTH the DCR ('<dcr-name>') AND the table ('<table-name>') in workspace '<workspace-name>' and re-run; engine will recreate with the correct shape.
+[ERROR]   2) SPN lacks Contributor (or Monitoring Contributor) on DCR resource group '<rg>' in sub '<sub-id>'.
+[ERROR]   3) Schema sample contains a null/empty value in a required column (engine should have caught this upstream).
+```
+
+Operator no longer has to chase the actual diagnostic at the bottom of the stack trace.
 
 ---
 

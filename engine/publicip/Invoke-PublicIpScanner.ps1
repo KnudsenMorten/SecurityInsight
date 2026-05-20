@@ -538,7 +538,7 @@ function Invoke-ShodanScans {
             AssetName         = $t.AssetName
             AssetEngine       = $t.AssetEngine
             AssetType         = 'PublicIP'
-            AssetTier         = [int]$t.AssetTier   # Int -- matches existing DCR transform output type (avoids InvalidTransformOutput on schema migration)
+            AssetTier         = [string][int]$t.AssetTier   # v2.2.320 -- String to match LA custom-table convention. Pre-v2.2.320 emitted [int] which 400'd against tenants whose DCR was created with String AssetTier ("InvalidTransformOutput: AssetTier produced:'Int', output:'String'"). The [int] cast in the middle still validates the input is numeric before stringifying.
             cmdbId              = $t.cmdbId
             cmdbName            = $t.cmdbName
             cmdbCriticality     = $t.cmdbCriticality
@@ -682,11 +682,43 @@ function Send-RowsToLogAnalytics {
                         -AzLogDcrTableCreateFromAnyMachine          $true `
                         -AzLogDcrTableCreateFromReferenceMachine    @() 4>$null
         } catch {
+            # v2.2.320 -- surface full context inline (operator ask: "would be
+            # great to include details like dcr name, rg name, sub name, etc").
+            # Plus pull the Azure error body out of $_.ErrorDetails / response
+            # stream because Invoke-RestMethod 400s often leave the diagnostic
+            # there instead of in $_.Exception.Message.
+            $_azDetail = $_.Exception.Message
+            if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                $_azDetail = [string]$_.ErrorDetails.Message
+            } else {
+                try {
+                    $_respStream = $_.Exception.Response.GetResponseStream()
+                    if ($_respStream) {
+                        if ($_respStream.CanSeek) { $_respStream.Position = 0 }
+                        $_reader = New-Object System.IO.StreamReader($_respStream)
+                        try { $_body = $_reader.ReadToEnd(); if (-not [string]::IsNullOrWhiteSpace($_body)) { $_azDetail = $_body } }
+                        finally { $_reader.Close() }
+                    }
+                } catch { }
+            }
+            $_azDetail = ($_azDetail -replace "`r?`n", ' ' -replace '\s{2,}', ' ').Trim()
             Write-Log "CheckCreateUpdate-TableDcr-Structure failed: $($_.Exception.Message)" 'ERROR'
-            Write-Log "Cannot proceed without a valid DCR. Common causes:" 'ERROR'
-            Write-Log "  1) Old DCR + table still exist in Azure -- delete BOTH first." 'ERROR'
-            Write-Log "  2) SPN lacks 'Contributor' (or 'Monitoring Contributor') on DCR resource group $($global:SI_DcrResourceGroup)." 'ERROR'
-            Write-Log "  3) Schema sample contains an invalid value (null/empty in a required column)." 'ERROR'
+            Write-Log '----- target context -----' 'ERROR'
+            Write-Log ("  Subscription   : {0}" -f ($global:SI_AzSubscriptionId  | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log ("  Workspace      : {0}" -f ($global:SI_WorkspaceName     | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log ("  Workspace RG   : {0}" -f ($global:SI_WorkspaceResourceGroup | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log ("  DCE            : {0}" -f ($global:SI_DceName           | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log ("  DCE RG         : {0}" -f ($global:SI_DceResourceGroup  | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log ("  DCR            : {0}" -f ($global:SI_Shodan_DcrName    | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log ("  DCR RG         : {0}" -f ($global:SI_DcrResourceGroup  | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log ("  Target table   : {0}" -f $tableName) 'ERROR'
+            Write-Log ("  SPN AppId      : {0}" -f ($global:SI_SPN_AppId         | ForEach-Object { if ($_) { $_ } else { '<unset>' } })) 'ERROR'
+            Write-Log '----- Azure error body -----' 'ERROR'
+            Write-Log ("  {0}" -f $_azDetail) 'ERROR'
+            Write-Log '----- common causes -----' 'ERROR'
+            Write-Log "  1) Schema drift -- existing DCR/table column type differs from engine's current row shape. Azure body usually says 'InvalidTransformOutput: <col> produced:X, output:Y'. Delete BOTH the DCR ('$($global:SI_Shodan_DcrName)') AND the table ('$tableName') in workspace '$($global:SI_WorkspaceName)' and re-run; engine will recreate with the correct shape." 'ERROR'
+            Write-Log "  2) SPN lacks Contributor (or Monitoring Contributor) on DCR resource group '$($global:SI_DcrResourceGroup)' in sub '$($global:SI_AzSubscriptionId)'." 'ERROR'
+            Write-Log '  3) Schema sample contains a null/empty value in a required column (engine should have caught this upstream).' 'ERROR'
             throw
         }
 

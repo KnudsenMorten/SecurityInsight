@@ -3998,6 +3998,31 @@ function Calculate-RiskScore {
             if (-not [string]::IsNullOrWhiteSpace($azResIdVal)) {
                 $tdom = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_TenantDomain)) { [string]$global:SI_TenantDomain } else { $tid }
                 [void]$mdLines.Add(('https://portal.azure.com/#@{0}/resource{1}/overview' -f $tdom, $azResIdVal))
+
+                # v2.2.314 -- surface Subscription Id + Name when the asset is an
+                # Azure resource. Customer ask: "i need to have subscription
+                # name id/subscription name in the more details if the asset is
+                # an azure resource". Sub Id comes from the AzureResourceId path
+                # (segment [2] after /subscriptions/); Sub Name from the row's
+                # AZ_SubscriptionName / SubscriptionName column when the
+                # profiler stamped it (Azure-engine rows have it; cross-domain
+                # rows where AzureResourceId came from EG traversal may not).
+                $azParts = $azResIdVal -split '/'
+                if ($azParts.Count -ge 3 -and $azParts[1] -eq 'subscriptions' -and -not [string]::IsNullOrWhiteSpace($azParts[2])) {
+                    $subId = $azParts[2]
+                    $subNm = ''
+                    foreach ($candidate in 'AZ_SubscriptionName','SubscriptionName','AzureSubscriptionName') {
+                        if ($r.PSObject.Properties[$candidate]) {
+                            $v = [string]$r.$candidate
+                            if (-not [string]::IsNullOrWhiteSpace($v)) { $subNm = $v; break }
+                        }
+                    }
+                    if ($subNm) {
+                        [void]$mdLines.Add(('Subscription: {0} ({1})' -f $subNm, $subId))
+                    } else {
+                        [void]$mdLines.Add(('Subscription: {0}' -f $subId))
+                    }
+                }
             }
         }
 
@@ -8421,8 +8446,24 @@ try {
         if ($r.PSObject.Properties['CriticalityTier']) { [void][int]::TryParse([string]$r.CriticalityTier, [ref]$tierVal) }
         $tw = _TierWeight $tierVal
 
-        $domainAcc[$dom].Numer += $rowKpi * $tw
-        $domainAcc[$dom].Denom += $tw
+        # v2.2.314 -- per-row population weight. Summary rows represent N
+        # asset-findings collapsed into one row (TotalIssuesImpactedAssets is the
+        # population). Detailed rows are one-finding-per-asset (weight = 1).
+        # Multiplying by population converges Summary KPI to Detailed KPI on the
+        # same underlying data -- pre-v2.2.314 the two reports diverged by 1-9
+        # points purely from per-row vs per-asset-finding averaging. Customer ask:
+        # "my customers cannot understand why the risk score is not same %
+        # between summary and detailed".
+        $rowWeight = 1.0
+        if ($r.PSObject.Properties['TotalIssuesImpactedAssets']) {
+            $tiia = 0
+            if ([int]::TryParse([string]$r.TotalIssuesImpactedAssets, [ref]$tiia) -and $tiia -gt 0) {
+                $rowWeight = [double]$tiia
+            }
+        }
+
+        $domainAcc[$dom].Numer += $rowKpi * $tw * $rowWeight
+        $domainAcc[$dom].Denom += $tw * $rowWeight
         $domainAcc[$dom].Rows++
     }
 

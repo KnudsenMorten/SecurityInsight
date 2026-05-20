@@ -19,9 +19,13 @@
     Example use in config/SecurityInsight.custom.ps1:
         . "$PSScriptRoot\..\auth\Get-SIKvSecret.ps1"
         $kv = 'kv-2linkit-automation-p'
-        $global:SI_StorageKey    = Get-SIKvSecret -VaultName $kv -SecretName 'SI-StorageKey'
         $global:SI_Shodan_ApiKey = Get-SIKvSecret -VaultName $kv -SecretName 'SI-Shodan-ApiKey'
         $global:OpenAI_apiKey    = Get-SIKvSecret -VaultName $kv -SecretName 'OpenAI-ApiKey'
+
+    NOTE: v2.2.314+ no longer supports SI_StorageKey. Storage auth is OAuth-only
+    via the SPN/MSI's Storage Blob/Table/Queue Data Contributor RBAC -- there is
+    no shared key to KV-pull anymore. Pre-v2.2.314 examples that pulled
+    'SI-StorageKey' should be deleted from your custom.ps1.
 
     Notes
     -----

@@ -187,17 +187,18 @@ $null = $sb.AppendLine("`$global:SI_Shodan_DcrName                = 'dcr-si-publ
 $null = $sb.AppendLine()
 $sectionsWritten += 'Infrastructure'
 
-# ---- 3. Storage (RBAC-only, no key) ----
+# ---- 3. Storage (OAuth-only, v2.2.314+) ----
 $null = $sb.AppendLine("# ============================================================================")
-$null = $sb.AppendLine("# 3. STORAGE  --  RBAC-only mode (no shared key written here)")
+$null = $sb.AppendLine("# 3. STORAGE  --  OAuth-only (v2.2.314+); SPN/MSI needs Storage Blob/Table/Queue")
+$null = $sb.AppendLine("#                  Data Contributor RBAC on the storage account")
 $null = $sb.AppendLine("# ============================================================================")
 $null = $sb.AppendLine("`$global:SI_StorageAccount             = '$($Infra.StorageAccountName)'")
 $null = $sb.AppendLine("`$global:SI_StorageResourceGroup       = '$($Infra.StorageResourceGroupName)'")
-$null = $sb.AppendLine("# (NO `$global:SI_StorageKey -- engine uses OAuth via SPN/MSI when the key is absent)")
-$null = $sb.AppendLine("# Force OAuth-only auth: SPN has Storage Blob/Table/Queue Data Contributor but")
-$null = $sb.AppendLine("# NOT 'listKeys' permission. Without this flag the engine probes Get-AzStorageAccountKey")
-$null = $sb.AppendLine("# first and warns 'Forbidden' before falling back; setting this skips the probe.")
-$null = $sb.AppendLine("`$global:SI_UseStorageOAuth            = `$true")
+$null = $sb.AppendLine("# v2.2.314+ -- SI_StorageKey and SI_UseStorageOAuth are no longer used. The engine")
+$null = $sb.AppendLine("# always authenticates to blob/table/queue via OAuth (SPN/MSI). listKeys is never")
+$null = $sb.AppendLine("# called, so the SPN does NOT need 'listKeys' permission. Pre-v2.2.314 lines like")
+$null = $sb.AppendLine("# `$global:SI_StorageKey = '...' or `$global:SI_UseStorageOAuth = `$true|`$false are")
+$null = $sb.AppendLine("# harmless leftovers and can be deleted from custom.ps1.")
 $null = $sb.AppendLine()
 $sectionsWritten += 'Storage'
 

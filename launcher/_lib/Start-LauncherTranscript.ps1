@@ -45,9 +45,14 @@ function Start-SILauncherTranscript {
     if ($global:SI_DisableTranscript) { return $null }
 
     # Resolve repo root: caller's $InstallPath > walk up from $PSScriptRoot.
+    # Walk-up accepts EITHER layout marker:
+    #   * <root>/SOLUTIONS/SecurityInsight/VERSION  -- monorepo (internal)
+    #   * <root>/VERSION                            -- flat publish (community)
     if (-not $RepoRoot) {
         $cur = $PSScriptRoot
-        while ($cur -and -not (Test-Path (Join-Path $cur 'SOLUTIONS\SecurityInsight\VERSION'))) {
+        while ($cur -and `
+               -not (Test-Path (Join-Path $cur 'SOLUTIONS\SecurityInsight\VERSION')) -and `
+               -not (Test-Path (Join-Path $cur 'VERSION'))) {
             $parent = Split-Path -Parent $cur
             if (-not $parent -or $parent -eq $cur) { break }
             $cur = $parent
@@ -55,15 +60,27 @@ function Start-SILauncherTranscript {
         $RepoRoot = $cur
     }
 
-    # Logs dir = <repo>/SOLUTIONS/SecurityInsight/logs (forward-slash join works on Win + Linux)
-    $logsDir = if ($RepoRoot) {
+    # Layout-aware logs dir. Pre-v2.2.312 unconditionally appended
+    # 'SOLUTIONS/SecurityInsight/logs' whenever -RepoRoot was passed (every
+    # launcher passes $InstallPath), which on a flat community install at
+    # C:\<install>\ created a stray C:\<install>\SOLUTIONS\SecurityInsight\logs\
+    # folder where operators couldn't find their transcripts. Now: probe for the
+    # monorepo marker; fall back to '<root>/logs' on flat layouts.
+    $logsDir = if ($RepoRoot -and (Test-Path -LiteralPath (Join-Path $RepoRoot 'SOLUTIONS\SecurityInsight\VERSION'))) {
         Join-Path $RepoRoot 'SOLUTIONS/SecurityInsight/logs'
+    } elseif ($RepoRoot) {
+        Join-Path $RepoRoot 'logs'
     } else {
-        # fall back to <launcherRoot>/../../logs when we couldn't resolve a repo root
+        # last-resort fallback: relative to this helper.
         Join-Path $PSScriptRoot '..\..\logs'
     }
     if (-not (Test-Path -LiteralPath $logsDir)) {
-        New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+        try {
+            New-Item -ItemType Directory -Path $logsDir -Force -ErrorAction Stop | Out-Null
+        } catch {
+            Write-Warning ("Could not create transcript folder {0}: {1}. Continuing without transcript." -f $logsDir, $_.Exception.Message)
+            return $null
+        }
     }
 
     # Retention prune (best-effort -- never throws)

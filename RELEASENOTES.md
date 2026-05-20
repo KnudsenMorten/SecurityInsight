@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.311
+## v2.2.312
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
 - release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
 - release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
 - release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
 - release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
 - release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
-- release: SecurityInsight v2.2.282 - stale-device filter for all Attack_Paths reports (945853fe)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.312 — Launcher `_lib\`: layout-aware logs folder; drop `data\LOGS\`; surface transcript-folder-create failures
+
+### Bugs
+
+Operator on a community-flat install at `C:\CommunityTest\` reported zero run transcripts on disk despite many launcher runs. Investigation showed:
+
+1. **`Start-LauncherTranscript.ps1`** unconditionally appended `SOLUTIONS/SecurityInsight/logs` whenever `-RepoRoot` was passed (which every launcher does via `$InstallPath`). On a flat community install this created a stray `C:\CommunityTest\SOLUTIONS\SecurityInsight\logs\` folder where operators couldn't find their transcripts — they were looking in the expected `C:\CommunityTest\logs\`.
+2. **`Initialize-LauncherConfig.ps1`** wrote config snapshots to `<RepoRoot>\DATA\LOGS\` (or `<RepoRoot>\SOLUTIONS\<Solution>\DATA\LOGS\`). Operator: "we don't use `\data` anymore." The separate folder also broke the parity story between internal-VM and community-VM operators.
+3. Both helpers silently swallowed transcript-folder-creation failures via `try { ... } catch { Write-Warning ... }`, so when path resolution went wrong the operator only saw a warning scrolling past in the console — no clear "where did my logs go" signal.
+
+### Fix
+
+Both helpers now use **layout-aware probing**: prefer the monorepo path (`<root>\SOLUTIONS\SecurityInsight\…`) when a `VERSION` marker exists at that location, otherwise fall back to flat (`<root>\logs\`). Config snapshots and transcripts always land in the **same folder**.
+
+| Layout | Install root | Logs folder (both file types) |
+|---|---|---|
+| Monorepo (internal) | `C:\SCRIPTS\AutomateIT\` | `C:\SCRIPTS\AutomateIT\SOLUTIONS\SecurityInsight\logs\` |
+| Community (flat publish) | `C:\CommunityTest\` | `C:\CommunityTest\logs\` |
+
+Additional hardening:
+- `Start-LauncherTranscript` walk-up now accepts both `<root>\VERSION` and `<root>\SOLUTIONS\SecurityInsight\VERSION` as layout markers (was monorepo-only — community walk-up silently failed and forced the fallback path).
+- Folder-creation failure now emits a clear `Write-Warning ("Could not create transcript folder {0}: {1}. Continuing without transcript.")` and returns `$null` instead of throwing into a generic catch.
+
+### Cleanup for affected operators
+
+Anyone running pre-v2.2.312 on a flat community install: a stray `<install>\SOLUTIONS\SecurityInsight\logs\` folder may exist with all your past transcripts. Move them to `<install>\logs\` and delete the stray `SOLUTIONS\` tree, then upgrade. Future runs will land correctly.
 
 ---
 

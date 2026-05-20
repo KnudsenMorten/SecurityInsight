@@ -964,7 +964,7 @@ schtasks /Create /TN "SecurityInsight\3. Asset Profiling - Identity" `
 
 Repeat for each row. Naming convention `SecurityInsight\<n>. <task name> (<h:mm AM/PM>)` is what shows up in the Task Scheduler library and matches the screenshot example above. The schedule runs in the **VM's local time zone** — pick a VM that's in your operations team's timezone so 9:00 PM means after-hours wherever your operators are.
 
-**Logs.** Every launcher writes a transcript to `logs\<engine>_internal-vm_<UTC-timestamp>.log` (and a config snapshot to `data\LOGS\config-<engine>-<local-timestamp>-<machine>.log`). Inspect those when a scheduled run fails — they include the full per-step output and the resolved config values.
+**Logs.** Every launcher writes two files to `logs\` per run: the transcript (`<engine>_<flavour>_<UTC-timestamp>.log`) and a config snapshot (`config-<engine>-<local-timestamp>-<machine>.log`). Same folder regardless of install layout (community-flat at `<install>\logs\`, monorepo at `<install>\SOLUTIONS\SecurityInsight\logs\`). Inspect both when a scheduled run fails — the transcript has the full per-step output, the snapshot shows the resolved config values (which layer set which `$global:*`). v2.2.312+ keeps both side by side; pre-v2.2.312 wrote snapshots to `data\LOGS\` and (on flat-layout community installs) silently dropped transcripts into a stray `<install>\SOLUTIONS\SecurityInsight\logs\` folder.
 
 #### 4.4.2 Schedule the engines on Azure Container Apps Job (KEDA auto-scaling)
 

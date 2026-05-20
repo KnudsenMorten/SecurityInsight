@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.336
+## v2.2.337
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
 - release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
 - release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
 - release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
 - release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
 - release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
-- release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.337 — Add `_si_PrimaryEntityId` projection-alias to the CL bucket-key + cross-domain lists; fixes `Identity_Admin_LogonTo_VulnerableDevice_Summary` (and siblings) that were still escalating to 131,072 buckets on the full-Locked Summary run
+
+### Bug
+
+After v2.2.336 the full Locked Summary run sailed through 42 reports clean → then `Identity_Admin_LogonTo_VulnerableDevice_Summary` escalated 2→4→8→…→131072 without ever distributing CL rows:
+
+```
+[hybrid] '_IdentityCmdb' bucket 1/2: 15000/15000 row(s) inlined ...
+[hybrid] '_IdentityCmdb' bucket 1/4: 15000/15000 row(s) inlined ...
+...
+[hybrid] '_IdentityCmdb' bucket 1/131072: 15000/15000 row(s) inlined ...
+[ERR] bucket escalation reached cap 131072. Unable to complete report
+```
+
+`_IdentityCmdb` projects `_si_PrimaryEntityId = tostring(PrimaryEntityId)` as its join key. That alias name wasn't in `Get-SICLBucketKey`'s priority list → every row returned `''` → all 15000 in bucket 0 → bucketing did nothing.
+
+### Fix
+
+Added `_si_PrimaryEntityId` to:
+- `Get-SICLBucketKey` priority list (position 2, after `EpJoinKey`)
+- Simulation `$bucketKeyCols` (so clones mutate the right column)
+- `$crossDomainCols` (so EG-skip activates for these reports — the EG side uses standard device cols and won't align with PrimaryEntityId)
+
+### Affects
+
+3 Identity_Admin_LogonTo_* reports (Vulnerable, InternetExposed, LowTier) + 1 Eligible variant — all use `_IdentityCmdb` with `_si_PrimaryEntityId`.
 
 ---
 

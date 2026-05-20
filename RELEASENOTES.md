@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.327
+## v2.2.328
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
 - release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
 - release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
 - release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
@@ -33,13 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
 - release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
 - release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
-- release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.328 — CL bucket-key prefers `EpJoinKey` (the projected join key) so 70%+ of rows stop collapsing to bucket 0 — fixes pathological skew that defeated CL-bucketing entirely on real `_ep` shapes
+
+### Bug
+
+v2.2.327 dev-server run with 15K simulation showed:
+
+```
+[hybrid] '_ep' bucket 1/2:   12971/15000 (86%)
+[hybrid] '_ep' bucket 1/4:   11946/15000 (80%)
+[hybrid] '_ep' bucket 1/8:   11404/15000 (76%)
+[hybrid] '_ep' bucket 1/64:  10978/15000 (73%)
+[hybrid] '_ep' bucket 1/256: 10924/15000 (73%)
+[hybrid] '_ep' bucket 1/512: 10912/15000 (73%)
+```
+
+Bucket #1 held 70%+ of rows no matter how high N escalated. Hash distribution should be ~1/N (uniform). 
+
+### Root cause
+
+`Get-SICLBucketKey`'s 14-column list omitted `EpJoinKey` — the synthesized join key that the canonical `_ep` let-body projects (`coalesce(AadDeviceId, AssetName, PrimaryEntityId)`). After `| project EpJoinKey, AadDeviceId, AssetName_From_CL, ...`, the raw DeviceKey/NodeId/etc. columns NO LONGER EXIST on the row. AadDeviceId is the only listed name that survives — and it's empty for servers, Linux, IoT, hashed identifiers.
+
+So:
+- Rows with non-empty AadDeviceId: bucketed correctly (~30% of rows)
+- Rows with empty AadDeviceId (the other 70%): `Get-SICLBucketKey` returns `''` → `Get-SISha256Bucket` short-circuits to bucket 0
+
+Simulation padding had the same blind spot — it modified the first non-empty column from the same list, so when AadDeviceId was empty it modified NOTHING and clones became identical to source rows.
+
+### Fix
+
+Both `Get-SICLBucketKey` and the simulation's `$bucketKeyCols` list now include `EpJoinKey` at position 0. EpJoinKey equals whatever EG-side column the join uses for matched rows (the join contract), so hashing it on CL side produces the same bucket as the EG side.
+
+### Expected outcome
+
+```
+[hybrid] '_ep' bucket 1/32: ~470/15000 row(s) inlined (~70 KB; CL-bucketed via SHA256)
+[hybrid] '_ep' bucket 2/32: ~468/15000 row(s) inlined (...)
+...
+```
+
+Even distribution → AutoBucket converges around 30-40 buckets → no 413.
 
 ---
 

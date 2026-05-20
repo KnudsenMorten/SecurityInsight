@@ -869,10 +869,18 @@ function Get-SISha256Bucket {
 function Get-SICLBucketKey {
     <# v2.2.323 -- mirror New-BucketFilterKql's column-coalesce on a CL row.
        First non-empty wins. Extended beyond device keys to cover Identity
-       (EntraObjectId/UserId) and Azure (AzureResourceId_Guid) report shapes. #>
+       (EntraObjectId/UserId) and Azure (AzureResourceId_Guid) report shapes.
+       v2.2.328 -- prefer EpJoinKey (the synthesized join key projected by the
+       canonical `_ep` let-binding body: AadDeviceId || AssetName || PrimaryEntityId).
+       After projection the raw bucket-key columns (DeviceKey/NodeId/etc.)
+       usually no longer exist, and AadDeviceId is often empty for servers/
+       Linux/IoT -- the result was Get-SICLBucketKey returning '' for 70%+
+       of rows and dumping them all in bucket 0. EpJoinKey equals whatever
+       EG-side column the join uses for matched rows, so hashing it produces
+       the same bucket as the EG side. #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Row)
-    foreach ($col in 'DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId') {
+    foreach ($col in 'EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId') {
         $p = $Row.PSObject.Properties[$col]
         if ($p) {
             $v = [string]$p.Value
@@ -978,7 +986,11 @@ function Resolve-ProfileCLLetBlocks {
             $simTarget = 0
             [void][int]::TryParse([string]$global:SI_SimulateCLRowCount, [ref]$simTarget)
             if ($simTarget -gt 0 -and $rowCount -gt 0 -and $rowCount -lt $simTarget) {
-                $bucketKeyCols = @('DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId')
+                # v2.2.328 -- mirror Get-SICLBucketKey order so simulation mutates
+                # the SAME column the hasher reads. EpJoinKey first; the rest are
+                # raw column names that survive only if the let body skips the
+                # `| project` step (rare).
+                $bucketKeyCols = @('EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId')
                 $needed = $simTarget - $rowCount
                 $clones = New-Object System.Collections.Generic.List[object]
                 $simIdx = 0

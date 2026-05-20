@@ -581,15 +581,71 @@ function Resolve-WorkspaceCustomerId {
     return $custId
 }
 
+function _ExtractProjectColumns {
+    <# Parse a KQL body to extract column names introduced by the LAST `project`
+       clause. Used to build a schema-aware empty datatable when the hybrid
+       CL-snapshot pre-fetch returns 0 rows -- without this, the empty-datatable
+       had a single `__placeholder:string` column and the downstream join failed
+       with `Failed to resolve column named '<expected_col>'`. v2.2.315. #>
+    param([string]$BodyKql)
+    if ([string]::IsNullOrWhiteSpace($BodyKql)) { return @() }
+    $m = [regex]::Matches($BodyKql, '\bproject\b', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($m.Count -eq 0) { return @() }
+    $lastProject = $m[$m.Count - 1]
+    $tail = $BodyKql.Substring($lastProject.Index + $lastProject.Length)
+    # Walk forward to find end of project clause (next | not in parens, or ;, or end-of-string)
+    $depth = 0
+    $end = $tail.Length
+    for ($i = 0; $i -lt $tail.Length; $i++) {
+        $c = $tail[$i]
+        if     ($c -eq '(' -or $c -eq '[') { $depth++ }
+        elseif ($c -eq ')' -or $c -eq ']') { $depth-- }
+        elseif ($depth -eq 0 -and ($c -eq '|' -or $c -eq ';')) { $end = $i; break }
+    }
+    $projectBody = $tail.Substring(0, $end)
+    # Split on top-level commas (depth 0) and extract column name
+    $cols = New-Object System.Collections.Generic.List[string]
+    $depth = 0
+    $start = 0
+    for ($i = 0; $i -le $projectBody.Length; $i++) {
+        $c = if ($i -lt $projectBody.Length) { $projectBody[$i] } else { ',' }
+        if     ($c -eq '(' -or $c -eq '[') { $depth++; continue }
+        elseif ($c -eq ')' -or $c -eq ']') { $depth--; continue }
+        if ($depth -eq 0 -and $c -eq ',') {
+            $segment = $projectBody.Substring($start, $i - $start).Trim()
+            $start = $i + 1
+            if ($segment -match '^([A-Za-z_][A-Za-z0-9_]*)\s*=') {
+                [void]$cols.Add($Matches[1])
+            } elseif ($segment -match '^([A-Za-z_][A-Za-z0-9_]*)$') {
+                [void]$cols.Add($Matches[1])
+            }
+        }
+    }
+    return $cols
+}
+
 function Convert-RowsToKqlDatatable {
     <# Serializes an array of PSCustomObject rows into a KQL `datatable(<schema>) [ <values> ]` literal.
-       Column types inferred from the first row's .NET types. Used by the hybrid CL-snapshot path. #>
+       Column types inferred from the first row's .NET types. Used by the hybrid CL-snapshot path.
+
+       v2.2.315 -- when $Rows is empty and -BodyKqlForSchemaHint is provided,
+       parses the body's last `project` clause to emit a schema-matched empty
+       datatable. Without the hint, falls back to the legacy single-placeholder
+       schema which crashes downstream joins. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$LetVarName,
-        [object[]]$Rows
+        [object[]]$Rows,
+        [string]$BodyKqlForSchemaHint
     )
     if (-not $Rows -or $Rows.Count -eq 0) {
+        if (-not [string]::IsNullOrWhiteSpace($BodyKqlForSchemaHint)) {
+            $cols = _ExtractProjectColumns $BodyKqlForSchemaHint
+            if ($cols.Count -gt 0) {
+                $schema = (($cols | ForEach-Object { '{0}:string' -f $_ }) -join ',')
+                return ('let {0} = datatable({1}) [];' -f $LetVarName, $schema)
+            }
+        }
         return ('let {0} = datatable(__placeholder:string)[];' -f $LetVarName)
     }
     $first = $Rows[0]
@@ -842,7 +898,13 @@ function Resolve-ProfileCLLetBlocks {
                 throw
             }
             $rowCount = if ($clRows) { @($clRows).Count } else { 0 }
-            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows)
+            # v2.2.315 -- pass the let-binding body so the empty-snapshot path
+            # can emit a schema-matched datatable instead of a single-column
+            # placeholder. Without the hint, the downstream join failed with
+            # "Failed to resolve column named '<expected_col>'" whenever the
+            # CL pre-fetch returned 0 rows (e.g. profiler hasn't run yet, or
+            # SI_Azure_Profile_CL has no data because SPN lacks Reader role).
+            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows) -BodyKqlForSchemaHint $bodyKql
             Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, $rowCount, $datatableLet.Length)
             $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
             # v2.2.273 -- track the largest CL snapshot row count seen for this query

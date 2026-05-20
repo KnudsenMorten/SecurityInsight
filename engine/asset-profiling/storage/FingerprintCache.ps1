@@ -92,13 +92,72 @@ function Get-SIFingerprintRecord {
     }
 }
 
+function _Get-SIAzureErrorBody {
+    <# Best-effort extractor for Azure REST error body. ErrorDetails.Message is
+       populated for some response shapes only; on PS 5.1 + many 400s the
+       Invoke-RestMethod exception swallows the body. Fall back to reading the
+       response stream directly. v2.2.315. #>
+    param($ErrorRecord)
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) {
+        return [string]$ErrorRecord.ErrorDetails.Message
+    }
+    try {
+        $resp = $ErrorRecord.Exception.Response
+        if ($resp) {
+            $stream = $resp.GetResponseStream()
+            if ($stream) {
+                # Reset stream to beginning if seekable (response stream sometimes already-consumed).
+                if ($stream.CanSeek) { $stream.Position = 0 }
+                $reader = New-Object System.IO.StreamReader($stream)
+                try {
+                    $body = $reader.ReadToEnd()
+                    if (-not [string]::IsNullOrWhiteSpace($body)) { return $body }
+                } finally { $reader.Close() }
+            }
+        }
+    } catch { }
+    return [string]$ErrorRecord.Exception.Message
+}
+
+function _Invoke-SITableDelete {
+    <# DELETE an Azure Table entity by PK + RowKey. Idempotent: 404 (entity
+       absent) is treated as success. Used by Set-SIFingerprintRecord's
+       self-heal-on-400 path + -ForceOverwrite path. v2.2.315. #>
+    param(
+        [Parameter(Mandatory)][object]$Context,
+        [Parameter(Mandatory)][string]$Url
+    )
+    $date = ConvertTo-SIRfc1123Date
+    $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $Url
+    $headers = @{
+        'x-ms-date'    = $date
+        'x-ms-version' = '2020-08-04'
+        'Accept'       = 'application/json;odata=nometadata'
+        'Authorization'= $auth
+        'If-Match'     = '*'   # unconditional delete
+    }
+    try {
+        Invoke-RestMethod -Method Delete -Uri $Url -Headers $headers -ErrorAction Stop | Out-Null
+        return $true
+    } catch {
+        $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        if ($code -eq 404) { return $true }   # already absent
+        return $false
+    }
+}
+
 function Set-SIFingerprintRecord {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$Context,
         [Parameter(Mandatory)][string]$TableName,
         [Parameter(Mandatory)][string]$AssetId,
-        [Parameter(Mandatory)][hashtable]$Properties
+        [Parameter(Mandatory)][hashtable]$Properties,
+        # v2.2.315 -- when set, skip the initial PUT and go straight to
+        # DELETE+PUT. The Invoke-Classify stage uses this on ForceFullRun=true
+        # to guarantee fresh column-type inference and self-heal any prior
+        # property-type drift in one round-trip pair.
+        [switch]$ForceOverwrite
     )
 
     $pk = ConvertTo-SISafeKey -Key $AssetId
@@ -129,13 +188,50 @@ function Set-SIFingerprintRecord {
         'Content-Type' = 'application/json'
         'Authorization'= $auth
     }
+
+    if ($ForceOverwrite) {
+        # v2.2.315 -- caller wants guaranteed-fresh column types. DELETE then PUT.
+        # Avoids the type-drift trap where the row's existing Edm.Int32 si_tier
+        # column locks out subsequent writes whose JSON marshals it differently.
+        [void](_Invoke-SITableDelete -Context $Context -Url $url)
+        try {
+            Invoke-RestMethod -Method Put -Uri $url -Headers $headers -Body $body -ErrorAction Stop | Out-Null
+            return
+        } catch {
+            $detail = _Get-SIAzureErrorBody -ErrorRecord $_
+            throw ('Set-SIFingerprintRecord PUT (force-overwrite) failed for asset={0}: {1}' -f $AssetId, $detail)
+        }
+    }
+
     try {
         Invoke-RestMethod -Method Put -Uri $url -Headers $headers -Body $body -ErrorAction Stop | Out-Null
     } catch {
-        # Bubble up the Azure Tables JSON error body if present (otherwise Invoke-RestMethod
-        # only surfaces "400 Bad Request" with no diagnostic).
-        $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
-        throw ('Set-SIFingerprintRecord PUT failed for asset={0}: {1}' -f $AssetId, $detail)
+        # v2.2.315 -- self-heal on 400. The dominant 400 cause is property-type
+        # drift across writes (e.g. si_tier was Edm.Int32 from a prior schema,
+        # current PUT marshals it as Edm.String). DELETE clears the column-type
+        # lock; the re-PUT succeeds with fresh types from the current JSON.
+        # 404 (entity absent) shouldn't reach here -- Insert-or-Replace creates;
+        # other status codes (401/403/500) bypass the self-heal.
+        $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        $firstDetail = _Get-SIAzureErrorBody -ErrorRecord $_
+        if ($code -eq 400) {
+            try {
+                [void](_Invoke-SITableDelete -Context $Context -Url $url)
+                # Re-sign because $date moved on (clock skew); rebuild header for second PUT.
+                $date2 = ConvertTo-SIRfc1123Date
+                $auth2 = Get-SITableAuthorizationHeader -Context $Context -Date $date2 -Url $url
+                $headers['x-ms-date']     = $date2
+                $headers['Authorization'] = $auth2
+                Invoke-RestMethod -Method Put -Uri $url -Headers $headers -Body $body -ErrorAction Stop | Out-Null
+                Write-Verbose ('Set-SIFingerprintRecord self-healed (DELETE+PUT) for asset={0} after first PUT 400: {1}' -f $AssetId, ($firstDetail -replace "`r?`n",' '))
+                return
+            } catch {
+                $finalDetail = _Get-SIAzureErrorBody -ErrorRecord $_
+                throw ('Set-SIFingerprintRecord PUT failed for asset={0} (self-heal also failed). First 400: {1} -- Final: {2}' -f $AssetId, ($firstDetail -replace "`r?`n",' '), ($finalDetail -replace "`r?`n",' '))
+            }
+        }
+        # Non-400: don't retry. Bubble up with body if available.
+        throw ('Set-SIFingerprintRecord PUT failed for asset={0}: {1}' -f $AssetId, $firstDetail)
     }
 }
 

@@ -101,7 +101,15 @@ try {
     # ----- Pull -----
     Write-Host ""
     Write-Host "  [STEP] git pull --ff-only origin main" -ForegroundColor Cyan
-    $pullOutput = & git pull --ff-only origin main 2>&1
+    # v2.2.318 -- git always writes "From <URL>" + progress lines to STDERR even
+    # on a successful pull. `2>&1` then surfaces each line as a PS ErrorRecord;
+    # PS 5.1 displays them as red NativeCommandError "remote: ..." text before
+    # the LASTEXITCODE check runs, which makes the operator think the pull
+    # failed when it didn't. `ForEach-Object { "$_" }` coerces every pipeline
+    # element (string OR ErrorRecord) into a plain string so PS treats it as
+    # normal pipeline data instead of an error. LASTEXITCODE is still the only
+    # reliable success check for native commands; we keep that.
+    $pullOutput = & git pull --ff-only origin main 2>&1 | ForEach-Object { "$_" }
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         _Err 'git pull failed. Output:'

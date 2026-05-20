@@ -6624,22 +6624,22 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
         }
         if ($capBucket -lt 1) { $capBucket = 1 }
 
-        # v2.2.329 -- per-report SOFT cap. The global AutoBucketMax default is
-        # 131072 (true safety net for 1M+-asset tenants), but unbounded escalation
-        # masks structural problems like CL-bucket-key misalignment. When the EG-
-        # side bucket coalesce doesn't match the CL-side join key (cross-domain
-        # reports: Attack_Paths_*_Github_to_Azure, _Public_IP_to_VM, etc.), EVERY
-        # bucket size N produces a ~2MB inline payload -> 413 -> escalate forever.
-        # Cap escalation at AutoBucketReportCap (default 256) so the engine fails
-        # fast on these reports and continues to the next instead of burning 30+
-        # min/report. Operator can raise the cap via `$global:AutoBucketReportCap`
-        # when they genuinely need >256 buckets for a single report; the global
-        # AutoBucketMax remains the hard ceiling.
-        $reportCap = if ([int]$global:AutoBucketReportCap -gt 0) {
+        # v2.2.330 -- REMOVE-ME-IN-NEXT-RELEASE. Temporary opt-in debug knob.
+        # OFF by default ($reportCap = 0) so production tenants never silently
+        # cap. While the per-report join-key parser is being built, operators
+        # can set `$global:AutoBucketReportCap = 256` to make cross-domain
+        # reports (Attack_Paths_*_Github_to_Azure, _Public_IP_to_VM, etc. --
+        # the ones whose EG-side bucket coalesce doesn't align with the CL-
+        # side join key) bail at the cap instead of escalating 2->8->...->
+        # 131072 forever. Delete this block (and the AutoBucketReportCap
+        # global entirely) once the join-key parser lands and aligns the
+        # bucket math properly for those reports.
+        $reportCap = if ($null -ne $global:AutoBucketReportCap) {
             [int]$global:AutoBucketReportCap
-        } else { 256 }
-        if ($capBucket -gt $reportCap) {
+        } else { 0 }
+        if ($reportCap -gt 0 -and $capBucket -gt $reportCap) {
             $capBucket = $reportCap
+            Write-Info ("AutoBucket report cap ACTIVE (debugging): '{0}' escalation capped at {1} buckets (set `$global:AutoBucketReportCap=0 to disable)." -f $ReportName, $reportCap)
         }
 
         $bucketCountToUse = $effectiveBucketCount

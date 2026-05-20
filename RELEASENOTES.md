@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.329
+## v2.2.330
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
 - release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
 - release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
 - release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
 - release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
 - release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
-- release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.330 — AutoBucketReportCap is now OPT-IN (default off) — production tenants never silently capped; debug-only knob marked REMOVE-ME for the next release once the join-key parser lands
+
+### Why
+
+v2.2.329 defaulted `$global:AutoBucketReportCap = 256` so cross-domain Attack_Paths reports bail at 256 buckets instead of escalating to 131,072. But this hardcoded default silently capped legitimate 1M+-asset tenants too — exactly the customers AutoBucketMax 131,072 was designed for.
+
+### Fix
+
+Default flipped to OFF. Operators who want fast-bail behaviour while debugging set `$global:AutoBucketReportCap = 256` explicitly. When active the engine logs `AutoBucket report cap ACTIVE (debugging)` so the constraint is visible. Production tenants leave it unset.
+
+### Lifecycle marker
+
+The opt-in knob is REMOVE-ME-IN-NEXT-RELEASE scaffolding. Once the per-report join-key parser lands (v2.2.331), bucket alignment will be correct for cross-domain reports and the cap loses its purpose. Both the global and the code block are deleted at that point — no permanent debug knobs in production code.
 
 ---
 

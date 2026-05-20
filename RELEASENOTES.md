@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.323
+## v2.2.324
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
 - release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
 - release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
 - release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
@@ -33,13 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
 - release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
 - release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
-- release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.324 — Reframe AH shard-sizing log lines from alarming WARN to neutral INFO ("calculating query sizing"); long-form tip emits once per run instead of per-bucket
+
+### Bug
+
+Operator: "customers thinks it is an error. make it more positive like calculating query sizing".
+
+When the AH endpoint returns 413 (query body exceeded the 1 MB nginx cap), the engine's existing logic is fine — it auto-tunes the bucket count and re-runs. But the LOG TEXT screamed at customers:
+
+```
+[WARN] Query body exceeded the advanced-hunting nginx body cap (413 Request Entity Too Large). This is a hard Microsoft-side limit (~1 MB) on /security/runHuntingQuery; not retryable.
+[WARN] Fix: enable Microsoft Sentinel data lake + table mirroring for SI_*_(Profile|Assets)_CL. The engine probe at startup detects this and queries submit DIRECTLY to advanced hunting with no inline let-block ... [long paragraph]
+[WARN] bucket 1/2: overflow/preempted (often transient XDR backend load). Retry attempt 1/3 after 30s before escalating. Error: ...
+[WARN] AutoBucket escalation: rerunning report 'X' with BucketCount 2 -> 30
+```
+
+Customers read "EXCEEDED HARD LIMIT NOT RETRYABLE" + yellow WARN color and opened tickets thinking the engine had broken. In reality the engine was just sizing shards.
+
+### Fix
+
+Four sites in `engine/risk-analysis/Invoke-RiskAnalysis.ps1` reworded + downgraded from `Write-Warn2` (yellow) → `Write-Info` (white):
+
+| Old (alarming) | New (neutral) |
+|---|---|
+| `Query body exceeded the advanced-hunting nginx body cap (413 ... not retryable)` | `Query body is being tuned for the advanced-hunting endpoint (1 MB shard cap). Calculating optimal shard count for <table>.` |
+| 5-line `Fix: enable Microsoft Sentinel data lake...` paragraph **repeated per-bucket per-retry** | 1-line `Tip (one-time): enable Microsoft Sentinel data lake...` **printed ONCE per run** via `$script:_LakeTipShown` gate |
+| `bucket N/M: overflow/preempted (often transient XDR backend load). Retry attempt X/Y after Zs before escalating.` | `bucket N/M: re-probing with current shard size (attempt X/Y, pausing Zs).` |
+| `bucket N/M overflowed on K consecutive attempts -- treating as genuine data overflow. Escalating bucket count and restarting this report.` | `bucket N/M: shard too large after K probes -- increasing shard count and re-running report.` |
+| `AutoBucket escalation: rerunning report 'X' with BucketCount A -> B` | `Shard sizing: 'X' increasing shard count A -> B (auto-tuning for this report's payload).` |
+
+### What's unchanged
+
+- Engine logic: identical. Same bucket escalation, same retry counts, same eventual outcome.
+- Real errors (auth failures, parse errors, throttling) still emit as WARN/ERR.
+- v2.2.323 simulation knob still produces the same volume of lines — just neutrally worded.
+
+### Customer-visible effect
+
+Operators tailing `<install>\logs\risk-analysis_*.log` during a tenant's first run no longer see a scary yellow wall of "EXCEEDED HARD LIMIT" text. The lines read like normal calibration ("calculating optimal shard count ... pausing 30s ... increasing shard count 2 -> 30"), matching what the engine is actually doing.
 
 ---
 

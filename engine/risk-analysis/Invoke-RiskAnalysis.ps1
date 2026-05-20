@@ -872,15 +872,17 @@ function Get-SICLBucketKey {
        (EntraObjectId/UserId) and Azure (AzureResourceId_Guid) report shapes.
        v2.2.328 -- prefer EpJoinKey (the synthesized join key projected by the
        canonical `_ep` let-binding body: AadDeviceId || AssetName || PrimaryEntityId).
-       After projection the raw bucket-key columns (DeviceKey/NodeId/etc.)
-       usually no longer exist, and AadDeviceId is often empty for servers/
-       Linux/IoT -- the result was Get-SICLBucketKey returning '' for 70%+
-       of rows and dumping them all in bucket 0. EpJoinKey equals whatever
-       EG-side column the join uses for matched rows, so hashing it produces
-       the same bucket as the EG side. #>
+       v2.2.334 -- add projection-aliased keys used by cross-domain Attack_Paths +
+       Identity_Admin_LogonTo_* reports: Target_AzureResourceId_Guid,
+       Source_AadDeviceId, Source_AssetId, Target_AssetId_From_CL. Without these
+       the 8 cross-domain reports had Get-SICLBucketKey returning '' for EVERY
+       row -> all 15K rows landed in bucket 0 -> CL bucketing was a no-op ->
+       2.7MB inline payload per bucket -> 413 -> escalation cap fired with zero
+       data. With these aliases present, CL distributes evenly across buckets,
+       body shrinks to ~42KB per bucket at N=8, AutoBucket settles fast, no cap. #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Row)
-    foreach ($col in 'EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId') {
+    foreach ($col in 'EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId','Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId') {
         $p = $Row.PSObject.Properties[$col]
         if ($p) {
             $v = [string]$p.Value
@@ -986,11 +988,12 @@ function Resolve-ProfileCLLetBlocks {
             $simTarget = 0
             [void][int]::TryParse([string]$global:SI_SimulateCLRowCount, [ref]$simTarget)
             if ($simTarget -gt 0 -and $rowCount -gt 0 -and $rowCount -lt $simTarget) {
-                # v2.2.328 -- mirror Get-SICLBucketKey order so simulation mutates
-                # the SAME column the hasher reads. EpJoinKey first; the rest are
-                # raw column names that survive only if the let body skips the
-                # `| project` step (rare).
-                $bucketKeyCols = @('EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId')
+                # v2.2.328+.334 -- mirror Get-SICLBucketKey order so simulation
+                # mutates the SAME column the hasher reads. Includes cross-domain
+                # aliases (Target_*/Source_*/FinalTargetId/FinalSourceId) so the
+                # simulation knob distributes its clones across buckets correctly
+                # for those reports too.
+                $bucketKeyCols = @('EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId','Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId')
                 $needed = $simTarget - $rowCount
                 $clones = New-Object System.Collections.Generic.List[object]
                 $simIdx = 0
@@ -1021,6 +1024,34 @@ function Resolve-ProfileCLLetBlocks {
         }
 
         $allRows = $script:_HybridRowsCache[$cacheKey]
+
+        # v2.2.334 -- cross-domain detection. If this let's CL rows carry a
+        # bucket key whose column name isn't in New-BucketFilterKql's EG-side
+        # coalesce list (DeviceKey/NodeId/DeviceNodeId/AadDeviceId/DeviceId/
+        # MachineId/Id/SourceNodeId/TargetNodeId), the EG-side bucket filter
+        # would partition EG rows on a column UNRELATED to the join key -- so
+        # per-bucket joins would miss most matches (lossy). Set a per-report
+        # script flag so Replace-BucketFilterBlock leaves the EG-side filter
+        # as the no-op `| where 1 == 1`. Each per-bucket query then scans
+        # ALL EG rows joined to the bucket's CL subset -- lossless, just
+        # heavier on EG compute. Cheap insurance vs producing wrong data.
+        if ($clBucketingActive -and -not $script:_SkipEGBucketForCrossDomain) {
+            $egStdCols = @{'DeviceKey'=$true; 'NodeId'=$true; 'DeviceNodeId'=$true; 'AadDeviceId'=$true; 'DeviceId'=$true; 'MachineId'=$true; 'Id'=$true; 'SourceNodeId'=$true; 'TargetNodeId'=$true}
+            $crossDomainCols = @('Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId','EpJoinKey')
+            $firstRow = if (@($allRows).Count -gt 0) { @($allRows)[0] } else { $null }
+            if ($firstRow) {
+                foreach ($cdCol in $crossDomainCols) {
+                    $p = $firstRow.PSObject.Properties[$cdCol]
+                    if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) {
+                        if (-not $egStdCols.ContainsKey($cdCol)) {
+                            $script:_SkipEGBucketForCrossDomain = $true
+                            Write-Info ("[hybrid] cross-domain let '{0}' uses '{1}' (not in EG bucket coalesce list) -- suppressing EG-side bucket filter so per-bucket joins stay lossless." -f $varName, $cdCol)
+                        }
+                        break
+                    }
+                }
+            }
+        }
 
         if ($clBucketingActive) {
             $bucketRows = @($allRows | Where-Object {
@@ -2850,6 +2881,18 @@ function Replace-BucketFilterBlock {
         [Parameter(Mandatory)][string]$Query,
         [Parameter(Mandatory)][string]$BucketFilterKql
     )
+    # v2.2.334 -- cross-domain reports (Attack_Paths_*, Identity_Admin_LogonTo_*)
+    # use projection-aliased CL bucket keys (Target_AzureResourceId_Guid, Source_AadDeviceId,
+    # etc.) that aren't in the EG-side coalesce list (DeviceKey/NodeId/...). For these,
+    # EG-side bucket filtering would partition EG rows by a column UNRELATED to the
+    # CL join key, so the per-bucket join misses most matching rows (lossy). Skip
+    # EG bucket substitution when Resolve-ProfileCLLetBlocks set this flag --
+    # CL stays bucketed (body shrinks, fits 1MB cap), EG sees ALL rows per bucket
+    # query (no partition loss), and across N buckets the union is lossless. Each
+    # bucket query is more compute-heavy on EG, but lossless > 8x faster.
+    if ([bool]$script:_SkipEGBucketForCrossDomain) {
+        return $Query
+    }
     $blockRx   = [regex]::Escape($script:_BucketFilterBeginMark) + '(?<body>.*?)' + [regex]::Escape($script:_BucketFilterEndMark)
     $bodyMatch = [regex]::Match($Query, $blockRx, [System.Text.RegularExpressions.RegexOptions]::Singleline)
     if (-not $bodyMatch.Success) { return $Query }
@@ -6486,6 +6529,11 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     $script:_CurrentBucketCount      = 0
     $script:_CurrentBucketIndex      = 0
     $script:_CurrentReportIsDetailed = $false
+    # v2.2.334 -- also reset the cross-domain EG-bucket-skip flag. Set by
+    # Resolve-ProfileCLLetBlocks during the first probe of a cross-domain report;
+    # if left set across reports, the next single-let report would incorrectly
+    # leave EG unfiltered (wasted compute, correct results but slow).
+    $script:_SkipEGBucketForCrossDomain = $false
 
     $inc = Resolve-ReportInclude -Item $includeItem
     $ReportNameFromTemplate = $inc.Name

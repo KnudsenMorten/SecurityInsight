@@ -838,11 +838,15 @@ function Add-CLSnapshotShadows {
 }
 
 function Get-SISha256Bucket {
-    <# v2.2.323 -- SHA256-based bucket assignment, identical math on KQL + PS
+    <# v2.2.325 -- SHA256-based bucket assignment, identical math on KQL + PS
        sides so CL-snapshot bucketing aligns with EG-side bucketing.
-       KQL equivalent:  abs(toint(substring(hash_sha256(<key>), 0, 8), 16)) % N
-       Take first 4 bytes of SHA256(utf8(key)), interpret as big-endian Int32,
-       absolute value, modulo bucket count. Returns 0..(N-1). #>
+       KQL equivalent:  tolong(substring(hash_sha256(<key>), 0, 8), 16) % N
+       Take first 4 bytes of SHA256(utf8(key)), interpret as big-endian
+       UNSIGNED 32-bit (0..2^32-1, matching KQL `tolong(hex, 16)`), modulo N.
+       v2.2.323 used signed Int32 + Abs(), which misaligned with KQL: bytes
+       0x80..0xff produced PS=2^31-byte but KQL=2^31+byte. Same input, different
+       bucket. With CL-bucketing inactive that drift never surfaced; activating
+       in v2.2.325 forced the uint32 fix. #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$Key,
@@ -854,12 +858,12 @@ function Get-SISha256Bucket {
     try {
         $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Key))
     } finally { $sha.Dispose() }
-    # Big-endian Int32 from first 4 bytes (matches KQL hex-parse order).
-    $i = ([int]$hash[0] -shl 24) -bor ([int]$hash[1] -shl 16) -bor ([int]$hash[2] -shl 8) -bor [int]$hash[3]
-    # Int32.MinValue's Abs() overflows; clamp to MaxValue (statistically 1 in 2^32).
-    if ($i -eq [int]::MinValue) { $i = [int]::MaxValue }
-    if ($i -lt 0)                { $i = -$i }
-    return $i % $BucketCount
+    # Big-endian UInt32 from first 4 bytes. BitConverter.ToUInt32 reads
+    # little-endian, so reverse the slice first.
+    $bytes = [byte[]]($hash[0..3])
+    [Array]::Reverse($bytes)
+    $u = [System.BitConverter]::ToUInt32($bytes, 0)
+    return [int]($u % [uint32]$BucketCount)
 }
 
 function Get-SICLBucketKey {
@@ -1670,8 +1674,22 @@ function Invoke-GraphHuntingQuery {
 
             if (-not $augmentPlans -or @($augmentPlans).Count -eq 0) {
                 # Legacy hybrid: pre-fetch + inline as datatable() literal.
+                # v2.2.325 -- per-bucket CL-snapshot bucketing. Bucket loop in
+                # MAIN sets $script:_CurrentBucketCount/_Index before each call;
+                # Resolve-ProfileCLLetBlocks then filters the inline datatable
+                # to only the rows whose SHA256-bucket matches the current EG
+                # bucket. Reduces inline payload from full snapshot to ~1/N per
+                # bucket, breaking the 1MB nginx body cap at root cause instead
+                # of escalating bucket counts to absurd levels (122,880+ today).
+                # Skipped for *_Detailed (composite-key EG buckets misalign with
+                # single-key CL buckets) and for unset state (non-bucketed runs).
+                $_bk = 0; $_bi = 0
+                if ([int]$script:_CurrentBucketCount -gt 1 -and -not [bool]$script:_CurrentReportIsDetailed) {
+                    $_bk = [int]$script:_CurrentBucketCount
+                    $_bi = [int]$script:_CurrentBucketIndex
+                }
                 try {
-                    $Query = Resolve-ProfileCLLetBlocks -Query $Query -WorkspaceResourceId $wsForCL
+                    $Query = Resolve-ProfileCLLetBlocks -Query $Query -WorkspaceResourceId $wsForCL -BucketCount $_bk -BucketIndex $_bi
                 } catch {
                     Write-Warn2 ("[scope] failed; let-blocks left for table-shadow fallback. Reason: {0}" -f $_.Exception.Message)
                 }
@@ -2243,7 +2261,7 @@ function New-BucketFilterKql {
              '')
 )
 | where isnotempty(__bucket_key)
-| extend __bucket = abs(hash(__bucket_key)) % $BucketCount
+| extend __bucket = tolong(substring(hash_sha256(__bucket_key), 0, 8), 16) % $BucketCount
 | where __bucket == $BucketIndex
 "@
   } else {
@@ -2260,7 +2278,7 @@ function New-BucketFilterKql {
     tostring(column_ifexists('TargetNodeId',''))
 )
 | where isnotempty(__bucket_key)
-| extend __bucket = abs(hash(__bucket_key)) % $BucketCount
+| extend __bucket = tolong(substring(hash_sha256(__bucket_key), 0, 8), 16) % $BucketCount
 | where __bucket == $BucketIndex
 "@
   }
@@ -6466,6 +6484,15 @@ try {
 foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
   try {
 
+    # v2.2.325 -- clear per-report bucket state at the TOP of every iteration
+    # so non-bucketed reports never inherit (BucketCount, BucketIndex) leftover
+    # from the previous report's last bucket. Without this, a non-bucketed
+    # report following a 4-bucket report would silently re-inline only 1/4 of
+    # its CL snapshot -- wrong results, no error.
+    $script:_CurrentBucketCount      = 0
+    $script:_CurrentBucketIndex      = 0
+    $script:_CurrentReportIsDetailed = $false
+
     $inc = Resolve-ReportInclude -Item $includeItem
     $ReportNameFromTemplate = $inc.Name
 
@@ -6623,16 +6650,34 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
             } catch { }
           }
 
+          # v2.2.325 -- track whether this report is *_Detailed so the inner
+          # CL-bucketing path in Invoke-GraphHuntingQuery / Resolve-ProfileCLLetBlocks
+          # can skip Detailed (composite-key EG buckets don't align with single-
+          # key CL row buckets, so CL filtering would drop join-matching rows).
+          $script:_CurrentReportIsDetailed = ($ReportName -like '*_Detailed' -or $ReportName -like '*_Detailed_*')
+
           $probe = {
             param([int]$BucketCount)
 
-            # Probe only bucket 0. If this bucket still exceeds limits, smaller buckets are needed.
-            $bucketFilter = New-BucketFilterKql -BucketCount $BucketCount -BucketIndex 0 -ReportName $ReportName
-            $probeQuery   = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $bucketFilter
+            # v2.2.325 -- probe must see the SAME inline payload size that the
+            # real per-bucket call will see; otherwise AutoBucket over-escalates
+            # (a 2.4MB-per-bucket probe failure pushes counts to 122K+ while
+            # actual per-bucket sends would be 60KB at N=40). Set script-scope
+            # bucket state so Invoke-GraphHuntingQuery's CL-bucketing kicks in.
+            $script:_CurrentBucketCount = $BucketCount
+            $script:_CurrentBucketIndex = 0
+            try {
+                # Probe only bucket 0. If this bucket still exceeds limits, smaller buckets are needed.
+                $bucketFilter = New-BucketFilterKql -BucketCount $BucketCount -BucketIndex 0 -ReportName $ReportName
+                $probeQuery   = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $bucketFilter
 
-            $null = Invoke-GraphHuntingQuery -Query $probeQuery `
-              -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes `
-              -MaxRetries 1
+                $null = Invoke-GraphHuntingQuery -Query $probeQuery `
+                  -ReconnectMaxAgeMinutes $global:GraphReconnectMaxAgeMinutes `
+                  -MaxRetries 1
+            } finally {
+                $script:_CurrentBucketCount = 0
+                $script:_CurrentBucketIndex = 0
+            }
           }
 
           try {
@@ -6673,6 +6718,12 @@ $script:_AutoBucketSkipRemainingBuckets = $false
 # from a prior heavier report).
 $script:_LastHybridSnapshotRowCount = 0
 
+# v2.2.325 -- always start each report with bucket-state cleared so that
+# non-bucketed report runs (and the first-iteration "is it Detailed" check)
+# never inherit coordinates from the previous report's last bucket.
+$script:_CurrentBucketCount = 0
+$script:_CurrentBucketIndex = 0
+
 while (-not $bucketRunSucceeded) {
 
   # Reset results on each (re)run so we don't keep partial data from a failing bucket count
@@ -6697,6 +6748,15 @@ while (-not $bucketRunSucceeded) {
       $bucketNo = $b + 1
       $bucketFilter = New-BucketFilterKql -BucketCount $bucketCountToUse -BucketIndex $b -ReportName $ReportName
       $thisQuery    = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $bucketFilter
+
+      # v2.2.325 -- publish current bucket coordinates so the CL-bucketing
+      # branch inside Resolve-ProfileCLLetBlocks (called from Invoke-GraphHuntingQuery)
+      # filters the inline _ep / _id / _az snapshot to only the rows whose
+      # SHA256-bucket matches THIS EG bucket. Without these vars set the
+      # legacy path reused the full snapshot per bucket, so escalation past
+      # ~30 buckets accomplished nothing (CL body, not EG body, was the cap-buster).
+      $script:_CurrentBucketCount = $bucketCountToUse
+      $script:_CurrentBucketIndex = $b
 
       Write-Info ("bucket {0}/{1}: running query (auto-routed: LA-direct or XDR Advanced Hunting based on table mix)" -f $bucketNo, $bucketCountToUse)
       Tock

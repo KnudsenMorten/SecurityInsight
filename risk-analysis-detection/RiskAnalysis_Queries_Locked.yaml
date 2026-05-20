@@ -8852,6 +8852,13 @@ Reports:
         | extend cmdbId = Target_cmdbId, cmdbName = Target_cmdbName, cmdbCriticality = Target_cmdbCriticality, cmdbDataSensitivity = Target_cmdbDataSensitivity, Target_Tier_Aliased = Target_Tier_From_CL
         // EG-derived multi-signal source-device probability (RiskFactorsCount + InternetExposed + LegacyEoS).
         | join kind=leftouter (_DeviceEnrichment) on $left.EntryPointDeviceId == $right.NodeId
+        // v2.2.317 -- Detailed body was missing this join (only Summary had it).
+        // Without it the downstream `extend AssetName = coalesce(Source_AssetName, ...)`
+        // + `extend RiskFactor_Probability = coalesce(toint(Source_RiskFactor_Probability), 0)`
+        // failed with "Failed to resolve scalar expression named 'Source_AssetName'"
+        // because the Source_* columns the projection references were never brought
+        // into scope. Mirrors the Summary join at line 8562.
+        | join kind=leftouter (_SourceCmdb) on $left.EntryPointAadDeviceId == $right.Source_AadDeviceId
         // Per project rule: CriticalityTier ALWAYS sources from SI_Azure_Profile_CL.Tier.
         // Use the aliased column (populated either by the engine's post-AH augment OR
         // by the legacy hybrid-pre-fetch inline datatable -- both paths populate it).

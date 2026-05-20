@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.316
+## v2.2.317
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
 - release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
 - release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
 - docs: SecurityInsight - update README + Container-Deploy-Guide for v2.2.314 OAuth-only + KPI parity + Subscription-in-MoreDetails (c420305c)
@@ -33,13 +34,52 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
 - release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
 - release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
-- release: SecurityInsight v2.2.288 - stale-device filter auto-injects when YAML placeholder missing (cfc4bd2e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.317 — `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`: add missing `_SourceCmdb` join (Detailed body referenced `Source_*` columns that were never brought into scope)
+
+### Bug
+
+Customer's RA run hit `[BadRequest] : 'extend' operator: Failed to resolve scalar expression named 'Source_AssetName'` on every bucket of this report. Tracing the Detailed body at `RiskAnalysis_Queries_Locked.yaml:8850+`:
+
+```kql
+_Paths
+| join kind=leftouter (_TargetCmdb) on …
+| extend cmdbId = Target_cmdbId, …
+| join kind=leftouter (_DeviceEnrichment) on …
+| extend CriticalityTier = coalesce(toint(Target_Tier_Aliased), 3)
+…
+| extend AssetName = coalesce(Source_AssetName, EntryPointDevice)        ← line 8869 -- fails
+| extend AssetId   = coalesce(Source_AssetId,   …)
+| extend AssetType = coalesce(Source_AssetType, "Device")
+| extend RiskFactor_Probability          = coalesce(toint(Source_RiskFactor_Probability), 0)
+| extend RiskFactor_Probability_Detailed = coalesce(tostring(Source_RiskFactor_Probability_Detailed), "")
+```
+
+The Detailed body joined `_TargetCmdb` + `_DeviceEnrichment` but **never joined `_SourceCmdb`**. So every `Source_*` reference in the downstream `extend` block resolved to nothing → KQL pre-flight rejected the query before submission.
+
+The Summary variant at `:8562` correctly has the join (added in v2.2.305-307 when the report family pivoted to source-device asset identity). The Detailed variant was missed in that pivot — the projection got updated to reference `Source_*` but the join that produces them never landed.
+
+### Fix
+
+One line added to the Detailed body, immediately after the `_DeviceEnrichment` join:
+
+```kql
+| join kind=leftouter (_SourceCmdb) on $left.EntryPointAadDeviceId == $right.Source_AadDeviceId
+```
+
+Mirrors the Summary join exactly. `Source_AssetName / AssetId / AssetType / Tier / cmdb* / RiskFactor_Probability / RiskFactor_Probability_Detailed` are now all in scope at the downstream `extend` block, the query compiles, and the customer's run produces rows instead of 4× retry-then-fail per bucket.
+
+### Audit done
+
+Grep across the locked YAML for `coalesce(Source_*` and `_SourceCmdb` references found this report was the **only** Detailed body affected. The other 5 `Attack_Paths_Detailed_*` reports don't reference `Source_*` columns at all (they use different enrichment sources). No further missing joins to chase.
 
 ---
 

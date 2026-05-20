@@ -195,7 +195,13 @@ function Resolve-RepoRoot {
 }
 # Resolve repo root + version BEFORE the banner so the banner can show the version.
 try {
-    if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
+    # Community-vm always lives at <install>\launcher\<engine>\launcher.community-vm.ps1.
+    # 2-up from $PSScriptRoot IS the install root by file-layout convention -- no walk-up,
+    # no marker-file requirement. Resolve-RepoRoot's walk-up looked for `scripts+launchers`
+    # or `engine+launcher` pairs and returned empty on flat community installs missing
+    # both pairs, causing Layer 3 (custom.ps1) to look at `\SOLUTIONS\...\config\...` and
+    # silently miss the customer's actual `<install>\config\<solution>.custom.ps1`.
+    if (-not $InstallPath) { $InstallPath = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
 } catch {
     # Defer the error until after the banner so the user sees what they ran.
     $resolveError = $_

@@ -837,6 +837,47 @@ function Add-CLSnapshotShadows {
     return (($shadows -join [Environment]::NewLine) + [Environment]::NewLine + $Query)
 }
 
+function Get-SISha256Bucket {
+    <# v2.2.323 -- SHA256-based bucket assignment, identical math on KQL + PS
+       sides so CL-snapshot bucketing aligns with EG-side bucketing.
+       KQL equivalent:  abs(toint(substring(hash_sha256(<key>), 0, 8), 16)) % N
+       Take first 4 bytes of SHA256(utf8(key)), interpret as big-endian Int32,
+       absolute value, modulo bucket count. Returns 0..(N-1). #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Key,
+        [Parameter(Mandatory)][int]$BucketCount
+    )
+    if ($BucketCount -le 1) { return 0 }
+    if ([string]::IsNullOrEmpty($Key)) { return 0 }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Key))
+    } finally { $sha.Dispose() }
+    # Big-endian Int32 from first 4 bytes (matches KQL hex-parse order).
+    $i = ([int]$hash[0] -shl 24) -bor ([int]$hash[1] -shl 16) -bor ([int]$hash[2] -shl 8) -bor [int]$hash[3]
+    # Int32.MinValue's Abs() overflows; clamp to MaxValue (statistically 1 in 2^32).
+    if ($i -eq [int]::MinValue) { $i = [int]::MaxValue }
+    if ($i -lt 0)                { $i = -$i }
+    return $i % $BucketCount
+}
+
+function Get-SICLBucketKey {
+    <# v2.2.323 -- mirror New-BucketFilterKql's column-coalesce on a CL row.
+       First non-empty wins. Extended beyond device keys to cover Identity
+       (EntraObjectId/UserId) and Azure (AzureResourceId_Guid) report shapes. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][object]$Row)
+    foreach ($col in 'DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId') {
+        $p = $Row.PSObject.Properties[$col]
+        if ($p) {
+            $v = [string]$p.Value
+            if (-not [string]::IsNullOrWhiteSpace($v)) { return $v }
+        }
+    }
+    return ''
+}
+
 function Resolve-ProfileCLLetBlocks {
     <# HYBRID CL-snapshot inlining. When a query references both
        SI_*_Profile_CL AND ExposureGraph*, the data-lake API is the only surface
@@ -853,7 +894,18 @@ function Resolve-ProfileCLLetBlocks {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Query,
-        [Parameter(Mandatory)][string]$WorkspaceResourceId
+        [Parameter(Mandatory)][string]$WorkspaceResourceId,
+        # v2.2.323 -- CL-snapshot bucketing. When both are passed AND the
+        # detected let-binding count == 1 (single-domain report), the inline
+        # datatable is filtered to rows whose SHA256-bucket assignment matches
+        # $BucketIndex. Each bucket query then carries ~1/N of the snapshot
+        # instead of the full payload, making bucketing genuinely effective
+        # for tenants whose CL snapshot blew the AH 1MB nginx cap. Skipped
+        # for multi-let-binding (cross-domain Attack_Paths) reports because
+        # bucket-key alignment across multiple CL sources isn't trivially
+        # solvable -- those fall back to the existing full-inline path.
+        [int]$BucketCount = 0,
+        [int]$BucketIndex = 0
     )
     # Strip strings/comments first to avoid false-positive `;` inside literals.
     $stripped = $Query
@@ -866,6 +918,12 @@ function Resolve-ProfileCLLetBlocks {
     $letRx = '(?ms)\blet\s+(?<var>\w+)\s*=\s*(?<body>[^;]*?\bSI_[A-Za-z]+_Profile_CL\b[^;]*?);'
     $matches2 = [regex]::Matches($stripped, $letRx)
     if ($matches2.Count -eq 0) { return $Query }
+
+    # v2.2.323 -- CL-snapshot bucketing requires exactly ONE let-binding so the
+    # bucket key is unambiguous. Multi-binding (cross-domain Attack_Paths)
+    # silently falls back to full-inline; the existing 413 WARN handles oversize
+    # cases for those reports until v2.2.325 ships per-binding bucket keys.
+    $clBucketingActive = ($BucketCount -gt 1 -and $matches2.Count -eq 1)
 
     $modified = $Query
     foreach ($m in $matches2) {
@@ -883,10 +941,36 @@ function Resolve-ProfileCLLetBlocks {
         # one report, AND most reports use the same _ep / _TargetCmdb let-binding
         # bodies, so a run-wide cache eliminates the duplication entirely.
         if (-not $script:_HybridSnapshotCache) { $script:_HybridSnapshotCache = @{} }
+        if (-not $script:_HybridRowsCache)     { $script:_HybridRowsCache     = @{} }   # v2.2.323 -- raw rows for per-bucket re-serialize
         $bodyHash = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash(
                         [System.Text.Encoding]::UTF8.GetBytes($bodyKql))).Replace('-','')
         $cacheKey = $varName + '|' + $bodyHash
-        if ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
+
+        # v2.2.323 -- when CL bucketing is active for THIS report, always go
+        # through the rows-cache path so we can re-serialize per bucket. When
+        # NOT bucketing, keep the legacy serialized-string cache for speed.
+        if ($clBucketingActive) {
+            if (-not $script:_HybridRowsCache.ContainsKey($cacheKey)) {
+                Write-Info ("[hybrid] pre-fetching CL snapshot for let-binding '{0}' from LA workspace (CL-bucketing active) ..." -f $varName)
+                try {
+                    $clRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $WorkspaceResourceId -Query $bodyKql
+                } catch {
+                    Write-Err2 ("[hybrid] CL snapshot fetch failed for '{0}': {1}" -f $varName, $_.Exception.Message)
+                    throw
+                }
+                $script:_HybridRowsCache[$cacheKey] = @($clRows)
+            }
+            $allRows  = $script:_HybridRowsCache[$cacheKey]
+            $bucketRows = @($allRows | Where-Object {
+                (Get-SISha256Bucket -Key (Get-SICLBucketKey -Row $_) -BucketCount $BucketCount) -eq $BucketIndex
+            })
+            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $bucketRows -BodyKqlForSchemaHint $bodyKql
+            Write-Info ("[hybrid] '{0}' bucket {1}/{2}: {3}/{4} row(s) inlined ({5} bytes; CL-bucketed via SHA256)" -f $varName, ($BucketIndex + 1), $BucketCount, $bucketRows.Count, $allRows.Count, $datatableLet.Length)
+            if ($null -eq $script:_LastHybridSnapshotRowCount -or $allRows.Count -gt [int]$script:_LastHybridSnapshotRowCount) {
+                $script:_LastHybridSnapshotRowCount = [int]$allRows.Count
+            }
+        }
+        elseif ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
             $datatableLet = $script:_HybridSnapshotCache[$cacheKey]
             Write-Info ("[hybrid] '{0}' snapshot reused from cache ({1} bytes)" -f $varName, $datatableLet.Length)
         } else {
@@ -898,19 +982,50 @@ function Resolve-ProfileCLLetBlocks {
                 throw
             }
             $rowCount = if ($clRows) { @($clRows).Count } else { 0 }
+
+            # v2.2.323 -- SIMULATION knob. When operator sets
+            # $global:SI_SimulateCLRowCount = <target>, pad the snapshot to
+            # <target> rows by cloning existing ones with bucket-key modified
+            # via "_sim<N>" suffix on the FIRST non-empty bucket-key column.
+            # Clones' fake keys won't match any EG-side row so they're filtered
+            # out at the join (ballast only -- no output pollution), but they
+            # DO bloat the inline payload so operators can validate scale +
+            # bucketing behaviour on small tenants without waiting for a real
+            # 50K-asset customer. Logged loud so it can't accidentally ship.
+            $simTarget = 0
+            [void][int]::TryParse([string]$global:SI_SimulateCLRowCount, [ref]$simTarget)
+            if ($simTarget -gt 0 -and $rowCount -gt 0 -and $rowCount -lt $simTarget) {
+                $bucketKeyCols = @('DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId')
+                $needed = $simTarget - $rowCount
+                $clones = New-Object System.Collections.Generic.List[object]
+                $simIdx = 0
+                while ($clones.Count -lt $needed) {
+                    foreach ($r in $clRows) {
+                        if ($clones.Count -ge $needed) { break }
+                        $copy = $r.PSObject.Copy()
+                        foreach ($col in $bucketKeyCols) {
+                            $p = $copy.PSObject.Properties[$col]
+                            if ($p -and -not [string]::IsNullOrWhiteSpace([string]$p.Value)) {
+                                $p.Value = ('{0}_sim{1}' -f [string]$p.Value, $simIdx)
+                                break
+                            }
+                        }
+                        [void]$clones.Add($copy)
+                        $simIdx++
+                    }
+                }
+                $clRows = @($clRows) + $clones.ToArray()
+                $rowCount = @($clRows).Count
+                Write-Warn2 ("[hybrid] SIMULATION ACTIVE -- '{0}' padded from {1} real rows to {2} total (+{3} ballast clones with `_sim<n>` suffixed bucket-key). Disable by clearing `$global:SI_SimulateCLRowCount." -f $varName, ($rowCount - $clones.Count), $rowCount, $clones.Count)
+            }
+
             # v2.2.315 -- pass the let-binding body so the empty-snapshot path
             # can emit a schema-matched datatable instead of a single-column
-            # placeholder. Without the hint, the downstream join failed with
-            # "Failed to resolve column named '<expected_col>'" whenever the
-            # CL pre-fetch returned 0 rows (e.g. profiler hasn't run yet, or
-            # SI_Azure_Profile_CL has no data because SPN lacks Reader role).
+            # placeholder.
             $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows) -BodyKqlForSchemaHint $bodyKql
             Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, $rowCount, $datatableLet.Length)
             $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
-            # v2.2.273 -- track the largest CL snapshot row count seen for this query
-            # so AutoBucket can pre-bias initial bucket count for heavy reports
-            # (avoids the 2 -> 4 -> 16 -> 64 escalation grind on first run when we
-            # already know the snapshot is huge).
+            $script:_HybridRowsCache[$cacheKey]     = @($clRows)   # v2.2.323 -- stash for future bucketed re-use
             if ($null -eq $script:_LastHybridSnapshotRowCount -or $rowCount -gt [int]$script:_LastHybridSnapshotRowCount) {
                 $script:_LastHybridSnapshotRowCount = [int]$rowCount
             }

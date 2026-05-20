@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.322
+## v2.2.323
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
 - release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
 - release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
 - release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
@@ -33,13 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
 - release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
 - release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
-- release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.323 — Add `$global:SI_SimulateCLRowCount` knob (pad CL snapshot to N rows for scale testing); land dormant infrastructure for CL-snapshot bucketing (active in v2.2.324)
+
+### Why this release
+
+Customer at 514K-identity scale hits the Defender XDR `/security/runHuntingQuery` ~1 MB nginx body cap (413). Existing EG-side bucketing doesn't help because the inlined CL snapshot is duplicated in every bucket query. Real fix is **CL-snapshot bucketing** — partition the inline datatable per bucket so each request carries ~1/N of the snapshot.
+
+But shipping bucket-wire-up blind (no tenant access to validate) is exactly the wrong move — silent dropped joins are the failure shape and they look like real data. So v2.2.323 lands the **simulation knob** + **dormant infrastructure**; v2.2.324 wires bucketing once the operator can validate locally using the simulation knob.
+
+### What's new in this release
+
+**`$global:SI_SimulateCLRowCount`** — operator sets this in `config/SecurityInsight.custom.ps1`:
+
+```powershell
+$global:SI_SimulateCLRowCount = 15000   # or 50000, or 514000
+```
+
+When the engine's hybrid CL pre-fetch returns fewer rows than the target, it pads the snapshot by cloning real rows + suffixing the first non-empty bucket-key column with `_sim<n>` so each clone produces a unique hash. Clones don't match any EG-side row (so no output pollution — they're invisible ballast), but they **DO bloat the inline payload** so operators can validate scale behavior on a small tenant.
+
+Log line when active:
+```
+[WARN] [hybrid] SIMULATION ACTIVE -- '_ep' padded from 247 real rows to 15000 total (+14753 ballast clones with `_sim<n>` suffixed bucket-key). Disable by clearing $global:SI_SimulateCLRowCount.
+```
+
+Test plan against operator's own tenant:
+1. Set `$global:SI_SimulateCLRowCount = 15000` in custom.ps1.
+2. Run any RA report with a CL let-binding (e.g. `Device_Recommendations_Detailed`).
+3. Confirm the engine produces the 413 nginx error (validates the failure mode).
+4. Bump to 50K, 100K to confirm threshold scales linearly.
+5. After v2.2.324 ships with bucketing, repeat — should succeed at all sizes.
+
+### Dormant infrastructure (NOT active until v2.2.324)
+
+Three helpers land for the bucketing wire-up:
+
+- `Get-SISha256Bucket` — SHA256-based bucket assignment, identical math KQL+PS sides
+- `Get-SICLBucketKey` — mirrors `New-BucketFilterKql`'s column-coalesce on a CL row (extended for Identity/Azure keys: `EntraObjectId`, `UserId`, `AzureResourceId_Guid`)
+- `Resolve-ProfileCLLetBlocks` now accepts optional `-BucketCount` + `-BucketIndex` (skipped when multi-let-binding cross-domain reports detected — those still need v2.2.325)
+- Raw rows cache (`$script:_HybridRowsCache`) parallel to the existing serialized cache, so v2.2.324's per-bucket re-serialize doesn't re-fetch from LA
+
+None of these change runtime behavior in v2.2.323. They're inert until v2.2.324 wires them into the bucket loop + flips EG-side to SHA256 to align.
 
 ---
 

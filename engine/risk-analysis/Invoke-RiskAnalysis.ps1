@@ -950,34 +950,15 @@ function Resolve-ProfileCLLetBlocks {
                         [System.Text.Encoding]::UTF8.GetBytes($bodyKql))).Replace('-','')
         $cacheKey = $varName + '|' + $bodyHash
 
-        # v2.2.323 -- when CL bucketing is active for THIS report, always go
-        # through the rows-cache path so we can re-serialize per bucket. When
-        # NOT bucketing, keep the legacy serialized-string cache for speed.
-        if ($clBucketingActive) {
-            if (-not $script:_HybridRowsCache.ContainsKey($cacheKey)) {
-                Write-Info ("[hybrid] pre-fetching CL snapshot for let-binding '{0}' from LA workspace (CL-bucketing active) ..." -f $varName)
-                try {
-                    $clRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $WorkspaceResourceId -Query $bodyKql
-                } catch {
-                    Write-Err2 ("[hybrid] CL snapshot fetch failed for '{0}': {1}" -f $varName, $_.Exception.Message)
-                    throw
-                }
-                $script:_HybridRowsCache[$cacheKey] = @($clRows)
-            }
-            $allRows  = $script:_HybridRowsCache[$cacheKey]
-            $bucketRows = @($allRows | Where-Object {
-                (Get-SISha256Bucket -Key (Get-SICLBucketKey -Row $_) -BucketCount $BucketCount) -eq $BucketIndex
-            })
-            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $bucketRows -BodyKqlForSchemaHint $bodyKql
-            Write-Info ("[hybrid] '{0}' bucket {1}/{2}: {3}/{4} row(s) inlined ({5} bytes; CL-bucketed via SHA256)" -f $varName, ($BucketIndex + 1), $BucketCount, $bucketRows.Count, $allRows.Count, $datatableLet.Length)
-            if ($null -eq $script:_LastHybridSnapshotRowCount -or $allRows.Count -gt [int]$script:_LastHybridSnapshotRowCount) {
-                $script:_LastHybridSnapshotRowCount = [int]$allRows.Count
-            }
-        }
-        elseif ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
-            $datatableLet = $script:_HybridSnapshotCache[$cacheKey]
-            Write-Info ("[hybrid] '{0}' snapshot reused from cache ({1} bytes)" -f $varName, $datatableLet.Length)
-        } else {
+        # v2.2.327 -- raw-rows fetch + simulation padding happens ONCE per
+        # (let-binding body, run). Both bucketing and non-bucketing paths read
+        # the same shared $script:_HybridRowsCache so the simulation knob
+        # (`$global:SI_SimulateCLRowCount`) takes effect regardless of which
+        # path serializes. v2.2.323-.326 only padded in the legacy else branch,
+        # so activating CL-bucketing in v2.2.325 silently disabled simulation
+        # padding -- a 66-row tenant tested bucketing on 11/66 rows instead of
+        # the intended 15000-row stress test.
+        if (-not $script:_HybridRowsCache.ContainsKey($cacheKey)) {
             Write-Info ("[hybrid] pre-fetching CL snapshot for let-binding '{0}' from LA workspace ..." -f $varName)
             try {
                 $clRows = Invoke-LogAnalyticsKqlQuery -WorkspaceResourceId $WorkspaceResourceId -Query $bodyKql
@@ -987,15 +968,13 @@ function Resolve-ProfileCLLetBlocks {
             }
             $rowCount = if ($clRows) { @($clRows).Count } else { 0 }
 
-            # v2.2.323 -- SIMULATION knob. When operator sets
-            # $global:SI_SimulateCLRowCount = <target>, pad the snapshot to
-            # <target> rows by cloning existing ones with bucket-key modified
-            # via "_sim<N>" suffix on the FIRST non-empty bucket-key column.
-            # Clones' fake keys won't match any EG-side row so they're filtered
-            # out at the join (ballast only -- no output pollution), but they
-            # DO bloat the inline payload so operators can validate scale +
-            # bucketing behaviour on small tenants without waiting for a real
-            # 50K-asset customer. Logged loud so it can't accidentally ship.
+            # SIMULATION knob. When operator sets $global:SI_SimulateCLRowCount,
+            # pad the snapshot to <target> rows by cloning existing rows with
+            # "_sim<N>" suffix on the FIRST non-empty bucket-key column. Clones'
+            # fake keys won't match any EG-side row so they're filtered out at
+            # the join (no output pollution), but they DO bloat the inline
+            # payload so operators can validate scale + bucketing behaviour on
+            # small tenants without waiting for a real 50K-asset customer.
             $simTarget = 0
             [void][int]::TryParse([string]$global:SI_SimulateCLRowCount, [ref]$simTarget)
             if ($simTarget -gt 0 -and $rowCount -gt 0 -and $rowCount -lt $simTarget) {
@@ -1023,16 +1002,29 @@ function Resolve-ProfileCLLetBlocks {
                 Write-Warn2 ("[hybrid] SIMULATION ACTIVE -- '{0}' padded from {1} real rows to {2} total (+{3} ballast clones with `_sim<n>` suffixed bucket-key). Disable by clearing `$global:SI_SimulateCLRowCount." -f $varName, ($rowCount - $clones.Count), $rowCount, $clones.Count)
             }
 
-            # v2.2.315 -- pass the let-binding body so the empty-snapshot path
-            # can emit a schema-matched datatable instead of a single-column
-            # placeholder.
-            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($clRows) -BodyKqlForSchemaHint $bodyKql
-            Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, $rowCount, $datatableLet.Length)
-            $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
-            $script:_HybridRowsCache[$cacheKey]     = @($clRows)   # v2.2.323 -- stash for future bucketed re-use
+            $script:_HybridRowsCache[$cacheKey] = @($clRows)
             if ($null -eq $script:_LastHybridSnapshotRowCount -or $rowCount -gt [int]$script:_LastHybridSnapshotRowCount) {
                 $script:_LastHybridSnapshotRowCount = [int]$rowCount
             }
+        }
+
+        $allRows = $script:_HybridRowsCache[$cacheKey]
+
+        if ($clBucketingActive) {
+            $bucketRows = @($allRows | Where-Object {
+                (Get-SISha256Bucket -Key (Get-SICLBucketKey -Row $_) -BucketCount $BucketCount) -eq $BucketIndex
+            })
+            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $bucketRows -BodyKqlForSchemaHint $bodyKql
+            Write-Info ("[hybrid] '{0}' bucket {1}/{2}: {3}/{4} row(s) inlined ({5} bytes; CL-bucketed via SHA256)" -f $varName, ($BucketIndex + 1), $BucketCount, $bucketRows.Count, $allRows.Count, $datatableLet.Length)
+        }
+        elseif ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
+            $datatableLet = $script:_HybridSnapshotCache[$cacheKey]
+            Write-Info ("[hybrid] '{0}' snapshot reused from cache ({1} bytes)" -f $varName, $datatableLet.Length)
+        }
+        else {
+            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows @($allRows) -BodyKqlForSchemaHint $bodyKql
+            Write-Info ("[hybrid] '{0}' snapshot: {1} row(s) inlined as datatable ({2} bytes)" -f $varName, @($allRows).Count, $datatableLet.Length)
+            $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
         }
         $modified = $modified.Replace($fullBlock, $datatableLet)
     }

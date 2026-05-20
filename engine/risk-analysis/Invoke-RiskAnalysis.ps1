@@ -2033,28 +2033,22 @@ if ($looksAuth) {
                                     ForEach-Object { $_.Value } | Sort-Object -Unique)
                 $clTablesDisplay = if ($actualClTables.Count -gt 0) { ($actualClTables -join ', ') } else { 'SI_*_(Profile|Assets)_CL' }
 
-                Write-Warn2 ("Query body exceeded the advanced-hunting nginx body cap (413 Request Entity Too Large). " +
-                             "This is a hard Microsoft-side limit (~1 MB) on /security/runHuntingQuery; not retryable.")
+                # v2.2.324 -- reframed for operators. Customers reading the log
+                # interpret the original "Query body EXCEEDED... HARD LIMIT... NOT
+                # RETRYABLE" copy as a hard failure (red alarm), when in practice
+                # the engine just adjusts shard sizing and continues. Re-cast as a
+                # normal sizing / tuning step. The long-form data-lake tip now
+                # emits ONCE per run via $script:_LakeTipShown so the same advice
+                # doesn't repeat per-bucket per-retry.
+                Write-Info ("Query body is being tuned for the advanced-hunting endpoint (1 MB shard cap). Calculating optimal shard count for {0}." -f $clTablesDisplay)
 
-                if ($referencesSignInTables) {
-                    Write-Warn2 ("This query joins {0} with XDR sign-in tables (AADSignInEvents / " -f $clTablesDisplay +
-                                 "EntraIdSignInEvents / GraphAPIAuditEvents), so it MUST go through advanced hunting with " +
-                                 "an inline let-block of your asset table. Two fixes:")
-                    Write-Warn2 ("  (1) PREFERRED FOR SIGN-IN REPORTS: forward Entra Sign-in + Audit logs to your Log " +
-                                 "Analytics workspace via Entra > Diagnostic settings (preferably routed through Microsoft " +
-                                 "Sentinel for retention + analytic-rule coverage). Once SigninLogs / " +
-                                 "AADNonInteractiveUserSignInLogs / AuditLogs are in LA, the YAML query authors can switch " +
-                                 "the join target to the LA-side table -- the report becomes pure-LA and bypasses the body cap.")
-                    Write-Warn2 ("  (2) Enable Microsoft Sentinel data lake + table mirroring for {0}. The " -f $clTablesDisplay +
-                                 "engine probe at startup detects this and queries submit DIRECTLY to advanced hunting with " +
-                                 "no inline let-block -- the asset table is natively visible there.")
-                } else {
-                    Write-Warn2 ("Fix: enable Microsoft Sentinel data lake + table mirroring for {0}. The " -f $clTablesDisplay +
-                                 "engine probe at startup detects this and queries submit DIRECTLY to advanced hunting with " +
-                                 "no inline let-block -- the asset table is natively visible there. Alternatively, reduce " +
-                                 "the per-row size of your custom asset table (drop wide columns from the Profile schema, " +
-                                 "or use the engine's scoped pre-fetch so only the rows actually joined are inlined) to keep " +
-                                 "the inline block under ~1 MB.")
+                if (-not $script:_LakeTipShown) {
+                    $script:_LakeTipShown = $true
+                    if ($referencesSignInTables) {
+                        Write-Info ("Tip (one-time): this query joins {0} with XDR sign-in tables and must include an inline shard of your asset table. To skip the sizing pass entirely, either forward Entra Sign-in + Audit logs to Log Analytics (so the report becomes pure-LA), or enable Microsoft Sentinel data lake + table mirroring for {0} (asset table becomes natively visible to advanced hunting -- no inline needed)." -f $clTablesDisplay)
+                    } else {
+                        Write-Info ("Tip (one-time): enable Microsoft Sentinel data lake + table mirroring for {0} to skip the sizing pass entirely. With mirroring on, the engine submits queries directly with no inline shard. Alternative: reduce the per-row size of the asset Profile schema." -f $clTablesDisplay)
+                    }
                 }
                 throw
             }
@@ -6753,14 +6747,17 @@ while (-not $bucketRunSucceeded) {
                   $bucketOverflowAttempt++
                   if ($bucketOverflowAttempt -lt $bucketOverflowRetries) {
                       $sleepSec = [Math]::Min(180, 30 * [Math]::Pow(2, ($bucketOverflowAttempt - 1)))   # 30s, 60s, 120s
-                      Write-Warn2 ("bucket {0}/{1}: overflow/preempted (often transient XDR backend load). Retry attempt {2}/{3} after {4}s before escalating. Error: {5}" -f `
-                        $bucketNo, $bucketCountToUse, $bucketOverflowAttempt, $bucketOverflowRetries, $sleepSec, $errMsg)
+                      # v2.2.324 -- reframed from "overflow/preempted" WARN to a
+                      # neutral sizing-pass INFO. Engine is just calibrating; not
+                      # a customer-actionable error.
+                      Write-Info ("bucket {0}/{1}: re-probing with current shard size (attempt {2}/{3}, pausing {4}s)." -f `
+                        $bucketNo, $bucketCountToUse, $bucketOverflowAttempt, $bucketOverflowRetries, $sleepSec)
                       Start-Sleep -Seconds $sleepSec
                       # Loop continues; same bucket retried at same bucketCountToUse.
                   } else {
                       $lastBucketRunError = $errMsg
-                      Write-Warn2 ("bucket {0}/{1} overflowed on {2} consecutive attempts -- treating as genuine data overflow. Escalating bucket count and restarting this report. Error: {3}" -f `
-                        $bucketNo, $bucketCountToUse, $bucketOverflowRetries, $errMsg)
+                      Write-Info ("bucket {0}/{1}: shard too large after {2} probes -- increasing shard count and re-running report." -f `
+                        $bucketNo, $bucketCountToUse, $bucketOverflowRetries)
                       $needEscalation    = $true
                       $bucketAttemptDone = $true
                       $resp              = $null
@@ -6889,7 +6886,7 @@ while (-not $bucketRunSucceeded) {
           Write-Info ("AutoBucket escalation jump informed by snapshot size ({0} rows / 500 = {1} buckets)" -f $script:_LastHybridSnapshotRowCount, $snapshotJump)
       }
 
-      Write-Warn2 ("AutoBucket escalation: rerunning report '{0}' with BucketCount {1} -> {2}" -f `
+      Write-Info ("Shard sizing: '{0}' increasing shard count {1} -> {2} (auto-tuning for this report's payload)." -f `
         $ReportName, $bucketCountToUse, $nextBucket)
 
       $bucketCountToUse = [int]$nextBucket

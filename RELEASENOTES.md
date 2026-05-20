@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.326
+## v2.2.327
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
 - release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
 - release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
 - release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
 - release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
 - release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
-- release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.327 — `$global:SI_SimulateCLRowCount` knob now applies regardless of CL-bucketing path: refactor `Resolve-ProfileCLLetBlocks` to fetch+pad ONCE in a shared cache, then branch on serialize
+
+### Bug
+
+Operator ran v2.2.326 with `$global:SI_SimulateCLRowCount = 15000` in their custom.ps1 expecting 15000-row scale test. Log showed:
+
+```
+[hybrid] '_ep' bucket 2/2: 11/66 row(s) inlined (2762 bytes; CL-bucketed via SHA256)
+```
+
+Only the 66 real rows. v2.2.323's simulation padding lived inside the legacy `else` branch (non-bucketing). When v2.2.325 activated the `_HybridRowsCache` branch (CL-bucketing), padding was silently bypassed — the 15K-row stress test couldn't run.
+
+### Fix
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` `Resolve-ProfileCLLetBlocks` restructured:
+
+1. **Single raw fetch path** at the top. Reads from LA, applies simulation padding once, stashes in `$script:_HybridRowsCache[$cacheKey]`. Triggered when the cache is cold for that let-binding-body.
+2. **Three serialize branches** read the (already-padded) raw rows:
+   - `clBucketingActive`: filter via SHA256-bucket, serialize bucket subset.
+   - Cache hit (no bucketing): reuse the serialized string.
+   - Cold (no bucketing): serialize full set + cache the string.
+
+This guarantees the simulation knob takes effect whichever serialize path runs.
+
+### Expected outcome (15K simulation)
+
+```
+[hybrid] pre-fetching CL snapshot for let-binding '_ep' ...
+[hybrid] SIMULATION ACTIVE -- '_ep' padded from 66 real rows to 15000 total (+14934 ballast clones with _sim<n>)
+[hybrid] '_ep' bucket 1/40: 375/15000 row(s) inlined (~62 KB; CL-bucketed via SHA256)
+[hybrid] '_ep' bucket 2/40: 376/15000 row(s) inlined (...)
+...
+```
+
+AutoBucket should converge around 30-40 buckets (15K rows / ~400 per bucket) instead of escalating to 122,880.
 
 ---
 

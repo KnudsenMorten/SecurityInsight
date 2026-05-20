@@ -933,11 +933,16 @@ function Resolve-ProfileCLLetBlocks {
     $matches2 = [regex]::Matches($stripped, $letRx)
     if ($matches2.Count -eq 0) { return $Query }
 
-    # v2.2.323 -- CL-snapshot bucketing requires exactly ONE let-binding so the
-    # bucket key is unambiguous. Multi-binding (cross-domain Attack_Paths)
-    # silently falls back to full-inline; the existing 413 WARN handles oversize
-    # cases for those reports until v2.2.325 ships per-binding bucket keys.
-    $clBucketingActive = ($BucketCount -gt 1 -and $matches2.Count -eq 1)
+    # v2.2.323 -- CL-snapshot bucketing required exactly ONE let-binding because
+    # the original design relied on EG-side bucket-filter alignment with the let's
+    # join key (impossible to align ONE EG filter with multiple lets' different keys).
+    # v2.2.335 lifts that restriction: with v2.2.334's EG-bucket-skip mechanism the
+    # EG side stops trying to filter when the CL key is cross-domain -- so each
+    # let-binding can be bucketed INDEPENDENTLY (each rows-cache filtered to its
+    # own bucket), EG sees all rows, joins stay lossless. Multi-let cross-domain
+    # reports (Attack_Paths_*_Device_with_high_sev with _SourceCmdb + _TargetCmdb,
+    # _Github_to_Azure with _TargetCmdb only, etc.) all get bucketed now.
+    $clBucketingActive = ($BucketCount -gt 1)
 
     $modified = $Query
     foreach ($m in $matches2) {

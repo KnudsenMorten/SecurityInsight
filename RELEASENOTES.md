@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.334
+## v2.2.335
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
 - release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
 - release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
 - release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
 - release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
 - release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
-- release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.335 — Lift the single-let-binding gate on CL-bucketing — multi-let cross-domain reports (Attack_Paths_*_Device_with_high_sev with `_SourceCmdb` + `_TargetCmdb`) now bucket each let INDEPENDENTLY; v2.2.334's EG-skip ensures the joins stay lossless
+
+### Bug
+
+v2.2.334 made the EG-skip logic for cross-domain reports, but during the test run the launcher still hit 413 on `Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`. Root cause: `$clBucketingActive` was gated on `$matches2.Count -eq 1` (single let-binding only), a v2.2.323 restriction from when alignment was hard. Multi-let reports fell through to the legacy full-inline path → 3MB body → 413.
+
+### Fix
+
+Drop the `$matches2.Count -eq 1` condition. With v2.2.334's EG-skip mechanism, each let-binding can be bucketed INDEPENDENTLY:
+- `_TargetCmdb`: filtered to rows where `hash(Target_AzureResourceId_Guid) % N == B`
+- `_SourceCmdb`: filtered to rows where `hash(Source_AadDeviceId) % N == B`
+- EG side: NO bucket filter (full rows per query)
+- Joins: lossless — every (EG, CL_target, CL_source) triple that would join in an un-bucketed query joins in exactly one bucket query
+
+Per-bucket body now ~70KB (35KB per let at N=32) instead of 3MB. AutoBucket settles around N=8-16, no escalation chaos.
 
 ---
 

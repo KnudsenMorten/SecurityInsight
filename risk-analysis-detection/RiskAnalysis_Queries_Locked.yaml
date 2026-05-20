@@ -20907,11 +20907,18 @@ Reports:
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
                  CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
+        // v2.2.322 -- tier-driven 4-label severity so PublicIP rows bucket
+        // into Critical/High/Medium/Low dashboard columns same as every other
+        // engine. Pre-v2.2.322 emitted "Very High"/"High"/"Medium-High"/"Medium"
+        // which never produced "Critical" (only "Very High" maps there) and
+        // never produced "Low" -- so PublicIP always showed Critical=0 + Low=0.
+        // Port-risk + tier-0 escalation now flow through RiskFactor_Probability
+        // tokens (AdminPort, Tier0Asset) only -- severity label = pure tier.
         | extend SecuritySeverity =
-            case(IsHighRiskPort == 1 and CriticalityTier == 0, "Very High",
-                 IsHighRiskPort == 1, "High",
-                 CriticalityTier == 0, "Medium-High",
-                 "Medium")
+            case(CriticalityTier == 0, "Very High",
+                 CriticalityTier == 1, "High",
+                 CriticalityTier == 2, "Medium",
+                 "Low")
         | extend SecurityDomain    = "PublicIP"
         | extend Category          = "External Exposure"
         | extend Subcategory       = "Open Port"
@@ -21025,11 +21032,18 @@ Reports:
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
                  CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
+        // v2.2.322 -- tier-driven 4-label severity so PublicIP rows bucket
+        // into Critical/High/Medium/Low dashboard columns same as every other
+        // engine. Pre-v2.2.322 emitted "Very High"/"High"/"Medium-High"/"Medium"
+        // which never produced "Critical" (only "Very High" maps there) and
+        // never produced "Low" -- so PublicIP always showed Critical=0 + Low=0.
+        // Port-risk + tier-0 escalation now flow through RiskFactor_Probability
+        // tokens (AdminPort, Tier0Asset) only -- severity label = pure tier.
         | extend SecuritySeverity =
-            case(IsHighRiskPort == 1 and CriticalityTier == 0, "Very High",
-                 IsHighRiskPort == 1, "High",
-                 CriticalityTier == 0, "Medium-High",
-                 "Medium")
+            case(CriticalityTier == 0, "Very High",
+                 CriticalityTier == 1, "High",
+                 CriticalityTier == 2, "Medium",
+                 "Low")
         | extend SecurityDomain    = "PublicIP"
         | extend Category          = "External Exposure"
         | extend Subcategory       = "Open Port"
@@ -21125,7 +21139,19 @@ Reports:
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
                  CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
-        | extend SecuritySeverity = iff(CriticalityTier == 0, "Very High", "High")
+        // v2.2.322 -- tier-driven 4-label severity matching the Open_Port
+        // reports + every other engine. Pre-v2.2.322 used iff(Tier0?VH:High)
+        // so the lowest possible CVE finding showed as "High" -- dashboard's
+        // Critical and Low columns always 0 for PublicIP CVE. Now Tier 3 IPs
+        // with CVEs correctly bucket as Low; Tier 0 stays Very High (Critical
+        // bucket). Per-row CVE presence still elevates the risk SCORE through
+        // RiskFactor_Probability (InternetExposedCVE token), independent of
+        // the severity LABEL.
+        | extend SecuritySeverity =
+            case(CriticalityTier == 0, "Very High",
+                 CriticalityTier == 1, "High",
+                 CriticalityTier == 2, "Medium",
+                 "Low")
         | extend SecurityDomain    = "PublicIP"
         | extend Category          = "External Exposure"
         | extend Subcategory       = "Vulnerability"
@@ -21236,7 +21262,19 @@ Reports:
                  CriticalityTier == 1, "High - tier 1",
                  CriticalityTier == 2, "Medium - tier 2",
                  CriticalityTier == 3, "Low - tier 3", "Low - tier 3")
-        | extend SecuritySeverity = iff(CriticalityTier == 0, "Very High", "High")
+        // v2.2.322 -- tier-driven 4-label severity matching the Open_Port
+        // reports + every other engine. Pre-v2.2.322 used iff(Tier0?VH:High)
+        // so the lowest possible CVE finding showed as "High" -- dashboard's
+        // Critical and Low columns always 0 for PublicIP CVE. Now Tier 3 IPs
+        // with CVEs correctly bucket as Low; Tier 0 stays Very High (Critical
+        // bucket). Per-row CVE presence still elevates the risk SCORE through
+        // RiskFactor_Probability (InternetExposedCVE token), independent of
+        // the severity LABEL.
+        | extend SecuritySeverity =
+            case(CriticalityTier == 0, "Very High",
+                 CriticalityTier == 1, "High",
+                 CriticalityTier == 2, "Medium",
+                 "Low")
         | extend SecurityDomain    = "PublicIP"
         | extend Category          = "External Exposure"
         | extend Subcategory       = "Vulnerability"

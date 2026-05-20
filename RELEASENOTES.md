@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.318
+## v2.2.319
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
 - release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
 - release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
 - release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
@@ -33,13 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
 - release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
 - release: SecurityInsight v2.2.291 - silence missing-secret warnings (Write-Warning -> Write-Verbose) (91bf47ac)
-- release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.319 — `Update-SecurityInsight.ps1`: route git through `cmd /c` so STDERR is merged BEFORE PowerShell sees it (v2.2.318 fix was too late in the pipeline)
+
+### Bug recurrence
+
+Operator tested v2.2.318 by running `..\..\Update-SecurityInsight.ps1` — the red `NativeCommandError` text was **still** there. v2.2.318's `ForEach-Object { "$_" }` approach runs at the pipeline *consumer*, but PS 5.1's host writes the red "NativeCommandError" line at *conversion time* (when `2>&1` turns the stderr line into an `ErrorRecord`) — before any consumer pipeline element runs. The string coercion came too late.
+
+### Real fix
+
+Move the stderr→stdout merge into `cmd.exe`:
+
+```powershell
+# before (v2.2.318)
+$pullOutput = & git pull --ff-only origin main 2>&1 | ForEach-Object { "$_" }
+# after (v2.2.319)
+$pullOutput = & cmd /c 'git pull --ff-only origin main 2>&1'
+```
+
+`cmd /c` performs the stderr merge inside the child process. PowerShell never sees an `ErrorRecord`-shaped stream — only plain stdout strings. The red host text disappears. cmd forwards the child's exit code, so `$LASTEXITCODE` continues to work as the success check.
+
+Verified by the operator paste-back: v2.2.318 still showed the red text → v2.2.319 routes through cmd → quiet success.
 
 ---
 

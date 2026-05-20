@@ -882,7 +882,11 @@ function Get-SICLBucketKey {
        body shrinks to ~42KB per bucket at N=8, AutoBucket settles fast, no cap. #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Row)
-    foreach ($col in 'EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId','Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId') {
+    # v2.2.337 -- add _si_PrimaryEntityId for Identity_Admin_LogonTo_* reports
+    # whose _IdentityCmdb let projects `_si_PrimaryEntityId = tostring(PrimaryEntityId)`
+    # as the join key. Without it, all 15K rows hashed to bucket 0 and escalation
+    # ran 2->4->8->...->131072 to no avail.
+    foreach ($col in 'EpJoinKey','_si_PrimaryEntityId','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId','Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId') {
         $p = $Row.PSObject.Properties[$col]
         if ($p) {
             $v = [string]$p.Value
@@ -998,7 +1002,7 @@ function Resolve-ProfileCLLetBlocks {
                 # aliases (Target_*/Source_*/FinalTargetId/FinalSourceId) so the
                 # simulation knob distributes its clones across buckets correctly
                 # for those reports too.
-                $bucketKeyCols = @('EpJoinKey','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId','Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId')
+                $bucketKeyCols = @('EpJoinKey','_si_PrimaryEntityId','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId','Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId')
                 $needed = $simTarget - $rowCount
                 $clones = New-Object System.Collections.Generic.List[object]
                 $simIdx = 0
@@ -1049,7 +1053,7 @@ function Resolve-ProfileCLLetBlocks {
             # reports keep using the EG bucket filter (faster: per-bucket EG scan,
             # not full EG scan per bucket).
             $egStdCols = @{'DeviceKey'=$true; 'NodeId'=$true; 'DeviceNodeId'=$true; 'AadDeviceId'=$true; 'DeviceId'=$true; 'MachineId'=$true; 'Id'=$true; 'SourceNodeId'=$true; 'TargetNodeId'=$true; 'EpJoinKey'=$true}
-            $crossDomainCols = @('Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId')
+            $crossDomainCols = @('Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId','_si_PrimaryEntityId')
             $firstRow = if (@($allRows).Count -gt 0) { @($allRows)[0] } else { $null }
             if ($firstRow) {
                 foreach ($cdCol in $crossDomainCols) {

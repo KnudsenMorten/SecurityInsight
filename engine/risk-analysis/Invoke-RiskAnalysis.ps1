@@ -1041,8 +1041,15 @@ function Resolve-ProfileCLLetBlocks {
         # ALL EG rows joined to the bucket's CL subset -- lossless, just
         # heavier on EG compute. Cheap insurance vs producing wrong data.
         if ($clBucketingActive -and -not $script:_SkipEGBucketForCrossDomain) {
-            $egStdCols = @{'DeviceKey'=$true; 'NodeId'=$true; 'DeviceNodeId'=$true; 'AadDeviceId'=$true; 'DeviceId'=$true; 'MachineId'=$true; 'Id'=$true; 'SourceNodeId'=$true; 'TargetNodeId'=$true}
-            $crossDomainCols = @('Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId','EpJoinKey')
+            # v2.2.336 -- EpJoinKey is the designed-alignment case (CL.EpJoinKey value
+            # equals EG.DeviceKey value for matched rows because the EG side extends
+            # DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm) and
+            # the CL projection sets EpJoinKey = coalesce(AadDeviceId, AssetName, ...) ).
+            # Keep EpJoinKey OUT of the cross-domain trigger so Endpoint single-let
+            # reports keep using the EG bucket filter (faster: per-bucket EG scan,
+            # not full EG scan per bucket).
+            $egStdCols = @{'DeviceKey'=$true; 'NodeId'=$true; 'DeviceNodeId'=$true; 'AadDeviceId'=$true; 'DeviceId'=$true; 'MachineId'=$true; 'Id'=$true; 'SourceNodeId'=$true; 'TargetNodeId'=$true; 'EpJoinKey'=$true}
+            $crossDomainCols = @('Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId')
             $firstRow = if (@($allRows).Count -gt 0) { @($allRows)[0] } else { $null }
             if ($firstRow) {
                 foreach ($cdCol in $crossDomainCols) {

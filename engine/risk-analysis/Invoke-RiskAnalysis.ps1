@@ -1074,16 +1074,17 @@ function Resolve-ProfileAugmentPlan {
     $stripped = [regex]::Replace($stripped, "'[^'\r\n]*'", "''")
     $stripped = [regex]::Replace($stripped, '//[^\r\n]*', '')
 
-    # 1. Find every `let <var> = SI_*_Profile_CL | ... | project <body> | where isnotempty(<RightKey>);` let block.
-    # v2.2.332 -- accept BOTH shapes for the terminating where-isnotempty:
-    #   bare:           `where isnotempty(EpJoinKey)`
-    #   defensive:      `where isnotempty(tostring(column_ifexists("Target_AzureResourceId_Guid", "")))`
-    # The defensive form (introduced for projection-aliased keys that may not
-    # exist on every CL row) is the shape Attack_Paths_*_Github_to_Azure and
-    # Attack_Paths_*_Device_with_high_sev_lateral_movement_Azure use. Without
-    # matching it, those reports skipped 2-phase and fell back to inline-
-    # datatable, which exploded the body on 15K-row tenants.
-    $letRx = '(?ms)\blet\s+(?<var>\w+)\s*=\s*(?<bodyAll>[^;]*?\bSI_(?<table>[A-Za-z]+_Profile)_CL\b[^;]*?\|\s*project\s+(?<proj>[^;]*?)\|\s*where\s+isnotempty\(\s*(?:tostring\(\s*column_ifexists\(\s*"(?<rkey>\w+)"\s*,[^)]*\)\s*\)|(?<rkey2>\w+))\s*\)\s*);'
+    # 1. Find every `let <var> = SI_*_Profile_CL | ... | project <body> | where <RightKey-test>;` let block.
+    # v2.2.332 -- accept THREE shapes for the terminating where-clause that
+    # filters out empty join keys:
+    #   bare-isnotempty: `where isnotempty(EpJoinKey)`
+    #   defensive:       `where isnotempty(tostring(column_ifexists("Target_AzureResourceId_Guid", "")))`
+    #   inequality:      `where Target_AzureResourceId_Guid != ""`
+    # The Attack_Paths cross-domain reports (Github_to_Azure, Device_with_high_sev_*,
+    # Identity_Group_Membership, Data_Sensitivity, Credential_Based_Lateral) all
+    # use the inequality form. Without matching it, those reports skip 2-phase
+    # and fall back to inline-datatable, exploding the body on 15K-row tenants.
+    $letRx = '(?ms)\blet\s+(?<var>\w+)\s*=\s*(?<bodyAll>[^;]*?\bSI_(?<table>[A-Za-z]+_Profile)_CL\b[^;]*?\|\s*project\s+(?<proj>[^;]*?)\|\s*where\s+(?:isnotempty\(\s*(?:tostring\(\s*column_ifexists\(\s*"(?<rkey>\w+)"\s*,[^)]*\)\s*\)|(?<rkey2>\w+))\s*\)|(?<rkey3>\w+)\s*!=\s*"")\s*);'
 
     $plans = New-Object System.Collections.Generic.List[hashtable]
     $modified = $Query
@@ -1094,10 +1095,14 @@ function Resolve-ProfileAugmentPlan {
         $varName  = $m.Groups['var'].Value
         $tableTag = $m.Groups['table'].Value      # e.g. "Azure_Profile" -> SI_Azure_Profile_CL
         $tableNm  = "SI_" + $tableTag + "_CL"
-        # v2.2.332 -- rkey can be captured by either the defensive `column_ifexists("X",...)` group
-        # (preferred) or the bare-identifier fallback (rkey2). The two alternatives are mutually
-        # exclusive at match time; whichever fired holds the column name.
-        $rkey     = if ($m.Groups['rkey'].Success -and $m.Groups['rkey'].Value) { $m.Groups['rkey'].Value } else { $m.Groups['rkey2'].Value }
+        # v2.2.332 -- rkey can be captured by any of three alternatives in the where-clause:
+        #   rkey  = column_ifexists("X", ...) inside isnotempty(tostring(...))
+        #   rkey2 = bare identifier inside isnotempty(...)
+        #   rkey3 = bare identifier on the LHS of `!= ""`
+        # The three are mutually exclusive at match time; whichever fired holds the column name.
+        $rkey     = if ($m.Groups['rkey'].Success -and $m.Groups['rkey'].Value) { $m.Groups['rkey'].Value }
+                    elseif ($m.Groups['rkey2'].Success -and $m.Groups['rkey2'].Value) { $m.Groups['rkey2'].Value }
+                    else { $m.Groups['rkey3'].Value }
         # Re-extract projection body from the original query (avoids placeholder issues from the strip pass).
         $origMatch = [regex]::Match($modified, $letRx)
         if (-not $origMatch.Success) { continue }

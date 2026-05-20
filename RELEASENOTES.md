@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.315
+## v2.2.316
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
 - release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
 - docs: SecurityInsight - update README + Container-Deploy-Guide for v2.2.314 OAuth-only + KPI parity + Subscription-in-MoreDetails (c420305c)
 - release: SecurityInsight v2.2.314 - OAuth-only storage enforcement; Subscription Id+Name in MoreDetails for Azure rows; canonical asset-weighted KPI (Summary == Detailed) (94386a13)
@@ -33,13 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.290 - Attack_Paths_Detailed_Device YAML rewrite, multiplicative -> additive cartesian (dcf44ecb)
 - release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
 - release: SecurityInsight v2.2.288 - stale-device filter auto-injects when YAML placeholder missing (cfc4bd2e)
-- release: SecurityInsight v2.2.287 - stale-device filter defaults to strict (was off, contradicted v2.2.282 intent) (3095b0bb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.316 — Catch up the `VERSION` file (was stuck at `2.2.308`)
+
+Operator: "files still shows as 308 / `SecurityInsight * Asset Profiling - Azure (resources + management groups) * v2.2.308`".
+
+`SOLUTIONS/SecurityInsight/VERSION` was never bumped across v2.2.309 → v2.2.315 — every release tagged the repo + updated RELEASENOTES but left the `VERSION` file pointing at `2.2.308`. The launcher banner (via `Get-PublishedVersion` reading that file) + the engine's `SolutionVersion` row-stamp both surfaced the wrong number on every run.
+
+### Fix
+
+Single-line bump of `SOLUTIONS/SecurityInsight/VERSION` from `2.2.308` to `2.2.316`. Next run's banner + every `SI_*_Profile_CL.SolutionVersion` value + every `RiskAnalysis_*.json`/`.xlsx` row will carry the correct version.
+
+### Process fix
+
+Future releases must bump `VERSION` in the same commit as the tag, not separately. (TODO follow-up: add a tiny `Cut-SIRelease.ps1` helper that reads the next semver, writes `VERSION`, commits, and dual-tags in one shot so this never drifts again.)
 
 ---
 

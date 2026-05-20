@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.330
+## v2.2.331
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
 - release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
 - release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
 - release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
@@ -33,13 +34,49 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
 - release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
 - release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
-- release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.331 — Drop composite `DeviceKey|FindingKey` bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary, which re-enables CL-bucketing for Detailed (fixes Device_Missing_CVEs_Detailed escalation cap)
+
+### Bug
+
+After v2.2.328 fixed Summary CL-bucketing, operator ran v2.2.329 and saw:
+
+```
+[ERR] bucket escalation reached cap 256. Unable to complete report 'Device_Missing_CVEs_Detailed'
+```
+
+`Device_Missing_CVEs_Detailed` is single-let (just `_ep`) and structurally identical to its Summary sibling — it should have bucketed cleanly. Operator's pushback: "device missing should not go to 256".
+
+### Root cause
+
+v2.2.200 introduced a composite `DeviceKey|FindingKey` bucket key for *_Detailed reports to split hot-device cartesian (a single device with 10K findings dropping 10K rows in one bucket → XDR backend timeout). v2.2.325 added the bucket-state machinery and explicitly skipped CL-bucketing for Detailed (`$script:_CurrentReportIsDetailed`) because composite-EG-key vs single-CL-key alignment would silently drop join-matching rows.
+
+But "skip CL-bucketing" means each Detailed bucket re-inlines the FULL ~2MB CL snapshot → 413 → escalate forever → cap.
+
+### Fix
+
+Two small edits in `engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
+
+1. `New-BucketFilterKql` — removed the `*_Detailed` composite branch. Both Summary and Detailed now use the same device-only coalesce. The composite key was an optimization for hot-device cartesian; with N=256+ buckets and modern CL-bucketing keeping per-bucket payload small, the optimization is no longer worth the alignment cost.
+
+2. `Resolve-ProfileCLLetBlocks` call site in `Invoke-GraphHuntingQuery` — removed the `-not $script:_CurrentReportIsDetailed` guard. Detailed reports now bucket the same way Summary does.
+
+### Trade-off accepted
+
+A 1M-asset tenant with ONE hot device carrying 10K findings will get 10K rows in that device's bucket. At N=256 that single bucket may approach AH's response cap; if it does, v2.2.277's sub-bucketing splits the affected bucket further. The worst case is bounded.
+
+### What's unchanged
+
+- v2.2.328 EpJoinKey-aware CL bucket key: still active.
+- v2.2.330 opt-in `$global:AutoBucketReportCap`: still off by default, still REMOVE-ME-tagged for after the per-report join-key parser lands (needed for cross-domain multi-let Attack_Paths reports).
 
 ---
 

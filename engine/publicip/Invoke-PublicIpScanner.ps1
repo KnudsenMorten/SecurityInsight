@@ -37,6 +37,11 @@
 . (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
 Ensure-SecurityInsightModules
 
+# v2.2.321 -- bring in the shared Write-SIIngestTarget helper (canonical
+# 6-line "where is data going" block used by every SI engine). Lives in the
+# asset-profiling _shared directory; not duplicated here.
+. (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'engine/asset-profiling/_shared/Write-SIStyle.ps1')
+
 # v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
 # Mirrors $global:SI_SPN_* (v2.3 Setup Wizard output) onto the legacy
 # $global:Spn* names this engine still reads, so the engine works when invoked
@@ -664,6 +669,11 @@ function Send-RowsToLogAnalytics {
                 Write-Log ("DCE collision guard: '{0}' NOT in sub '{1}' / RG '{2}'. {3} same-named DCE(s) visible in other scopes -- module name-only lookup will pick wrong record. Verify SI_DceName / SI_AzSubscriptionId / SI_DceResourceGroup." -f $global:SI_DceName, $global:SI_AzSubscriptionId, $global:SI_DceResourceGroup, $_byName.Count) 'WARN'
             }
         }
+
+        # v2.2.321 -- always print where data is being sent (operator ask:
+        # "give me 5-6 lines with info where it is sent to"). Uses the shared
+        # Write-SIIngestTarget helper so every engine emits the same format.
+        Write-SIIngestTarget -DcrName $global:SI_Shodan_DcrName -TableName $tableName
 
         Write-Log 'CheckCreateUpdate-TableDcr-Structure (schema check + auto-provision)' 'STEP'
         try {

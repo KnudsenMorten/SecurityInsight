@@ -98,6 +98,31 @@ function Write-SIDone { param([Parameter(Mandatory)][string]$Message) Write-Host
 # but help when debugging. Mirror of RA's Write-Diag.
 function Write-SIDiag { param([Parameter(Mandatory)][string]$Message) if ($global:SI_Verbose -or $VerbosePreference -eq 'Continue') { Write-Host (" [DIAG] {0}" -f $Message) -ForegroundColor White } }
 
+# v2.2.321 -- one canonical "where is data going" block used by every engine
+# (profile/Invoke-Output, publicip/Invoke-PublicIpScanner, RA/Invoke-RiskAnalysis,
+# RA/Send-SIRunHealthRow, etc) so operators see the same 6-line format on every
+# ingest call. Caller passes the per-engine DcrName + TableName because those
+# vary across engines; everything else is pulled from $global:SI_*. Use
+# Write-SIInfo (white) for routine prints; switch to Write-SIErr internally if
+# needed for failure-path callers (none today; failure blocks render their own
+# richer error context).
+function Write-SIIngestTarget {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$DcrName,
+        [Parameter(Mandatory)][string]$TableName,
+        [string]$Logger = 'Write-SIInfo'   # override to 'Write-SIErr' from inside a catch{} if you want red text
+    )
+    $_emit = if ($Logger -eq 'Write-SIErr') { 'Write-SIErr' } else { 'Write-SIInfo' }
+    $_or   = { param($v) if ($v) { [string]$v } else { '<unset>' } }
+    & $_emit ('  ingest -> Subscription : {0}' -f (& $_or $global:SI_AzSubscriptionId))
+    & $_emit ('  ingest -> Workspace    : {0}  (rg={1})' -f (& $_or $global:SI_WorkspaceName), (& $_or $global:SI_WorkspaceResourceGroup))
+    & $_emit ('  ingest -> DCE          : {0}  (rg={1})' -f (& $_or $global:SI_DceName),       (& $_or $global:SI_DceResourceGroup))
+    & $_emit ('  ingest -> DCR          : {0}  (rg={1})' -f (& $_or $DcrName),                 (& $_or $global:SI_DcrResourceGroup))
+    & $_emit ('  ingest -> Table        : {0}' -f (& $_or $TableName))
+    & $_emit ('  ingest -> SPN AppId    : {0}' -f (& $_or $global:SI_SPN_AppId))
+}
+
 # periodic progress logger for long loops. Throttles to whichever
 # comes first: a percentage milestone (default every 10%) or a time interval
 # (default every 30s). Caller passes a stable Label to bucket throttle state

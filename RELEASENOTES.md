@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.324
+## v2.2.325
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
 - release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
 - release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
 - release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
@@ -33,13 +34,72 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
 - release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
 - release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
-- release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.325 — CL-snapshot bucketing wired up: per-bucket SHA256 filtering on the inline `_ep` / `_id` / `_az` datatable shrinks AH payload from 2.4 MB-per-bucket to ~60 KB-per-bucket and fixes the infinite "bucket 1/122880" escalation loop on large tenants
+
+### Bug
+
+Operator on dev server with `$global:SI_SimulateCLRowCount = 15000`:
+
+```
+[INFO] Shard sizing: 'Device_Missing_CVEs_Summary' increasing shard count 2 -> 30
+[INFO] [hybrid] '_ep' snapshot reused from cache (2477099 bytes)
+... 413 ...
+[INFO] Shard sizing: ... increasing 30 -> 122880
+[INFO] [hybrid] '_ep' snapshot reused from cache (2477099 bytes)  <-- SAME 2.4 MB
+... 413 ... loop forever
+```
+
+The bucket loop was escalating the EG-side bucket count to absurd levels (122,880+), but the inline `_ep` datatable (2.4 MB CL snapshot) was reused at FULL size in every single bucket query. Every bucket's `submitting query to advanced hunting...` always exceeded the 1 MB nginx body cap because CL — not EG — was the cap-buster.
+
+v2.2.323 shipped the dormant infrastructure (`Get-SISha256Bucket`, `Get-SICLBucketKey`, bucket-aware `Resolve-ProfileCLLetBlocks` accepting `-BucketCount`/`-BucketIndex`) but no caller passed those args. v2.2.325 wires it up.
+
+### Fix
+
+Four changes in `engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
+
+1. **`Get-SISha256Bucket` rewritten to uint32 math** (lines ~840). The v2.2.323 implementation used signed `[int]` + `Abs()`, which silently misaligned with the KQL side: PS gave `0..2^31-1`, KQL `tolong(hex,16)` gives `0..2^32-1`. Same input → different bucket assignment → join would drop matched rows. Now uses `BitConverter.ToUInt32` for true alignment.
+
+2. **`New-BucketFilterKql` switched from `abs(hash(x)) % N` (xxHash64) to `tolong(substring(hash_sha256(x), 0, 8), 16) % N`** so the EG-side bucket filter uses the same algorithm as the PS-side CL-row filter. Both Summary and Detailed paths updated via shared replace.
+
+3. **`Invoke-GraphHuntingQuery` now passes `-BucketCount`/`-BucketIndex`** to `Resolve-ProfileCLLetBlocks` from new script-scope vars `$script:_CurrentBucketCount` / `$script:_CurrentBucketIndex`. Detailed reports skip CL-bucketing (composite-key EG buckets misalign with single-key CL row buckets).
+
+4. **Bucket loop + AutoBucket probe set those vars** before each `Invoke-GraphHuntingQuery` call so the inline `_ep` / `_id` / `_az` datatable filters down to ~1/N of its rows per bucket. Probe's measured size now matches actual per-bucket payload, so AutoBucket converges quickly.
+
+### Per-iteration safety
+
+Top of every report iteration now resets `$script:_CurrentBucketCount = 0`, `_CurrentBucketIndex = 0`, `_CurrentReportIsDetailed = $false`. Without this a non-bucketed report following a 4-bucket report would silently re-inline only 1/4 of its CL snapshot — wrong results, no error.
+
+### Expected outcome
+
+With `$global:SI_SimulateCLRowCount = 15000` on dev server, expect log lines like:
+
+```
+[INFO] [hybrid] '_ep' bucket 1/40: 375/15000 row(s) inlined (~62 KB; CL-bucketed via SHA256)
+[INFO] submitting query to advanced hunting (attempt 1/4; may take up to 900s if too large)...
+[INFO] bucket 1/40: completed in N.NNs
+```
+
+…instead of `2,477,099 bytes` × 122,880 buckets forever. AutoBucket should settle around 30-40 buckets for the 15K-row simulation (vs failing endlessly at 122,880).
+
+### Cache hygiene
+
+AutoBucket cache (`$SettingsPath/<engine>/<env>/AutoBucket.cache.json`) entries written by v2.2.324 and earlier may carry the runaway escalation counts. Operators should delete it after upgrading so the first v2.2.325 run probes fresh.
+
+### What's unchanged
+
+- v2.2.323 simulation knob (`$global:SI_SimulateCLRowCount`) still works identically.
+- v2.2.324 neutral INFO wording still applies for the few sites that still need a probe escalation.
+- Non-bucketed reports: unchanged path.
+- Detailed reports (`*_Detailed`): still use full inline snapshot per bucket. The composite EG bucket key (Device|Finding) doesn't align with the single CL key, so per-bucket CL filtering would drop join-matching rows. Detailed reports will be tackled separately in a future release.
 
 ---
 

@@ -1075,7 +1075,15 @@ function Resolve-ProfileAugmentPlan {
     $stripped = [regex]::Replace($stripped, '//[^\r\n]*', '')
 
     # 1. Find every `let <var> = SI_*_Profile_CL | ... | project <body> | where isnotempty(<RightKey>);` let block.
-    $letRx = '(?ms)\blet\s+(?<var>\w+)\s*=\s*(?<bodyAll>[^;]*?\bSI_(?<table>[A-Za-z]+_Profile)_CL\b[^;]*?\|\s*project\s+(?<proj>[^;]*?)\|\s*where\s+isnotempty\(\s*(?<rkey>\w+)\s*\)\s*);'
+    # v2.2.332 -- accept BOTH shapes for the terminating where-isnotempty:
+    #   bare:           `where isnotempty(EpJoinKey)`
+    #   defensive:      `where isnotempty(tostring(column_ifexists("Target_AzureResourceId_Guid", "")))`
+    # The defensive form (introduced for projection-aliased keys that may not
+    # exist on every CL row) is the shape Attack_Paths_*_Github_to_Azure and
+    # Attack_Paths_*_Device_with_high_sev_lateral_movement_Azure use. Without
+    # matching it, those reports skipped 2-phase and fell back to inline-
+    # datatable, which exploded the body on 15K-row tenants.
+    $letRx = '(?ms)\blet\s+(?<var>\w+)\s*=\s*(?<bodyAll>[^;]*?\bSI_(?<table>[A-Za-z]+_Profile)_CL\b[^;]*?\|\s*project\s+(?<proj>[^;]*?)\|\s*where\s+isnotempty\(\s*(?:tostring\(\s*column_ifexists\(\s*"(?<rkey>\w+)"\s*,[^)]*\)\s*\)|(?<rkey2>\w+))\s*\)\s*);'
 
     $plans = New-Object System.Collections.Generic.List[hashtable]
     $modified = $Query
@@ -1086,7 +1094,10 @@ function Resolve-ProfileAugmentPlan {
         $varName  = $m.Groups['var'].Value
         $tableTag = $m.Groups['table'].Value      # e.g. "Azure_Profile" -> SI_Azure_Profile_CL
         $tableNm  = "SI_" + $tableTag + "_CL"
-        $rkey     = $m.Groups['rkey'].Value
+        # v2.2.332 -- rkey can be captured by either the defensive `column_ifexists("X",...)` group
+        # (preferred) or the bare-identifier fallback (rkey2). The two alternatives are mutually
+        # exclusive at match time; whichever fired holds the column name.
+        $rkey     = if ($m.Groups['rkey'].Success -and $m.Groups['rkey'].Value) { $m.Groups['rkey'].Value } else { $m.Groups['rkey2'].Value }
         # Re-extract projection body from the original query (avoids placeholder issues from the strip pass).
         $origMatch = [regex]::Match($modified, $letRx)
         if (-not $origMatch.Success) { continue }

@@ -1687,8 +1687,14 @@ function Invoke-GraphHuntingQuery {
                 # of escalating bucket counts to absurd levels (122,880+ today).
                 # Skipped for *_Detailed (composite-key EG buckets misalign with
                 # single-key CL buckets) and for unset state (non-bucketed runs).
+                # v2.2.331 -- Detailed reports no longer skip CL-bucketing. With
+                # composite EG bucket key removed (now device-only for both Summary
+                # and Detailed), the alignment that prevented Detailed bucketing
+                # in v2.2.325 no longer applies. Both report shapes use the same
+                # device-key hash, so a CL row in bucket B always matches its EG
+                # counterpart in bucket B.
                 $_bk = 0; $_bi = 0
-                if ([int]$script:_CurrentBucketCount -gt 1 -and -not [bool]$script:_CurrentReportIsDetailed) {
+                if ([int]$script:_CurrentBucketCount -gt 1) {
                     $_bk = [int]$script:_CurrentBucketCount
                     $_bi = [int]$script:_CurrentBucketIndex
                 }
@@ -2225,50 +2231,19 @@ function New-BucketFilterKql {
     [string]$ReportName = ''
   )
 
-  # v2.2.200 -- composite bucket key for *_Detailed reports.
-  #
-  # Default (Summary + everything else): hash on the FIRST non-empty device-
-  # level identifier. All rows for the same device land in the same bucket,
-  # so any downstream `summarize by <device>` rolls up correctly.
-  #
-  # *_Detailed reports emit one row per (asset, finding) tuple -- a hot device
-  # with 10K findings dumps 10K join-explosion rows into a single bucket and
-  # the XDR backend preempts no matter how high we escalate the bucket count
-  # (the device is deterministic-bucketed; doubling N just moves the whole
-  # device to a different bucket, never splits it). Composite key strcat's
-  # the asset key AND the finding key, so the SAME asset's findings hash to
-  # DIFFERENT buckets -- the hot device gets split across N buckets naturally.
-  # Per-(asset, finding) rows are unique to a bucket, so the downstream
-  # `summarize by AssetName, FindingName` still works -- each tuple lives in
-  # one bucket only, and across-bucket concatenation gives the full result.
-  $isDetailed = $ReportName -like '*_Detailed'
-
-  if ($isDetailed) {
-@"
-| extend __bucket_key = strcat(
-    coalesce(tostring(column_ifexists('DeviceKey','')),
-             tostring(column_ifexists('NodeId','')),
-             tostring(column_ifexists('DeviceNodeId','')),
-             tostring(column_ifexists('AadDeviceId','')),
-             tostring(column_ifexists('DeviceId','')),
-             tostring(column_ifexists('MachineId','')),
-             tostring(column_ifexists('Id','')),
-             tostring(column_ifexists('SourceNodeId','')),
-             tostring(column_ifexists('TargetNodeId',''))),
-    '|',
-    coalesce(tostring(column_ifexists('FindingNodeId','')),
-             tostring(column_ifexists('FindingName','')),
-             tostring(column_ifexists('CVE','')),
-             tostring(column_ifexists('CveId','')),
-             tostring(column_ifexists('ConfigurationId','')),
-             tostring(column_ifexists('RecommendationId','')),
-             '')
-)
-| where isnotempty(__bucket_key)
-| extend __bucket = tolong(strcat("0x", substring(hash_sha256(__bucket_key), 0, 8))) % $BucketCount
-| where __bucket == $BucketIndex
-"@
-  } else {
+  # v2.2.331 -- device-only bucket key for ALL reports (Summary AND Detailed).
+  # Previously the *_Detailed branch used a composite `DeviceKey|FindingKey` to
+  # split hot-device cartesian. But that key DOESN'T ALIGN with the CL-side
+  # bucket key (CL has device-only EpJoinKey -- there's no finding info on the
+  # CL row), so CL-bucketing was disabled for Detailed reports entirely
+  # (Resolve-ProfileCLLetBlocks fell back to full-inline per bucket -> 413).
+  # Device-only on both sides aligns by string equality, so CL-bucketing works
+  # for Detailed too. Accepted trade-off: a 1M-asset tenant with ONE hot device
+  # carrying 10K findings will get 10K rows in that device's bucket. At N=256
+  # buckets that single bucket may approach AH's response cap, but the engine
+  # already handles bucket-timeout via sub-bucketing (v2.2.277) so the worst
+  # case stays bounded. Multi-tenant runs validated v2.2.328 distribution as
+  # uniform once the CL-side bucket key matched EG's.
 @"
 | extend __bucket_key = coalesce(
     tostring(column_ifexists('DeviceKey','')),
@@ -2285,7 +2260,6 @@ function New-BucketFilterKql {
 | extend __bucket = tolong(strcat("0x", substring(hash_sha256(__bucket_key), 0, 8))) % $BucketCount
 | where __bucket == $BucketIndex
 "@
-  }
 }
 
 function New-SubBucketFilterKql {

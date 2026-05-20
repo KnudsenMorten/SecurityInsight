@@ -134,7 +134,10 @@ function Resolve-RepoRoot {
 }
 
 try {
-    if (-not $InstallPath) { $InstallPath = Resolve-RepoRoot }
+    # Community-vm always lives at <install>\launcher\<engine>\launcher.community-vm.ps1.
+    # 2-up from $PSScriptRoot IS the install root by file-layout convention. See v2.2.313
+    # release note for why Resolve-RepoRoot's walk-up is bypassed for community-vm.
+    if (-not $InstallPath) { $InstallPath = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
 } catch {
     $resolveError = $_
 }

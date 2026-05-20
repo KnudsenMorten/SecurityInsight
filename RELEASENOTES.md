@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.312
+## v2.2.313
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.313 - community-vm launchers stop calling Resolve-RepoRoot; use 2-up convention so flat installs Just Work (8275fd41)
 - release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
 - release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
 - release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.286 - Get-PlatformSecretLocal also soft-fails (parity with KeyVault) (2b40bfc5)
 - release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
 - release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
-- release: SecurityInsight v2.2.283 - extend stale-device filter to 8 Identity_Admin_LogonTo reports (64b5901c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.313 — Community-VM launchers: stop calling `Resolve-RepoRoot`; use 2-up convention so flat installs Just Work
+
+### Urgent customer-blocking bug
+
+Multiple community-VM customers reported `$global:SpnTenantId is required but not set` even though their `config\SecurityInsight.custom.ps1` had the SPN populated. Trace:
+
+1. Launcher banner showed `repo root: -` (empty) → `Resolve-RepoRoot` returned an empty string instead of throwing.
+2. Initialize-LauncherConfig was called with `-RepoRoot ""`, so Layer 3 looked at `\SOLUTIONS\SecurityInsight\config\SecurityInsight.custom.ps1` (with leading backslash) instead of the customer's actual `<install>\config\SecurityInsight.custom.ps1`.
+3. Layer 3 reported `absent` → custom.ps1 never loaded.
+4. `$global:SI_SPN_*` never populated → the `SI_SPN_* → Spn*` shim (`Initialize-LauncherConfig.ps1:603-604`) had nothing to copy.
+5. Auth check at `launcher.community-vm.ps1:232` threw the misleading "put your SPN credentials in custom.ps1" error.
+
+`Resolve-RepoRoot` walked up looking for `FUNCTIONS\AutomateITPS\AutomateITPS.psd1` (monorepo marker), a `scripts\` + `launchers\` sibling pair (published-community marker), or an `engine\` + `launcher\` sibling pair (v2.2 dev-tree marker). Flat community installs whose layout doesn't match any of those three (e.g. a hybrid with only `launcher\` and `config\`) returned `$communityMatch = $null` → empty install path → cascading failure above.
+
+### Fix
+
+A community-VM launcher always ships at `<install>\launcher\<engine>\launcher.community-vm.ps1` by file-layout convention. So:
+
+```powershell
+if (-not $InstallPath) { $InstallPath = Split-Path -Parent (Split-Path -Parent $PSScriptRoot) }
+```
+
+No walk-up. No marker file. No `-InstallPath` argument needed. Works on every flat community install regardless of what else is or isn't present. Applied to all 6 community-VM launchers (`endpoint`, `identity`, `azure`, `publicip`, `risk-analysis`, `privilege-tier-classifier`). `Resolve-RepoRoot` function remains in each file but is unused on the default path — `-InstallPath` from the CLI still wins, and internal-VM launchers (which legitimately need the AutomateIT-root walk-up) are unaffected.
+
+### Workaround for customers on pre-v2.2.313 who can't update yet
+
+Pass `-InstallPath <install>` explicitly:
+
+```powershell
+.\launcher.community-vm.ps1 -InstallPath C:\SecurityInsight
+```
+
+That bypasses the broken resolver and gives Layer 3 a correct `$RepoRoot`. After pulling v2.2.313, the argument is no longer needed.
 
 ---
 

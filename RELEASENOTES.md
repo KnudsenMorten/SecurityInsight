@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.331
+## v2.2.332
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
 - release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
 - release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
 - release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
@@ -33,13 +34,77 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
 - release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
 - release: SecurityInsight v2.2.304 - update README + docs report counts to 116 (publish-gate fix after v2.2.303 moved 2 reports to Dev) (56bdd3bb)
-- release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.332 — `Resolve-ProfileAugmentPlan` regex now matches the defensive `where isnotempty(tostring(column_ifexists("Col", "")))` shape — cross-domain Attack_Paths reports (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies
+
+### Bug
+
+After v2.2.331 fixed Detailed CL-bucketing, cross-domain Attack_Paths reports still blew up:
+
+```
+[INFO] [hybrid] '_TargetCmdb' snapshot: 15000 row(s) inlined as datatable (1496464 bytes)
+[INFO] [hybrid] '_SourceCmdb' snapshot: 15000 row(s) inlined as datatable (1509476 bytes)
+[INFO] submitting query to advanced hunting (attempt 1/1; may take up to 900s if too large)...
+... 413 ...
+```
+
+3MB inline body → 413 → escalate forever. v2.2.330's opt-in cap caught it in 256 buckets but produced no rows.
+
+### Root cause
+
+`Resolve-ProfileAugmentPlan` (which strips CL joins from the query and does the cmdb augmentation in PowerShell post-hoc, avoiding inline entirely) was meant to handle these reports. But its let-block regex required:
+
+```kql
+| where isnotempty(<bareCol>)
+```
+
+The Attack_Paths reports use the defensive shape:
+
+```kql
+| where isnotempty(tostring(column_ifexists("Target_AzureResourceId_Guid", "")))
+```
+
+…which the regex didn't recognize. The 2-phase planner produced zero plans → engine fell back to the inline-datatable hybrid path → 3MB body → 413.
+
+### Fix
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` `Resolve-ProfileAugmentPlan` — extended the let-block regex's terminating clause to accept BOTH shapes:
+
+```kql
+where isnotempty(EpJoinKey)
+where isnotempty(tostring(column_ifexists("Target_AzureResourceId_Guid", "")))
+```
+
+The 2-phase loop already iterates over every matching let-block (the multi-let path was always there — just unused on cross-domain reports because no let matched). With the regex extended, BOTH `_SourceCmdb` AND `_TargetCmdb` plans are extracted, both joins are stripped from the query, the pure-EG remainder submits to AH with a small body, and `Invoke-ProfileAugment` fetches both CL snapshots once and stamps the alias columns in PowerShell.
+
+### Expected outcome
+
+```
+[2phase] active: 2 plan(s); let+join+extend stripped from query, augment will run post-AH
+[2phase] '_SourceCmdb' lookup built: 15000 CL rows -> hashtable on Source_AadDeviceId
+[2phase] '_TargetCmdb' lookup built: 15000 CL rows -> hashtable on Target_AzureResourceId_Guid
+[INFO] hunting query completed in N.NNs
+[INFO] total rows: M
+```
+
+Body size drops from 3MB to ~10KB (no inline). 15K-row tenants now process cross-domain Attack_Paths without the bucket-escalation chaos.
+
+### Trade-off accepted
+
+2-phase augment fetches the entire CL snapshot from LA into PowerShell once per (table, key). For a 1M-row CL table that's a meaningful pull, but the alternative (per-bucket inline at 256-bucket cap) would have been 256 × (full snapshot) bandwidth. The hashtable join is O(N+M) and trivial.
+
+### What's unchanged
+
+- v2.2.328-.331 CL-bucketing for Summary + Detailed single-let Endpoint reports: still active for the path where 2-phase doesn't match (engine tries 2-phase first, falls through to bucketing as fallback).
+- v2.2.330 opt-in `$global:AutoBucketReportCap`: still off by default. Once v2.2.333 verifies all 6 cross-domain Attack_Paths reports flow through 2-phase under 15K simulation, the scaffolding is deleted.
 
 ---
 

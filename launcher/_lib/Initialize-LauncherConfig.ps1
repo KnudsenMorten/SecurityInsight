@@ -297,17 +297,19 @@ function Initialize-LauncherConfig {
             [Parameter(Mandatory)][string]$Engine,
             [int]$RetentionDays = 7
         )
-        # Resolve the right DATA\LOGS folder:
-        #   Monorepo layout (internal deploys): $RepoRoot is C:\SCRIPTS\AutomateIT
-        #     and the solution DATA lives under SOLUTIONS\<Solution>\DATA.
-        #   Community layout: $RepoRoot IS the solution folder, so DATA lives
-        #     directly under $RepoRoot.
-        # Try solution-qualified path first; fall back to repo-root DATA.
-        $solutionData = Join-Path $RepoRoot (Join-Path 'SOLUTIONS' (Join-Path $Solution 'DATA'))
-        if (Test-Path -LiteralPath (Split-Path -Parent $solutionData)) {
-            $logDir = Join-Path $solutionData 'LOGS'
+        # v2.2.312: write config snapshots into the same `logs\` folder as the
+        # run transcripts (Start-LauncherTranscript.ps1). Pre-v2.2.312 dropped
+        # them under `data\LOGS\` which (a) was a separate folder operators had
+        # to discover and (b) made internal vs community parity awkward
+        # (operator: "we don't use \data anymore").
+        # Mirror Start-LauncherTranscript's resolution algorithm so both file
+        # types always land together.
+        $solutionLogs = Join-Path $RepoRoot (Join-Path 'SOLUTIONS' (Join-Path $Solution 'logs'))
+        if (Test-Path -LiteralPath (Split-Path -Parent $solutionLogs)) {
+            $logDir = $solutionLogs
         } else {
-            $logDir = Join-Path $RepoRoot 'DATA\LOGS'
+            # Community (flat) layout: $RepoRoot IS the solution folder.
+            $logDir = Join-Path $RepoRoot 'logs'
         }
         try {
             if (-not (Test-Path -LiteralPath $logDir)) { New-Item -ItemType Directory -Force -Path $logDir | Out-Null }

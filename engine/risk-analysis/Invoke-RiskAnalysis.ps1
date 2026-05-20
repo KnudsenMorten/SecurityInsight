@@ -6624,6 +6624,24 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
         }
         if ($capBucket -lt 1) { $capBucket = 1 }
 
+        # v2.2.329 -- per-report SOFT cap. The global AutoBucketMax default is
+        # 131072 (true safety net for 1M+-asset tenants), but unbounded escalation
+        # masks structural problems like CL-bucket-key misalignment. When the EG-
+        # side bucket coalesce doesn't match the CL-side join key (cross-domain
+        # reports: Attack_Paths_*_Github_to_Azure, _Public_IP_to_VM, etc.), EVERY
+        # bucket size N produces a ~2MB inline payload -> 413 -> escalate forever.
+        # Cap escalation at AutoBucketReportCap (default 256) so the engine fails
+        # fast on these reports and continues to the next instead of burning 30+
+        # min/report. Operator can raise the cap via `$global:AutoBucketReportCap`
+        # when they genuinely need >256 buckets for a single report; the global
+        # AutoBucketMax remains the hard ceiling.
+        $reportCap = if ([int]$global:AutoBucketReportCap -gt 0) {
+            [int]$global:AutoBucketReportCap
+        } else { 256 }
+        if ($capBucket -gt $reportCap) {
+            $capBucket = $reportCap
+        }
+
         $bucketCountToUse = $effectiveBucketCount
 
         if ([bool]$global:AutoBucketCount) {

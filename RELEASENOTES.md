@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.328
+## v2.2.329
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
 - release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
 - release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
 - release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.303 - add Dev YAML tier + move broken Attack_Paths_Device_*_Azure to Dev with native graph-match shape (dbdfaced)
 - release: SecurityInsight v2.2.302 - stop auto-injecting stale-device filter into reports without TargetNodeId/NodeId at injection point (9c940c47)
 - release: SecurityInsight v2.2.301 - sweep all remaining off-scope case() defaults across Identity + CVE + Attack_Paths reports (c334b8f7)
-- release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.329 — Per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating from 2 → 131,072
+
+### Bug
+
+After v2.2.328 fixed Summary reports (Device_Missing_CVEs, Device_Recommendations both producing rows), `Attack_Paths_Summary_Github_to_Azure_Resources` started infinite-escalating:
+
+```
+[INFO] Shard sizing: 2 -> 8 -> 32 -> 128 -> 512 -> 2048 -> 8192 -> 32768
+```
+
+Operator saw "8100 bucket" mid-loop and pulled the plug.
+
+### Root cause
+
+For cross-domain Attack_Paths reports the CL-side join key is e.g. `_TargetCmdb.Target_AzureResourceId_Guid`; the EG-side join key is `$left.FinalTargetId`. But `New-BucketFilterKql` hardcodes the EG bucket key to a device-column coalesce (`DeviceKey`, `NodeId`, `AadDeviceId`, ...). EG.DeviceKey hashes differently from CL.Target_AzureResourceId_Guid for the same logical row, so CL bucketing for these reports does nothing useful — every bucket size still produces ~2 MB payload and 413s. Escalation keeps doubling without effect.
+
+The proper fix (per-report join-key parser that aligns EG and CL bucket keys to whatever the actual `join … on $left.X == $right.Y` declares) lands in a follow-up release. v2.2.329 is the operational stopgap.
+
+### Fix
+
+`$global:AutoBucketReportCap` (default 256) caps per-report escalation. Beyond that, the report bails with `bucket escalation reached cap 256. Unable to complete report 'X'` and the engine moves to the next report — no more 30+ min wasted per broken report.
+
+Operators who genuinely need higher per-report bucket counts can override with `$global:AutoBucketReportCap = 1024`. The global `$global:AutoBucketMax` (default 131,072) remains the absolute ceiling for legitimate large-tenant runs that align correctly.
+
+### What's unchanged
+
+- v2.2.328 single-let CL-bucketing (Endpoint Summary reports): still works perfectly.
+- v2.2.323 simulation knob: unchanged.
+- Cross-domain reports temporarily skipped after 256-bucket cap; v2.2.330 will add the join-key parser to fix them properly.
 
 ---
 

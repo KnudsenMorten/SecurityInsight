@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.313
+## v2.2.314
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.314 - OAuth-only storage enforcement; Subscription Id+Name in MoreDetails for Azure rows; canonical asset-weighted KPI (Summary == Detailed) (94386a13)
 - release: SecurityInsight v2.2.313 - community-vm launchers stop calling Resolve-RepoRoot; use 2-up convention so flat installs Just Work (8275fd41)
 - release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
 - release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
@@ -33,13 +34,58 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.287 - stale-device filter defaults to strict (was off, contradicted v2.2.282 intent) (3095b0bb)
 - release: SecurityInsight v2.2.286 - Get-PlatformSecretLocal also soft-fails (parity with KeyVault) (2b40bfc5)
 - release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
-- release: SecurityInsight v2.2.284 - default $global:SI_UseStorageOAuth=$true in shared-defaults (85c72390)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.314 — OAuth-only storage enforcement; Subscription Id/Name in `MoreDetails` for Azure rows; canonical asset-weighted KPI (Summary == Detailed)
+
+Three related operator asks shipped together.
+
+### A. Storage auth is OAuth-only — `$global:SI_StorageKey` and `Get-AzStorageAccountKey` are gone
+
+Customer ask: "remove the requirement for a sas key, as we now must support only oauth. cannot be overruled by false."
+
+Changes:
+- **`engine/asset-profiling/Invoke-SIEngineRun.ps1`** — auth-resolution block hardcodes `$global:SI_UseStorageOAuth = $true` regardless of what the operator's `custom.ps1` says. The pre-v2.2.314 SharedKey branch (which fell back to `$global:SI_StorageKey` or threw a "key is required" error) is deleted. Setting `$global:SI_UseStorageOAuth = $false` in `custom.ps1` is silently ignored.
+- **`engine/asset-profiling/shared/Invoke-SIPrestageInfra.ps1`** — the SharedKey-fetch branch that called `Get-AzStorageAccountKey` and **auto-persisted the result back into `custom.ps1`** is deleted. The engine no longer asks for `listKeys` permission. The Storage Blob/Table/Queue Data Contributor RBAC granted earlier in prestage is the only authorization the engine needs.
+- **`auth/Get-SIKvSecret.ps1`** — doc-comment example no longer shows the `SI-StorageKey` KV pull. A NOTE explicitly tells pre-v2.2.314 operators to delete that line from their `custom.ps1`.
+
+Pre-v2.2.314 `custom.ps1` files with a leftover `$global:SI_StorageKey = '...'` line are harmless — engine just ignores the global. Operators can delete the auto-persisted block whenever they like (see the comment block engine added on first-fetch).
+
+Private-endpoint deployments now require zero code changes — the storage path goes through PE + Private DNS zones transparently, and removing `listKeys` removes the last ARM (public) probe in the storage flow.
+
+### B. `MoreDetails` now surfaces Subscription Id + Name on Azure-domain rows
+
+Customer ask: "i need to have subscription name id/subscription name in the more details if the asset is an azure resource."
+
+Engine `MoreDetails` builder (post-process at `Invoke-RiskAnalysis.ps1:~3996`) now appends one of two lines after the existing portal-blade URL when the row is Azure-domain and has an `AzureResourceId`:
+
+```
+Subscription: <SubName> (<SubId>)        // when AZ_SubscriptionName / SubscriptionName is on the row
+Subscription: <SubId>                    // when only the id is available
+```
+
+Subscription Id comes from the `AzureResourceId` path segment (`[2]` after `/subscriptions/`). Subscription Name is read from the first non-empty of `AZ_SubscriptionName`, `SubscriptionName`, `AzureSubscriptionName`. Pure-Azure-engine rows have the name; cross-domain rows where `AzureResourceId` came from EG traversal may not (those just show the id).
+
+### C. Risk Score KPI is now identical between Summary and Detailed (Option B)
+
+Customer ask: "my customers cannot understand why the risk score is not same % between summary and detailed."
+
+Pre-v2.2.314 the run-end rollup at `Invoke-RiskAnalysis.ps1:~8416` weighted each row equally — so Summary (where one row collapses N asset-findings) and Detailed (where each row IS one asset-finding) computed different averages on the same underlying signal. Endpoint Summary KPI 58 vs Detailed KPI 53 was mathematically legitimate but operationally confusing.
+
+v2.2.314 multiplies the row's KPI contribution by `TotalIssuesImpactedAssets` (the per-row asset-finding population, fixed in v2.2.311 to be per-row scope). Result:
+
+- Summary row with TIIA=10 → contributes 10× weight
+- Detailed row → TIIA absent → defaults to 1× weight
+- 10 Detailed rows sum to the same numerator + denominator as the equivalent 1 Summary row
+
+Both reports converge to the same canonical, asset-weighted KPI per domain and globally. Bands (At Risk / Moderate / Good / Very Good) shift slightly upward or downward depending on whether the tenant's heavy-issue assets are also low-tier (downweight) or high-tier (upweight) — this is the correct asset-driven view.
 
 ---
 

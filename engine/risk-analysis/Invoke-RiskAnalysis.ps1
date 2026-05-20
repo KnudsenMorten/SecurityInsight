@@ -2261,7 +2261,7 @@ function New-BucketFilterKql {
              '')
 )
 | where isnotempty(__bucket_key)
-| extend __bucket = tolong(substring(hash_sha256(__bucket_key), 0, 8), 16) % $BucketCount
+| extend __bucket = tolong(strcat("0x", substring(hash_sha256(__bucket_key), 0, 8))) % $BucketCount
 | where __bucket == $BucketIndex
 "@
   } else {
@@ -2278,7 +2278,7 @@ function New-BucketFilterKql {
     tostring(column_ifexists('TargetNodeId',''))
 )
 | where isnotempty(__bucket_key)
-| extend __bucket = tolong(substring(hash_sha256(__bucket_key), 0, 8), 16) % $BucketCount
+| extend __bucket = tolong(strcat("0x", substring(hash_sha256(__bucket_key), 0, 8))) % $BucketCount
 | where __bucket == $BucketIndex
 "@
   }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.325
+## v2.2.326
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
 - release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
 - release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
 - release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.300 - fix "Unknown - unmapped" CriticalityTierLevel default silently dropping all Endpoint rows on customers with poor CL coverage (67b434e4)
 - release: SecurityInsight v2.2.299 - fix IsExcludedByTag null-filter dropping all Device_Recommendations + Device_Missing_CVEs rows (74fc8d55)
 - release: SecurityInsight v2.2.298 - sanitize customer-name literals in internal provisioning script docs (524bca80)
-- release: SecurityInsight v2.2.297 - strip inline // comments from _TargetCmdb projection (LA pre-fetch SYN0002 fix) (d10c086f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.326 — Fix v2.2.325 KQL syntax: `tolong(s, 16)` not valid in Defender AH; switch to `tolong(strcat("0x", hex))` for hex→long conversion
+
+### Bug
+
+v2.2.325 emitted bucket-filter KQL using `tolong(substring(hash_sha256(x), 0, 8), 16)`. Defender Advanced Hunting's `tolong()` only accepts ONE argument — the base parameter is ADX-only (`parse_int(s, base)`). First real per-bucket query 400'd:
+
+```
+[BadRequest] : tolong(): function expects 1 argument(s).. Fix semantic errors in your query.
+```
+
+CL-bucketing itself worked perfectly — `[hybrid] '_ep' bucket 2/2: 11/66 row(s) inlined (2762 bytes; CL-bucketed via SHA256)` confirms inline payload shrunk from 2.4 MB to 2.7 KB per bucket. Only the EG-side filter was syntactically broken.
+
+### Fix
+
+Switch KQL from
+```kql
+| extend __bucket = tolong(substring(hash_sha256(__bucket_key), 0, 8), 16) % $BucketCount
+```
+to
+```kql
+| extend __bucket = tolong(strcat("0x", substring(hash_sha256(__bucket_key), 0, 8))) % $BucketCount
+```
+
+`tolong("0x...")` auto-parses hex per Kusto spec; works in both ADX and Defender AH. Both Summary + Detailed code paths updated.
+
+PS-side `Get-SISha256Bucket` (uint32 from first 4 bytes via `BitConverter.ToUInt32`) stays aligned: both sides now produce `0..2^32-1` from the first 4 bytes of SHA256, modulo N.
 
 ---
 

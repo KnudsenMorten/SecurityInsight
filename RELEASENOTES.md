@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.335
+## v2.2.336
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
 - release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
 - release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
 - release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
 - release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
 - release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
-- release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.336 — Stop flagging `EpJoinKey` as cross-domain; the designed-alignment Endpoint single-let path now keeps using the EG bucket filter (faster per-bucket queries, no behaviour change)
+
+### Bug
+
+After v2.2.335 lifted the single-let gate, Endpoint reports (`Device_Missing_CVEs_Summary` etc.) started logging:
+
+```
+[hybrid] cross-domain let '_ep' uses 'EpJoinKey' (not in EG bucket coalesce list) -- suppressing EG-side bucket filter so per-bucket joins stay lossless.
+```
+
+EpJoinKey was incorrectly classified as cross-domain because the literal column name "EpJoinKey" isn't in `New-BucketFilterKql`'s coalesce list (which uses raw EG-side names: DeviceKey, NodeId, etc.). But by DESIGN: the `_ep` projection sets `EpJoinKey = coalesce(AadDeviceId, AssetName, PrimaryEntityId)`, and the EG side extends `DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, NodeNameNorm)` — values are equal for matched rows, so bucket alignment is automatic.
+
+Effect of the false flag: queries still produced correct data, but each bucket query did a full EG scan instead of EG-bucket-filtered scan → 4-8× slower for Endpoint reports.
+
+### Fix
+
+`EpJoinKey` removed from `$crossDomainCols` and added to `$egStdCols` in `Resolve-ProfileCLLetBlocks`. Endpoint single-let reports now keep the fast EG-filtered bucket path. Cross-domain reports (`Target_AzureResourceId_Guid`, `Source_AadDeviceId`, etc.) still trigger the EG-skip as before.
 
 ---
 

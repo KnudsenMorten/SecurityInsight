@@ -895,31 +895,38 @@ function Invoke-SIClassify {
         # (Azure Tables 400 from oversized verdict JSON, key with bad chars,
         # transient throttling) was terminating the entire stage and losing
         # all classification work. Now per-asset failures are warnings only.
-        # skip fingerprint cache writes when ForceFullRun is on.
-        # ForceFullRun bypasses the cache on read anyway (every asset is re-
-        # classified regardless of cadence), so writing the cache during this
-        # run is wasted work -- one Azure Table PUT per asset (~100ms round-
-        # trip) and the next non-Force run will re-write fresh values. Cuts
-        # azure Classify from ~120s -> ~10s on tenants with 500+ resources.
+        #
+        # v2.2.315 -- ALWAYS write the fingerprint cache (pre-v2.2.315 skipped
+        # writes when ForceFullRun=true, but customers like fischer.de run
+        # ForceFullRun=true permanently and the cache stayed empty forever ->
+        # next non-Force run read stale data). On ForceFullRun, the write uses
+        # -ForceOverwrite (DELETE+PUT) so column-type drift from prior runs
+        # self-heals; otherwise the helper auto-heals on 400 with the same
+        # DELETE+PUT path.
         try {
+            $verdictJson = $verdict | ConvertTo-Json -Compress -Depth 8
+            # Azure Tables property limit: 64KB. Truncate verdict JSON if it
+            # blew up (heavy TierSources for users with many roles can hit it).
+            if ($verdictJson.Length -gt 60000) {
+                $verdictJson = '{"truncated":true,"reason":"verdict JSON > 60KB","SI_Tier":' + $verdict.SI_Tier + '}'
+            }
+            $_fpProperties = @{
+                si_tier          = $verdict.SI_Tier
+                si_verdict       = $verdictJson
+                last_seen_run_id = $RunContext.RunId
+                last_seen_at     = ([datetime]::UtcNow.ToString('o'))
+            }
             if ($RunContext.ForceFullRun) {
-                # Skip the per-asset PUT entirely.
-            } else {
-                $verdictJson = $verdict | ConvertTo-Json -Compress -Depth 8
-                # Azure Tables property limit: 64KB. Truncate verdict JSON if it
-                # blew up (heavy TierSources for users with many roles can hit it).
-                if ($verdictJson.Length -gt 60000) {
-                    $verdictJson = '{"truncated":true,"reason":"verdict JSON > 60KB","SI_Tier":' + $verdict.SI_Tier + '}'
-                }
                 Set-SIFingerprintRecord -Context $RunContext.StorageContext `
                                          -TableName $RunContext.FingerprintTable `
                                          -AssetId $r.AssetId `
-                                         -Properties @{
-                                             si_tier          = $verdict.SI_Tier
-                                             si_verdict       = $verdictJson
-                                             last_seen_run_id = $RunContext.RunId
-                                             last_seen_at     = ([datetime]::UtcNow.ToString('o'))
-                                         }
+                                         -Properties $_fpProperties `
+                                         -ForceOverwrite
+            } else {
+                Set-SIFingerprintRecord -Context $RunContext.StorageContext `
+                                         -TableName $RunContext.FingerprintTable `
+                                         -AssetId $r.AssetId `
+                                         -Properties $_fpProperties
             }
         } catch {
             $msg = $_.Exception.Message

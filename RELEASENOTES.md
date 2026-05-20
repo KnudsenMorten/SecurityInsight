@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.314
+## v2.2.315
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
+- docs: SecurityInsight - update README + Container-Deploy-Guide for v2.2.314 OAuth-only + KPI parity + Subscription-in-MoreDetails (c420305c)
 - release: SecurityInsight v2.2.314 - OAuth-only storage enforcement; Subscription Id+Name in MoreDetails for Azure rows; canonical asset-weighted KPI (Summary == Detailed) (94386a13)
 - release: SecurityInsight v2.2.313 - community-vm launchers stop calling Resolve-RepoRoot; use 2-up convention so flat installs Just Work (8275fd41)
 - release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
@@ -32,14 +34,69 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.289 - Invoke-SIHuntingQuery LA retry + richer error reporting (0b5b7ed3)
 - release: SecurityInsight v2.2.288 - stale-device filter auto-injects when YAML placeholder missing (cfc4bd2e)
 - release: SecurityInsight v2.2.287 - stale-device filter defaults to strict (was off, contradicted v2.2.282 intent) (3095b0bb)
-- release: SecurityInsight v2.2.286 - Get-PlatformSecretLocal also soft-fails (parity with KeyVault) (2b40bfc5)
-- release: SecurityInsight v2.2.285 - Get-PlatformSecretKeyVault soft-fails on missing secret (188bc689)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.315 — Schema-aware empty CL snapshot (fixes `Failed to resolve column named 'X'` on first-run); self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping
+
+Two unrelated production failures from the same customer's run.
+
+### A. Hybrid CL snapshot returned `Failed to resolve column named 'AzureResourceId_Guid'` whenever `SI_Azure_Profile_CL` was empty
+
+`Convert-RowsToKqlDatatable` at `Invoke-RiskAnalysis.ps1:592-594` emitted a hardcoded placeholder schema when the LA pre-fetch returned 0 rows:
+
+```powershell
+return ('let {0} = datatable(__placeholder:string)[];' -f $LetVarName)
+```
+
+The downstream KQL join `$left.AssetNodeId == $right.AzureResourceId_Guid` then failed at submit-time with a misleading schema error — the operator saw "fix semantic errors in your query" when the actual problem was that the Azure profiler hadn't populated `SI_Azure_Profile_CL` yet (e.g. SPN missing `Reader` on the subscription, wrong `SI_AzSubscriptionId`).
+
+### Fix
+
+Added `_ExtractProjectColumns` helper that parses the LAST `project` clause in a KQL body (paren-depth-aware comma splitting) and returns the introduced column names. `Convert-RowsToKqlDatatable` now accepts an optional `-BodyKqlForSchemaHint` parameter; when rows are empty AND the hint is provided, emits a schema-matched datatable instead of the placeholder:
+
+```kql
+let _ap = datatable(AzureResourceId_Guid:string, AzureResourceId:string, Tier_From_SI_CL:string, IsExcludedByTag:string, cmdbId:string, cmdbName:string, ...) [];
+```
+
+All columns default to `string` (which is the type the upstream `tostring(column_ifexists(...))` projections produce anyway). The join compiles, leftouter yields all left rows with right-side cols as null, the report ships with 0 hits instead of crashing.
+
+Caller at `Invoke-RiskAnalysis.ps1:845` passes the let-binding body as the hint. No YAML changes required.
+
+### B. Fingerprint cache PUT failed with HTTP 400 on EG-discovered endpoint assets
+
+Customer hit `Set-SIFingerprintRecord PUT failed for asset=eg:dev:<hex>: The remote server returned an error: (400) Bad Request` during CLASSIFY. Two of four EG-source assets failed; the other two succeeded. The dominant root cause for these 400s is **column-type drift across writes** — Azure Tables locks a column's Edm.* type on first write; subsequent PUTs whose JSON marshals the same property differently (e.g. `si_tier = 1` → `Edm.Int32` then later `si_tier = "Tier 1"` → `Edm.String`) get rejected.
+
+The pre-v2.2.315 error handler also silently lost the Azure error body — `Invoke-RestMethod`'s 400 path doesn't always populate `ErrorDetails.Message`, so the warning surfaced only "(400) Bad Request" with no actionable detail.
+
+### Fix
+
+`Set-SIFingerprintRecord` now self-heals on 400 (`FingerprintCache.ps1`):
+
+1. **Capture Azure error body** via new `_Get-SIAzureErrorBody` helper that falls back to reading `Exception.Response.GetResponseStream()` when `ErrorDetails.Message` is empty (PS 5.1 default for many shapes).
+2. **On HTTP 400: DELETE the entity, then re-PUT once** (`_Invoke-SITableDelete` helper, idempotent on 404). DELETE clears the column-type lock; the re-PUT writes fresh types from current JSON. Logs `Set-SIFingerprintRecord self-healed (DELETE+PUT) for asset=<id> after first PUT 400: <azure-reason>` at Verbose.
+3. **On non-400 (401/403/500)**: bubble immediately with the captured body — no retry.
+4. **If second PUT also fails**: throw with BOTH first + final Azure reasons so the warning is actionable.
+
+New `-ForceOverwrite` switch on `Set-SIFingerprintRecord` skips the initial PUT and goes straight to DELETE+PUT. Caller uses it on ForceFullRun runs to guarantee fresh types on every write.
+
+### C. ForceFullRun now WRITES the fingerprint cache (was skip) with overwrite semantics
+
+`Invoke-Classify.ps1:905` pre-v2.2.315 **skipped** the cache write entirely when `$RunContext.ForceFullRun` was true. Rationale at the time was "ForceFullRun bypasses cache on read anyway, and the next non-Force run re-writes." **Problem in practice**: customers like Fischer run `$global:SI_ForceFullRun = $true` permanently — the cache stayed empty forever, then when they eventually flip to `$false` they read a stale/missing cache and cadence decisions go wrong.
+
+v2.2.315 changes the gate to ALWAYS write — on ForceFullRun, the call uses `-ForceOverwrite` (DELETE+PUT) so the cache is continuously refreshed AND any prior column-type drift self-heals on every run.
+
+### Customer-visible behavior
+
+- The Azure_Recommendations_Detailed report no longer fails with a schema error when `SI_Azure_Profile_CL` is empty — it ships 0 rows with a clean log line. (The root cause — Azure profiler not producing data — still needs fixing on the customer's side; the engine just stops surfacing it as a misleading KQL error.)
+- Fingerprint cache 400 warnings during CLASSIFY drop to zero on next re-run for customers hitting the type-drift class of failure. Any remaining warnings now include the Azure reason in the message text.
+- ForceFullRun=true customers see slightly slower CLASSIFY (one DELETE+PUT per asset instead of zero writes) but their cache stays fresh and accurate.
 
 ---
 

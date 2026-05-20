@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.321
+## v2.2.322
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
 - release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
 - release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
 - release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
@@ -33,13 +34,56 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.296 - fix v2.2.295 LA pre-fetch regression + EG priv-esc-vuln entry-point gate (6bb966c3)
 - release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
 - release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
-- release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.322 — PublicIP RA reports: tier-driven 4-label severity (Critical/High/Medium/Low buckets now populated)
+
+### Bug
+
+Operator's `myfamilynetwork` Detailed report showed PublicIP severity breakdown:
+
+```
+Public IP : Critical=0  High=109  Medium=21  Low=0    (total 130)
+```
+
+**Critical=0 AND Low=0** with everything clustered in High+Medium was the fingerprint of the 4 PublicIP report queries using a non-standard severity scheme that never emitted the dashboard's edge labels:
+
+- **Open_Port Summary/Detailed** (`:20910, :21035`) — emitted `Very High` / `High` / `Medium-High` / `Medium`. `Very High` correctly bucketed as Critical (but required port + Tier 0 combo — usually empty). No `Low` ever emitted. `Medium-High` collapsed into Medium.
+- **CVE Summary/Detailed** (`:21142, :21265`) — emitted `Very High` / `High` only via `iff(Tier 0 ? VH : High)`. No Medium, no Low ever emitted for CVE findings — Tier 2/3 IPs with CVEs showed as High regardless.
+
+Result: PublicIP findings could never populate Critical (rare combo) or Low (impossible), and Medium/Low CVEs were impossible.
+
+### Fix
+
+All 4 PublicIP report bodies now use the standard tier-driven 4-label case() that every other SI engine already uses (lines 9697, 16354 etc.):
+
+```kql
+| extend SecuritySeverity =
+    case(CriticalityTier == 0, "Very High",
+         CriticalityTier == 1, "High",
+         CriticalityTier == 2, "Medium",
+         "Low")
+```
+
+- Tier 0 IP → "Very High" → dashboard **Critical** column
+- Tier 1 IP → "High"      → dashboard **High** column
+- Tier 2 IP → "Medium"    → dashboard **Medium** column
+- Tier 3 IP → "Low"       → dashboard **Low** column
+
+### What moves
+
+Port-risk + Tier-0 escalation no longer fold into the severity LABEL — they continue to flow through `RiskFactor_Probability_Detailed` tokens (`AdminPort`, `Tier0Asset`, `InternetExposedCVE`) which feed the risk SCORE through the canonical scoring contract (`Invoke-RiskAnalysis.ps1:3690-3714`). The risk-score number is unchanged; only the dashboard bucketing now reflects asset tier consistently with the other domains.
+
+### Customer-visible effect
+
+Same PublicIP findings as before, but distribution shifts: Tier 0 findings move into Critical, Tier 3 findings (e.g. Tier 3 IPs with CVEs) move into Low. Critical and Low columns no longer always 0 for PublicIP.
 
 ---
 

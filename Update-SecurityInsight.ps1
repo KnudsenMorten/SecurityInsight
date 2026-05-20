@@ -101,15 +101,17 @@ try {
     # ----- Pull -----
     Write-Host ""
     Write-Host "  [STEP] git pull --ff-only origin main" -ForegroundColor Cyan
-    # v2.2.318 -- git always writes "From <URL>" + progress lines to STDERR even
-    # on a successful pull. `2>&1` then surfaces each line as a PS ErrorRecord;
-    # PS 5.1 displays them as red NativeCommandError "remote: ..." text before
-    # the LASTEXITCODE check runs, which makes the operator think the pull
-    # failed when it didn't. `ForEach-Object { "$_" }` coerces every pipeline
-    # element (string OR ErrorRecord) into a plain string so PS treats it as
-    # normal pipeline data instead of an error. LASTEXITCODE is still the only
-    # reliable success check for native commands; we keep that.
-    $pullOutput = & git pull --ff-only origin main 2>&1 | ForEach-Object { "$_" }
+    # v2.2.319 -- git always writes "From <URL>" + progress lines to STDERR even
+    # on a successful pull. Pre-v2.2.319 used `& git ... 2>&1` and PS 5.1
+    # surfaced each stderr line as a red NativeCommandError host write BEFORE
+    # the pipeline consumer (or LASTEXITCODE check) had a chance to handle it.
+    # v2.2.318 tried `ForEach-Object { "$_" }` -- that runs at the consumer
+    # side, too late; the red host text still appears at conversion time.
+    # The reliable fix in PS 5.1 is to do the stderr->stdout merge INSIDE
+    # cmd.exe via `cmd /c`, so PowerShell only ever sees stdout strings and
+    # never constructs an ErrorRecord for git's normal output. cmd's exit code
+    # forwards as LASTEXITCODE so the success check still works.
+    $pullOutput = & cmd /c 'git pull --ff-only origin main 2>&1'
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         _Err 'git pull failed. Output:'

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.333
+## v2.2.334
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
 - release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
 - release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
 - release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.308 - sanitize remaining customer-name literals in INTERNAL/New-SISolutionConfig.ps1 .EXAMPLE block (c1459b0d)
 - release: SecurityInsight v2.2.307 - Attack_Paths_*_Device_*_Azure: AssetName/Id/Type + cmdb columns now reflect SOURCE device, not Azure target (0d4d36b5)
 - release: SecurityInsight v2.2.306 - promote Attack_Paths_*_Device_*_Azure (Summary+Detailed) back to Locked with native make-graph shape (5310c573)
-- release: SecurityInsight v2.2.305 - fix Pester RaReportCount over-counting templates as reports (publish-gate stuck after v2.2.304) (bca70d55)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.334 — Cross-domain CL-bucketing now LOSSLESS: `Get-SICLBucketKey` learned the projection-aliased keys (Target_AzureResourceId_Guid, Source_AadDeviceId, FinalTargetId, etc.) and `Replace-BucketFilterBlock` skips the EG-side filter when the CL key isn't in EG's coalesce list — the 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants
+
+### Operator question that drove this
+
+> "if we know the size of source cl is 2.7 mb. then we calculate how many source bucket to have instead of capping at 256. potentially we could lose data" — and later "are we losing data / or missing detections?"
+
+Correct on both counts: the v2.2.329 cap was a stop-loss, not a fix. The real bug was that CL rows weren't distributing because their bucket keys (`Target_AzureResourceId_Guid`, `Source_AadDeviceId`, etc.) weren't in `Get-SICLBucketKey`'s priority list — so every row hashed to bucket 0, no amount of bucket escalation helped. The cap then fired because the body never shrank.
+
+### Two changes
+
+1. **`Get-SICLBucketKey` priority list extended** with the projection-aliased keys cross-domain reports actually project: `Target_AzureResourceId_Guid`, `Source_AadDeviceId`, `Source_AssetId`, `Target_AssetId_From_CL`, `FinalTargetId`, `FinalSourceId`. The simulation knob's `$bucketKeyCols` got the same additions so clone bucket-keys distribute too.
+
+2. **`Replace-BucketFilterBlock` honours new `$script:_SkipEGBucketForCrossDomain` flag** — set by `Resolve-ProfileCLLetBlocks` when the CL key it just hashed isn't a column EG's bucket coalesce would pick (DeviceKey/NodeId/etc.). When set, the `__BUCKET_FILTER__` placeholder stays at the no-op `| where 1 == 1` — each per-bucket query then scans ALL EG rows joined to that bucket's CL subset. Across N buckets every EG row meets its matching CL row exactly once. LOSSLESS.
+
+### Trade-off
+
+Per-bucket EG compute is N× heavier (full EG scan per bucket), but each per-bucket query stays well under AH's 900s timeout because the join is bounded by the CL subset size. Body fits, no 413, no escalation. AutoBucket naturally settles around N=4-8 (just enough for the body to fit), no cap needed.
+
+### Operator verification
+
+After deploying v2.2.334 + clearing the cache, the 8 cross-domain reports should now:
+- Not hit the 256-cap (cap is opt-in v2.2.330 scaffolding, off by default — kept for now as belt-and-braces)
+- Produce log lines like `[hybrid] cross-domain let 'X' uses 'Target_AzureResourceId_Guid' (not in EG bucket coalesce list) -- suppressing EG-side bucket filter so per-bucket joins stay lossless.`
+- Return rows in the xlsx export — same count as a tenant running the report against an AH endpoint with infinite body capacity
+
+### Scaffolding deletion (next release)
+
+v2.2.330's `$global:AutoBucketReportCap` is no longer load-bearing — v2.2.334 fixes the root cause so escalation naturally converges. Will delete the knob + dev custom override in v2.2.335 after the operator has verified the simulation run completes cleanly without it.
 
 ---
 

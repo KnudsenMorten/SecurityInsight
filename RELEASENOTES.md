@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.320
+## v2.2.321
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
 - release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
 - release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
 - release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
@@ -33,13 +34,62 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.295 - mirror Microsoft ASM filtering (exploit-grade creds + authoritative target tier) (aaf43fda)
 - release: SecurityInsight v2.2.294 - Attack_Paths_Detailed_Device pre-aggregate at each hop (a2d78c90)
 - release: SecurityInsight v2.2.293 - Attack_Paths_Detailed_Device YAML: bucket on Device, not CVE (f8ae6f51)
-- release: SecurityInsight v2.2.292 - fix TimeGenerated -> Timestamp on AH-table filters in Device_Recommendations_* (82d3c58c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.321 — Canonical 6-line "ingest target" block on every run, every engine (PublicIP + profile engines + RA Summary/Detailed); consolidated into single `Write-SIIngestTarget` helper
+
+### Operator asks (in order)
+
+1. v2.2.320: "give me 5-6 lines with info where it is sent to" → added unconditional context block to PublicIP scanner only.
+2. v2.2.321: "is this also enabled for the other profilers + ra engine" + "i need this info at all runs" → extend to every engine.
+3. v2.2.321: "why is this not consolidated" → kill the copy-paste; single shared helper.
+
+### Fix
+
+New shared helper `Write-SIIngestTarget` in `engine/asset-profiling/_shared/Write-SIStyle.ps1`:
+
+```powershell
+function Write-SIIngestTarget {
+    param([Parameter(Mandatory)][string]$DcrName, [Parameter(Mandatory)][string]$TableName, [string]$Logger = 'Write-SIInfo')
+    # emits 6 lines: Subscription / Workspace+RG / DCE+RG / DCR+RG / Table / SPN AppId
+}
+```
+
+Caller passes the per-engine `DcrName` + `TableName` (those vary across engines — PublicIP uses `SI_Shodan_DcrName`, RA uses `RiskAnalysis_DcrName_Summary/Detailed`, profile engines use a per-engine derived name). Everything else (sub / workspace / DCE / RG / SPN) is pulled from `$global:SI_*`.
+
+### Call sites
+
+| Engine | File | Per-run block fires |
+|---|---|---|
+| **PublicIP** (Shodan scanner) | `engine/publicip/Invoke-PublicIpScanner.ps1:670` | once before DCR provision |
+| **Profile engines** (endpoint / identity / azure) | `engine/asset-profiling/stages/Invoke-Output.ps1:534+` | once per engine output |
+| **Risk Analysis** (Summary + Detailed) | `engine/risk-analysis/Invoke-RiskAnalysis.ps1:7530+` | once per RA report rendered |
+
+RA lazy-loads the helper (it doesn't dot-source asset-profiling shared at startup); guarded with `Get-Command` so the call is a no-op if the file moves.
+
+### Output (every run, every engine)
+
+```
+[INFO]   ingest -> Subscription : <sub-id>
+[INFO]   ingest -> Workspace    : <name>  (rg=<rg>)
+[INFO]   ingest -> DCE          : <name>  (rg=<rg>)
+[INFO]   ingest -> DCR          : <name>  (rg=<rg>)
+[INFO]   ingest -> Table        : <table-name>
+[INFO]   ingest -> SPN AppId    : <appid>
+```
+
+Any "wrong workspace" / "wrong DCR" / "wrong SPN" mistake is obvious *before* the API call fires. The richer failure-path block (v2.2.320) stays in place for when something actually breaks.
+
+### Why consolidation now
+
+Copy-paste at 3+ sites is exactly when the abstraction pays off. One helper, one format change next time we want a 7th line. Operator caught the duplication on the spot — credit to them.
 
 ---
 

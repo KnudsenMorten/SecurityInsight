@@ -7528,6 +7528,21 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 # infer the target table schema. Same pattern as IAC.
                 $schemaSample = @($global:final | Select-Object -First 100)
 
+                # v2.2.321 -- always print where data is being sent. Shared
+                # Write-SIIngestTarget helper from Write-SIStyle.ps1 keeps the
+                # 6-line format identical across publicip / profile / RA
+                # engines. Fires once per RA report (Summary, Detailed each).
+                # Lazy-load the helper because RA doesn't dot-source the asset-
+                # profiling _shared scripts at startup; safe no-op when it's
+                # already in scope or when the file moves.
+                if (-not (Get-Command Write-SIIngestTarget -ErrorAction SilentlyContinue)) {
+                    $__styleFile = Join-Path (Split-Path -Parent $PSScriptRoot) 'asset-profiling/_shared/Write-SIStyle.ps1'
+                    if (Test-Path -LiteralPath $__styleFile) { . $__styleFile }
+                }
+                if (Get-Command Write-SIIngestTarget -ErrorAction SilentlyContinue) {
+                    Write-SIIngestTarget -DcrName $laDcrName -TableName $laTable
+                }
+
                 # DCE collision guard (mirrors v2.2.59 in Invoke-Output.ps1). Strict
                 # name + sub + RG match; if the cache contains multiple DCEs with
                 # the same name across tenants/RGs the AzLogDcrIngestPS line 1575

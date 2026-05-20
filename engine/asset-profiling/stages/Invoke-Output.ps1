@@ -536,6 +536,10 @@ function Write-SIClassificationToLogAnalytics {
             $_ | Add-Member -MemberType NoteProperty -Name CollectionTime -Value $RunContext.CollectionTime -Force -PassThru
         })
 
+        # v2.2.321 -- always print where data is being sent. Shared helper so
+        # publicip/RA/profile engines all emit the same 6-line format.
+        Write-SIIngestTarget -DcrName $dcrName -TableName $tableName
+
         # Step 3: provision/update DCR + LA table.
         # v2.2.258 -- AzLogDcrIngestPS v1.6.3 BUG WORKAROUND for cert auth.
         # CheckCreateUpdate-TableDcr-Structure has this gate at line 910:

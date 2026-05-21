@@ -39,7 +39,12 @@ function Start-SILauncherTranscript {
         [Parameter(Mandatory)][string]$Engine,
         [Parameter(Mandatory)][ValidateSet('community-vm','internal-vm','container')][string]$Flavour,
         [Parameter()][string]$RepoRoot,
-        [Parameter()][int]$RetentionDays = $(if ($global:SI_LogRetentionDays) { [int]$global:SI_LogRetentionDays } else { 30 })
+        [Parameter()][int]$RetentionDays = $(if ($global:SI_LogRetentionDays) { [int]$global:SI_LogRetentionDays } else { 30 }),
+        # v2.2.341 -- when set, slot in between <flavour> and <utcStamp> so the
+        # filename tells the operator at a glance which template + which simulation
+        # mode produced the log. Both sanitized to [A-Za-z0-9]+ for safety.
+        [Parameter()][string]$Template,
+        [Parameter()][string]$Simulation
     )
 
     if ($global:SI_DisableTranscript) { return $null }
@@ -94,7 +99,20 @@ function Start-SILauncherTranscript {
     }
 
     $stamp   = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
-    $logPath = Join-Path $logsDir ("{0}_{1}_{2}.log" -f $Engine, $Flavour, $stamp)
+    # v2.2.341 -- optional Simulation + Template slots. Sanitize to [A-Za-z0-9]+
+    # so filenames stay portable. Order: <engine>_<flavour>[_<simulation>][_<template>]_<stamp>.log
+    $segments = New-Object System.Collections.Generic.List[string]
+    [void]$segments.Add($Engine); [void]$segments.Add($Flavour)
+    if (-not [string]::IsNullOrWhiteSpace($Simulation)) {
+        $simSafe = [regex]::Replace($Simulation, '[^A-Za-z0-9]', '')
+        if ($simSafe) { [void]$segments.Add($simSafe) }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Template)) {
+        $tplSafe = [regex]::Replace($Template, '[^A-Za-z0-9]', '')
+        if ($tplSafe) { [void]$segments.Add($tplSafe) }
+    }
+    [void]$segments.Add($stamp)
+    $logPath = Join-Path $logsDir (($segments -join '_') + '.log')
 
     # Defensive: stop any prior transcript silently.
     try { Stop-Transcript -ErrorAction SilentlyContinue | Out-Null } catch { }

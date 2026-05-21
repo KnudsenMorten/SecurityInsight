@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.340
+## v2.2.341
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.341 - log file name now embeds simulation mode + report template (e.g. risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log) for instant test-run triage (f54a22c9)
 - release: SecurityInsight v2.2.340 - slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11/12 in v2.2.339) (e3edbc4e)
 - release: SecurityInsight v2.2.339 - expand AssetSimulationComplexSummary to include Azure_Recommendations_Summary; expand AssetSimulationComplexDetailed to include Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed (668df5e4)
 - release: SecurityInsight v2.2.338 - new launcher CLI knob -RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N; new AssetSimulationComplex{Summary,Detailed} Locked templates listing 10 cross-domain reports that exercise source/target bucketing; hardcoded SI_SimulateCLRowCount removed from custom.ps1 (2e01de15)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs: SecurityInsight - update README + Container-Deploy-Guide for v2.2.314 OAuth-only + KPI parity + Subscription-in-MoreDetails (c420305c)
 - release: SecurityInsight v2.2.314 - OAuth-only storage enforcement; Subscription Id+Name in MoreDetails for Azure rows; canonical asset-weighted KPI (Summary == Detailed) (94386a13)
 - release: SecurityInsight v2.2.313 - community-vm launchers stop calling Resolve-RepoRoot; use 2-up convention so flat installs Just Work (8275fd41)
-- release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.341 — Log file name now embeds the simulation mode + report template — e.g. `risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log` — so operators (and the engineer correlating multiple test runs) can tell at a glance which knob produced which log
+
+### Why
+
+When iterating on the source/target bucketing fix this morning, distinguishing "the v2.2.336 full Locked Summary log" from "the v2.2.337 ComplexSummary stress test log" meant opening each file and reading the header. The flat `risk-analysis_internal-vm_<utc>.log` shape doesn't survive 10 test runs in one morning. Encoding the template + simulation mode in the filename makes log triage instant.
+
+### Filename shape
+
+```
+<engine>_<flavour>[_<Simulation>][_<Template>]_<utcStamp>.log
+```
+
+Examples:
+
+| Invocation | Log name |
+|---|---|
+| `launcher.internal-vm.ps1` (defaults) | `risk-analysis_internal-vm_RiskAnalysisSummary_20260521T101530Z.log` |
+| `launcher.internal-vm.ps1 -ReportTemplate AssetSimulationComplexDetailed` | `risk-analysis_internal-vm_AssetSimulationComplexDetailed_20260521T101530Z.log` |
+| `launcher.internal-vm.ps1 -RunAssetSimulation ComplexSummary -AssetSimulationAmount 500000` | `risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log` |
+
+Both segments are sanitized to `[A-Za-z0-9]+` (so `RiskAnalysis_Summary` becomes `RiskAnalysisSummary`) so filenames stay portable across filesystems.
+
+### Changes
+
+- `launcher/_lib/Start-LauncherTranscript.ps1`: new optional `-Template` + `-Simulation` parameters; filename built from sanitized segments joined with `_`.
+- `launcher/risk-analysis/launcher.internal-vm.ps1` + `launcher.community-vm.ps1`: compute the labels from `$PSBoundParameters` BEFORE the transcript call (the routing logic that sets `$global:ReportTemplate` runs much later in the launcher, so we mirror its decision tree once at the top).
 
 ---
 

@@ -8087,7 +8087,59 @@ if ([bool]$global:BuildSummaryByAI) {
 
     Write-Section "AI summary"
 
-    if ($null -eq $global:final -or @($global:final).Count -eq 0) {
+    # ---------------------------------------------------------------------
+    # v2.2.345 -- FIRST-WIN AI SUMMARY CACHE (24h freshness)
+    # Whichever RA run (Summary or Detailed) fires first after the cached
+    # summary's age crosses $global:SI_AISummary_MaxAgeHours (default 24)
+    # BUILDS a fresh AI summary and persists it to RiskAnalysis_Top50_Shared.json.
+    # All other RA runs within the freshness window reuse that summary verbatim.
+    #
+    # Net effects:
+    #   - Email/xlsx Top-50 + drilldown + quick-wins are IDENTICAL across all
+    #     runs within a 24h window regardless of which template (Summary/Detailed)
+    #     ran first.
+    #   - AI is called at most once per 24h, not once per run (cost saving).
+    #   - No "Summary is authority" asymmetry from v2.2.342 -- first-run wins.
+    #
+    # File payload (extends v2.2.342's shape with AISummaryText):
+    #   { GeneratedAt, SolutionVersion, CollectionTime, SourceTemplate,
+    #     TopAssets, TopFindings, AISummaryText }
+    $sharedTopNPath        = Join-Path $global:OutputDir 'RiskAnalysis_Top50_Shared.json'
+    $aiSummaryMaxAgeHours  = if ([int]$global:SI_AISummary_MaxAgeHours -gt 0) {
+        [int]$global:SI_AISummary_MaxAgeHours
+    } else { 24 }
+    $cachedSummaryUsed     = $false
+
+    if (Test-Path -LiteralPath $sharedTopNPath) {
+        try {
+            $shared = Get-Content -LiteralPath $sharedTopNPath -Raw | ConvertFrom-Json
+            if ($shared.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$shared.AISummaryText)) {
+                $sharedAge = (Get-Date) - [DateTime]::Parse($shared.GeneratedAt).ToLocalTime()
+                if ($sharedAge.TotalHours -le $aiSummaryMaxAgeHours) {
+                    $global:AI_SummaryText = [string]$shared.AISummaryText
+                    Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText
+                    Write-Info ("[AISummaryCache] reusing cached AI summary from {0:N1}h ago (template '{1}', collection {2}, max-age {3}h). AI not called this run." -f `
+                        $sharedAge.TotalHours, $shared.SourceTemplate, $shared.CollectionTime, $aiSummaryMaxAgeHours)
+                    $cachedSummaryUsed = $true
+                } else {
+                    Write-Info ("[AISummaryCache] cached AI summary is {0:N1}h old (>{1}h max via `$global:SI_AISummary_MaxAgeHours); this run will REFRESH it." -f `
+                        $sharedAge.TotalHours, $aiSummaryMaxAgeHours)
+                }
+            } else {
+                Write-Info "[AISummaryCache] no cached AI summary present in shared file; this run will build + persist a fresh one."
+            }
+        } catch {
+            Write-Warn2 ("[AISummaryCache] failed to read shared file: {0}; this run will build a fresh AI summary." -f $_.Exception.Message)
+        }
+    } else {
+        Write-Info ("[AISummaryCache] no shared file at {0}; this run will build + persist." -f $sharedTopNPath)
+    }
+    # ---------------------------------------------------------------------
+
+    if ($cachedSummaryUsed) {
+        # Skip the entire rollup + AI call block -- nothing more to do here.
+    }
+    elseif ($null -eq $global:final -or @($global:final).Count -eq 0) {
         Write-Warn2 "BuildSummaryByAI requested, but there are no final rows to summarize."
     }
     else {
@@ -8456,102 +8508,13 @@ if ([bool]$global:BuildSummaryByAI) {
                 Select-Object -First $TopFindingsN
         }
 
-        # ---------------------------------------------------------------------
-        # v2.2.342 -- CROSS-RUN TOP-50 STABILITY
-        # Summary and Detailed runs persist/read a shared Top-50 JSON so the
-        # email + xlsx top-asset and top-finding sections agree regardless of
-        # which template last ran. Summary is the AUTHORITY (its rows are the
-        # canonical finding-rollup the rest of the report is built around);
-        # Detailed reads what Summary wrote.
-        #
-        # Operator pain that drove this: manager-facing emails showed a
-        # different Top-50 each time because (a) Summary and Detailed feed
-        # different input rows to the rollup, and (b) AI temperature jitter
-        # could re-order ties. Engineers couldn't tell which list was "the
-        # one" to prioritise. Persisting an authoritative Top-50 makes both
-        # reports converge on the same list.
-        #
-        # Storage: $global:OutputDir/RiskAnalysis_Top50_Shared.json. Local
-        # file works for single-host installs (the vast majority). Multi-host
-        # / containerised installs would need to switch this to a shared blob
-        # (planned v2.2.343 follow-up: SI_RiskAnalysis_Top50_CL custom LA
-        # table; same DCR pattern as other SI_RiskAnalysis_* tables).
-        $sharedTopNPath = Join-Path $global:OutputDir 'RiskAnalysis_Top50_Shared.json'
-        $isSummaryRun   = ($global:ReportTemplate -notlike '*_Detailed*')
-
-        if ($isSummaryRun) {
-            try {
-                $shared = [pscustomobject]@{
-                    GeneratedAt     = (Get-Date).ToUniversalTime().ToString('o')
-                    SolutionVersion = [string]$global:RA_SolutionVersion
-                    CollectionTime  = ([datetime]$global:RA_CollectionTime).ToUniversalTime().ToString('o')
-                    SourceTemplate  = [string]$global:ReportTemplate
-                    TopAssets       = $assetRanked
-                    TopFindings     = $findingRanked
-                }
-                $shared | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path $sharedTopNPath -Encoding UTF8 -Force
-                Write-Info ("[Top50] Summary run wrote shared Top-{0} assets + {1} findings -> {2}" -f @($assetRanked).Count, @($findingRanked).Count, $sharedTopNPath)
-            } catch {
-                Write-Warn2 ("[Top50] failed to write shared Top-N file: {0}" -f $_.Exception.Message)
-            }
-        } else {
-            # Detailed run: prefer Summary's persisted Top-N over this run's own.
-            if (Test-Path -LiteralPath $sharedTopNPath) {
-                try {
-                    $shared = Get-Content -LiteralPath $sharedTopNPath -Raw | ConvertFrom-Json
-                    $sharedAge = (Get-Date) - [DateTime]::Parse($shared.GeneratedAt).ToLocalTime()
-                    $maxAgeDays = if ([int]$global:SI_Top50_MaxAgeDays -gt 0) { [int]$global:SI_Top50_MaxAgeDays } else { 7 }
-                    if ($sharedAge.TotalDays -le $maxAgeDays) {
-                        $assetRanked   = @($shared.TopAssets)
-                        $findingRanked = @($shared.TopFindings)
-                        # v2.2.343 -- ConvertFrom-Json turns hashtables into PSCustomObject and
-                        # HashSet into a flat array. Downstream code calls .GetEnumerator() on
-                        # AssetRiskScores and .Add() on AffectedAssets/Links -- both fail on the
-                        # JSON-roundtripped shapes. Re-hydrate finding rollup entries back to the
-                        # native types the prompt-build expects.
-                        foreach ($f in $findingRanked) {
-                            # AssetRiskScores: PSCustomObject -> hashtable
-                            $ars = @{}
-                            if ($f.AssetRiskScores) {
-                                foreach ($p in $f.AssetRiskScores.PSObject.Properties) {
-                                    $ars[$p.Name] = [double]$p.Value
-                                }
-                            }
-                            $f.AssetRiskScores = $ars
-                            # AffectedAssets: array -> HashSet[string]
-                            $hs = New-Object 'System.Collections.Generic.HashSet[string]'
-                            foreach ($a in @($f.AffectedAssets)) { if ($a) { [void]$hs.Add([string]$a) } }
-                            $f.AffectedAssets = $hs
-                            # Links: array -> HashSet[string]
-                            $hl = New-Object 'System.Collections.Generic.HashSet[string]'
-                            foreach ($u in @($f.Links)) { if ($u) { [void]$hl.Add([string]$u) } }
-                            $f.Links = $hl
-                        }
-                        foreach ($a in $assetRanked) {
-                            # Domains / TopItems / Links: same story
-                            $hd = New-Object 'System.Collections.Generic.HashSet[string]'
-                            foreach ($d in @($a.Domains))  { if ($d) { [void]$hd.Add([string]$d) } }
-                            $a.Domains = $hd
-                            $ti = New-Object 'System.Collections.Generic.List[string]'
-                            foreach ($t in @($a.TopItems)) { if ($t) { [void]$ti.Add([string]$t) } }
-                            $a.TopItems = $ti
-                            $hl = New-Object 'System.Collections.Generic.HashSet[string]'
-                            foreach ($u in @($a.Links)) { if ($u) { [void]$hl.Add([string]$u) } }
-                            $a.Links = $hl
-                        }
-                        Write-Info ("[Top50] Detailed run using shared Top-{0} assets + {1} findings from Summary run {2:N1}h ago (template '{3}', collection {4})." -f `
-                            @($assetRanked).Count, @($findingRanked).Count, $sharedAge.TotalHours, $shared.SourceTemplate, $shared.CollectionTime)
-                    } else {
-                        Write-Warn2 ("[Top50] shared Top-N file is {0:N1} days old (>{1} max via `$global:SI_Top50_MaxAgeDays); falling back to this run's computed Top-N." -f $sharedAge.TotalDays, $maxAgeDays)
-                    }
-                } catch {
-                    Write-Warn2 ("[Top50] failed to read shared Top-N file: {0}; using this run's computed Top-N." -f $_.Exception.Message)
-                }
-            } else {
-                Write-Info ("[Top50] no shared Top-N file at {0} (Summary hasn't run yet); Detailed using its own Top-N for this run -- next Summary run will persist." -f $sharedTopNPath)
-            }
-        }
-        # ---------------------------------------------------------------------
+        # v2.2.345 -- v2.2.342's Summary-writes / Detailed-reads Top-50 sharing
+        # block was removed here. It's superseded by the cache-first-by-age
+        # mechanism added near "Write-Section 'AI summary'" above: when the
+        # cached AI summary is still fresh, we skip this whole rollup block
+        # entirely; when it's stale, this run becomes the authoritative builder
+        # and writes the result (AI text + Top-50 inputs) to the same shared
+        # file in the post-AI-call persist step below.
 
         $findingLines2 = @()
         $rankF = 0
@@ -8790,6 +8753,28 @@ Rules:
               Write-Ok "AI summary added to Excel (Summary sheet)"
             } catch {
               Write-Warn2 ("failed to write AI summary to excel: {0}" -f $_.Exception.Message)
+            }
+
+            # v2.2.345 -- PERSIST the AI summary + Top-50 inputs to the shared
+            # file so the next RA run (Summary or Detailed) within the freshness
+            # window reuses this exact text. First-writer-wins; subsequent runs
+            # skip the entire rollup + AI call until the 24h cache expires.
+            try {
+                $shared = [pscustomobject]@{
+                    GeneratedAt     = (Get-Date).ToUniversalTime().ToString('o')
+                    SolutionVersion = [string]$global:RA_SolutionVersion
+                    CollectionTime  = ([datetime]$global:RA_CollectionTime).ToUniversalTime().ToString('o')
+                    SourceTemplate  = [string]$global:ReportTemplate
+                    MaxAgeHours     = $aiSummaryMaxAgeHours
+                    TopAssets       = $assetRanked
+                    TopFindings     = $findingRanked
+                    AISummaryText   = $global:AI_SummaryText
+                }
+                $shared | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path $sharedTopNPath -Encoding UTF8 -Force
+                Write-Info ("[AISummaryCache] persisted fresh AI summary + Top-{0} assets + {1} findings -> {2} (next run within {3}h will reuse it)." -f `
+                    @($assetRanked).Count, @($findingRanked).Count, $sharedTopNPath, $aiSummaryMaxAgeHours)
+            } catch {
+                Write-Warn2 ("[AISummaryCache] failed to persist shared AI summary: {0}" -f $_.Exception.Message)
             }
 
         } catch {

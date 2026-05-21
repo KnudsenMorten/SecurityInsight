@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.344
+## v2.2.345
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
 - release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
 - release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
 - release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
 - release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
 - release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
-- release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.345 — First-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim — manager emails carry IDENTICAL conclusions regardless of which template ran first
+
+### Why
+
+v2.2.342 made the Top-50 inputs identical across Summary + Detailed runs but still called the AI on every run. Two issues remained:
+
+1. AI variance (even at temp=0, model deployments occasionally non-deterministic) could nudge the rendered prose.
+2. Wasted AI cost — calling the API for the same input every 4 hours when nothing material has changed.
+
+Operator's suggested fix: cache the AI output, not just the rollup. Whoever runs first after the cache expires builds; everyone else reuses. 24h refresh cadence matches typical manager review frequency.
+
+### How it works
+
+1. At the top of the AI summary build block, engine reads `<OutputDir>/RiskAnalysis_Top50_Shared.json`. If it contains `AISummaryText` AND `GeneratedAt` is ≤24h ago: set `$global:AI_SummaryText` from the file, write it to the xlsx, SKIP the entire rollup + AI call. Log: `[AISummaryCache] reusing cached AI summary from 4.2h ago ...`
+2. Otherwise: do the full build (compute Top-50 rollup, build prompt, call AI). After AI succeeds, persist `{GeneratedAt, SolutionVersion, CollectionTime, SourceTemplate, MaxAgeHours, TopAssets, TopFindings, AISummaryText}` to the shared file. Log: `[AISummaryCache] persisted fresh AI summary + Top-50 ...`
+
+### Behaviour matrix
+
+| Scenario | What happens |
+|---|---|
+| First RA run after 24h, regardless of template | Builds + persists fresh AI summary |
+| All subsequent runs within 24h | Reuse cached AI summary; skip AI call |
+| Detailed runs before Summary on a fresh deploy | Detailed builds + persists; next Summary reuses it |
+| Cached summary stale (>24h) | Next run rebuilds; clock restarts |
+
+### Configurable
+
+`$global:SI_AISummary_MaxAgeHours` (default 24) — set this in customer custom config to tune the refresh cadence (12 = twice daily, 168 = weekly, etc.).
+
+### Removed scaffolding
+
+v2.2.342's Summary-writes / Detailed-reads asymmetric block is gone; the cache-first-by-age check above subsumes it. v2.2.343's JSON re-hydration code is also gone — the cached summary is a markdown string, no collection types to rehydrate.
+
+### Known limitation (planned follow-up)
+
+File is local to the host. Multi-host / containerised installs need the shared file in the sistaging blob — planned v2.2.346: also upload to `<sistaging>/risk-analysis/RiskAnalysis_Top50_Shared.json` via `StagingBlob.ps1` so cross-host runs see the same cache. Single-host VMs unaffected.
 
 ---
 

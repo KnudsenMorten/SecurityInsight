@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.339
+## v2.2.340
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.340 - slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11/12 in v2.2.339) (e3edbc4e)
 - release: SecurityInsight v2.2.339 - expand AssetSimulationComplexSummary to include Azure_Recommendations_Summary; expand AssetSimulationComplexDetailed to include Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed (668df5e4)
 - release: SecurityInsight v2.2.338 - new launcher CLI knob -RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N; new AssetSimulationComplex{Summary,Detailed} Locked templates listing 10 cross-domain reports that exercise source/target bucketing; hardcoded SI_SimulateCLRowCount removed from custom.ps1 (2e01de15)
 - release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
@@ -33,13 +34,25 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.314 - OAuth-only storage enforcement; Subscription Id+Name in MoreDetails for Azure rows; canonical asset-weighted KPI (Summary == Detailed) (94386a13)
 - release: SecurityInsight v2.2.313 - community-vm launchers stop calling Resolve-RepoRoot; use 2-up convention so flat installs Just Work (8275fd41)
 - release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
-- release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.340 — Slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11 / 12 in v2.2.339)
+
+Operator wanted a leaner set so the simulation test finishes in ~5-10 min instead of ~15. The 7 reports together cover every bucketing path:
+
+- **Endpoint single-let** (EpJoinKey alignment): `Device_Missing_CVEs`, `Device_Recommendations`
+- **Azure single-let** (CL bucket-key without EG alignment, kept in EG cross-domain path): `Azure_Recommendations`
+- **Multi-let cross-domain** (`_SourceCmdb` + `_TargetCmdb`): `Attack_Paths_*_Identity_Group_Membership_to_Privileged_Resources`, `*_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`, `*_Credential_Based_Lateral_Movement`
+- **Cross-domain Identity** (`_IdentityCmdb` with `_si_PrimaryEntityId`): `Identity_Admin_LogonTo_VulnerableDevice`
+
+Summary and Detailed templates mirror each other (same 7 reports, just the Summary/Detailed sibling).
 
 ---
 

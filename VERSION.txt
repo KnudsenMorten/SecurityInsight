@@ -1,1 +1,1 @@
-SecurityInsight-v2.2.339
+SecurityInsight-v2.2.340

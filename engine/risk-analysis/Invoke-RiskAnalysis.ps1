@@ -8187,6 +8187,14 @@ if ([bool]$global:BuildSummaryByAI) {
     } else { 24 }
     $cachedSummaryUsed     = $false
 
+    # v2.2.350 -- if the cached file ALSO carries the Risk Score KPI (GlobalScore,
+    # DomainScore, SevByDomain, Band), capture it here. The KPI compute block at
+    # the bottom of the engine will REPLACE the live-computed scores with these
+    # cached values so the Summary + Detailed emails show the IDENTICAL overall
+    # "63/100" number within the 24h freshness window. Customer ask: "the actual
+    # score must be the same between summary and detailed".
+    $script:_CachedRAKPI = $null
+
     $cached = Get-RATop50CachedFile
     if ($cached) {
         $shared = $cached.Data
@@ -8198,6 +8206,10 @@ if ([bool]$global:BuildSummaryByAI) {
                 Write-Info ("[AISummaryCache] reusing cached AI summary from {0:N1}h ago (source={1}, template '{2}', collection {3}, max-age {4}h). AI not called this run." -f `
                     $sharedAge.TotalHours, $cached.Source, $shared.SourceTemplate, $shared.CollectionTime, $aiSummaryMaxAgeHours)
                 $cachedSummaryUsed = $true
+                # v2.2.350 -- capture cached KPI for downstream override.
+                if ($shared.PSObject.Properties['GlobalScore'] -and $null -ne $shared.GlobalScore) {
+                    $script:_CachedRAKPI = $shared
+                }
             } else {
                 Write-Info ("[AISummaryCache] cached AI summary is {0:N1}h old (source={1}, >{2}h max via `$global:SI_AISummary_MaxAgeHours); this run will REFRESH it." -f `
                     $sharedAge.TotalHours, $cached.Source, $aiSummaryMaxAgeHours)
@@ -8837,20 +8849,56 @@ Rules:
             # to the sistaging blob too when $global:SI_StorageAccount is set,
             # so multi-host / containerised installs share the cache.
             try {
-                $shared = [pscustomobject]@{
-                    GeneratedAt     = (Get-Date).ToUniversalTime().ToString('o')
-                    SolutionVersion = [string]$global:RA_SolutionVersion
-                    CollectionTime  = ([datetime]$global:RA_CollectionTime).ToUniversalTime().ToString('o')
-                    SourceTemplate  = [string]$global:ReportTemplate
-                    MaxAgeHours     = $aiSummaryMaxAgeHours
-                    TopAssets       = $assetRanked
-                    TopFindings     = $findingRanked
-                    AISummaryText   = $global:AI_SummaryText
+                # v2.2.350 -- FIRST-WRITER-WINS race guard. Concurrent Summary +
+                # Detailed runs both start with empty cache, both compute AI fresh.
+                # Re-check the cache RIGHT BEFORE write: if a peer already wrote
+                # within the freshness window, SKIP the write (and skip the KPI
+                # update too -- peer's KPI also wins). Matches the same semantics
+                # the user wants for the Risk Score KPI.
+                $existing = Get-RATop50CachedFile
+                $skipWrite = $false
+                if ($existing -and $existing.Data -and $existing.Data.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$existing.Data.AISummaryText)) {
+                    try {
+                        $existingAge = (Get-Date) - [DateTime]::Parse($existing.Data.GeneratedAt).ToLocalTime()
+                        if ($existingAge.TotalHours -le $aiSummaryMaxAgeHours) {
+                            $skipWrite = $true
+                            Write-Info ("[AISummaryCache] race detected: peer run wrote cache {0:N1}h ago (template '{1}', source={2}). NOT overwriting -- first-writer-wins. This run's email will be regenerated to use peer's AI text + KPI." -f `
+                                $existingAge.TotalHours, $existing.Data.SourceTemplate, $existing.Source)
+                            # Adopt the peer's AI text + flag KPI override so the
+                            # downstream KPI block + email use the cached values.
+                            $global:AI_SummaryText = [string]$existing.Data.AISummaryText
+                            try { Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText } catch {}
+                            if ($existing.Data.PSObject.Properties['GlobalScore'] -and $null -ne $existing.Data.GlobalScore) {
+                                $script:_CachedRAKPI = $existing.Data
+                            }
+                            $script:_RACacheNeedsKPIUpdate = $false
+                        }
+                    } catch {}
                 }
-                $jsonContent = $shared | ConvertTo-Json -Depth 12 -Compress
-                Save-RATop50CachedFile -JsonContent $jsonContent
-                Write-Info ("[AISummaryCache] persisted fresh AI summary + Top-{0} assets + {1} findings -> {2} (next run within {3}h will reuse it)." -f `
-                    @($assetRanked).Count, @($findingRanked).Count, $script:_RATop50Local, $aiSummaryMaxAgeHours)
+                if (-not $skipWrite) {
+                    $shared = [pscustomobject]@{
+                        GeneratedAt     = (Get-Date).ToUniversalTime().ToString('o')
+                        SolutionVersion = [string]$global:RA_SolutionVersion
+                        CollectionTime  = ([datetime]$global:RA_CollectionTime).ToUniversalTime().ToString('o')
+                        SourceTemplate  = [string]$global:ReportTemplate
+                        MaxAgeHours     = $aiSummaryMaxAgeHours
+                        TopAssets       = $assetRanked
+                        TopFindings     = $findingRanked
+                        AISummaryText   = $global:AI_SummaryText
+                        # KPI fields populated by the post-KPI-compute updater.
+                        GlobalScore     = $null
+                        Band            = $null
+                        RiskLevel       = $null
+                        DomainScore     = $null
+                        SevByDomain     = $null
+                    }
+                    $jsonContent = $shared | ConvertTo-Json -Depth 12 -Compress
+                    Save-RATop50CachedFile -JsonContent $jsonContent
+                    # Flag the post-KPI updater to fire when $global:RA_KPI is ready.
+                    $script:_RACacheNeedsKPIUpdate = $true
+                    Write-Info ("[AISummaryCache] persisted fresh AI summary + Top-{0} assets + {1} findings -> {2} (next run within {3}h will reuse it)." -f `
+                        @($assetRanked).Count, @($findingRanked).Count, $script:_RATop50Local, $aiSummaryMaxAgeHours)
+                }
             } catch {
                 Write-Warn2 ("[AISummaryCache] failed to persist shared AI summary: {0}" -f $_.Exception.Message)
             }
@@ -9027,6 +9075,92 @@ try {
     Write-Info ("[SCORE] Global={0} ({1}) Endpoint={2} Identity={3} Azure={4} PublicIP={5} | Sev: C={6} H={7} M={8} L={9} | Rows={10} | Direction: HIGHER = BETTER (Microsoft-inspired)" -f `
         $globalScore, $band, $domainScore['Endpoint'], $domainScore['Identity'], $domainScore['Azure'], $domainScore['PublicIP'], `
         $sevCount['Critical'], $sevCount['High'], $sevCount['Medium'], $sevCount['Low'], $rows.Count)
+
+    # v2.2.350 -- FINAL re-read of the cache, late as possible. Catches the
+    # race where THIS run started with empty cache + computed live, but a
+    # concurrent peer wrote during our run. The peer's KPI now wins for our
+    # email too -- both Summary and Detailed emails show the IDENTICAL
+    # headline score regardless of order/timing.
+    if (-not $script:_CachedRAKPI -or $null -eq $script:_CachedRAKPI.GlobalScore) {
+        try {
+            $finalCheck = Get-RATop50CachedFile
+            if ($finalCheck -and $finalCheck.Data -and $finalCheck.Data.PSObject.Properties['GlobalScore'] -and $null -ne $finalCheck.Data.GlobalScore) {
+                try {
+                    $finalAge = (Get-Date) - [DateTime]::Parse($finalCheck.Data.GeneratedAt).ToLocalTime()
+                    if ($finalAge.TotalHours -le $aiSummaryMaxAgeHours -and [string]$finalCheck.Data.SourceTemplate -ne [string]$global:ReportTemplate) {
+                        $script:_CachedRAKPI = $finalCheck.Data
+                        Write-Info ("[SCORE] final-pre-email re-check: peer run wrote cached KPI {0:N1}h ago (template '{1}', source={2}). Adopting peer's KPI for this run too." -f `
+                            $finalAge.TotalHours, $finalCheck.Data.SourceTemplate, $finalCheck.Source)
+                        # Suppress our own pending KPI write -- peer already populated.
+                        $script:_RACacheNeedsKPIUpdate = $false
+                    }
+                } catch {}
+            }
+        } catch {}
+    }
+
+    # v2.2.350 -- if the AI summary cache carried a frozen KPI (either from
+    # an earlier run's 24h-fresh write OR from a concurrent peer caught by
+    # the final re-read above), OVERRIDE the just-computed scores. Per-domain
+    # Total/Critical/High/Medium/Low row COUNTS in the dashboard table can
+    # still differ (Summary aggregates, Detailed is per-row) -- that's
+    # expected -- but the headline KPI is now coherent across templates.
+    if ($script:_CachedRAKPI -and $null -ne $script:_CachedRAKPI.GlobalScore) {
+        $c = $script:_CachedRAKPI
+        $liveScore = $globalScore
+        $cachedScore = [int]$c.GlobalScore
+        # Rehydrate DomainScore / SevByDomain hashtables from the cached
+        # PSCustomObject (ConvertFrom-Json returns objects, not hashtables).
+        $cachedDomainScore = @{}
+        if ($c.DomainScore) {
+            foreach ($p in $c.DomainScore.PSObject.Properties) { $cachedDomainScore[$p.Name] = [int]$p.Value }
+        }
+        $cachedSevByDomain = @{}
+        if ($c.SevByDomain) {
+            foreach ($p in $c.SevByDomain.PSObject.Properties) {
+                $bucket = @{}
+                foreach ($sp in $p.Value.PSObject.Properties) { $bucket[$sp.Name] = [int]$sp.Value }
+                $cachedSevByDomain[$p.Name] = $bucket
+            }
+        }
+        $global:RA_KPI = [pscustomobject]@{
+            GlobalScore  = $cachedScore
+            Band         = if ($c.Band) { [string]$c.Band } else { $band }
+            RiskLevel    = if ($c.RiskLevel) { [string]$c.RiskLevel } else { $bcRiskLevel }
+            DomainScore  = if ($cachedDomainScore.Count -gt 0) { $cachedDomainScore } else { $domainScore }
+            SevCount     = $sevCount       # live -- per-row tally is run-specific anyway
+            SevByDomain  = if ($cachedSevByDomain.Count -gt 0) { $cachedSevByDomain } else { $sevByDomain }
+            TotalRows    = $rows.Count    # live -- reflects this run's data
+            Direction    = 'higher-is-better'
+        }
+        Write-Info ("[SCORE] OVERRIDE with cached values from AI summary cache: live={0} -> cached={1} (template '{2}' won the cache; ensures Summary + Detailed emails show identical headline KPI within {3}h window)." -f `
+            $liveScore, $cachedScore, $c.SourceTemplate, $aiSummaryMaxAgeHours)
+    }
+    # When THIS run produced the cached AI summary, write the just-computed KPI
+    # back into the cache file so the SECOND template (e.g. Detailed after Summary)
+    # finds the GlobalScore on its next read. Same idempotent file path.
+    elseif ($script:_RACacheNeedsKPIUpdate -and $global:RA_KPI) {
+        try {
+            $cachedNow = Get-RATop50CachedFile
+            if (-not $cachedNow -or -not $cachedNow.Data) {
+                Write-Warn2 "[AISummaryCache] cache file disappeared between AI-write and KPI-update; skipping KPI persist for this run."
+            } else {
+                $shared = $cachedNow.Data
+                $shared | Add-Member -NotePropertyName GlobalScore -NotePropertyValue ([int]$global:RA_KPI.GlobalScore)   -Force
+                $shared | Add-Member -NotePropertyName Band        -NotePropertyValue ([string]$global:RA_KPI.Band)        -Force
+                $shared | Add-Member -NotePropertyName RiskLevel   -NotePropertyValue ([string]$global:RA_KPI.RiskLevel)   -Force
+                $shared | Add-Member -NotePropertyName DomainScore -NotePropertyValue $global:RA_KPI.DomainScore           -Force
+                $shared | Add-Member -NotePropertyName SevByDomain -NotePropertyValue $global:RA_KPI.SevByDomain           -Force
+                $jsonContent = $shared | ConvertTo-Json -Depth 12 -Compress
+                Save-RATop50CachedFile -JsonContent $jsonContent
+                Write-Info ("[AISummaryCache] persisted fresh Risk Score KPI (GlobalScore={0}, Band='{1}') to shared cache; next RA run (Summary or Detailed) within {2}h will reuse this score." -f `
+                    $global:RA_KPI.GlobalScore, $global:RA_KPI.Band, $aiSummaryMaxAgeHours)
+                $script:_RACacheNeedsKPIUpdate = $false
+            }
+        } catch {
+            Write-Warn2 ("[AISummaryCache] failed to persist Risk Score KPI to shared cache: {0} (live KPI still shown in this run's email)." -f $_.Exception.Message)
+        }
+    }
 } catch {
     Write-Warn2 ("KPI rollup failed: {0} (continuing -- mail will degrade gracefully)" -f $_.Exception.Message)
 }

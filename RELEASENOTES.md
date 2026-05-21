@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.349
+## v2.2.350
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
 - release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
 - release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
 - release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
@@ -33,13 +34,54 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
 - release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
 - release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
-- release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.350 — Risk Score KPI now cached alongside the AI summary so Summary + Detailed RA emails show the IDENTICAL headline "63/100" GlobalScore within the 24h freshness window.
+
+### Why
+
+v2.2.345/346 made the AI summary text identical across Summary and Detailed RA emails (whichever template runs first within 24h builds; later runs reuse). But the headline Risk Score KPI ("63/100" big number + Band like "Moderate") was still computed live per run from the underlying row set. Summary and Detailed templates can contain DIFFERENT reports, so their underlying row sets differ -> different per-row weighted average -> different GlobalScore. Customer ask: "the actual score must be the same between summary and detailed (red arrow). per-domain Critical/High/Medium/Low row counts can differ, but the overall score cannot."
+
+### How
+
+The KPI is now part of the same shared cache that already carries the Top-50 assets/findings + AI text:
+
+1. **Write path** -- when a run actually fires AI (cache was stale or empty), it writes the just-computed `GlobalScore` / `Band` / `RiskLevel` / `DomainScore` / `SevByDomain` into the cache file after the KPI rollup runs. Goes through `Save-RATop50CachedFile` (local + blob mirror, same as v2.2.346).
+2. **Read path** -- on subsequent runs, the cache-hit branch captures the cached KPI into `$script:_CachedRAKPI`. After the live KPI compute runs at the bottom of the engine, the live `$global:RA_KPI` is REPLACED with the cached values. Email template then renders the cached "63/100".
+3. **First-writer-wins** -- same semantics as the AI text. Whichever template fires first after the cache crosses `$global:SI_AISummary_MaxAgeHours` (default 24h) freezes the score for the next 24h regardless of any data drift during that window. Acceptable trade-off because the AI commentary is already frozen for the same period.
+
+### What stays live
+
+- **Per-domain row counts** in the domain x severity table (Endpoint Total/Critical/High/Medium/Low) -- Summary aggregates configurations so its counts are LOWER than Detailed's per-finding counts. That's by design, not the user's complaint.
+- **`SevCount` + `TotalRows`** on `$global:RA_KPI` -- these reflect THIS run's row set, used for in-run diagnostics.
+
+### Operator log
+
+Cache hit:
+
+```
+[SCORE] Global=58 (Moderate) Endpoint=51 Identity=64 Azure=62 PublicIP=55 | Sev: ... | Rows=2103 | Direction: HIGHER = BETTER
+[SCORE] OVERRIDE with cached values from AI summary cache: live=58 -> cached=63 (template 'RiskAnalysis_Detailed' won the cache; ensures Summary + Detailed emails show identical headline KPI within 24h window).
+```
+
+First write after cache expiry:
+
+```
+[AISummaryCache] persisted fresh Risk Score KPI (GlobalScore=63, Band='Moderate') to shared cache; next RA run (Summary or Detailed) within 24h will reuse this score.
+```
+
+### Customer impact
+
+- `$global:SI_AISummary_MaxAgeHours` controls both AI text AND KPI freshness (same knob, default 24).
+- Existing cache files from v2.2.345-349 lack the KPI fields -> first run after upgrade falls through to live KPI compute, writes back to cache, next run reuses it. No manual migration needed.
+- `$global:RA_KPI` shape unchanged -- email templates + Power BI export consume it the same way.
 
 ---
 

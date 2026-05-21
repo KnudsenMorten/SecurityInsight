@@ -312,7 +312,8 @@ $global:SI_StorageKey     = '<storage-account-primary-key-base64>'
 # ============================================================================
 # 7.  ENGINE: PUBLICIP  --  public-IP scanner (Shodan REST integration)
 # ============================================================================
-# Read by: launcher/publicip/* + engine/publicip/Invoke-PublicIpScanner.ps1
+# Read by: launcher/publicip/* + engine/asset-profiling/Invoke-SIEngineRun.ps1 -Engine publicip
+# (v2.2.348: publicip folded into the shared pipeline -- same engine entry as endpoint/identity/azure.)
 
 # $global:SI_AssetLimit_PublicIp = 0
 # $global:SI_ForceFullRun_PublicIp = $true

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.347
+## v2.2.348
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
 - release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
 - release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
 - release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
 - release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
 - release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
-- release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.348 — PublicIP engine folded into the shared asset-profiling pipeline. Standalone `Invoke-PublicIpScanner.ps1` retired; all three flavours (internal-vm, community-vm, container) now call `Invoke-SIEngineRun.ps1 -Engine publicip` through the same 9-stage orchestrator as endpoint / identity / azure.
+
+### Why
+
+The PublicIP engine was a 951-line standalone monolith with its own auth / module-loading / logging / DCR ingest. That divergence caused real bugs:
+
+- Ingest-target diagnostic showed `<unset>` for Subscription / WorkspaceRG / DceRG / DcrRG (PingAutomateIT case): the standalone scanner had no prestage to backfill those globals from `$global:SI_WorkspaceResourceId`.
+- `TerminatingError(Invoke-WebRequest)` flood around DCR provisioning: standalone had no `Invoke-SIQuietBlock` wrapper to suppress AzLogDcrIngestPS' VERBOSE storm.
+- DCE collision guard only fired when Subscription + DceRG were set — both unset in PingAutomateIT, so the LinkedAuthorizationFailed "Array" bug surfaced.
+- No cmdb / Tier / server-only / fresh-scan logic ever made it into the pipeline branch (`Get-DiscoveryFromShodan.ps1` only knew ARG + EG + extras), so the container flavour was already silently missing those filters.
+
+Folding into `Invoke-SIEngineRun.ps1` inherits prestage (auto-derive Subscription/RG from `SI_WorkspaceResourceId`), `Invoke-SIQuietBlock`, shared DCE collision guard, schema-driven row builder, shared RunHealth heartbeat — and stops the drift.
+
+### What changed
+
+1. **`engine/asset-profiling/discovery/Get-DiscoveryFromShodan.ps1`** — added Profile_CL as the 4th discovery source (Tier ≤ N + server-only filter + cmdb passthrough, KQL ported from legacy `Get-PublicIpsFromProfileTables`). Ported the fresh-scan submit/wait/defer state machine (`Submit-/Get-/Wait-/Save-/Load-/Clear-SIShodan*` + `Invoke-SIShodanFreshScanFlow`). Added 1100ms throttle between live `/host` calls.
+2. **`engine/asset-profiling/shared/Build-PublicIpProfileRow.ps1`** — emits legacy-compat alias columns so RA YAML queries against `SI_VulnerabilityPIP_CL` keep working unchanged: `HasShodanRecord` (=`InShodan`), `AssetTier` (=`Tier` as string), `AssetEngine` (from discovery row), `Org` (=`OrgName`), `ISP` (=`Isp`), `LastShodanUpdate` (=`ShodanLastSeen`). CMDB readback now falls back through `Metadata` for the publicip engine, which doesn't go through Stage Reconcile.
+3. **`engine/asset-profiling/_shared/Write-SIStyle.ps1`** — `Write-SIIngestTarget` now derives Subscription / WorkspaceRG / WorkspaceName from `$global:SI_WorkspaceResourceId` when those globals are unset, and falls DcrRG → DceRG when DceRG is unset. Fixes the `<unset>` diagnostic across every engine that uses this helper (not just publicip).
+4. **`launcher/publicip/launcher.internal-vm.ps1` + `launcher.community-vm.ps1`** — flip the engine invocation from `engine\publicip\Invoke-PublicIpScanner.ps1` to `engine\asset-profiling\Invoke-SIEngineRun.ps1 -Engine publicip -Sinks ... @cliPassthrough`. Container (`container/Start-SIInContainer.ps1`) already invoked the new pipeline, so no container change needed.
+5. **`launcher/publicip/LauncherConfig.defaults.ps1`** — exposes the new knobs: `$global:SI_PublicIP_DiscoverySource` (default `'profile-cl'` for legacy parity; alternatives `'arg-eg'` / `'union'`), `SI_Shodan_TierMax` (default 3), `SI_Shodan_ServerOnly` (default $true), `SI_Shodan_LookbackDays` (8), `SI_Shodan_ThrottleMs` (1100), `SI_Shodan_TimeoutSec` (15), and the fresh-scan triplet (`SI_Shodan_ForceFreshScan` default $false, `SI_Shodan_ScanWaitMaxSec` 300, `SI_Shodan_ScanPollIntervalSec` 30, `SI_Shodan_FreshScanIntervalHours` 20).
+6. **Deleted** `engine/publicip/Invoke-PublicIpScanner.ps1` and `engine/publicip/_shared/Ensure-Module.ps1`. The entire `engine/publicip/` tree is gone — publicip is now an asset-profiling engine like any other.
+
+### Customer impact
+
+- Same DCR (`dcr-si-publicip-profile`), same table (`SI_VulnerabilityPIP_CL`), same row shape (modulo the new legacy-compat aliases that add fields without removing any). RA YAML queries unchanged.
+- `LauncherConfig.custom.ps1` files that already set `$global:SI_Shodan_*` knobs continue to work — same names, same defaults.
+- Operator log line "ingest -> Subscription / Workspace / DCE / DCR" now shows real values for tenants where prior bootstrap didn't set the SI_* globals.
+- One commit; one tag pair (`SI-2.2.348` + `SecurityInsight-v2.2.348`).
 
 ---
 

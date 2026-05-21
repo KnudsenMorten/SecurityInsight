@@ -99,7 +99,7 @@ function Write-SIDone { param([Parameter(Mandatory)][string]$Message) Write-Host
 function Write-SIDiag { param([Parameter(Mandatory)][string]$Message) if ($global:SI_Verbose -or $VerbosePreference -eq 'Continue') { Write-Host (" [DIAG] {0}" -f $Message) -ForegroundColor White } }
 
 # v2.2.321 -- one canonical "where is data going" block used by every engine
-# (profile/Invoke-Output, publicip/Invoke-PublicIpScanner, RA/Invoke-RiskAnalysis,
+# (profile/Invoke-Output, publicip via Invoke-SIEngineRun, RA/Invoke-RiskAnalysis,
 # RA/Send-SIRunHealthRow, etc) so operators see the same 6-line format on every
 # ingest call. Caller passes the per-engine DcrName + TableName because those
 # vary across engines; everything else is pulled from $global:SI_*. Use
@@ -114,11 +114,32 @@ function Write-SIIngestTarget {
         [string]$Logger = 'Write-SIInfo'   # override to 'Write-SIErr' from inside a catch{} if you want red text
     )
     $_emit = if ($Logger -eq 'Write-SIErr') { 'Write-SIErr' } else { 'Write-SIInfo' }
+
+    # v2.2.348 -- last-resort derivation from $global:SI_WorkspaceResourceId when
+    # Prestage hasn't backfilled the canonical globals. Bootstrap paths that skip
+    # Prestage (PingAutomateIT-style) previously printed <unset> for Subscription/
+    # WorkspaceRG/WorkspaceName even though the ARM id was available all along.
+    $sub    = $global:SI_AzSubscriptionId
+    $wsName = $global:SI_WorkspaceName
+    $wsRg   = $global:SI_WorkspaceResourceGroup
+    if (-not $sub -or -not $wsName -or -not $wsRg) {
+        $wsId = [string]$global:SI_WorkspaceResourceId
+        if ($wsId -match '^/subscriptions/(?<sub>[^/]+)/resourceGroups/(?<rg>[^/]+)/providers/Microsoft\.OperationalInsights/workspaces/(?<name>[^/]+)$') {
+            if (-not $sub)    { $sub    = $matches.sub }
+            if (-not $wsRg)   { $wsRg   = $matches.rg }
+            if (-not $wsName) { $wsName = $matches.name }
+        }
+    }
+    # DCE RG -- if unset, default to DCR RG (typical installs put both in one RG).
+    $dceRg = $global:SI_DceResourceGroup
+    $dcrRg = $global:SI_DcrResourceGroup
+    if (-not $dceRg -and $dcrRg) { $dceRg = $dcrRg }
+
     $_or   = { param($v) if ($v) { [string]$v } else { '<unset>' } }
-    & $_emit ('  ingest -> Subscription : {0}' -f (& $_or $global:SI_AzSubscriptionId))
-    & $_emit ('  ingest -> Workspace    : {0}  (rg={1})' -f (& $_or $global:SI_WorkspaceName), (& $_or $global:SI_WorkspaceResourceGroup))
-    & $_emit ('  ingest -> DCE          : {0}  (rg={1})' -f (& $_or $global:SI_DceName),       (& $_or $global:SI_DceResourceGroup))
-    & $_emit ('  ingest -> DCR          : {0}  (rg={1})' -f (& $_or $DcrName),                 (& $_or $global:SI_DcrResourceGroup))
+    & $_emit ('  ingest -> Subscription : {0}' -f (& $_or $sub))
+    & $_emit ('  ingest -> Workspace    : {0}  (rg={1})' -f (& $_or $wsName), (& $_or $wsRg))
+    & $_emit ('  ingest -> DCE          : {0}  (rg={1})' -f (& $_or $global:SI_DceName), (& $_or $dceRg))
+    & $_emit ('  ingest -> DCR          : {0}  (rg={1})' -f (& $_or $DcrName),           (& $_or $dcrRg))
     & $_emit ('  ingest -> Table        : {0}' -f (& $_or $TableName))
     & $_emit ('  ingest -> SPN AppId    : {0}' -f (& $_or $global:SI_SPN_AppId))
 }

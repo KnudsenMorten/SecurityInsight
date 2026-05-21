@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.338
+## v2.2.339
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.339 - expand AssetSimulationComplexSummary to include Azure_Recommendations_Summary; expand AssetSimulationComplexDetailed to include Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed (668df5e4)
 - release: SecurityInsight v2.2.338 - new launcher CLI knob -RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N; new AssetSimulationComplex{Summary,Detailed} Locked templates listing 10 cross-domain reports that exercise source/target bucketing; hardcoded SI_SimulateCLRowCount removed from custom.ps1 (2e01de15)
 - release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
 - release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.313 - community-vm launchers stop calling Resolve-RepoRoot; use 2-up convention so flat installs Just Work (8275fd41)
 - release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
 - release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
-- release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.339 — Expand `AssetSimulationComplexSummary` to include `Azure_Recommendations_Summary` (single-let sanity check) and `AssetSimulationComplexDetailed` to include `Device_Missing_CVEs_Detailed` + `Device_Recommendations_Detailed`
+
+Operator ask: "include these 2 - Name: Device_Missing_CVEs_Detailed - Name: Device_Recommendations_Detailed + one azure summary in the complex".
+
+ComplexSummary is now 11 reports (was 10): the 10 cross-domain reports + `Azure_Recommendations_Summary` as a single-let CL-bucketing sanity check. ComplexDetailed is now 12 reports (was 10): the 10 cross-domain Detailed + the 2 Device_*_Detailed single-let reports.
 
 ---
 

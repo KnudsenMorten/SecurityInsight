@@ -214,7 +214,28 @@ try {
 $versionStamp = Get-PublishedVersion -RepoRoot $InstallPath
 
 Write-Banner -Solution 'SecurityInsight' -Engine 'RiskAnalysis' -Flavour 'community-vm' -Version $versionStamp
-$global:SI_TranscriptPath = Start-SILauncherTranscript -Engine 'risk-analysis' -Flavour 'community-vm' -RepoRoot $InstallPath
+
+# v2.2.341 -- compute Template + Simulation labels BEFORE transcript start so
+# the log filename carries them. See launcher.internal-vm.ps1 for full notes.
+$_logSim = ''; $_logTpl = ''
+if ($PSBoundParameters.ContainsKey('RunAssetSimulation') -and -not [string]::IsNullOrWhiteSpace([string]$RunAssetSimulation)) {
+    $_logSim = $RunAssetSimulation
+    $_logTpl = switch ($RunAssetSimulation) {
+        'FullSummary'     { 'RiskAnalysis_Summary' }
+        'FullDetailed'    { 'RiskAnalysis_Detailed' }
+        'ComplexSummary'  { 'AssetSimulationComplexSummary' }
+        'ComplexDetailed' { 'AssetSimulationComplexDetailed' }
+    }
+} elseif ($PSBoundParameters.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace($ReportTemplate)) {
+    $_logTpl = $ReportTemplate
+} elseif (-not [string]::IsNullOrWhiteSpace($ReportTemplate_Default)) {
+    $_logTpl = $ReportTemplate_Default
+} elseif ($Detailed -and -not $Summary) {
+    $_logTpl = $ReportTemplate_Default_Detailed
+} else {
+    $_logTpl = $ReportTemplate_Default_Summary
+}
+$global:SI_TranscriptPath = Start-SILauncherTranscript -Engine 'risk-analysis' -Flavour 'community-vm' -RepoRoot $InstallPath -Template $_logTpl -Simulation $_logSim
 
 if ($resolveError) {
     Write-Err2 $resolveError.Exception.Message

@@ -1243,6 +1243,24 @@ function Resolve-ProfileAugmentPlan {
         Write-Info ("[2phase] '{0}' plan: leftKey={1}, rightKey={2}, alias-cols=[{3}]" -f $varName, $leftKey, $rkey, ($aliasNames -join ','))
     }
 
+    # v2.2.344 -- VERIFY all stripped letvars are no longer referenced anywhere
+    # in the modified query. If any plan's letvar still appears (e.g., the report
+    # has a SECOND join referencing the same letvar that our regex didn't strip,
+    # or a downstream projection that uses the let), the strip is incomplete and
+    # AH will 400 with "Failed to resolve table or column expression named '_X'".
+    # Abort 2-phase entirely and let the hybrid path handle ALL let-blocks via
+    # inline datatable substitution -- which is correct because it replaces the
+    # let-block in place rather than removing it, so downstream references resolve.
+    # Triggered by Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_*
+    # which has additional `_SourceCmdb` references the augment-plan regex missed.
+    foreach ($plan in $plans) {
+        $varName = $plan.Var
+        if ($modified -match ('\b' + [regex]::Escape($varName) + '\b')) {
+            Write-Warn2 ("[2phase] '{0}' SKIPPED -- letvar still referenced after strip (incomplete: report has additional joins/projections beyond the canonical pattern). Falling back to inline-datatable hybrid path for this entire report." -f $varName)
+            return @{ Query = $Query; Plans = @() }
+        }
+    }
+
     return @{ Query = $modified; Plans = @($plans.ToArray()) }
 }
 

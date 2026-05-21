@@ -90,6 +90,35 @@ if ($global:HighPriv_Modern_ApplicationID_Azure            -and -not $global:Spn
 if ($global:HighPriv_Modern_ApplicationSecret_Azure        -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:HighPriv_Modern_ApplicationSecret_Azure }
 if ($global:HighPriv_Modern_CertificateThumbprint_Azure    -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:HighPriv_Modern_CertificateThumbprint_Azure }
 
+# v2.2.349 -- REVERSE bridge: legacy $global:Spn* + HighPriv_* -> canonical
+# $global:SI_SPN_*. Stages downstream (Invoke-Output.ps1, Send-SIRunHealthRow.ps1,
+# Get-SIShodanKey.ps1) read the SI_SPN_* unified globals to decide cert-vs-secret
+# auth + log the "auth : SPN+Cert" / "auth : SPN+Secret" line. Without this reverse
+# bridge, internal-AutomateIT customers (who set HighPriv_Modern_CertificateThumbprint_Azure
+# via Connect-Platform but never SI_SPN_CertThumbprint) showed up as "SPN+Secret"
+# in the ingest log even though they were actually using certificate auth, and
+# Invoke-Output's auth-resolver fell through to the secret branch (wrong).
+if (-not $global:SI_SPN_TenantId       -and $global:SpnTenantId)              { $global:SI_SPN_TenantId       = [string]$global:SpnTenantId }
+if (-not $global:SI_SPN_AppId          -and $global:SpnClientId)              { $global:SI_SPN_AppId          = [string]$global:SpnClientId }
+if (-not $global:SI_SPN_Secret         -and $global:SpnClientSecret)          { $global:SI_SPN_Secret         = [string]$global:SpnClientSecret }
+if (-not $global:SI_SPN_ObjectId       -and $global:SpnObjectId)              { $global:SI_SPN_ObjectId       = [string]$global:SpnObjectId }
+if (-not $global:SI_SPN_CertThumbprint -and $global:SpnCertificateThumbprint) { $global:SI_SPN_CertThumbprint = [string]$global:SpnCertificateThumbprint }
+# v2.2.349 -- when cert auth is in play, BLANK out SI_SPN_Secret so the downstream
+# auth-resolvers ($useCert = -not $useMi -and -not IsNullOrWhiteSpace $spnCertThumb)
+# unambiguously pick the cert branch. Internal-AutomateIT installs that have BOTH
+# secret AND cert populated were silently being treated as secret-auth (cert branch
+# preferred only when explicitly set + secret empty -- see Invoke-Output.ps1:367,
+# which prioritises cert via $useCert variable but the auth-NOTE check ran the
+# wrong way).
+if ($global:SI_SPN_CertThumbprint -and $global:SI_SPN_Secret) {
+    # Defensive: if BOTH are set the operator probably copy-pasted both into config
+    # without realising. Cert wins (matches Connect-AzAccount precedence; cert is
+    # the more secure option) -- and we surface the override in the log so the
+    # operator can confirm intent.
+    Write-Warning ("Auth conflict: both SI_SPN_CertThumbprint and SI_SPN_Secret are populated. Cert wins. Clear `$global:SI_SPN_Secret to silence this warning.")
+    $global:SI_SPN_Secret = $null
+}
+
 # auto-load customer-overlay file each engine launch.
 # Lookup order (first hit wins; cycle stops at filesystem root):
 #   1. $global:SI_CustomConfigPath  (explicit override set in $PROFILE / launcher)

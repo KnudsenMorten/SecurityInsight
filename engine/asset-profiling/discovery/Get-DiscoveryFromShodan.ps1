@@ -421,21 +421,32 @@ ExposureGraphNodes
         try {
             $body = Get-Content -LiteralPath $customSchema -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($body.PSObject.Properties['extraIPs'] -and $body.extraIPs.PSObject.Properties['entries']) {
+                # Case-insensitive scalar getter (PS 5.1 doesn't allow `if` as expression
+                # inside [string]() cast -- parses 'if' as a command name -- so use a
+                # helper that returns the value explicitly and cast outside.
+                $_get = {
+                    param($Entry, [string]$Key)
+                    if ($null -eq $Entry) { return $null }
+                    foreach ($p in $Entry.PSObject.Properties) {
+                        if ([string]::Equals($p.Name, $Key, [System.StringComparison]::OrdinalIgnoreCase)) { return $p.Value }
+                    }
+                    return $null
+                }
                 foreach ($e in @($body.extraIPs.entries)) {
                     if (-not $e) { continue }
-                    $ipRaw = if ($e.PSObject.Properties['ipAddress'] -or $e.PSObject.Properties['IpAddress']) {
-                        if ($e.PSObject.Properties['IpAddress']) { [string]$e.IpAddress } else { [string]$e.ipAddress }
-                    } else { '' }
+                    $ipRaw = [string](& $_get $e 'ipAddress')
                     if ([string]::IsNullOrWhiteSpace($ipRaw)) { continue }
                     $ipKey = $ipRaw.ToLowerInvariant()
                     $extraIps[$ipKey] = $true
+                    $_tierRaw = & $_get $e 'tier'
+                    $_tier    = if ($null -ne $_tierRaw -and -not [string]::IsNullOrWhiteSpace([string]$_tierRaw)) { [int]$_tierRaw } else { 99 }
                     $extraEnriched[$ipKey] = [pscustomobject]@{
-                        AssetName           = ([string](if ($e.PSObject.Properties['assetName']) { $e.assetName } else { '' }))
-                        AssetTier           = if ($e.PSObject.Properties['tier'] -and $null -ne $e.tier) { [int]$e.tier } else { 99 }
-                        cmdbId              = ([string](if ($e.PSObject.Properties['cmdbId']) { $e.cmdbId } else { '' }))
-                        cmdbName            = ([string](if ($e.PSObject.Properties['cmdbName']) { $e.cmdbName } else { '' }))
-                        cmdbCriticality     = ([string](if ($e.PSObject.Properties['cmdbCriticality']) { $e.cmdbCriticality } else { '' }))
-                        cmdbDataSensitivity = ([string](if ($e.PSObject.Properties['cmdbDataSensitivity']) { $e.cmdbDataSensitivity } else { '' }))
+                        AssetName           = [string](& $_get $e 'assetName')
+                        AssetTier           = $_tier
+                        cmdbId              = [string](& $_get $e 'cmdbId')
+                        cmdbName            = [string](& $_get $e 'cmdbName')
+                        cmdbCriticality     = [string](& $_get $e 'cmdbCriticality')
+                        cmdbDataSensitivity = [string](& $_get $e 'cmdbDataSensitivity')
                     }
                 }
             }

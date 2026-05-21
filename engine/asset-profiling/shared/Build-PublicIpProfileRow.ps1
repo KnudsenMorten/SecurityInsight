@@ -184,6 +184,12 @@ function Get-SIDerivedValue {
     switch ($Field.name) {
         'PrimaryEntityId'   { return $Context.PrimaryEntityId }
         'PrimaryEntityType' { return 'IpAddress' }
+        # v2.2.349 -- IpAddress is a 'derived' field per the schema ("the public IP itself").
+        # It aliases PrimaryEntityId. Without this case the schema-iterated IpAddress column
+        # came through empty in the pre-ingest audit (0% [EMPTY]) even though PrimaryEntityId
+        # was populated 100% with the same value.
+        'IpAddress'         { return $Context.PrimaryEntityId }
+        'IpVersion'         { if ($Context.PrimaryEntityId -like '*:*') { return 'IPv6' } else { return 'IPv4' } }
         'EntityIds'         { return ,$Context.EntityIds }
         'RunId'             { return $Context.Record.SI_RunId }
         'CollectionTime'    { return $Context.RunContext.CollectionTime }

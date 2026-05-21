@@ -317,12 +317,45 @@ function Write-SIClassificationToLogAnalytics {
         'endpoint' { [string]$global:SI_Endpoint_DcrName }
         'identity' { [string]$global:SI_Identity_DcrName }
         'azure'    { [string]$global:SI_Azure_DcrName }
-        'publicip' { [string]$global:SI_PublicIp_DcrName }
+        # v2.2.349 -- publicip falls back to the LEGACY $global:SI_Shodan_DcrName
+        # if SI_PublicIp_DcrName isn't set. Customers who installed under the
+        # standalone Invoke-PublicIpScanner.ps1 era already have SI_Shodan_DcrName
+        # in their custom.ps1 pointing at their existing DCR; honour it so the
+        # pipeline writes to the SAME DCR + table they're already using.
+        'publicip' {
+            if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_PublicIp_DcrName)) { [string]$global:SI_PublicIp_DcrName }
+            else { [string]$global:SI_Shodan_DcrName }
+        }
         default    { '' }
     }
     if (-not [string]::IsNullOrWhiteSpace($_perEngineDcrName)) {
         Write-SIInfo ("DCR override: '{0}' -> '{1}' (from `$global:SI_{2}_DcrName)" -f $dcrName, $_perEngineDcrName, $engineCap)
         $dcrName = $_perEngineDcrName
+    }
+
+    # v2.2.349 -- per-engine table-name override (mirrors the DCR override above).
+    # Lets each engine point at a fully-qualified table name distinct from the
+    # SI_<Engine>_Profile pattern. Critical for publicip migration: legacy
+    # Invoke-PublicIpScanner.ps1 wrote SI_VulnerabilityPIP_CL (hardcoded), not
+    # the pattern-derived SI_Publicip_Profile_CL -- preserves continuity for
+    # the existing table + RA YAML queries.
+    $_perEngineTableName = switch ($RunContext.Engine.ToLowerInvariant()) {
+        'endpoint' { [string]$global:SI_Endpoint_TableName }
+        'identity' { [string]$global:SI_Identity_TableName }
+        'azure'    { [string]$global:SI_Azure_TableName }
+        'publicip' {
+            if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_PublicIp_TableName)) { [string]$global:SI_PublicIp_TableName }
+            else { [string]$global:SI_Shodan_TableName }
+        }
+        default    { '' }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($_perEngineTableName)) {
+        # Module appends _CL on ingest; strip a trailing _CL on customer-set value
+        # so the canonical "SI_VulnerabilityPIP_CL" config-value works as well as
+        # the bare "SI_VulnerabilityPIP".
+        $_perEngineTableName = $_perEngineTableName -replace '_CL$',''
+        Write-SIInfo ("Table override: '{0}' -> '{1}' (from `$global:SI_{2}_TableName)" -f $tableName, $_perEngineTableName, $engineCap)
+        $tableName = $_perEngineTableName
     }
 
     try {
@@ -363,8 +396,41 @@ function Write-SIClassificationToLogAnalytics {
                              $_resolved
                          } else { 'LocalMachine' }
 
+        # v2.2.349 -- DEFINITIVE auth-type detection via JWT decode. Get an ARM
+        # access token from the active Az session, decode the JWT payload, and
+        # read the `appidacr` claim. Per Microsoft Identity docs:
+        #   appidacr = 0  -> password (client secret) auth
+        #   appidacr = 1  -> certificate auth (private_key_jwt)
+        #   appidacr = 2  -> certificate auth (tls_client_auth)
+        # This is the ground truth -- doesn't matter what's in HighPriv_* / SI_SPN_* /
+        # AzContext.ExtendedProperties. The token issuer tells us what they validated.
+        $jwtAuthType = $null    # 'cert' / 'secret' / $null (couldn't determine)
+        try {
+            $tok = Get-AzAccessToken -ResourceUrl 'https://management.azure.com/' -ErrorAction Stop
+            $tokStr = if ($tok.Token -is [System.Security.SecureString]) {
+                $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($tok.Token)
+                try { [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+            } else { [string]$tok.Token }
+            $parts = $tokStr -split '\.'
+            if ($parts.Length -eq 3) {
+                $payload = $parts[1]
+                $pad = $payload.Length % 4
+                if ($pad -gt 0) { $payload = $payload + ('=' * (4 - $pad)) }
+                $payload = $payload.Replace('-','+').Replace('_','/')
+                $claims = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($payload)) | ConvertFrom-Json
+                $appidacr = [string]$claims.appidacr
+                $jwtAuthType = switch ($appidacr) {
+                    '0' { 'secret' }
+                    '1' { 'cert' }
+                    '2' { 'cert' }
+                    default { $null }
+                }
+            }
+        } catch { }
+
         $useMi   = $global:SI_PreferUami -and -not [string]::IsNullOrWhiteSpace($global:SI_UAMI_ClientId)
         $useCert = -not $useMi -and -not [string]::IsNullOrWhiteSpace($spnCertThumb)
+        $useSecret = -not $useMi -and -not $useCert -and -not [string]::IsNullOrWhiteSpace($spnSecret)
 
         $authParams = if ($useMi) {
             @{ UseManagedIdentity = $true; ManagedIdentityClientId = $global:SI_UAMI_ClientId }
@@ -378,7 +444,16 @@ function Write-SIClassificationToLogAnalytics {
         } else {
             @{ AzAppId = $spnAppId; AzAppSecret = $spnSecret; TenantId = $spnTenantId }
         }
-        $authNote = if ($useMi) { 'UAMI' } elseif ($useCert) { 'SPN+Cert' } else { 'SPN+Secret' }
+
+        # v2.2.349 -- label comes from the JWT's appidacr claim (the token issuer
+        # tells us what it actually validated), not from inferring which globals
+        # are populated. Falls back to explicit creds when JWT didn't decode.
+        $authNote = if ($useMi)                  { 'UAMI' }
+                    elseif ($jwtAuthType -eq 'cert')   { 'SPN+Cert' }
+                    elseif ($jwtAuthType -eq 'secret') { 'SPN+Secret' }
+                    elseif ($useCert)                  { 'SPN+Cert' }
+                    elseif ($useSecret)                { 'SPN+Secret' }
+                    else { 'SPN+Session' }
 
         # AzLogDcrIngestPS reads tokens from the active Az session cache rather
         # than doing a clean client_credentials call internally. Refresh the

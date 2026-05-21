@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.350
+## v2.2.351
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
 - release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
 - release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
 - release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
 - release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
 - release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
-- release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.351 — Hotfix follow-up to v2.2.350 Risk Score KPI cache: backfill KPI into a pre-v2.2.350 cache file when the cached AI text is adopted.
+
+### Bug
+
+Live dev-tenant test (RA Detailed run, 2026-05-21 ~20:30) showed the Detailed run reused the AI summary from a 2.1h-old cache (written by v2.2.349, source=blob) -- correct behaviour -- but then went on to compute the Risk Score KPI LIVE and emit `[SCORE] Global=72 ...` instead of any `[SCORE] OVERRIDE ...`. The cached file had `AISummaryText` but no `GlobalScore` (v2.2.349 didn't persist KPI), so v2.2.350's "override if cached KPI present" branch did nothing.
+
+Worse: because the AI text was adopted, the engine skipped the entire AI-write block, which is also where v2.2.350's `$script:_RACacheNeedsKPIUpdate = $true` flag was set. So the run NEVER wrote its just-computed KPI back into the cache file. Result: the cache stays AI-only forever; every Summary + Detailed run keeps computing different live scores; the user-visible "63/100 vs 72/100 mismatch" never converges.
+
+### Fix
+
+When the cache READ adopts an AI text but finds no `GlobalScore`, set `$script:_RACacheNeedsKPIUpdate = $true` directly in the cache-read branch. The post-KPI-compute block at the bottom of the engine then backfills the just-computed KPI into the existing cache file (Add-Member onto the parsed object + Save-RATop50CachedFile). Cached AI text is preserved -- only the missing KPI fields are added.
+
+Migration path:
+- **Run #1 after upgrade** -- cache has AI but no KPI. Adopts AI, computes live KPI, **backfills cache**. Email shows live KPI (one-time mismatch acceptable).
+- **Run #2** -- cache now has both AI + KPI. Adopts both. Email shows cached KPI.
+- **Run #3+** within 24h window -- all reuse same AI + KPI. Summary + Detailed emails converge on the identical headline number.
+
+After 24h freshness expires, the cycle restarts: first run rebuilds AI + KPI; everyone else reuses for the next 24h.
+
+### Operator log
+
+New log line in the cache-read branch:
+
+```
+[AISummaryCache] cached AI text adopted, but cached file has no GlobalScore (pre-v2.2.350 cache). Will backfill KPI into the cache from this run's live compute.
+```
+
+Then on the post-KPI write:
+
+```
+[AISummaryCache] persisted fresh Risk Score KPI (GlobalScore=72, Band='Moderate') to shared cache; next RA run (Summary or Detailed) within 24h will reuse this score.
+```
 
 ---
 

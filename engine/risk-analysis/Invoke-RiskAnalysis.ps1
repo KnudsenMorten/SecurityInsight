@@ -8209,6 +8209,17 @@ if ([bool]$global:BuildSummaryByAI) {
                 # v2.2.350 -- capture cached KPI for downstream override.
                 if ($shared.PSObject.Properties['GlobalScore'] -and $null -ne $shared.GlobalScore) {
                     $script:_CachedRAKPI = $shared
+                } else {
+                    # v2.2.351 -- cached AI text exists but cached KPI doesn't
+                    # (cache was written by v2.2.345-349 before KPI persistence
+                    # landed). This run skips the AI block entirely (AI text
+                    # adopted), so the AI-write site's KPI-update flag would
+                    # never fire. Set it here so the post-KPI-compute block at
+                    # the bottom of the engine writes the just-computed KPI
+                    # back into the existing cache file, populating it for
+                    # subsequent runs without invalidating the cached AI text.
+                    $script:_RACacheNeedsKPIUpdate = $true
+                    Write-Info "[AISummaryCache] cached AI text adopted, but cached file has no GlobalScore (pre-v2.2.350 cache). Will backfill KPI into the cache from this run's live compute."
                 }
             } else {
                 Write-Info ("[AISummaryCache] cached AI summary is {0:N1}h old (source={1}, >{2}h max via `$global:SI_AISummary_MaxAgeHours); this run will REFRESH it." -f `

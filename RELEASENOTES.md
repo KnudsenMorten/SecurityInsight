@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.345
+## v2.2.346
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
 - release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
 - release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
 - release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
 - release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
 - release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
-- release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.346 — Multi-host AI summary cache: shared file now mirrors to `sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json` blob (in addition to the local OUTPUT/) so two replicas / two hosts share the same 24h cache; lookup is local-first (cheap), blob-fallback (warm), build-fresh (cold)
+
+### Why
+
+v2.2.345 cached the AI summary to a local file. Single-host VMs were fine, but in container or multi-host deployments two replicas each maintain their own local file → both build the AI summary every 24h → manager could get two different versions of "today's" Top-50 + drilldown depending on which replica's email landed in their inbox.
+
+### How
+
+Two new helpers in `Invoke-RiskAnalysis.ps1`'s AI block:
+
+- **`Get-RATop50CachedFile`** — local read first (cheap); on miss tries blob `sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json`; on blob hit, also writes the local file so subsequent processes on the same host are fast. Returns `{Source='local'|'blob', Data=<parsed JSON>}` or `$null`.
+- **`Save-RATop50CachedFile`** — writes local file always; mirrors to blob when `$global:SI_StorageAccount` is set AND `Az.Storage` is loadable; auto-creates the container if missing.
+
+The freshness check (24h) and first-writer-wins semantics from v2.2.345 are unchanged — the only difference is WHERE the cache lives.
+
+### Configurable
+
+| Global | Default | Purpose |
+|---|---|---|
+| `$global:SI_AISummary_MaxAgeHours` | `24` | Refresh cadence (cache stale → rebuild) |
+| `$global:SI_StorageAccount` | (unset) | Enables blob mirror when set |
+| `$global:SI_RATop50_BlobContainer` | `sistaging` | Blob container name |
+| `$global:SI_RATop50_BlobName` | `risk-analysis/RiskAnalysis_Top50_Shared.json` | Blob path within container |
+
+### Graceful degradation
+
+If `Az.Storage` isn't loaded OR `$global:SI_StorageAccount` is empty OR blob write fails: local file remains the authoritative cache. Single-host VMs need no config changes; multi-host installs set `$global:SI_StorageAccount` (typically already set for the staging pipeline) and the blob mirror activates automatically.
+
+### Operator log lines
+
+```
+[AISummaryCache] mirrored to blob: sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json
+[AISummaryCache] reusing cached AI summary from 4.2h ago (source=blob, template 'RiskAnalysis_Summary', ...). AI not called this run.
+```
+
+`source=local` means this host had a fresh local file; `source=blob` means it had to pull from the shared blob (typical first run on a fresh replica).
 
 ---
 

@@ -331,18 +331,20 @@ if ($StorageAccountKey)  { $cliPassthrough['StorageAccountKey']  = $StorageAccou
 
 try {
     Write-Step "Invoking engine"
-    # 2026-05-02: PublicIP is its own standalone scanner (Shodan-driven), NOT
-    # an asset-profiling sub-engine. Reads Tier 0/1 IPs from the existing
-    # SI_Endpoint_Profile_CL + SI_Azure_Profile_CL snapshots, calls Shodan REST,
-    # ingests SI_VulnerabilityPIP_CL.
+    # v2.2.348: PublicIP folded into the shared asset-profiling pipeline. Same
+    # 9-stage orchestrator as endpoint/identity/azure. Discovery defaults to
+    # 'profile-cl' mode (legacy parity: SI_Endpoint_Profile_CL + SI_Azure_Profile_CL
+    # Tier 0-N servers + customer extras). Output ingests SI_VulnerabilityPIP_CL
+    # via dcr-si-publicip-profile -- same table the old standalone scanner wrote
+    # to, so RA YAML queries continue to work without changes.
     $launcherDir = $PSScriptRoot
     $siRootForEngine = Split-Path -Parent (Split-Path -Parent $launcherDir)
-    $engine = Join-Path $siRootForEngine 'engine\publicip\Invoke-PublicIpScanner.ps1'
+    $engine = Join-Path $siRootForEngine 'engine\asset-profiling\Invoke-SIEngineRun.ps1'
     if (-not (Test-Path -LiteralPath $engine)) {
-        throw "Launcher: engine 'Invoke-PublicIpScanner.ps1' not found at $engine."
+        throw "Launcher: engine 'Invoke-SIEngineRun.ps1' not found at $engine."
     }
-    Write-Info "engine: $engine"
-    & $engine
+    Write-Info "engine: $engine -Engine publicip"
+    & $engine -Engine 'publicip' -Sinks $effectiveSinks @cliPassthrough
     Write-Ok "Engine completed successfully"
 } catch {
     Write-Err2 "Engine failed: $($_.Exception.Message)"

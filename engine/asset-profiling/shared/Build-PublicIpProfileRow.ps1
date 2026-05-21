@@ -424,11 +424,38 @@ function Build-SIPublicIpProfileRow {
     $row['Properties'] = $properties
 
     # ---- CMDB / Reconcile flat columns ----
+    # v2.2.348 -- also read from Metadata for the publicip engine: Profile_CL
+    # discovery stamps cmdb* on the discovery row's TOP-LEVEL keys + as CMDB_*
+    # in Metadata. Read TOP-LEVEL first (matches endpoint/identity/azure
+    # Reconcile path), fall back to Metadata top-level when missing.
     foreach ($f in @('cmdbId','cmdbName','cmdbCriticality','cmdbDataSensitivity',
                      'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','CmdbMatchConfidence','LastSeenInCmdb')) {
-        $v = if ($Record.PSObject.Properties[$f]) { $Record.$f } else { $null }
+        $v = $null
+        if ($Record.PSObject.Properties[$f] -and $Record.$f) { $v = $Record.$f }
+        elseif ($meta -is [System.Collections.IDictionary] -and $meta.Contains($f) -and $meta[$f]) { $v = $meta[$f] }
+        elseif ($meta.PSObject.Properties[$f] -and $meta.$f) { $v = $meta.$f }
         $row[$f] = $v
     }
+
+    # ---- v2.2.348 LEGACY-COMPAT ALIAS COLUMNS (SI_VulnerabilityPIP_CL) ----
+    # Older RA YAML queries (PublicIP_OpenPorts_*, PublicIP_Vulnerabilities_*)
+    # were written against the legacy Invoke-PublicIpScanner.ps1 row shape.
+    # Emit alias columns so those queries keep working after the engine flip:
+    #   HasShodanRecord  = InShodan  (bool)
+    #   AssetTier        = Tier      (string; LA convention -- legacy was [string][int])
+    #   AssetEngine      = endpoint/azure/extra/eg  (from discovery row, top-level)
+    #   Org              = OrgName   (shodan.org)
+    #   ISP              = Isp       (shodan.isp)
+    #   LastShodanUpdate = ShodanLastSeen  (shodan.last_update raw)
+    if ($row.Contains('InShodan'))       { $row['HasShodanRecord']  = [bool]$row['InShodan'] }
+    if ($row.Contains('Tier'))           { $row['AssetTier']        = [string]([int]$row['Tier']) }
+    $assetEngineMeta = $null
+    if ($meta -is [System.Collections.IDictionary] -and $meta.Contains('AssetEngine')) { $assetEngineMeta = [string]$meta['AssetEngine'] }
+    elseif ($meta.PSObject.Properties['AssetEngine']) { $assetEngineMeta = [string]$meta.AssetEngine }
+    if ($assetEngineMeta) { $row['AssetEngine'] = $assetEngineMeta }
+    if ($row.Contains('OrgName'))        { $row['Org']              = [string]$row['OrgName'] }
+    if ($row.Contains('Isp'))            { $row['ISP']              = [string]$row['Isp'] }
+    if ($row.Contains('ShodanLastSeen')) { $row['LastShodanUpdate'] = [string]$row['ShodanLastSeen'] }
 
     $collectFieldNames  = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'collect'         -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })
     $enrichFieldNames   = @($schema.fields | Where-Object { $_.stage.writtenBy -eq 'enrich'          -and $_.purpose -notin 'enrichment','forensic','raw' } | ForEach-Object { $_.name })

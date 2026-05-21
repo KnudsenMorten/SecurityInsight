@@ -66,6 +66,62 @@ $global:SI_ShodanMonthlyCreditCap = 4000
 
 
 # ============================================================================
+#  DISCOVERY SOURCE  (v2.2.348 -- pipeline-folded engine)
+# ============================================================================
+# How to find IPs to scan. Three modes:
+#   'profile-cl' (DEFAULT) -- Tier 0-N servers from SI_Endpoint_Profile_CL +
+#                              SI_Azure_Profile_CL + customer extras. Preserves
+#                              the legacy "scan only IPs attached to assets we
+#                              already classified" behaviour. Recommended.
+#   'arg-eg'              -- ARG publicIPAddresses + EG NodeLabel + extras.
+#                              Broader coverage; no per-IP tier or cmdb context.
+#   'union'               -- All sources merged. Maximum coverage; Profile_CL
+#                              metadata wins on same-IP collisions.
+$global:SI_PublicIP_DiscoverySource = 'profile-cl'
+
+# Tier cap for Profile_CL discovery. Only assets with Tier <= this value are
+# considered. Default 3 = include Tier 0/1/2/3 (everything classified).
+# Set to 1 if you only want Tier 0 (Critical) + Tier 1 (High) servers.
+$global:SI_Shodan_TierMax = 3
+
+# Server-only filter for Profile_CL discovery from SI_Endpoint_Profile_CL.
+# Workstation PublicIp = user's home/cafe/cellular ISP NAT, not a scannable
+# asset the customer owns. Default $true.
+$global:SI_Shodan_ServerOnly = $true
+
+# Lookback window for Profile_CL discovery (days). Latest snapshot per
+# PrimaryEntityId within this window is used. Default 8 days.
+$global:SI_Shodan_LookbackDays = 8
+
+
+# ============================================================================
+#  SHODAN RATE-LIMIT + TIMEOUT
+# ============================================================================
+# Throttle between per-IP /host calls (ms). Shodan free tier rate-limits at
+# 1 call/sec; 1100ms gives a small safety margin. Cache hits skip the throttle.
+$global:SI_Shodan_ThrottleMs = 1100
+
+# Per-call timeout (seconds) for both /host and /scan submissions.
+$global:SI_Shodan_TimeoutSec = 15
+
+
+# ============================================================================
+#  FRESH-SCAN FLOW  (POST /shodan/scan -> wait/defer state machine)
+# ============================================================================
+# Set ForceFreshScan = $true and schedule the launcher to run at 02:00 + 03:00
+# (and optionally 04:00). First run submits + waits up to 5 min, persisting
+# scan_id to data/shodan-pending-scans.json if it can't sync-complete. Later
+# runs check pending state + a skip-if-recent guard
+# (data/shodan-last-fresh-scan.json) so credits don't burn on duplicate submits.
+# Defaults are OFF -- cache-only mode -- so passive enrichment doesn't burn
+# scan credits. Turn ON in LauncherConfig.custom.ps1 when you want fresh data.
+$global:SI_Shodan_ForceFreshScan         = $false
+$global:SI_Shodan_ScanWaitMaxSec         = 300    # 5-min sync deadline per run
+$global:SI_Shodan_ScanPollIntervalSec    = 30
+$global:SI_Shodan_FreshScanIntervalHours = 20     # don't re-submit within this window
+
+
+# ============================================================================
 #  ACTIVITY / STALENESS
 # ============================================================================
 # Public IPs are flagged IsEnabledActive=$true when bound to an active Azure

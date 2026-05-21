@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.343
+## v2.2.344
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
 - release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
 - release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
 - release: SecurityInsight v2.2.341 - log file name now embeds simulation mode + report template (e.g. risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log) for instant test-run triage (f54a22c9)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
 - release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
 - release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
-- docs: SecurityInsight - update README + Container-Deploy-Guide for v2.2.314 OAuth-only + KPI parity + Subscription-in-MoreDetails (c420305c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.344 — Hotfix: `Resolve-ProfileAugmentPlan` now verifies every stripped letvar is no longer referenced anywhere in the modified query — if a downstream join/projection still uses it, abort 2-phase entirely so the hybrid path handles the report via inline datatable
+
+### Bug
+
+Detailed run of `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`:
+
+```
+[ERR]  query failed for bucket 1/2: [BadRequest] : 'join' operator: Failed to resolve table or column expression named '_SourceCmdb'. Fix semantic errors in your query.
+[ERR]  query failed for bucket 2/2: [BadRequest] : 'join' operator: Failed to resolve table or column expression named '_SourceCmdb'. Fix semantic errors in your query.
+```
+
+`Resolve-ProfileAugmentPlan` matched the canonical `let _SourceCmdb = ... | join (_SourceCmdb) on ... | extend ...` triple and stripped all three. But the report has a SECOND join referencing `_SourceCmdb` further downstream (cross-domain Detailed shape uses the cmdb twice: once for asset enrichment, once for finding-level severity weighting). That second reference survived the strip → AH 400 → both buckets fail → report produces 0 rows.
+
+### Fix
+
+Add a post-strip verification: walk every plan, check if its `Var` (letvar name) still appears anywhere in the modified query. If yes, the strip is incomplete — abort 2-phase entirely (return original query + empty plans) and let the hybrid path handle ALL let-blocks via inline datatable substitution. Hybrid replaces the let-block in place rather than removing it, so downstream references resolve naturally.
+
+Affected reports recover automatically — the hybrid path with v2.2.335 multi-let CL-bucketing was already validated working for these shapes.
+
+### Diagnostic
+
+When this triggers, operator sees:
+
+```
+[WARN] [2phase] '_SourceCmdb' SKIPPED -- letvar still referenced after strip (incomplete: report has additional joins/projections beyond the canonical pattern). Falling back to inline-datatable hybrid path for this entire report.
+```
 
 ---
 

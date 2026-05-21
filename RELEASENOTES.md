@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.346
+## v2.2.347
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
 - release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
 - release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
 - release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
@@ -33,13 +34,42 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
 - release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
 - release: SecurityInsight v2.2.318 - Update-SecurityInsight.ps1: stop surfacing git stderr as red NativeCommandError on successful pulls (0f6b178b)
-- release: SecurityInsight v2.2.317 - Attack_Paths_Detailed_Device_*_Azure: add missing _SourceCmdb join (0b7de1dc)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.347 — Hotfix: YAML — `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` was missing the `let _SourceCmdb = ...` declaration. The join on `_SourceCmdb` at line 236 referenced an undeclared name → AH 400 → 0 rows. Restored the let-binding from the Summary variant (byte-for-byte).
+
+### Bug
+
+The YAML for the Detailed variant had:
+
+```kql
+let _TargetCmdb = SI_Azure_Profile_CL | ... | project ... ;
+
+// ... 100+ lines of EG path expansion ...
+
+| join kind=leftouter (_TargetCmdb)  on $left.TargetAzureAssetId == $right.Target_AzureResourceId_Guid
+| join kind=leftouter (_SourceCmdb)  on $left.EntryPointAadDeviceId == $right.Source_AadDeviceId
+```
+
+…but no `let _SourceCmdb = ...` was ever declared. Likely a copy-paste omission when the Detailed report was forked from Summary back in v2.2.x. The bug stayed hidden because earlier hybrid/2-phase code paths failed before submitting (eg cap-bail, partial-strip crash). v2.2.344's strip verification stopped masking the crash and the hybrid path finally tried submitting the malformed query → "Failed to resolve table or column expression named '_SourceCmdb'".
+
+### Fix
+
+Added the missing `let _SourceCmdb = SI_Endpoint_Profile_CL | ... ;` block immediately after `let _TargetCmdb = ...`, mirroring the Summary variant byte-for-byte. The downstream `join kind=leftouter (_SourceCmdb) on ...` now resolves.
+
+### Verification
+
+Next Detailed run of this report should:
+- Not throw `Failed to resolve table or column expression named '_SourceCmdb'`
+- Either trigger 2-phase + strip verification (`[2phase] '_SourceCmdb' SKIPPED -- letvar still referenced after strip ...`) — same defensive abort as `_TargetCmdb`
+- Or fall through to hybrid which inlines both lets as datatables (now both are declared, both can be matched + replaced)
 
 ---
 

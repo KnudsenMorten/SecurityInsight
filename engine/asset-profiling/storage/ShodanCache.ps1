@@ -36,6 +36,21 @@ function Initialize-SIShodanCacheTables {
         return
     }
 
+    # v2.2.349 -- ensure AzTable cmdlets are available. Legacy Invoke-PublicIpScanner
+    # loaded it via Ensure-SecurityInsightModules; the new asset-profiling launcher
+    # path doesn't have AzTable in its list. Auto-load here so the cache helpers
+    # don't blow up on Add-AzTableRow not recognized. If the module isn't installed,
+    # flag the context to skip caching -- live fetch still works, just no cache hits.
+    if (-not (Get-Command -Name 'Add-AzTableRow' -ErrorAction SilentlyContinue)) {
+        try {
+            Import-Module AzTable -ErrorAction Stop -Verbose:$false 4>$null
+        } catch {
+            Write-Warning ('Shodan cache: AzTable module not available ({0}) -- proceeding without cache. Install via: Install-Module AzTable -Scope AllUsers.' -f $_.Exception.Message)
+            Add-Member -InputObject $Context -NotePropertyName '_AzTableSkip' -NotePropertyValue $true -Force
+            return
+        }
+    }
+
     foreach ($t in @('sishodanhosts','sishodanbudget')) {
         try {
             $tbl = Get-AzStorageTable -Name $t -Context $Context.AzContext -ErrorAction Stop
@@ -43,6 +58,15 @@ function Initialize-SIShodanCacheTables {
             $tbl = New-AzStorageTable -Name $t -Context $Context.AzContext
         }
     }
+}
+
+# Helper: returns $true when the context flagged AzTable as unavailable so the
+# read/write helpers should no-op. Centralised so the Add/Get callers stay terse.
+function _SIShodanSkip {
+    param($Context)
+    if (-not $Context) { return $true }
+    if ($Context.PSObject.Properties['_AzTableSkip'] -and $Context._AzTableSkip) { return $true }
+    return $false
 }
 
 function Get-SIShodanHostFromCache {
@@ -104,8 +128,13 @@ function Set-SIShodanHostCache {
         $store[('{0}|{1}' -f $partKey, $ipKey)] = $row
         return
     }
-    $tbl = Get-AzStorageTable -Name 'sishodanhosts' -Context $Context.AzContext
-    Add-AzTableRow -Table $tbl.CloudTable -PartitionKey $partKey -RowKey $ipKey -Property $row -UpdateExisting | Out-Null
+    if (_SIShodanSkip $Context) { return }
+    try {
+        $tbl = Get-AzStorageTable -Name 'sishodanhosts' -Context $Context.AzContext -ErrorAction Stop
+        Add-AzTableRow -Table $tbl.CloudTable -PartitionKey $partKey -RowKey $ipKey -Property $row -UpdateExisting -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Verbose ('Set-SIShodanHostCache: cache write skipped -- {0}' -f $_.Exception.Message)
+    }
 }
 
 function Get-SIShodanCreditsUsedThisMonth {
@@ -144,6 +173,11 @@ function Add-SIShodanCreditsUsed {
         $Context.MockState.Tables['sishodanbudget'][$month] = $row
         return
     }
-    $tbl = Get-AzStorageTable -Name 'sishodanbudget' -Context $Context.AzContext
-    Add-AzTableRow -Table $tbl.CloudTable -PartitionKey 'shodan' -RowKey $month -Property $row -UpdateExisting | Out-Null
+    if (_SIShodanSkip $Context) { return }
+    try {
+        $tbl = Get-AzStorageTable -Name 'sishodanbudget' -Context $Context.AzContext -ErrorAction Stop
+        Add-AzTableRow -Table $tbl.CloudTable -PartitionKey 'shodan' -RowKey $month -Property $row -UpdateExisting -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Verbose ('Add-SIShodanCreditsUsed: budget write skipped -- {0}' -f $_.Exception.Message)
+    }
 }

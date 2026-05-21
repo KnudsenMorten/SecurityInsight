@@ -531,6 +531,21 @@ function Invoke-SICollect {
                 ARG_Source       = $a.Source
                 ARG_Hint         = $a.Hint
             }
+        } elseif ($RunContext.Engine -eq 'publicip') {
+            # v2.2.349 -- pass-through every discovery-emitted field as metadata.
+            # The schema-driven row builder (Build-SIPublicIpProfileRow.ps1) reads
+            # IP_* / EG_* / SHODAN_* / CMDB_* / AssetEngine / AssetTier / cmdb*
+            # from metadata via its keymap + flat-readback. Without this branch
+            # publicip rows fall through to the Mock fallback below and lose all
+            # discovery data (IpAddress 0% populated in the pre-ingest audit).
+            $excludedTopLevel = @('AssetId','Source','Sources','Hint','Name','NormalizedKey','Raw')
+            $metadata = @{}
+            $allKeys = if ($a -is [System.Collections.IDictionary]) { @($a.Keys) } else { @($a.PSObject.Properties.Name) }
+            foreach ($k in $allKeys) {
+                if ($k -in $excludedTopLevel) { continue }
+                $val = if ($a -is [System.Collections.IDictionary]) { $a[$k] } else { $a.$k }
+                if ($null -ne $val) { $metadata[$k] = $val }
+            }
         } else {
             # Mock fallback
             $metadata = @{

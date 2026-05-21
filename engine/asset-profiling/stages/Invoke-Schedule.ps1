@@ -142,8 +142,20 @@ function Invoke-SISchedule {
                 Write-SIInfo ("CMDB provider ENABLED -- refreshing cache ({0}) ..." -f $reason)
                 $refreshScript = Join-Path $siRoot 'asset-profiling-providers\servicenow-cmdb\Refresh-CmdbCache.ps1'
                 if (Test-Path $refreshScript) {
-                    $cmdbRefresh = & $refreshScript -StorageAccountName ([string]$RunContext.StorageContext.AccountName) -StorageKey ([string]$RunContext.StorageContext.AccountKey)
-                    Write-SIInfo ("CMDB cache refreshed: {0} services written" -f $cmdbRefresh.ServicesWritten)
+                    # v2.2.349 -- CMDB auto-refresh is OAuth-incompatible (the helper
+                    # uses SharedKey-signed Table Storage REST calls). Under v2.2.314+
+                    # OAuth-on-storage policy we no longer carry a storage key, so the
+                    # auto-refresh is silently a no-op -- Reconcile's empty-cache /
+                    # stale-cache fallback continues to operate against the most recent
+                    # cached snapshot. TODO: rewrite Refresh-CmdbCache.ps1 to use OAuth
+                    # bearer tokens against Table Storage REST; once that lands this
+                    # branch can fire under OAuth too.
+                    if ($RunContext.StorageContext.Mode -eq 'OAuth' -or [string]::IsNullOrWhiteSpace([string]$RunContext.StorageContext.AccountKey)) {
+                        Write-SIInfo "CMDB auto-refresh skipped (OAuth-on-storage; refresh helper rewrite pending). Reconcile continues against the existing cached snapshot."
+                    } else {
+                        $cmdbRefresh = & $refreshScript -StorageAccountName ([string]$RunContext.StorageContext.AccountName) -StorageKey ([string]$RunContext.StorageContext.AccountKey)
+                        Write-SIInfo ("CMDB cache refreshed: {0} services written" -f $cmdbRefresh.ServicesWritten)
+                    }
                 } else {
                     Write-Warning ("Refresh-CmdbCache.ps1 not found at {0}" -f $refreshScript)
                 }

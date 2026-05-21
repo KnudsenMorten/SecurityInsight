@@ -64,6 +64,26 @@ $global:SI_ShodanCacheAgeDays = 7
 # Small Business plan). Bump or lower based on your subscription tier.
 $global:SI_ShodanMonthlyCreditCap = 4000
 
+# ----------------------------------------------------------------------------
+# TABLE / DCR NAME OVERRIDES  (v2.2.349 -- preserve legacy customer install)
+# ----------------------------------------------------------------------------
+# Legacy Invoke-PublicIpScanner.ps1 wrote to `SI_VulnerabilityPIP_CL` via the
+# DCR named in $global:SI_Shodan_DcrName (customer-set, typically
+# 'dcr-si-publicip'). The new asset-profiling pipeline's default naming
+# pattern would create a DIFFERENT table (`SI_Publicip_Profile_CL`) and DCR
+# (`dcr-si-publicip-profile`) -- breaking continuity with RA YAML queries
+# that read SI_VulnerabilityPIP_CL + customers' existing ingest history.
+#
+# These two globals point the new pipeline at the LEGACY table + DCR. The
+# DCR-name fallback in Invoke-Output.ps1 also reads $global:SI_Shodan_DcrName
+# when SI_PublicIp_DcrName is empty, so existing custom.ps1 settings keep
+# working without edit.
+$global:SI_PublicIp_TableName = 'SI_VulnerabilityPIP'   # module appends _CL on ingest
+# Leave DCR name unset by default -- pipeline falls back to SI_Shodan_DcrName
+# (customer's existing override), or to the pattern-derived 'dcr-si-publicip-profile'
+# if neither is set.
+# $global:SI_PublicIp_DcrName = 'dcr-si-publicip-profile'
+
 
 # ============================================================================
 #  DISCOVERY SOURCE  (v2.2.348 -- pipeline-folded engine)

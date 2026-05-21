@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.348
+## v2.2.349
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
 - release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
 - release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
 - release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
@@ -33,13 +34,66 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
 - release: SecurityInsight v2.2.321 - canonical 6-line ingest-target block on every run, every engine, via shared Write-SIIngestTarget helper (aee8decb)
 - release: SecurityInsight v2.2.320 - PublicIP engine: AssetTier emits String (fixes InvalidTransformOutput on existing DCRs); failure path surfaces DCR/RG/sub/table context + Azure body inline (545e2736)
-- release: SecurityInsight v2.2.319 - Update-SecurityInsight.ps1: route git through cmd /c so STDERR merge happens BEFORE PowerShell sees it (v2.2.318 fix ran too late in the pipeline) (9fa59b3d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.349 — Hotfix follow-up to v2.2.348 publicip migration: 5 bugs surfaced by the first live run on dev tenant. All fixed.
+
+### Bugs found in the live run
+
+1. **`Add-AzTableRow` not recognized** -- Shodan cache helper (`engine/asset-profiling/storage/ShodanCache.ps1`) needs the `AzTable` module. Legacy `Invoke-PublicIpScanner.ps1` loaded it via its own `Ensure-SecurityInsightModules`; the asset-profiling launcher path doesn't have AzTable in its module list. Fix: `Initialize-SIShodanCacheTables` now auto-loads AzTable; if the module isn't installed it flags the context with `_AzTableSkip = $true` and the read/write helpers no-op silently (live Shodan fetch still works, just no caching). Operator gets a one-line warning telling them to `Install-Module AzTable -Scope AllUsers`. Also wrapped `Set-SIShodanHostCache` and `Add-SIShodanCreditsUsed` (the two helpers that weren't already in try/catch) so any Table-Storage flake degrades to skip-cache instead of killing the run.
+2. **PublicIP rows fell into Mock fallback in Stage Collect** -- `engine/asset-profiling/stages/Invoke-Collect.ps1` had no `publicip` branch in the per-engine metadata builder. Discovery's `IP_*` / `SHODAN_*` / `CMDB_*` / `cmdb*` / `AssetEngine` / `AssetTier` fields therefore got dropped on the floor and the schema-driven row builder produced rows where `IpAddress` was 0% populated. Added an explicit `elseif ($RunContext.Engine -eq 'publicip')` branch that pass-through copies every non-reserved discovery-row field into `$metadata`.
+3. **InvalidStream on LA ingest** (`Custom-SI_Publicip_Profile_CL was not configured in the data collection rule`). Default naming pattern produced `SI_Publicip_Profile_CL` / `dcr-si-publicip-profile`, but customer's actual deployed DCR is `dcr-si-publicip` (from older `SI_DcrNamePattern = 'dcr-si-{0}'`) wired to `SI_VulnerabilityPIP_CL` (legacy hardcoded table). Two fixes in `Invoke-Output.ps1`:
+   - **DCR override extended:** `publicip` branch now falls back to `$global:SI_Shodan_DcrName` (the legacy customer-set name) when `$global:SI_PublicIp_DcrName` is empty. Customers who installed under the standalone era keep working with zero config changes.
+   - **NEW: per-engine TABLE-name override** mirroring the existing DCR-name override. `$global:SI_PublicIp_TableName` (and fallback to `$global:SI_Shodan_TableName`) wins over the `SI_<Engine>_Profile` pattern. Default in `LauncherConfig.defaults.ps1` is `SI_VulnerabilityPIP` (matches the legacy hardcoded value, preserves table + RA YAML query continuity).
+4. **`IpAddress` column 0% [EMPTY]** in pre-ingest audit (separate from #2). Schema declares `IpAddress` as `source: derived`, but `Get-SIDerivedValue` in `Build-PublicIpProfileRow.ps1` had no `'IpAddress'` case in its switch -- so the schema-iterated render returned `$null` even though `PrimaryEntityId` (same value) was populated 100%. Added the missing case (`IpAddress` and `IpVersion` both now alias `PrimaryEntityId` per schema sourcePath).
+5. **`Cannot bind argument to parameter 'AccountKey' because it is an empty string`** in Stage Schedule + Stage Reconcile under OAuth mode. Two fixes -- both silent skips that respect the v2.2.314+ OAuth-on-storage policy (we no longer carry a storage key, period):
+   - **`Invoke-Schedule.ps1`** -- CMDB auto-refresh is OAuth-incompatible (the underlying helper uses SharedKey-signed Table Storage REST). Under OAuth the auto-refresh is a silent no-op; Reconcile continues against the most-recent cached snapshot. TODO: rewrite `Refresh-CmdbCache.ps1` to use OAuth bearer tokens.
+   - **`CmdbCache.ps1::Initialize-SICmdbCacheTables`** -- no-ops silently under OAuth mode. The Reconcile stage's existing empty-cache fallback path takes over.
+
+### Cert-auth bridge + auth log consistency (operator ask)
+
+Internal-AutomateIT installs that authenticate via certificate (Connect-Platform sets `$global:HighPriv_Modern_CertificateThumbprint_Azure`) showed up as `auth : SPN+Secret` in the LA-ingest banner -- the engine was actually using cert under the hood, the BANNER was lying. Plus Invoke-Output's auth-resolver risked falling back to the secret branch on the same misread.
+
+Root cause: the bridge in `Invoke-SIEngineRun.ps1` only flowed `SI_SPN_*` -> `Spn*` and `HighPriv_*` -> `Spn*`. Downstream code (Invoke-Output, Send-SIRunHealthRow, Get-SIShodanKey) reads `SI_SPN_*` directly -- not `Spn*` -- so the cert thumbprint never reached them.
+
+Fixes in `Invoke-SIEngineRun.ps1`:
+1. **Reverse bridge added:** `Spn*` -> `SI_SPN_*` so anything set via the legacy globals (or via `HighPriv_*` -> `Spn*` -> `SI_SPN_*` cascade) reaches the canonical SI_SPN_* names that downstream stages actually read.
+2. **Cert wins over secret when both are populated:** defensive guard that BLANKS `SI_SPN_Secret` and warns when both are set. Matches `Connect-AzAccount` precedence (cert is the more secure option) and removes ambiguity in `$useCert` resolution.
+
+After fix the LA-ingest log line correctly shows `auth : SPN+Cert` on internal-AutomateIT installs.
+
+### Parse JSON `if` warning
+
+Inside the publicip extras-loader the inline `[string](if (...) {...} else {...})` cast pattern was parsed by PS 5.1 as `[string] (if ...)` where `if` is treated as a command name -- "The term 'if' is not recognized as the name of a cmdlet". Replaced with an explicit case-insensitive getter scriptblock + outside-the-cast assignment.
+
+### Verification
+
+Live run on dev tenant (15 -> 17 IPs, full pipeline 9 stages):
+
+```
+[INFO] DCR override: 'dcr-si-publicip' -> 'dcr-si-publicip' (from $global:SI_Publicip_DcrName)
+[INFO] Table override: 'SI_Publicip_Profile' -> 'SI_VulnerabilityPIP' (from $global:SI_Publicip_TableName)
+[INFO] table : SI_VulnerabilityPIP_CL
+[INFO] DCR   : dcr-si-publicip  (rg=rg-securityinsight)
+IpAddress    17 / 17 = 100%
+Posting data to LogAnalytics table [ SI_VulnerabilityPIP_CL ] -- SUCCESS
+[DONE] 17 rows -> 3/3 sink(s) OK [LA=OK JSON=OK Excel=OK]  (35,9s)
+[OK] RUN COMPLETE
+```
+
+All three sinks (LA + JSON + Excel) green. Same table + DCR as the legacy engine -- RA YAML queries against `SI_VulnerabilityPIP_CL` continue to work unchanged.
+
+### TODO (out of scope for this hotfix)
+
+- **`CmdbCache.ps1`** still uses SharedKey signing internally. Should be rewritten to use OAuth bearer tokens against Table Storage REST so the auto-refresh works under OAuth mode (currently a manual operator step).
+- **`Refresh-CmdbCache.ps1`** has a Mandatory `-StorageKey` parameter; needs an OAuth path too.
 
 ---
 

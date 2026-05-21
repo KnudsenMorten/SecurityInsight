@@ -179,6 +179,16 @@ function Initialize-SICmdbCacheTables {
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Context)
 
+    # v2.2.349 -- CmdbCache still uses SharedKey signing internally (Get-SISharedKeySignature
+    # reads $Context.AccountKey). Under OAuth mode the key is empty by design, so the
+    # signature helper throws "Cannot bind argument to parameter 'AccountKey' because
+    # it is an empty string." Skip table init silently in that case -- the empty-cache
+    # path in Reconcile already handles missing entries gracefully. TODO: rewrite
+    # CmdbCache to use OAuth bearer tokens against Table Storage REST.
+    if ($Context.Mode -eq 'OAuth' -or [string]::IsNullOrWhiteSpace([string]$Context.AccountKey)) {
+        return
+    }
+
     foreach ($t in @('sicmdbservices','sicmdbcis','sicmdbmembership')) {
         if ($Context.Mode -eq 'Mock') {
             if (-not $Context.MockState.Tables.ContainsKey($t)) { $Context.MockState.Tables[$t] = @{} }

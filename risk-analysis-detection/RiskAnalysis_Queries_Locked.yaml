@@ -8714,6 +8714,27 @@ Reports:
             // fetch + inline keeps all 4 cmdb extends + the Tier coalesce intact.
             | where Target_AzureResourceId_Guid != "";
 
+        // v2.2.347 -- _SourceCmdb let-binding restored (was missing from Detailed
+        // YAML even though line 236 below joins on it; the omission only surfaced
+        // once v2.2.344's strip-verification stopped masking the partial-strip
+        // crash and the hybrid path finally tried to submit the malformed query).
+        // Mirrors the Summary variant's _SourceCmdb definition byte-for-byte.
+        let _SourceCmdb =
+            SI_Endpoint_Profile_CL
+            | where TimeGenerated > ago(8d)
+            | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+            | project
+                Source_AadDeviceId         = tostring(column_ifexists("AadDeviceId", "")),
+                Source_AssetName           = tostring(column_ifexists("AssetName", "")),
+                Source_AssetId             = tostring(column_ifexists("AssetId", "")),
+                Source_AssetType           = tostring(column_ifexists("AssetType", "")),
+                Source_Tier                = toint(column_ifexists("Tier", 0)),
+                Source_cmdbId              = tostring(column_ifexists("cmdbId", "")),
+                Source_cmdbName            = tostring(column_ifexists("cmdbName", "")),
+                Source_cmdbCriticality     = tostring(column_ifexists("cmdbCriticality", "")),
+                Source_cmdbDataSensitivity = tostring(column_ifexists("cmdbDataSensitivity", ""))
+            | where Source_AadDeviceId != "";
+
         let VulnerableDevices = ExposureGraphNodes
         | where set_has_element(Categories, "device")
         | where NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true

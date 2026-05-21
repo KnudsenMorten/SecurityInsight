@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.337
+## v2.2.338
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.338 - new launcher CLI knob -RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N; new AssetSimulationComplex{Summary,Detailed} Locked templates listing 10 cross-domain reports that exercise source/target bucketing; hardcoded SI_SimulateCLRowCount removed from custom.ps1 (2e01de15)
 - release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
 - release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
 - release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
@@ -33,13 +34,56 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.312 - layout-aware logs folder; drop data/LOGS; surface transcript-folder-create failures (9f978c7f)
 - release: SecurityInsight v2.2.311 - RA Summary per-row IssueList + TotalIssuesImpactedAssets; wider CVSSDesc; top-aligned cells (eaf7ce7f)
 - release: SecurityInsight v2.2.310 - Write-SICustomConfig + Setup-Unattended refuse to overwrite live custom.ps1 unless -Force / -ForceConfigOverwrite (32923bd5)
-- release: SecurityInsight v2.2.309 - fix Identity engine 400 Bad Request on Table-cache lookup when ENTRA_Department/OU contains apostrophe, space, + or % (d147bd5d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.338 — New launcher CLI knob `-RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N`; new `AssetSimulationComplex{Summary,Detailed}` Locked templates listing the 10 cross-domain reports that exercise source/target bucketing; hardcoded `$global:SI_SimulateCLRowCount` removed from `SecurityInsight.custom.ps1`
+
+### Why
+
+Stress-testing the source/target bucketing fix (v2.2.334-.337) on a small tenant required two hand-edits to custom.ps1 — set `$global:SI_SimulateCLRowCount` and switch the template by `-ReportTemplate`. Easy to forget either. With this release the operator runs one line:
+
+```powershell
+pwsh launcher.internal-vm.ps1 `
+    -RunAssetSimulation ComplexSummary `
+    -AssetSimulationAmount 500000
+```
+
+…and the launcher sets the simulation row count + routes to a template that runs ONLY the 10 cross-domain reports (skips the ~50 Identity Summary reports that finish in seconds anyway and don't exercise the bucketing path). Result: full bucketing validation in ~10-15 min instead of ~1.5 hrs.
+
+### Mode → template mapping
+
+| `-RunAssetSimulation` value | Template |
+|---|---|
+| `FullSummary` | `RiskAnalysis_Summary` (all 62) |
+| `FullDetailed` | `RiskAnalysis_Detailed` (all Detailed) |
+| `ComplexSummary` | `AssetSimulationComplexSummary` (10 cross-domain Summary) |
+| `ComplexDetailed` | `AssetSimulationComplexDetailed` (10 cross-domain Detailed) |
+
+### New templates in `RiskAnalysis_Queries_Locked.yaml`
+
+Both included in the Locked catalog so customer installs can use the CLI knob too (not just dev box). Contains the 6 cross-domain `Attack_Paths_*` reports + 4 cross-domain `Identity_Admin_LogonTo_*` / `Identity_EligibleAdmin_LogonTo_*` reports — i.e. the entire set that depends on the v2.2.334-.337 source/target bucketing fix.
+
+### Custom config cleanup
+
+`SecurityInsight.custom.ps1` previously carried two hardcoded knobs that were really dev-only stress-test scaffolding:
+
+```powershell
+$global:SI_SimulateCLRowCount = 15000     # padded EVERY run, not just tests
+$global:AutoBucketReportCap = 0           # v2.2.330 opt-in debug cap, off here
+```
+
+Both removed. Simulation now happens only when the operator opts in via the CLI knob; the cap was load-bearing only during the v2.2.330-.337 debug arc and is no longer needed.
+
+### Coverage
+
+Both launcher flavours updated: `launcher.internal-vm.ps1` + `launcher.community-vm.ps1`.
 
 ---
 

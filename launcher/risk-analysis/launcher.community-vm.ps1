@@ -39,7 +39,12 @@ param(
 
     # Other engine knobs
     [switch]$ShowConfig,
-    [switch]$DebugQueryHash
+    [switch]$DebugQueryHash,
+
+    # v2.2.338 -- asset-simulation runner (see internal-vm launcher for details).
+    [ValidateSet('FullSummary','ComplexSummary','FullDetailed','ComplexDetailed')]
+    [string]$RunAssetSimulation,
+    [int]$AssetSimulationAmount
 )
 $ErrorActionPreference = 'Stop'
 
@@ -448,9 +453,24 @@ if (Test-Path variable:global:ReportTemplate_Default)          { $ReportTemplate
 if (Test-Path variable:global:ReportTemplate_Default_Summary)  { $ReportTemplate_Default_Summary  = $global:ReportTemplate_Default_Summary }
 if (Test-Path variable:global:ReportTemplate_Default_Detailed) { $ReportTemplate_Default_Detailed = $global:ReportTemplate_Default_Detailed }
 
+# v2.2.338 -- -RunAssetSimulation routing. See launcher.internal-vm.ps1 for full notes.
+if ($cliBound.ContainsKey('RunAssetSimulation') -and -not [string]::IsNullOrWhiteSpace([string]$cliBound['RunAssetSimulation'])) {
+    $simMode = [string]$cliBound['RunAssetSimulation']
+    $simAmount = if ($cliBound.ContainsKey('AssetSimulationAmount')) { [int]$cliBound['AssetSimulationAmount'] } else { 15000 }
+    if ($simAmount -lt 1) { throw "-AssetSimulationAmount must be > 0 (got $simAmount)" }
+    $global:SI_SimulateCLRowCount = $simAmount
+    $simTemplate = switch ($simMode) {
+        'FullSummary'     { 'RiskAnalysis_Summary' }
+        'FullDetailed'    { 'RiskAnalysis_Detailed' }
+        'ComplexSummary'  { 'AssetSimulationComplexSummary' }
+        'ComplexDetailed' { 'AssetSimulationComplexDetailed' }
+    }
+    $global:ReportTemplate = $simTemplate
+    Write-Info ("[LAUNCHER] RunAssetSimulation={0} AssetSimulationAmount={1} -> template={2} (SI_SimulateCLRowCount set)" -f $simMode, $simAmount, $simTemplate)
+}
 # ReportTemplate: -ReportTemplate wins, then $ReportTemplate_Default,
 # then per-mode default by Summary/Detailed.
-if ($cliBound.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace([string]$cliBound['ReportTemplate'])) {
+elseif ($cliBound.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhiteSpace([string]$cliBound['ReportTemplate'])) {
     $global:ReportTemplate = [string]$cliBound['ReportTemplate']
 } elseif (-not [string]::IsNullOrWhiteSpace($ReportTemplate_Default)) {
     $global:ReportTemplate = $ReportTemplate_Default

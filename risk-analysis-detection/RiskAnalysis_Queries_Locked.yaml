@@ -24183,3 +24183,42 @@ ReportTemplates:
       - Name: Identity_HighRiskFactorComposite4Plus_Summary
       - Name: PublicIP_OpenPorts_Summary
       - Name: PublicIP_Vulnerabilities_Summary
+
+    - ReportName: AssetSimulationComplexSummary
+      ReportPurpose: |
+        v2.2.338 -- the 10 Summary reports that exercise the cross-domain CL-bucketing
+        path (multi-let `_SourceCmdb` + `_TargetCmdb` with projection-aliased join keys
+        like Target_AzureResourceId_Guid / Source_AadDeviceId / _si_PrimaryEntityId).
+        Designed to be paired with the launcher's `-RunAssetSimulation ComplexSummary
+        -AssetSimulationAmount N` knob: clones the small real `_*Cmdb` snapshots up to
+        N rows so operators can stress-test the source/target bucketing fix on a small
+        tenant without provisioning a 500K-asset lab. Skips the ~50 Identity Summary
+        reports that finish in seconds and don't exercise the bucketing path.
+      ReportsIncluded:
+      - Name: Attack_Paths_Summary_Github_to_Azure_Resources
+      - Name: Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
+      - Name: Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
+      - Name: Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials
+      - Name: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+      - Name: Attack_Paths_Summary_Credential_Based_Lateral_Movement
+      - Name: Identity_Admin_LogonTo_VulnerableDevice_Summary
+      - Name: Identity_Admin_LogonTo_InternetExposedDevice_Summary
+      - Name: Identity_Admin_LogonTo_LowTierDevice_Summary
+      - Name: Identity_EligibleAdmin_LogonTo_ExploitableDevice_Summary
+
+    - ReportName: AssetSimulationComplexDetailed
+      ReportPurpose: |
+        v2.2.338 -- Detailed counterparts to AssetSimulationComplexSummary. Same cross-
+        domain shapes, per-(asset, finding) rows. Use with
+        `-RunAssetSimulation ComplexDetailed -AssetSimulationAmount N`.
+      ReportsIncluded:
+      - Name: Attack_Paths_Detailed_Github_to_Azure_Resources
+      - Name: Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation
+      - Name: Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources
+      - Name: Attack_Paths_Detailed_Data_Sensitivity_to_Exposed_Credentials
+      - Name: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+      - Name: Attack_Paths_Detailed_Credential_Based_Lateral_Movement
+      - Name: Identity_Admin_LogonTo_VulnerableDevice_Detailed
+      - Name: Identity_Admin_LogonTo_InternetExposedDevice_Detailed
+      - Name: Identity_Admin_LogonTo_LowTierDevice_Detailed
+      - Name: Identity_EligibleAdmin_LogonTo_ExploitableDevice_Detailed

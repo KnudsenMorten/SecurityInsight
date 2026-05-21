@@ -8088,6 +8088,83 @@ if ([bool]$global:BuildSummaryByAI) {
     Write-Section "AI summary"
 
     # ---------------------------------------------------------------------
+    # v2.2.346 -- LOCAL + BLOB lookup chain for the shared cache file. Local
+    # works for single-host VMs; blob mirror lets multi-host / containerised
+    # deployments share the cache (so two replicas don't both build the AI
+    # summary the same hour). Storage account from $global:SI_StorageAccount
+    # (the same account the asset-profiling pipeline already uses for staging).
+    # Disabled gracefully when SI_StorageAccount isn't set OR Az.Storage isn't
+    # importable -- local file remains the source of truth.
+    $script:_RATop50Local       = Join-Path $global:OutputDir 'RiskAnalysis_Top50_Shared.json'
+    $script:_RATop50Container   = if ($global:SI_RATop50_BlobContainer) { [string]$global:SI_RATop50_BlobContainer } else { 'sistaging' }
+    $script:_RATop50BlobName    = if ($global:SI_RATop50_BlobName)      { [string]$global:SI_RATop50_BlobName }      else { 'risk-analysis/RiskAnalysis_Top50_Shared.json' }
+    $script:_RATop50StorageAcct = [string]$global:SI_StorageAccount
+
+    function Get-RATop50CachedFile {
+        # Returns parsed JSON or $null. Local first (cheap), then blob.
+        # On blob hit, saves a local copy so the next process on this host
+        # is fast.
+        if (Test-Path -LiteralPath $script:_RATop50Local) {
+            try {
+                $j = Get-Content -LiteralPath $script:_RATop50Local -Raw | ConvertFrom-Json
+                return [pscustomobject]@{ Source = 'local'; Data = $j }
+            } catch {
+                Write-Warn2 ("[AISummaryCache] failed to parse local cache file: {0}" -f $_.Exception.Message)
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($script:_RATop50StorageAcct) -and (Get-Command -Name New-AzStorageContext -ErrorAction SilentlyContinue)) {
+            try {
+                $ctx = New-AzStorageContext -StorageAccountName $script:_RATop50StorageAcct -UseConnectedAccount -ErrorAction Stop
+                $tmp = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), [System.IO.Path]::GetRandomFileName() + '.json')
+                $prevProgress = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
+                try {
+                    Get-AzStorageBlobContent -Container $script:_RATop50Container -Blob $script:_RATop50BlobName -Destination $tmp -Context $ctx -Force -ErrorAction Stop | Out-Null
+                } finally { $ProgressPreference = $prevProgress }
+                if (Test-Path -LiteralPath $tmp) {
+                    $raw = Get-Content -LiteralPath $tmp -Raw
+                    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                    $j = $raw | ConvertFrom-Json
+                    # Save a local copy so subsequent processes on this host are fast.
+                    try { Set-Content -LiteralPath $script:_RATop50Local -Value $raw -Encoding UTF8 -Force } catch { }
+                    return [pscustomobject]@{ Source = 'blob'; Data = $j }
+                }
+            } catch {
+                if ($_.Exception.Message -notmatch 'BlobNotFound|ResourceNotFound|404') {
+                    Write-Warn2 ("[AISummaryCache] blob lookup failed: {0}" -f $_.Exception.Message)
+                }
+            }
+        }
+        return $null
+    }
+
+    function Save-RATop50CachedFile {
+        param([Parameter(Mandatory)][string]$JsonContent)
+        # Local write
+        try {
+            Set-Content -LiteralPath $script:_RATop50Local -Value $JsonContent -Encoding UTF8 -Force
+        } catch {
+            Write-Warn2 ("[AISummaryCache] failed to write local cache: {0}" -f $_.Exception.Message)
+        }
+        # Blob mirror (best-effort, single-host installs without SI_StorageAccount skip silently)
+        if (-not [string]::IsNullOrWhiteSpace($script:_RATop50StorageAcct) -and (Get-Command -Name Set-AzStorageBlobContent -ErrorAction SilentlyContinue)) {
+            try {
+                $ctx = New-AzStorageContext -StorageAccountName $script:_RATop50StorageAcct -UseConnectedAccount -ErrorAction Stop
+                # Auto-create container if missing.
+                if (-not (Get-AzStorageContainer -Name $script:_RATop50Container -Context $ctx -ErrorAction SilentlyContinue)) {
+                    New-AzStorageContainer -Name $script:_RATop50Container -Context $ctx -Permission Off -ErrorAction Stop | Out-Null
+                }
+                $prevProgress = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
+                try {
+                    Set-AzStorageBlobContent -Container $script:_RATop50Container -File $script:_RATop50Local -Blob $script:_RATop50BlobName -Context $ctx -Force -ErrorAction Stop | Out-Null
+                } finally { $ProgressPreference = $prevProgress }
+                Write-Info ("[AISummaryCache] mirrored to blob: {0}/{1}" -f $script:_RATop50Container, $script:_RATop50BlobName)
+            } catch {
+                Write-Warn2 ("[AISummaryCache] blob mirror failed (local file still authoritative): {0}" -f $_.Exception.Message)
+            }
+        }
+    }
+
+    # ---------------------------------------------------------------------
     # v2.2.345 -- FIRST-WIN AI SUMMARY CACHE (24h freshness)
     # Whichever RA run (Summary or Detailed) fires first after the cached
     # summary's age crosses $global:SI_AISummary_MaxAgeHours (default 24)
@@ -8104,35 +8181,32 @@ if ([bool]$global:BuildSummaryByAI) {
     # File payload (extends v2.2.342's shape with AISummaryText):
     #   { GeneratedAt, SolutionVersion, CollectionTime, SourceTemplate,
     #     TopAssets, TopFindings, AISummaryText }
-    $sharedTopNPath        = Join-Path $global:OutputDir 'RiskAnalysis_Top50_Shared.json'
+    $sharedTopNPath        = $script:_RATop50Local   # back-compat with v2.2.345 var name; same path
     $aiSummaryMaxAgeHours  = if ([int]$global:SI_AISummary_MaxAgeHours -gt 0) {
         [int]$global:SI_AISummary_MaxAgeHours
     } else { 24 }
     $cachedSummaryUsed     = $false
 
-    if (Test-Path -LiteralPath $sharedTopNPath) {
-        try {
-            $shared = Get-Content -LiteralPath $sharedTopNPath -Raw | ConvertFrom-Json
-            if ($shared.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$shared.AISummaryText)) {
-                $sharedAge = (Get-Date) - [DateTime]::Parse($shared.GeneratedAt).ToLocalTime()
-                if ($sharedAge.TotalHours -le $aiSummaryMaxAgeHours) {
-                    $global:AI_SummaryText = [string]$shared.AISummaryText
-                    Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText
-                    Write-Info ("[AISummaryCache] reusing cached AI summary from {0:N1}h ago (template '{1}', collection {2}, max-age {3}h). AI not called this run." -f `
-                        $sharedAge.TotalHours, $shared.SourceTemplate, $shared.CollectionTime, $aiSummaryMaxAgeHours)
-                    $cachedSummaryUsed = $true
-                } else {
-                    Write-Info ("[AISummaryCache] cached AI summary is {0:N1}h old (>{1}h max via `$global:SI_AISummary_MaxAgeHours); this run will REFRESH it." -f `
-                        $sharedAge.TotalHours, $aiSummaryMaxAgeHours)
-                }
+    $cached = Get-RATop50CachedFile
+    if ($cached) {
+        $shared = $cached.Data
+        if ($shared.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$shared.AISummaryText)) {
+            $sharedAge = (Get-Date) - [DateTime]::Parse($shared.GeneratedAt).ToLocalTime()
+            if ($sharedAge.TotalHours -le $aiSummaryMaxAgeHours) {
+                $global:AI_SummaryText = [string]$shared.AISummaryText
+                Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText
+                Write-Info ("[AISummaryCache] reusing cached AI summary from {0:N1}h ago (source={1}, template '{2}', collection {3}, max-age {4}h). AI not called this run." -f `
+                    $sharedAge.TotalHours, $cached.Source, $shared.SourceTemplate, $shared.CollectionTime, $aiSummaryMaxAgeHours)
+                $cachedSummaryUsed = $true
             } else {
-                Write-Info "[AISummaryCache] no cached AI summary present in shared file; this run will build + persist a fresh one."
+                Write-Info ("[AISummaryCache] cached AI summary is {0:N1}h old (source={1}, >{2}h max via `$global:SI_AISummary_MaxAgeHours); this run will REFRESH it." -f `
+                    $sharedAge.TotalHours, $cached.Source, $aiSummaryMaxAgeHours)
             }
-        } catch {
-            Write-Warn2 ("[AISummaryCache] failed to read shared file: {0}; this run will build a fresh AI summary." -f $_.Exception.Message)
+        } else {
+            Write-Info ("[AISummaryCache] cache file exists (source={0}) but contains no AISummaryText; this run will build + persist." -f $cached.Source)
         }
     } else {
-        Write-Info ("[AISummaryCache] no shared file at {0}; this run will build + persist." -f $sharedTopNPath)
+        Write-Info ("[AISummaryCache] no cached file (local or blob); this run will build + persist.")
     }
     # ---------------------------------------------------------------------
 
@@ -8759,6 +8833,9 @@ Rules:
             # file so the next RA run (Summary or Detailed) within the freshness
             # window reuses this exact text. First-writer-wins; subsequent runs
             # skip the entire rollup + AI call until the 24h cache expires.
+            # v2.2.346 -- write goes through Save-RATop50CachedFile which mirrors
+            # to the sistaging blob too when $global:SI_StorageAccount is set,
+            # so multi-host / containerised installs share the cache.
             try {
                 $shared = [pscustomobject]@{
                     GeneratedAt     = (Get-Date).ToUniversalTime().ToString('o')
@@ -8770,9 +8847,10 @@ Rules:
                     TopFindings     = $findingRanked
                     AISummaryText   = $global:AI_SummaryText
                 }
-                $shared | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path $sharedTopNPath -Encoding UTF8 -Force
+                $jsonContent = $shared | ConvertTo-Json -Depth 12 -Compress
+                Save-RATop50CachedFile -JsonContent $jsonContent
                 Write-Info ("[AISummaryCache] persisted fresh AI summary + Top-{0} assets + {1} findings -> {2} (next run within {3}h will reuse it)." -f `
-                    @($assetRanked).Count, @($findingRanked).Count, $sharedTopNPath, $aiSummaryMaxAgeHours)
+                    @($assetRanked).Count, @($findingRanked).Count, $script:_RATop50Local, $aiSummaryMaxAgeHours)
             } catch {
                 Write-Warn2 ("[AISummaryCache] failed to persist shared AI summary: {0}" -f $_.Exception.Message)
             }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.342
+## v2.2.343
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
 - release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
 - release: SecurityInsight v2.2.341 - log file name now embeds simulation mode + report template (e.g. risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log) for instant test-run triage (f54a22c9)
 - release: SecurityInsight v2.2.340 - slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11/12 in v2.2.339) (e3edbc4e)
@@ -33,13 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.316 - catch up VERSION file (was stuck at 2.2.308 across v2.2.309-315 releases) (8f158f46)
 - release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
 - docs: SecurityInsight - update README + Container-Deploy-Guide for v2.2.314 OAuth-only + KPI parity + Subscription-in-MoreDetails (c420305c)
-- release: SecurityInsight v2.2.314 - OAuth-only storage enforcement; Subscription Id+Name in MoreDetails for Azure rows; canonical asset-weighted KPI (Summary == Detailed) (94386a13)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.343 — Hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashes at `$f.AssetRiskScores.GetEnumerator()` because `ConvertFrom-Json` turned the hashtable into a `PSCustomObject`
+
+### Bug
+
+v2.2.342's Detailed run crashed at line 8508 with:
+
+```
+Method invocation failed because [System.Management.Automation.PSCustomObject]
+does not contain a method named 'GetEnumerator'.
+$topAssetsForFinding = @($f.AssetRiskScores.GetEnumerator() | ...)
+```
+
+Summary wrote `$findingRanked` to JSON. The rollup entries contain `AssetRiskScores` (hashtable), `AffectedAssets` (HashSet), `Links` (HashSet), `Domains` (HashSet), `TopItems` (List). `ConvertTo-Json` serialises these as plain objects/arrays. `ConvertFrom-Json` then reads them back as `PSCustomObject` / `Object[]` — losing the native methods (`GetEnumerator`, `Add`, `Contains`, etc.) the downstream prompt-build code calls.
+
+### Fix
+
+After loading the shared Top-50 in Detailed runs, walk `$assetRanked` + `$findingRanked` and re-hydrate the collection-typed properties back to their native types (`Hashtable`, `HashSet[string]`, `List[string]`). Downstream code paths work unchanged.
 
 ---
 

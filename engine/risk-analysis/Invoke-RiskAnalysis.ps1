@@ -8486,6 +8486,41 @@ if ([bool]$global:BuildSummaryByAI) {
                     if ($sharedAge.TotalDays -le $maxAgeDays) {
                         $assetRanked   = @($shared.TopAssets)
                         $findingRanked = @($shared.TopFindings)
+                        # v2.2.343 -- ConvertFrom-Json turns hashtables into PSCustomObject and
+                        # HashSet into a flat array. Downstream code calls .GetEnumerator() on
+                        # AssetRiskScores and .Add() on AffectedAssets/Links -- both fail on the
+                        # JSON-roundtripped shapes. Re-hydrate finding rollup entries back to the
+                        # native types the prompt-build expects.
+                        foreach ($f in $findingRanked) {
+                            # AssetRiskScores: PSCustomObject -> hashtable
+                            $ars = @{}
+                            if ($f.AssetRiskScores) {
+                                foreach ($p in $f.AssetRiskScores.PSObject.Properties) {
+                                    $ars[$p.Name] = [double]$p.Value
+                                }
+                            }
+                            $f.AssetRiskScores = $ars
+                            # AffectedAssets: array -> HashSet[string]
+                            $hs = New-Object 'System.Collections.Generic.HashSet[string]'
+                            foreach ($a in @($f.AffectedAssets)) { if ($a) { [void]$hs.Add([string]$a) } }
+                            $f.AffectedAssets = $hs
+                            # Links: array -> HashSet[string]
+                            $hl = New-Object 'System.Collections.Generic.HashSet[string]'
+                            foreach ($u in @($f.Links)) { if ($u) { [void]$hl.Add([string]$u) } }
+                            $f.Links = $hl
+                        }
+                        foreach ($a in $assetRanked) {
+                            # Domains / TopItems / Links: same story
+                            $hd = New-Object 'System.Collections.Generic.HashSet[string]'
+                            foreach ($d in @($a.Domains))  { if ($d) { [void]$hd.Add([string]$d) } }
+                            $a.Domains = $hd
+                            $ti = New-Object 'System.Collections.Generic.List[string]'
+                            foreach ($t in @($a.TopItems)) { if ($t) { [void]$ti.Add([string]$t) } }
+                            $a.TopItems = $ti
+                            $hl = New-Object 'System.Collections.Generic.HashSet[string]'
+                            foreach ($u in @($a.Links)) { if ($u) { [void]$hl.Add([string]$u) } }
+                            $a.Links = $hl
+                        }
                         Write-Info ("[Top50] Detailed run using shared Top-{0} assets + {1} findings from Summary run {2:N1}h ago (template '{3}', collection {4})." -f `
                             @($assetRanked).Count, @($findingRanked).Count, $sharedAge.TotalHours, $shared.SourceTemplate, $shared.CollectionTime)
                     } else {

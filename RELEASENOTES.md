@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.351
+## v2.2.352
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
 - release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
 - release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
 - release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
@@ -33,13 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
 - release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
 - release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
-- release: SecurityInsight v2.2.322 - PublicIP RA reports: tier-driven 4-label severity so Critical+Low dashboard buckets populate (5ca66cff)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.352 — Hotfix follow-up to v2.2.350/.351 KPI cache: parallel Summary + Detailed runs starting at the same time no longer both call AI + produce divergent scores. Cache is re-checked at the actual decision points (just-before-AI-POST and just-before-KPI-backfill), not just at engine start.
+
+### Bug observed live
+
+User received two RA emails (Summary GlobalScore=65 / Detailed GlobalScore=72) from runs that started concurrently. Both runs' early cache read at engine entry saw an empty cache (or cache without GlobalScore), both proceeded to compute live, neither saw the other's mid-flight write, both ended up with divergent KPIs in their respective emails.
+
+User's diagnosis: "I propose you don't read the cache summary at the start of the script -- but just before you need it. otherwise 2 starting same time, but finish at different time will both fail, if first run."
+
+### Fix
+
+Two new re-check points added:
+
+1. **Just before the AI POST** (saves AI cost on parallel runs). After the prompt has been built, re-read the cache. If a concurrent peer wrote during our Top-50 prep + prompt build, ADOPT the peer's AI text + KPI and SKIP the POST + cache write. Operator log:
+
+   ```
+   [AISummaryCache] pre-POST race re-check: peer run wrote cache 0.1h ago (template 'RiskAnalysis_Summary', source=local). SKIPPING AI POST -- adopting peer's AI text + KPI.
+   ```
+
+2. **Just before the KPI backfill** (saves KPI divergence on parallel runs). When this run is about to write its own live-computed KPI into the existing cache, re-read first. If a concurrent peer already backfilled KPI, ADOPT the peer's KPI for THIS run's email too -- both reports converge on the identical headline number. Operator log:
+
+   ```
+   [AISummaryCache] race detected on KPI backfill: peer already wrote GlobalScore=63. Adopting peer's KPI for this run's email.
+   ```
+
+### Race semantics now
+
+- The early cache read at engine start (v2.2.345/350) remains as the fast-path skip for single non-parallel runs.
+- The pre-POST re-check + pre-KPI-backfill re-check catch the parallel-run race window.
+- Combined with the existing post-AI-write race guard (v2.2.350), the engine first-writer-wins for AI text + first-writer-wins for KPI + parallel runs ALWAYS converge on the same headline number regardless of which finished first.
+
+What stays divergent: per-domain Total / Critical / High / Medium / Low row counts in the dashboard table (Summary aggregates configurations, Detailed is per-row -- by design).
 
 ---
 

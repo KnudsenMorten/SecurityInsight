@@ -24186,15 +24186,17 @@ ReportTemplates:
 
     - ReportName: AssetSimulationComplexSummary
       ReportPurpose: |
-        v2.2.338 -- the 10 Summary reports that exercise the cross-domain CL-bucketing
+        v2.2.338 -- the 11 Summary reports that exercise the cross-domain CL-bucketing
         path (multi-let `_SourceCmdb` + `_TargetCmdb` with projection-aliased join keys
-        like Target_AzureResourceId_Guid / Source_AadDeviceId / _si_PrimaryEntityId).
+        like Target_AzureResourceId_Guid / Source_AadDeviceId / _si_PrimaryEntityId)
+        plus Azure_Recommendations_Summary as a single-let CL-bucketing sanity check.
         Designed to be paired with the launcher's `-RunAssetSimulation ComplexSummary
         -AssetSimulationAmount N` knob: clones the small real `_*Cmdb` snapshots up to
         N rows so operators can stress-test the source/target bucketing fix on a small
         tenant without provisioning a 500K-asset lab. Skips the ~50 Identity Summary
         reports that finish in seconds and don't exercise the bucketing path.
       ReportsIncluded:
+      - Name: Azure_Recommendations_Summary
       - Name: Attack_Paths_Summary_Github_to_Azure_Resources
       - Name: Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
       - Name: Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
@@ -24209,9 +24211,13 @@ ReportTemplates:
     - ReportName: AssetSimulationComplexDetailed
       ReportPurpose: |
         v2.2.338 -- Detailed counterparts to AssetSimulationComplexSummary. Same cross-
-        domain shapes, per-(asset, finding) rows. Use with
+        domain shapes, per-(asset, finding) rows. Also includes
+        Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed as
+        single-let Detailed sanity checks. Use with
         `-RunAssetSimulation ComplexDetailed -AssetSimulationAmount N`.
       ReportsIncluded:
+      - Name: Device_Missing_CVEs_Detailed
+      - Name: Device_Recommendations_Detailed
       - Name: Attack_Paths_Detailed_Github_to_Azure_Resources
       - Name: Attack_Paths_Detailed_Public_IP_to_VM_with_CVE_Exploitation
       - Name: Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources

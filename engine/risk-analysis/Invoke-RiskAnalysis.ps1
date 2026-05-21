@@ -8760,6 +8760,43 @@ Rules:
 - ONLY use the two score columns provided (Total Risk Score, Weighted Risk Score). Do NOT invent or carry over old field names like 'MaxRiskScore' or 'RiskScoreTotal' from prior outputs.
 "@
 
+        # v2.2.352 -- FINAL race re-check BEFORE the AI POST. The early cache
+        # read at engine start may have shown empty cache for this run, but a
+        # concurrent peer (Summary vs Detailed launched at ~same time) may have
+        # finished its AI POST and written to the cache during our Top-50 prep.
+        # Re-read here and adopt + skip the POST if so. Saves both AI API cost
+        # AND prevents Summary/Detailed emails from showing divergent scores
+        # when both start with empty cache. User ask: "don't read the cache
+        # summary at the start of the script -- but just before you need it.
+        # otherwise 2 starting same time, but finish at different time will
+        # both fail, if first run."
+        $skipAIPost = $false
+        try {
+            $preCallCheck = Get-RATop50CachedFile
+            if ($preCallCheck -and $preCallCheck.Data -and $preCallCheck.Data.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$preCallCheck.Data.AISummaryText)) {
+                $preCallAge = (Get-Date) - [DateTime]::Parse($preCallCheck.Data.GeneratedAt).ToLocalTime()
+                if ($preCallAge.TotalHours -le $aiSummaryMaxAgeHours) {
+                    Write-Info ("[AISummaryCache] pre-POST race re-check: peer run wrote cache {0:N1}h ago (template '{1}', source={2}). SKIPPING AI POST -- adopting peer's AI text + KPI." -f `
+                        $preCallAge.TotalHours, $preCallCheck.Data.SourceTemplate, $preCallCheck.Source)
+                    $global:AI_SummaryText = [string]$preCallCheck.Data.AISummaryText
+                    try { Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText } catch {}
+                    if ($preCallCheck.Data.PSObject.Properties['GlobalScore'] -and $null -ne $preCallCheck.Data.GlobalScore) {
+                        $script:_CachedRAKPI = $preCallCheck.Data
+                    } else {
+                        # Peer cached AI but not KPI -- backfill KPI from our live compute.
+                        $script:_RACacheNeedsKPIUpdate = $true
+                    }
+                    $skipAIPost = $true
+                }
+            }
+        } catch { }
+
+        if ($skipAIPost) {
+            # Jump to end of try-block; the cache-write block below has its own
+            # race guard that will skip when AI text wasn't built fresh.
+        }
+        else {
+
         Write-Host "`n[AI SUMMARY RESPONSE]`n" -ForegroundColor Cyan
 
         $sb = New-Object System.Text.StringBuilder
@@ -8924,6 +8961,7 @@ Rules:
             if ($reader) { try { $reader.Close() } catch {} }
             if ($client) { try { $client.Dispose() } catch {} }
         }
+        }   # close v2.2.352 `else` (skipAIPost was $false; AI POST + cache-write block above)
     }
 }
 
@@ -9155,6 +9193,34 @@ try {
             $cachedNow = Get-RATop50CachedFile
             if (-not $cachedNow -or -not $cachedNow.Data) {
                 Write-Warn2 "[AISummaryCache] cache file disappeared between AI-write and KPI-update; skipping KPI persist for this run."
+            } elseif ($cachedNow.Data.PSObject.Properties['GlobalScore'] -and $null -ne $cachedNow.Data.GlobalScore) {
+                # v2.2.352 -- another concurrent run already backfilled the KPI.
+                # First-writer-wins -- DON'T overwrite. Adopt the peer's KPI for
+                # this run's email too so both reports show the identical score.
+                Write-Info ("[AISummaryCache] race detected on KPI backfill: peer already wrote GlobalScore={0}. Adopting peer's KPI for this run's email." -f $cachedNow.Data.GlobalScore)
+                $script:_CachedRAKPI = $cachedNow.Data
+                # Re-run the override block by rebuilding $global:RA_KPI with cached values.
+                $cachedDomainScore = @{}
+                if ($cachedNow.Data.DomainScore) { foreach ($p in $cachedNow.Data.DomainScore.PSObject.Properties) { $cachedDomainScore[$p.Name] = [int]$p.Value } }
+                $cachedSevByDomain = @{}
+                if ($cachedNow.Data.SevByDomain) {
+                    foreach ($p in $cachedNow.Data.SevByDomain.PSObject.Properties) {
+                        $bucket = @{}
+                        foreach ($sp in $p.Value.PSObject.Properties) { $bucket[$sp.Name] = [int]$sp.Value }
+                        $cachedSevByDomain[$p.Name] = $bucket
+                    }
+                }
+                $global:RA_KPI = [pscustomobject]@{
+                    GlobalScore  = [int]$cachedNow.Data.GlobalScore
+                    Band         = if ($cachedNow.Data.Band)      { [string]$cachedNow.Data.Band }      else { $global:RA_KPI.Band }
+                    RiskLevel    = if ($cachedNow.Data.RiskLevel) { [string]$cachedNow.Data.RiskLevel } else { $global:RA_KPI.RiskLevel }
+                    DomainScore  = if ($cachedDomainScore.Count -gt 0) { $cachedDomainScore } else { $global:RA_KPI.DomainScore }
+                    SevCount     = $global:RA_KPI.SevCount
+                    SevByDomain  = if ($cachedSevByDomain.Count -gt 0) { $cachedSevByDomain } else { $global:RA_KPI.SevByDomain }
+                    TotalRows    = $global:RA_KPI.TotalRows
+                    Direction    = 'higher-is-better'
+                }
+                $script:_RACacheNeedsKPIUpdate = $false
             } else {
                 $shared = $cachedNow.Data
                 $shared | Add-Member -NotePropertyName GlobalScore -NotePropertyValue ([int]$global:RA_KPI.GlobalScore)   -Force

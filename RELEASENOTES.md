@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.341
+## v2.2.342
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
 - release: SecurityInsight v2.2.341 - log file name now embeds simulation mode + report template (e.g. risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log) for instant test-run triage (f54a22c9)
 - release: SecurityInsight v2.2.340 - slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11/12 in v2.2.339) (e3edbc4e)
 - release: SecurityInsight v2.2.339 - expand AssetSimulationComplexSummary to include Azure_Recommendations_Summary; expand AssetSimulationComplexDetailed to include Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed (668df5e4)
@@ -33,13 +34,49 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.315 - schema-aware empty CL snapshot; self-healing fingerprint cache (DELETE+PUT on 400); ForceFullRun now writes-with-overwrite instead of skipping (83f41107)
 - docs: SecurityInsight - update README + Container-Deploy-Guide for v2.2.314 OAuth-only + KPI parity + Subscription-in-MoreDetails (c420305c)
 - release: SecurityInsight v2.2.314 - OAuth-only storage enforcement; Subscription Id+Name in MoreDetails for Azure rows; canonical asset-weighted KPI (Summary == Detailed) (94386a13)
-- release: SecurityInsight v2.2.313 - community-vm launchers stop calling Resolve-RepoRoot; use 2-up convention so flat installs Just Work (8275fd41)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.342 — Cross-run Top-50 stability: Summary writes a shared `RiskAnalysis_Top50_Shared.json`; Detailed reads it. AI temperature dropped to 0. Manager emails from Summary and Detailed runs now show the IDENTICAL Top-50 assets + Top-50 findings even when the two runs are on different cadences
+
+### Operator pain
+
+> "the top 50 list are NOT the same between the summary report and the detailed report. it comes from ai generated list. they must be identitically, as people priotize base on that, especially managers"
+
+Two root causes:
+1. Summary and Detailed fed DIFFERENT input rows to the PowerShell rollup → different aggregated Top-N → different AI output.
+2. AI temperature 0.2 added small jitter even when input was the same.
+
+### Fix
+
+**Persistence**: after $assetRanked + $findingRanked are computed, the engine writes them to `<OutputDir>/RiskAnalysis_Top50_Shared.json` on Summary runs (authoritative), or READS that file and overrides its own rankings on Detailed runs. File carries `GeneratedAt` + `SolutionVersion` + `CollectionTime` + `SourceTemplate` so the operator can see exactly which Summary run produced it.
+
+**Authority model**: Summary is the source of truth. Why: Summary's rows are the canonical finding-rollup (one row per Configuration with `ImpactedAssetsList` aggregated), which is what the rest of the report — exclude lists, dashboards, tier-engine — is built around. Detailed mirrors that.
+
+**Staleness guard**: Detailed falls back to its own computation if the shared file is >7 days old (override via `$global:SI_Top50_MaxAgeDays`).
+
+**AI determinism**: temperature 0.2 → 0. With the same JSON input, the AI now produces byte-identical markdown.
+
+**AI role unchanged**: the AI still writes the narrative — "why high risk" sentences, top-5 actions per asset, cross-asset quick wins, reference link rendering. It just no longer ranks. PowerShell ranks deterministically; AI enriches.
+
+### What the operator sees
+
+```
+[INFO] [Top50] Summary run wrote shared Top-50 assets + 50 findings -> .../OUTPUT/RiskAnalysis_Top50_Shared.json
+... (later, Detailed run) ...
+[INFO] [Top50] Detailed run using shared Top-50 assets + 50 findings from Summary run 4.2h ago (template 'RiskAnalysis_Summary', collection 2026-05-21T08:00:00Z).
+```
+
+### Known limitations (planned follow-ups)
+
+- File persistence works for single-host VMs (the typical case). Multi-host / containerised installs need a shared blob or LA table — planned v2.2.343: new `SI_RiskAnalysis_Top50_CL` custom table ingested via the same DCR pattern; engine reads `arg_max(CollectionTime, *)` from there as the source of truth.
+- If Detailed runs BEFORE Summary has ever run, Detailed uses its own computation (one-time; next Summary run persists).
 
 ---
 

@@ -8438,6 +8438,68 @@ if ([bool]$global:BuildSummaryByAI) {
                 Select-Object -First $TopFindingsN
         }
 
+        # ---------------------------------------------------------------------
+        # v2.2.342 -- CROSS-RUN TOP-50 STABILITY
+        # Summary and Detailed runs persist/read a shared Top-50 JSON so the
+        # email + xlsx top-asset and top-finding sections agree regardless of
+        # which template last ran. Summary is the AUTHORITY (its rows are the
+        # canonical finding-rollup the rest of the report is built around);
+        # Detailed reads what Summary wrote.
+        #
+        # Operator pain that drove this: manager-facing emails showed a
+        # different Top-50 each time because (a) Summary and Detailed feed
+        # different input rows to the rollup, and (b) AI temperature jitter
+        # could re-order ties. Engineers couldn't tell which list was "the
+        # one" to prioritise. Persisting an authoritative Top-50 makes both
+        # reports converge on the same list.
+        #
+        # Storage: $global:OutputDir/RiskAnalysis_Top50_Shared.json. Local
+        # file works for single-host installs (the vast majority). Multi-host
+        # / containerised installs would need to switch this to a shared blob
+        # (planned v2.2.343 follow-up: SI_RiskAnalysis_Top50_CL custom LA
+        # table; same DCR pattern as other SI_RiskAnalysis_* tables).
+        $sharedTopNPath = Join-Path $global:OutputDir 'RiskAnalysis_Top50_Shared.json'
+        $isSummaryRun   = ($global:ReportTemplate -notlike '*_Detailed*')
+
+        if ($isSummaryRun) {
+            try {
+                $shared = [pscustomobject]@{
+                    GeneratedAt     = (Get-Date).ToUniversalTime().ToString('o')
+                    SolutionVersion = [string]$global:RA_SolutionVersion
+                    CollectionTime  = ([datetime]$global:RA_CollectionTime).ToUniversalTime().ToString('o')
+                    SourceTemplate  = [string]$global:ReportTemplate
+                    TopAssets       = $assetRanked
+                    TopFindings     = $findingRanked
+                }
+                $shared | ConvertTo-Json -Depth 12 -Compress | Set-Content -Path $sharedTopNPath -Encoding UTF8 -Force
+                Write-Info ("[Top50] Summary run wrote shared Top-{0} assets + {1} findings -> {2}" -f @($assetRanked).Count, @($findingRanked).Count, $sharedTopNPath)
+            } catch {
+                Write-Warn2 ("[Top50] failed to write shared Top-N file: {0}" -f $_.Exception.Message)
+            }
+        } else {
+            # Detailed run: prefer Summary's persisted Top-N over this run's own.
+            if (Test-Path -LiteralPath $sharedTopNPath) {
+                try {
+                    $shared = Get-Content -LiteralPath $sharedTopNPath -Raw | ConvertFrom-Json
+                    $sharedAge = (Get-Date) - [DateTime]::Parse($shared.GeneratedAt).ToLocalTime()
+                    $maxAgeDays = if ([int]$global:SI_Top50_MaxAgeDays -gt 0) { [int]$global:SI_Top50_MaxAgeDays } else { 7 }
+                    if ($sharedAge.TotalDays -le $maxAgeDays) {
+                        $assetRanked   = @($shared.TopAssets)
+                        $findingRanked = @($shared.TopFindings)
+                        Write-Info ("[Top50] Detailed run using shared Top-{0} assets + {1} findings from Summary run {2:N1}h ago (template '{3}', collection {4})." -f `
+                            @($assetRanked).Count, @($findingRanked).Count, $sharedAge.TotalHours, $shared.SourceTemplate, $shared.CollectionTime)
+                    } else {
+                        Write-Warn2 ("[Top50] shared Top-N file is {0:N1} days old (>{1} max via `$global:SI_Top50_MaxAgeDays); falling back to this run's computed Top-N." -f $sharedAge.TotalDays, $maxAgeDays)
+                    }
+                } catch {
+                    Write-Warn2 ("[Top50] failed to read shared Top-N file: {0}; using this run's computed Top-N." -f $_.Exception.Message)
+                }
+            } else {
+                Write-Info ("[Top50] no shared Top-N file at {0} (Summary hasn't run yet); Detailed using its own Top-N for this run -- next Summary run will persist." -f $sharedTopNPath)
+            }
+        }
+        # ---------------------------------------------------------------------
+
         $findingLines2 = @()
         $rankF = 0
         foreach ($f in $findingRanked) {
@@ -8596,7 +8658,12 @@ Rules:
             $body = @{
                 model = $global:AI_deployment
                 stream = $true
-                temperature = 0.2
+                # v2.2.342 -- temp 0 (was 0.2) so the AI rendering is byte-identical
+                # across repeated calls with the same input. Combined with the new
+                # shared Top-50 ($global:OutputDir/RiskAnalysis_Top50_Shared.json
+                # written by Summary, read by Detailed), Summary and Detailed
+                # email/xlsx top-N sections now agree.
+                temperature = 0
                 top_p = 1.0
                 max_tokens = [int]$global:AI_MaxTokensPerRequest
                 messages = @(

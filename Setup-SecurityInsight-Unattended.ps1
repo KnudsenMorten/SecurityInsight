@@ -467,6 +467,29 @@ try {
         Infra = $infraOut
     }
     if ($ForceConfigOverwrite) { $cfgArgs.Force = $true }
+    # v2.2.355 -- pass Smtp through to the custom.ps1 writer when the operator
+    # populated it in setup-unattended.json. Community ONLY -- Internal flavour
+    # gets SMTP from PlatformConfiguration/config/platform-defaults.ps1 via
+    # Connect-Platform's automatic dot-source, so we skip even when Smtp is
+    # defined to avoid duplicating + diverging from the platform-wide default.
+    if ($cfg.Flavour -eq 'Community' -and $cfg.PSObject.Properties['Smtp'] -and $cfg.Smtp -and $cfg.Smtp.Server) {
+        $smtpHash = @{
+            Server     = [string]$cfg.Smtp.Server
+            Port       = if ($cfg.Smtp.Port)   { [int]$cfg.Smtp.Port }   else { 587 }
+            User       = [string]$cfg.Smtp.User
+            Password   = [string]$cfg.Smtp.Password
+            From       = [string]$cfg.Smtp.From
+            UseSsl     = if ($null -ne $cfg.Smtp.UseSsl) { [bool]$cfg.Smtp.UseSsl } else { $true }
+            MailTo     = @($cfg.Smtp.MailTo     | Where-Object { $_ })
+            DetailedTo = @($cfg.Smtp.DetailedTo | Where-Object { $_ })
+            SummaryTo  = @($cfg.Smtp.SummaryTo  | Where-Object { $_ })
+        }
+        $cfgArgs.Smtp = $smtpHash
+        _Info ("Smtp section: server={0}:{1} from={2} mailTo={3} (Community flavour -- emitted into custom.ps1)" -f `
+            $smtpHash.Server, $smtpHash.Port, $smtpHash.From, ((@($smtpHash.MailTo) + @($smtpHash.DetailedTo) + @($smtpHash.SummaryTo) | Sort-Object -Unique) -join ','))
+    } elseif ($cfg.Flavour -eq 'Internal' -and $cfg.PSObject.Properties['Smtp'] -and $cfg.Smtp -and $cfg.Smtp.Server) {
+        _Info "Smtp section ignored: Internal flavour reads SMTP from PlatformConfiguration/config/platform-defaults.ps1. Edit there if a change is needed."
+    }
     $cfgOut = & $cmdletWriteConfig @cfgArgs
     $phaseStatus.config = 'ok'
 } catch {

@@ -204,10 +204,45 @@ function Invoke-SIPrestageInfra {
             if ($sa) {
                 Write-SIOk ($_lbl -f 'Storage account', "$StorageAccountName  $(_Si_Status $false)")
             } else {
-                $sa = New-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -Location $Location -SkuName 'Standard_LRS' -Kind 'StorageV2' -EnableHttpsTrafficOnly $true -MinimumTlsVersion 'TLS1_2' -AllowBlobPublicAccess $false -ErrorAction Stop
-                Write-SIOk ($_lbl -f 'Storage account', "$StorageAccountName  $(_Si_Status $true) (Standard_LRS, TLS1_2)")
-                $changed   = $true
-                $saCreated = $true
+                # v2.2.353 -- before assuming the storage account doesn't exist (and
+                # trying to create), probe ACROSS all subs/RGs the SPN can see. The
+                # storage account name is GLOBALLY unique; if it exists anywhere the
+                # SPN has read access we should adopt it rather than fail with
+                # "already taken" on the create. Covers the common case: customer's
+                # storage account was provisioned earlier under a different RG (or a
+                # sibling subscription) than the one we picked from defaults.
+                $existingElsewhere = $null
+                try {
+                    $existingElsewhere = Get-AzStorageAccount -ErrorAction SilentlyContinue |
+                                          Where-Object { $_.StorageAccountName -eq $StorageAccountName } |
+                                          Select-Object -First 1
+                } catch {}
+                if ($existingElsewhere) {
+                    $foundRg  = $existingElsewhere.ResourceGroupName
+                    $foundSub = ($existingElsewhere.Id -split '/')[2]
+                    if ($foundSub -ne $SubscriptionId -or $foundRg -ne $stRg) {
+                        Write-SIInfo ('  storage account ''{0}'' found in sub={1} rg={2} (not in expected sub={3} rg={4}) -- adopting existing.' -f `
+                            $StorageAccountName, $foundSub, $foundRg, $SubscriptionId, $stRg)
+                    }
+                    $sa = $existingElsewhere
+                    # Realign $stRg to where the storage account actually lives so
+                    # the RBAC-scope string below targets the right resource.
+                    $stRg = $foundRg
+                    Write-SIOk ($_lbl -f 'Storage account', "$StorageAccountName  $(_Si_Status $false) (in $foundRg)")
+                } else {
+                    # Name is free everywhere the SPN can see -- proceed with create.
+                    try {
+                        $sa = New-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName -Location $Location -SkuName 'Standard_LRS' -Kind 'StorageV2' -EnableHttpsTrafficOnly $true -MinimumTlsVersion 'TLS1_2' -AllowBlobPublicAccess $false -ErrorAction Stop
+                        Write-SIOk ($_lbl -f 'Storage account', "$StorageAccountName  $(_Si_Status $true) (Standard_LRS, TLS1_2)")
+                        $changed   = $true
+                        $saCreated = $true
+                    } catch {
+                        if ($_.Exception.Message -match 'already taken') {
+                            Write-Warning ("storage account '$StorageAccountName' is GLOBALLY taken but not visible to the SPN (probably owned by a different tenant, or the SPN lacks 'Reader' on the sub where it lives). Either rename `$global:SI_StorageAccount in custom.ps1, or grant the SPN Reader on the owning subscription so the prestage can adopt it. Re-throwing.")
+                        }
+                        throw
+                    }
+                }
             }
             # Storage Blob Data Contributor on the storage account (engine reads/writes blobs via OAuth when SI_UseStorageOAuth, otherwise uses key)
             $stScope = "/subscriptions/$SubscriptionId/resourceGroups/$stRg/providers/Microsoft.Storage/storageAccounts/$StorageAccountName"

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.353
+## v2.2.354
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
 - release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
 - release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
 - release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
 - release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
 - release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
-- release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.354 — Setup grants Contributor at the target subscription (was missing). SPN's permission footprint is now exactly: Reader at tenant-root MG (Resource Graph + Exposure Graph enumeration) + Contributor on the subscription where SI runs (everything else). Never Owner anywhere.
+
+### Why
+
+Customer ask: "we need to change the default required permissions in the unattended setup routine, so it sets only READ on mgmt root and then contributor on the subscription defined where SI will be installed. it should not have owner on mgmt root as example".
+
+The SPN already received Reader at tenant-root MG (correct, no change), but the unattended setup never granted Contributor at the subscription level. Instead it relied on `Initialize-SIInfra.ps1` granting scattered Contributor + LA Contributor + Monitoring Metrics Publisher + Storage Blob/Table/Queue Data Contributor on individual workspaces / RGs / storage accounts. Worked for the happy path, but:
+
+- Operators saw a SPN with no visible role on the subscription itself, and assumed something was missing.
+- New resources provisioned under that subscription (e.g. a fresh DCR in a different RG, a new storage container, an idempotent re-grant from the engine) sometimes failed because no inherited Contributor covered them.
+- Adding a new engine that needs a new resource type forced an Initialize-SIInfra.ps1 edit + re-run.
+
+### Fix
+
+`setup/ConfigWizard/backend/New-SISpn.ps1` adds a Contributor grant at `/subscriptions/$SubscriptionId` right after the tenant-root Reader block. Idempotent (skips when already granted). If the grant fails, the warning explicitly tells the operator they need Owner OR Contributor + User Access Administrator on the subscription.
+
+The existing granular grants in `Initialize-SIInfra.ps1` (workspace Contributor, DCR-RG Contributor, storage account Data Contributors) stay -- they no-op when the role is inherited from the new sub-scope, and they remain useful when a customer scopes the SPN tighter than sub-Contributor (e.g. via Azure Policy denial of inherited Contributor on certain resource types).
+
+### Permission footprint after v2.2.354
+
+| Scope | Role | Why |
+|---|---|---|
+| `/providers/Microsoft.Management/managementGroups/<RootMg>` | **Reader** | ARG cross-sub discovery, Defender Exposure Graph enumeration |
+| `/subscriptions/<TargetSub>` | **Contributor** (NEW) | All SI provisioning + idempotent re-grants + cross-RG resource lifecycle |
+| `/subscriptions/<TargetSub>/resourceGroups/<DcrRg>` | Monitoring Metrics Publisher | DCR ingestion (covered by sub-Contributor; kept for explicitness) |
+| Storage account | Storage Blob/Table/Queue Data Contributor | Data-plane reads/writes via OAuth (covered by sub-Contributor; kept for explicitness) |
+| Tenant-root MG | Tag Contributor | OPT-IN only via `-IncludeTagContributor`. Required only for asset-exclusion-tagging engine. |
+
+**SPN never needs Owner anywhere.** Operator running the setup needs Owner OR Contributor + User Access Administrator on the target subscription (to grant Contributor there) AND User Access Administrator at tenant-root MG (to grant Reader there). Setup messaging already reflects this.
 
 ---
 

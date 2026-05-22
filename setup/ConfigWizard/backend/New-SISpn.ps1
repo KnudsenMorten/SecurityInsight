@@ -26,11 +26,16 @@
     Entra tenant ID (GUID).
 
 .PARAMETER SubscriptionId
-    Azure subscription ID where SI will run. Used to scope the RBAC.
+    Azure subscription ID where SI will run. The SPN gets Contributor at this
+    subscription scope so the engine can provision LA workspace + DCE + DCR + storage
+    account + RBAC delegations + run all idempotent infra updates without re-prompting
+    elevated perms on every run.
 
 .PARAMETER RootMgId
-    Tenant-root management group ID. RBAC (Reader by default; Tag Contributor only when -IncludeTagContributor is set) is granted at this scope
-    so the engine can query Azure Resource Graph across all subscriptions in the tenant.
+    Tenant-root management group ID. SPN gets ONLY Reader at this scope (Tag Contributor
+    is opt-in via -IncludeTagContributor for the asset-exclusion-tagging engine). Reader
+    is the minimum needed for ARG cross-subscription discovery + Defender Exposure Graph
+    enumeration. The SPN never needs Owner or Contributor at MG root.
     Defaults to the TenantId (which is the default name of the root MG).
 
 .PARAMETER CredKind
@@ -568,7 +573,9 @@ _Ok ("Az context: {0} (sub: {1} / {2})" -f $azCtx.Account.Id, $azCtx.Subscriptio
 $rbacScopes  = @()
 $rbacResults = @()                # @{Name; Scope; Status; Error}
 $rootMgScope = "/providers/Microsoft.Management/managementGroups/$RootMgId"
+$subScope    = "/subscriptions/$SubscriptionId"
 $readerRoleId       = 'acdd72a7-3385-48ef-bd42-f606fba81ae7'   # Reader
+$contributorRoleId  = 'b24988ac-6180-42a0-ab88-20f7382dd24c'   # Contributor
 $tagContributorId   = '4a9ae827-6dc8-4573-8ac7-8239d42aa03f'   # Tag Contributor
 
 # Build the role list for tenant-root MG. Reader is always included (drives
@@ -606,6 +613,32 @@ if ($SkipTenantRbac) {
             _Warn ("RBAC {0} grant failed: {1}" -f $pair.Name, $errMsg)
             $rbacResults += @{ Name = $pair.Name; Scope = $rootMgScope; Status = 'pending'; Error = $errMsg }
         }
+    }
+}
+
+# v2.2.354 -- Contributor at the target subscription (where SI is installed).
+# Customer ask: "set only READ on mgmt root and then contributor on the
+# subscription defined where SI will be installed". Replaces the implicit
+# expectation that downstream Initialize-SIInfra's granular RG/workspace/
+# storage grants would suffice -- subscription-scope Contributor covers all of
+# those + workspace ops + DCR/DCE provisioning + storage account create + RBAC
+# delegation, in one assignment. Granular grants in Initialize-SIInfra stay
+# (they no-op when inherited from sub-scope -- defensive idempotency).
+$existingSubContrib = Get-AzRoleAssignment -ObjectId $sp.Id -Scope $subScope -RoleDefinitionId $contributorRoleId -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Scope -eq $subScope }
+if ($existingSubContrib) {
+    _Info ("RBAC Contributor already in place at subscription {0}" -f $SubscriptionId)
+    $rbacResults += @{ Name = 'Contributor'; Scope = $subScope; Status = 'already'; Error = $null }
+} else {
+    try {
+        $null = New-AzRoleAssignment -ObjectId $sp.Id -RoleDefinitionId $contributorRoleId -Scope $subScope -ErrorAction Stop
+        _Ok ("RBAC Contributor granted at subscription {0}" -f $SubscriptionId)
+        $rbacScopes += "$subScope|Contributor"
+        $rbacResults += @{ Name = 'Contributor'; Scope = $subScope; Status = 'granted'; Error = $null }
+    } catch {
+        $errMsg = $_.Exception.Message
+        _Warn ("RBAC Contributor at subscription {0} failed: {1} (operator likely needs Owner OR Contributor + User Access Administrator on that subscription)" -f $SubscriptionId, $errMsg)
+        $rbacResults += @{ Name = 'Contributor'; Scope = $subScope; Status = 'pending'; Error = $errMsg }
     }
 }
 

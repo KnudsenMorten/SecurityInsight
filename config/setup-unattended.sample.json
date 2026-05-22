@@ -7,9 +7,9 @@
   "Sub": {
     "TenantId":       null,
     "SubscriptionId": null,
-    "Location":       "westeurope"
+    "Location":       null
   },
-  "_Sub_comment": "Internal flavour: TenantId null -> $global:AzureTenantId. SubscriptionId null -> $global:MainLogAnalyticsWorkspaceSubId. Community flavour: both required.",
+  "_Sub_comment": "TenantId/SubscriptionId: Internal flavour null -> $global:AzureTenantId / $global:MainLogAnalyticsWorkspaceSubId. Community flavour: both REQUIRED. Location: ALWAYS REQUIRED (no implicit default -- solution is used worldwide). Examples: westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth.",
 
   "Resources": {
     "ResourceGroupName":  "rg-securityinsight",

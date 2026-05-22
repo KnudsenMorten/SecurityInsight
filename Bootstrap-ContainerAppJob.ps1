@@ -35,16 +35,20 @@ param(
     #      config/SecurityInsight.custom.ps1
     #   3. -<ParamName> on the CLI
     [Parameter()][string]$ResourceGroupName  = 'rg-securityinsight',
-    [Parameter()][string]$Location           = 'westeurope',
+    # v2.2.356 -- no implicit westeurope default. Pass -Location explicitly
+    # OR set $global:SI_Bootstrap_Location / $global:SI_Location in
+    # config/SecurityInsight.custom.ps1. Solution is used worldwide.
+    [Parameter()][string]$Location           = '',
     [Parameter()][string]$AcrName            = 'acrsecurityinsight',
     [Parameter()][string]$EnvName            = 'cae-securityinsight',
     [Parameter()][string]$ImageTag           = 'latest',
-    [Parameter()][string[]]$Engines               = @('endpoint','identity','azure','schema-discovery','risk-analysis'),
-    [Parameter()][string]$ScheduleEndpoint        = '0 4 * * *',     # 04:00 UTC daily
-    [Parameter()][string]$ScheduleIdentity        = '30 4 * * *',    # 04:30 UTC daily
-    [Parameter()][string]$ScheduleAzure           = '0 5 * * *',     # 05:00 UTC daily
-    [Parameter()][string]$ScheduleSchemaDiscovery = '0 3 * * 0',     # 03:00 UTC every Sunday
-    [Parameter()][string]$ScheduleRiskAnalysis    = '0 6 * * *',     # 06:00 UTC daily (after collection)
+    [Parameter()][string[]]$Engines               = @('endpoint','identity','azure','publicip','privilege-tier-classifier','risk-analysis','risk-analysis-detailed'),
+    [Parameter()][string]$ScheduleEndpoint            = '0 4 * * *',     # 04:00 UTC daily
+    [Parameter()][string]$ScheduleIdentity            = '30 4 * * *',    # 04:30 UTC daily
+    [Parameter()][string]$ScheduleAzure               = '0 5 * * *',     # 05:00 UTC daily
+    [Parameter()][string]$ScheduleSchemaDiscovery     = '0 3 * * 0',     # 03:00 UTC every Sunday
+    [Parameter()][string]$ScheduleRiskAnalysis        = '0 6 * * *',     # 06:00 UTC daily Summary (after collection)
+    [Parameter()][string]$ScheduleRiskAnalysisDetailed = '0 8 * * *',    # 08:00 UTC daily Detailed (2h after Summary)
     [Parameter()][int]$ParallelismEndpoint        = 1,
     [Parameter()][int]$ParallelismIdentity        = 1,
     [Parameter()][int]$ParallelismAzure           = 1,
@@ -55,7 +59,7 @@ param(
     [Parameter()][int]$ParallelismRiskAnalysis    = 1,
     # RA-specific knobs. Engine reads these via env vars; see
     # container/Start-RiskAnalysisInContainer.ps1 for the full surface.
-    [Parameter()][string]$RiskAnalysisReportTemplate    = 'RiskAnalysis_Summary_Bucket',
+    [Parameter()][string]$RiskAnalysisReportTemplate    = 'RiskAnalysis_Summary',
     [Parameter()][string]$RiskAnalysisMode              = 'Summary',          # Summary | Detailed
     # ExportDestination defaults to $null at the param layer; the
     # post-load resolver derives a default from $global:SI_StorageAccount +
@@ -123,6 +127,13 @@ function _Apply-CustomDefault {
 # Bootstrap-wide knobs (one custom-file global per param, SI_Bootstrap_<Name>).
 _Apply-CustomDefault -ParamName 'ResourceGroupName'        -GlobalName 'SI_Bootstrap_ResourceGroupName'
 _Apply-CustomDefault -ParamName 'Location'                 -GlobalName 'SI_Bootstrap_Location'
+# v2.2.356 -- fall back to $global:SI_Location (the solution-wide location) when
+# the bootstrap-specific override isn't set, then throw clearly when neither is.
+# No implicit westeurope default -- solution is used worldwide.
+if ([string]::IsNullOrWhiteSpace($Location) -and $global:SI_Location) { $Location = [string]$global:SI_Location }
+if ([string]::IsNullOrWhiteSpace($Location)) {
+    throw "Location is not set. Pass -Location <azure-region>, or set `$global:SI_Bootstrap_Location (preferred for container infra) or `$global:SI_Location (solution-wide) in config\SecurityInsight.custom.ps1. Examples: westeurope, eastus, eastus2, southcentralus, australiaeast, southeastasia."
+}
 _Apply-CustomDefault -ParamName 'AcrName'                  -GlobalName 'SI_Bootstrap_AcrName'
 _Apply-CustomDefault -ParamName 'EnvName'                  -GlobalName 'SI_Bootstrap_EnvName'
 _Apply-CustomDefault -ParamName 'ImageTag'                 -GlobalName 'SI_Bootstrap_ImageTag'
@@ -131,7 +142,8 @@ _Apply-CustomDefault -ParamName 'ScheduleEndpoint'         -GlobalName 'SI_Boots
 _Apply-CustomDefault -ParamName 'ScheduleIdentity'         -GlobalName 'SI_Bootstrap_ScheduleIdentity'
 _Apply-CustomDefault -ParamName 'ScheduleAzure'            -GlobalName 'SI_Bootstrap_ScheduleAzure'
 _Apply-CustomDefault -ParamName 'ScheduleSchemaDiscovery'  -GlobalName 'SI_Bootstrap_ScheduleSchemaDiscovery'
-_Apply-CustomDefault -ParamName 'ScheduleRiskAnalysis'     -GlobalName 'SI_Bootstrap_ScheduleRiskAnalysis'
+_Apply-CustomDefault -ParamName 'ScheduleRiskAnalysis'         -GlobalName 'SI_Bootstrap_ScheduleRiskAnalysis'
+_Apply-CustomDefault -ParamName 'ScheduleRiskAnalysisDetailed' -GlobalName 'SI_Bootstrap_ScheduleRiskAnalysisDetailed'
 _Apply-CustomDefault -ParamName 'ParallelismEndpoint'      -GlobalName 'SI_Bootstrap_ParallelismEndpoint'
 _Apply-CustomDefault -ParamName 'ParallelismIdentity'      -GlobalName 'SI_Bootstrap_ParallelismIdentity'
 _Apply-CustomDefault -ParamName 'ParallelismAzure'         -GlobalName 'SI_Bootstrap_ParallelismAzure'
@@ -326,20 +338,34 @@ $acrPass  = $acrCreds.passwords[0].value
 foreach ($engine in $Engines) {
     # Risk Analysis is a different beast (report build, not collection). Compute
     # the flag up-front so it can gate job naming + KEDA decisions consistently.
-    $isRiskAnalysis = ($engine -eq 'risk-analysis')
+    # 'risk-analysis-detailed' is a second RA-class job; same entrypoint + env
+    # surface, but $SI_RA_MODE=Detailed and a separate cron schedule.
+    $isRiskAnalysis         = ($engine -eq 'risk-analysis' -or $engine -eq 'risk-analysis-detailed')
+    $isRiskAnalysisDetailed = ($engine -eq 'risk-analysis-detailed')
+
+    # Container App Jobs name max 32 chars. Engine names longer than ~18 chars
+    # need a shortened alias for the job-name slot (the SI_ENGINE env var still
+    # carries the full name for the dispatcher / orchestrator validset).
+    $engineNameShort = switch ($engine) {
+        'privilege-tier-classifier' { 'ptc' }
+        'asset-tagging'             { 'tagging' }
+        'schema-discovery'          { 'schema' }
+        default                     { $engine }
+    }
 
     # KEDA mode creates two jobs per engine; legacy + RA mode create one. RA
     # never participates in KEDA even when -UseKEDA is passed -- it's a single-
     # container report build, not a per-asset shard workload.
-    $producerName = ('caj-si-{0}-producer' -f $engine)
-    $workerName   = ('caj-si-{0}-worker' -f $engine)
-    $jobName      = if ($UseKEDA -and -not $isRiskAnalysis) { $workerName } else { ('caj-si-{0}' -f $engine) }
+    $producerName = ('caj-si-{0}-producer' -f $engineNameShort)
+    $workerName   = ('caj-si-{0}-worker' -f $engineNameShort)
+    $jobName      = if ($UseKEDA -and -not $isRiskAnalysis) { $workerName } else { ('caj-si-{0}' -f $engineNameShort) }
     $schedule    = switch ($engine) {
-        'identity'         { $ScheduleIdentity }
-        'azure'            { $ScheduleAzure }
-        'schema-discovery' { $ScheduleSchemaDiscovery }
-        'risk-analysis'    { $ScheduleRiskAnalysis }
-        default            { $ScheduleEndpoint }
+        'identity'                { $ScheduleIdentity }
+        'azure'                   { $ScheduleAzure }
+        'schema-discovery'        { $ScheduleSchemaDiscovery }
+        'risk-analysis'           { $ScheduleRiskAnalysis }
+        'risk-analysis-detailed'  { $ScheduleRiskAnalysisDetailed }
+        default                   { $ScheduleEndpoint }
     }
     $parallelism = switch ($engine) {
         'identity'         { $ParallelismIdentity }
@@ -492,14 +518,25 @@ foreach ($engine in $Engines) {
         "SI_SPN_OBJECTID=$spnObjectId"
     )
 
+    # SI_ROLE drives the entrypoint dispatcher in Start-SIInContainer.ps1.
+    # 'ra' for risk-analysis, 'worker' for all collection-engine job-instances
+    # (matches the default ENTRYPOINT path). Producer jobs get 'producer'
+    # injected separately further below.
+    $envArgs += @( if ($isRiskAnalysis) { 'SI_ROLE=ra' } else { 'SI_ROLE=worker' } )
+
     # Risk Analysis env vars: the RA entrypoint
     # (Start-RiskAnalysisInContainer.ps1) reads SI_RA_* to populate the
     # RA engine's $global:* surface. KEDA does not apply here -- RA is a
     # single-container report build by design.
     if ($isRiskAnalysis) {
+        # Detailed job overrides mode + template; Summary job uses the
+        # bootstrap-level $RiskAnalysisMode / $RiskAnalysisReportTemplate
+        # (which still default to Summary). Two RA jobs ship per tenant.
+        $raModeForJob     = if ($isRiskAnalysisDetailed) { 'Detailed' }                    else { $RiskAnalysisMode }
+        $raTemplateForJob = if ($isRiskAnalysisDetailed) { 'RiskAnalysis_Detailed_Bucket' } else { $RiskAnalysisReportTemplate }
         $envArgs += @(
-            "SI_RA_REPORT_TEMPLATE=$RiskAnalysisReportTemplate",
-            "SI_RA_MODE=$RiskAnalysisMode",
+            "SI_RA_REPORT_TEMPLATE=$raTemplateForJob",
+            "SI_RA_MODE=$raModeForJob",
             ('SI_RA_SEND_TO_LOG_ANALYTICS={0}' -f ([int][bool]$RiskAnalysisSendToLogAnalytics)),
             ('SI_RA_BUILD_SUMMARY_BY_AI={0}'   -f ([int][bool]$RiskAnalysisBuildSummaryByAI))
         )
@@ -569,7 +606,6 @@ foreach ($engine in $Engines) {
             '--registry-password',$acrPass,
             '--cpu','2.0',
             '--memory','4.0Gi',
-            '--command','pwsh','-NoProfile','-File','/app/container/Start-RiskAnalysisInContainer.ps1',
             '--output','none'
         )
     } else {
@@ -604,6 +640,13 @@ foreach ($engine in $Engines) {
     #   - 'containerapp job secret set --secrets ...'  for secrets
     #   - 'containerapp job update --replace-env-vars ...' for env vars
     # Image + cron go on the bare update.
+    # NOTE: do NOT pass --command "" / --args "" on UPDATE. az containerapp job
+    # update interprets the empty string as a literal value, setting
+    # command=[""] which Container Apps then tries to exec as an empty binary
+    # (-> "Failed", no replica). Only safe way to drop a stale command/args
+    # override is to DELETE + re-CREATE the job (CREATE without --command/--args
+    # lets the Dockerfile ENTRYPOINT win). Customers migrating from < v2.3
+    # bootstrap MUST delete the legacy caj-si-* jobs once before re-running.
     $updateArgs = @(
         'containerapp','job','update',
         '--name',$jobName,
@@ -650,6 +693,7 @@ foreach ($engine in $Engines) {
         Write-Host ('       Ensuring producer job {0} (cron: "{1}") ...' -f $producerName, $schedule)
 
         $producerEnvArgs = @(
+            'SI_ROLE=producer',
             "SI_ENGINE=$engine",
             "SI_SHARD_COUNT=$parallelism",
             "SI_STORAGE_ACCOUNT=$($global:SI_StorageAccount)",
@@ -696,11 +740,11 @@ foreach ($engine in $Engines) {
             '--registry-password',$acrPass,
             '--cpu','0.25',
             '--memory','0.5Gi',
-            '--command','pwsh','-NoProfile','-File','/app/container/Invoke-ShardProducer.ps1',
             '--output','none'
         )
         # producer update mirrors worker pattern -- bare --secrets and
         # --env-vars are create-only; updates need 'secret set' + --replace-env-vars.
+        # See worker UPDATE block above re: NOT passing --command/--args here.
         $producerUpdateArgs = @(
             'containerapp','job','update',
             '--name',$producerName,

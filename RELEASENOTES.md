@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.354
+## v2.2.355
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.355 - unattended setup writes SMTP into custom.ps1 for Community + README §4.3.1 unattended-setup reference (05573da0)
 - release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
 - release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
 - release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
 - release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
 - release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
-- release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.355 — Unattended setup now writes SMTP config into `config/SecurityInsight.custom.ps1` for Community customers + dedicated README §4.3.1 with full per-field reference.
+
+### Why
+
+`Setup-SecurityInsight-Unattended.ps1` was passing only `Spn + Infra` to `Write-SICustomConfig.ps1`, never `Smtp`. Result: every Community customer's generated `custom.ps1` had NO `# 5. SMTP` section, mail dispatch failed silently with "No SMTP server configured", and the operator had to hand-edit the file after Phase 3.
+
+User ask: "make the smtp info into the custom file if defined by the setup unattended, also include in sample if missing. do we have a section in readme on setup unattended, otherwise make detailed examples for all params".
+
+### What changed
+
+1. **`config/setup-unattended.sample.json`** -- added an `Smtp` block with all 9 fields (Server, Port, User, Password, From, UseSsl, MailTo, DetailedTo, SummaryTo) + an `_Smtp_comment` that explains the Internal-vs-Community distinction. Leaves `Server: null` as the default so the section silently no-ops when absent.
+2. **`Setup-SecurityInsight-Unattended.ps1`** -- Phase 3 (Config file) now passes `$cfg.Smtp` through to `Write-SICustomConfig` when the flavour is Community AND `Smtp.Server` is populated. Internal flavour ignores the section (with an info log) because Internal customers get SMTP from `PlatformConfiguration/config/platform-defaults.ps1` via Connect-Platform's automatic dot-source.
+3. **`README.md` §4.3.1 "Unattended setup (no wizard -- JSON-driven)"** -- new section under §4.3 with: full per-field reference table (every JSON key + Internal default + Community default), Internal-flavour example (matches the `Initialize-PlatformVm.ps1` call shape today's operator already uses), Community-flavour example with the full Smtp block, CLI-override rules, phase-skip switches, idempotency notes.
+
+### Customer impact
+
+Community customer onboarding now completes Phase 3 with a working email pipeline -- no post-setup hand-edit needed.
+
+Internal customers see no behavioural change; the Internal example in §4.3.1 documents the no-SMTP-needed flow they already use.
+
+### Known limitation (called out in README)
+
+SMTP password lands in plain text in `custom.ps1` -- the writer doesn't auto-vault. For production Community deployments, README §4.3.1 recommends post-setup migration to Key Vault via section 11 KV pulls.
 
 ---
 

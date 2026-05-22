@@ -48,5 +48,18 @@
     "UseKEDA":         true,
     "KedaMaxReplicas": 30
   },
-  "_Container_comment": "Enabled=true provisions ACR + Container Apps Environment + KEDA-scaled Jobs. AcrName null -> auto-derived from RG. Requires `az` CLI installed + `az login`."
+  "_Container_comment": "Enabled=true provisions ACR + Container Apps Environment + KEDA-scaled Jobs. AcrName null -> auto-derived from RG. Requires `az` CLI installed + `az login`.",
+
+  "Smtp": {
+    "Server":     null,
+    "Port":       587,
+    "User":       null,
+    "Password":   null,
+    "From":       null,
+    "UseSsl":     true,
+    "MailTo":     [],
+    "DetailedTo": [],
+    "SummaryTo":  []
+  },
+  "_Smtp_comment": "Community ONLY (Internal flavour reads SMTP from PlatformConfiguration/config/platform-defaults.ps1 -- leave Server null on Internal). Server null -> SMTP block is NOT written to custom.ps1 (customer must add manually). Port: 25=plain/STARTTLS, 465=SMTPS, 587=submission-with-STARTTLS (default). MailTo is the cross-engine default recipient list (RA + asset-tagging + ad-hoc); DetailedTo/SummaryTo override per RA mode (use MailTo when both are empty)."
 }

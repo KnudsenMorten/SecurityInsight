@@ -898,6 +898,143 @@ Auto-registered by Phase 2 of Setup if not already `Registered` on the target su
 
 `Microsoft.Resources`, `Microsoft.OperationalInsights`, `Microsoft.Insights`, `Microsoft.Monitor`, `Microsoft.Storage`, `Microsoft.Authorization`, `Microsoft.AlertsManagement` — plus `Microsoft.KeyVault` if KV cred storage is picked.
 
+<a id="431-unattended-setup-no-wizard"></a>
+### 4.3.1 Unattended setup (no wizard — JSON-driven)
+
+Same outcome as the HTML wizard (§4.3) but **headless** — driven by `config/setup-unattended.json` + CLI overrides. Use this for CI/CD pipelines, scripted multi-tenant rollouts, or any context where pointing a browser at `localhost:8766` isn't practical.
+
+The entry point is `Setup-SecurityInsight-Unattended.ps1` (lives at the SecurityInsight solution root). It calls the same backend cmdlets the wizard uses (`New-SISpn` / `Initialize-SIInfra` / `Write-SICustomConfig` / `Set-SIEntraDiagnosticSetting` / `New-SIContainerAppsJobs`) but without the UI layer. Same 5 phases as the wizard's Setup page.
+
+#### Prereqs (one-time per shell)
+
+```powershell
+Connect-AzAccount -Tenant <your-tenant-id>
+Set-AzContext -SubscriptionId <your-subscription-id> | Out-Null
+Connect-MgGraph -TenantId <your-tenant-id> -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome
+```
+
+Same context inheritance rules as the wizard. Both `Az` and `MgGraph` contexts must exist on the same shell before invocation — script aborts cleanly if either is missing.
+
+#### Config file (`setup-unattended.json`)
+
+Copy `config/setup-unattended.sample.json` to `config/setup-unattended.json` (gitignored), then edit. Every field accepts `null` to fall through to a script default (documented inline in the sample).
+
+| Section | Field | Purpose | Internal default | Community default |
+|---|---|---|---|---|
+| (root) | `Flavour` | `Internal` (re-uses v1 cert SPN, dot-sources platform-defaults.ps1) OR `Community` (creates standalone SPN, inline custom.ps1) | `Internal` | `Community` |
+| `Sub` | `TenantId` | Target tenant | `$global:AzureTenantId` (from Connect-Platform) | required |
+| `Sub` | `SubscriptionId` | Target subscription | `$global:KV_HighPriv_SubscriptionId` | required |
+| `Sub` | `Location` | Azure region for new resources | `westeurope` | `westeurope` |
+| `Resources` | `ResourceGroupName` | RG for workspace + DCE + DCR + storage | `rg-securityinsight` | `rg-securityinsight` |
+| `Resources` | `WorkspaceName` | LA workspace name | `log-platform-management-securityinsight` | same |
+| `Resources` | `DceName` | DCE name | `dce-securityinsight` | same |
+| `Resources` | `StorageAccountName` | Storage account name (3-24 chars, lowercase + digits) | auto-derived from RG (`st<rg>si`) | same |
+| `Resources` | `NamingSuffix` | Suffix appended to all 4 resource names (e.g. `-fvf` → `rg-securityinsight-fvf`) | `null` | `null` |
+| `Auth_Internal` | `AppId` | Re-use this AppId for SPN | `$global:HighPriv_Modern_ApplicationID_Azure` | n/a |
+| `Auth_Internal` | `CertificateThumbprint` | Re-use this cert thumbprint | `$global:HighPriv_Modern_CertificateThumbprint_Azure` | n/a |
+| `Auth_Internal` | `PlatformDefaultsPath` | Path to platform-defaults.ps1 (dot-sourced into bridged custom.ps1) | auto-resolves to `<repo>\..\PlatformConfiguration\config\platform-defaults.ps1` | n/a |
+| `Auth_Internal` | `TopUpGraphPerms` | Re-grant the 13 SI Graph perms idempotently (no harm if already granted) | `true` | n/a |
+| `Auth_Community` | `DisplayName` | Entra app reg display name | n/a | `sp-securityinsight` |
+| `Auth_Community` | `CredKind` | `Secret` (client secret) OR `Cert` (self-signed) | n/a | `Cert` |
+| `Auth_Community` | `CredStorage` | `KeyVault` OR `LocalCertStore` OR `Inline` | n/a | `LocalCertStore` |
+| `Auth_Community` | `KeyVaultName` | KV to store the cred (required when CredStorage=KeyVault) | n/a | `null` |
+| `EntraDiag` | `Enabled` | Create the tenant Diagnostic Setting that streams sign-in / audit logs to the workspace | `false` (Sentinel customer; already streamed) | `true` typical |
+| `Container` | `Enabled` | Provision ACR + Container Apps Environment + KEDA-scaled Jobs runtime | `false` | `false` |
+| `Container` | `AcrName` | ACR name (3-50 chars, lowercase + digits) | auto-derived from RG | same |
+| `Container` | `EnvName` | Container Apps Environment name | `cae-securityinsight` | same |
+| `Container` | `UseKEDA` | Queue-depth auto-scaling | `true` | `true` |
+| `Container` | `KedaMaxReplicas` | Hard cap on worker replicas | `30` | `30` |
+| `Smtp` | `Server` | SMTP relay hostname (e.g. `AZWE-S-RLAY-P01.casa.dk`, `smtp.office365.com`, `smtp-relay.brevo.com`) | **n/a — Internal reads SMTP from `PlatformConfiguration/config/platform-defaults.ps1`** | required for emails |
+| `Smtp` | `Port` | 25=plain/STARTTLS, 465=SMTPS, 587=submission-with-STARTTLS | n/a | `587` |
+| `Smtp` | `User` / `Password` | SMTP auth creds. Omit for unauthenticated relays | n/a | `null` |
+| `Smtp` | `From` | Default From address (e.g. `svc-automation@nordstern.dk`) | n/a | required |
+| `Smtp` | `UseSsl` | STARTTLS / SMTPS on transport | n/a | `true` |
+| `Smtp` | `MailTo` / `DetailedTo` / `SummaryTo` | Recipient lists. `MailTo` is the cross-engine default; per-mode overrides for RA | n/a | one of them required |
+
+CLI overrides win over the JSON for: `-Flavour`, `-TenantId`, `-SubscriptionId`, `-Location`, `-NamingSuffix`, `-EntraDiag_Enabled`, `-Container_Enabled`. Anything else is JSON-only. Per-phase skip switches: `-SkipPhase1` (SPN), `-SkipPhase2` (Infra), `-SkipPhase3` (Config), `-SkipPhase4` (EntraDiag), `-SkipPhase5` (Container).
+
+#### Example — Internal flavour (re-use v1 SPN, defaults from platform-defaults.ps1)
+
+This mirrors what you already run today (the `Initialize-PlatformVm.ps1` orchestrator wraps `Setup-SecurityInsight-Unattended.ps1` internally — but you can also call it directly):
+
+```powershell
+# 1. (one-time) Copy the sample then trim to Internal-only fields:
+Copy-Item config\setup-unattended.sample.json config\setup-unattended.json
+
+# Edit config\setup-unattended.json so it looks like this:
+# {
+#   "Flavour": "Internal",
+#   "Sub":       { "TenantId": null, "SubscriptionId": null, "Location": "westeurope" },
+#   "Resources": { "ResourceGroupName": "rg-automateit", "WorkspaceName": "log-platform-management-securityinsight-p", "DceName": "dce-securityinsight", "StorageAccountName": "stnssecurityinsight" },
+#   "Auth_Internal": { "AppId": null, "CertificateThumbprint": null, "PlatformDefaultsPath": null, "TopUpGraphPerms": true },
+#   "EntraDiag":     { "Enabled": false },
+#   "Container":     { "Enabled": false }
+# }
+
+# 2. Run (after Connect-AzAccount + Connect-MgGraph):
+.\Setup-SecurityInsight-Unattended.ps1
+
+# Or with CLI overrides on top of the JSON:
+.\Setup-SecurityInsight-Unattended.ps1 `
+  -TenantId       'be298fb4-86ca-4fa6-ae25-9b9db2c9061b' `
+  -SubscriptionId 'eada95ac-0b22-40dd-bbd7-caa457268860' `
+  -Location       'westeurope'
+```
+
+SMTP is read from `PlatformConfiguration/config/platform-defaults.ps1` automatically (Connect-Platform dot-sources it on every engine run — no per-tenant SMTP config needed).
+
+#### Example — Community flavour (standalone SPN, inline SMTP)
+
+Community customers don't have `PlatformConfiguration` — SMTP must be in the per-tenant `config/SecurityInsight.custom.ps1`. The unattended setup writes it for you when you populate the `Smtp` block:
+
+```powershell
+# config\setup-unattended.json (Community):
+# {
+#   "Flavour": "Community",
+#   "Sub":       { "TenantId": "<tenant>", "SubscriptionId": "<sub>", "Location": "westeurope" },
+#   "Resources": { "ResourceGroupName": "rg-securityinsight", "WorkspaceName": "log-securityinsight", "DceName": "dce-securityinsight", "StorageAccountName": null },
+#   "Auth_Community": { "DisplayName": "sp-securityinsight", "CredKind": "Cert", "CredStorage": "LocalCertStore" },
+#   "EntraDiag":      { "Enabled": true },
+#   "Container":      { "Enabled": false },
+#   "Smtp": {
+#     "Server":     "smtp.office365.com",
+#     "Port":       587,
+#     "User":       "svc-automation@contoso.com",
+#     "Password":   "<app-password-or-OAuth-token>",
+#     "From":       "svc-automation@contoso.com",
+#     "UseSsl":     true,
+#     "MailTo":     [ "secops@contoso.com" ],
+#     "DetailedTo": [],
+#     "SummaryTo":  []
+#   }
+# }
+
+.\Setup-SecurityInsight-Unattended.ps1 -Flavour Community
+```
+
+After Phase 3 (Config), inspect `config\SecurityInsight.custom.ps1` — section 5 will contain the rendered `$global:SmtpServer / SmtpPort / SMTPUser / SMTPPassword / SMTPFrom / SMTP_UseSSL / SMTPMailTo` globals.
+
+> ⚠ **Storing SMTP creds in plain text in `custom.ps1` is a known limitation** — for production Community deployments, set the password to a placeholder in the JSON, then post-setup move it into Key Vault and replace the literal with a `Get-AzKeyVaultSecret` lookup in custom.ps1's section 11 (KV pulls). The setup writer doesn't currently auto-vault the SMTP password.
+
+#### Phase status + idempotency
+
+On completion the script prints:
+
+```
+===================================================================
+ UNATTENDED SETUP DONE  (flavour=Internal)
+===================================================================
+ SPN       : ok | already | skipped | failed
+ Infra     : ok | already | skipped | failed
+ Config    : ok | failed
+ EntraDiag : ok | skipped | failed
+ Container : ok | skipped | failed
+```
+
+Re-runs are idempotent — `already` means "no change". `failed` halts subsequent phases unless `-SkipPhaseN` is set.
+
+---
+
 ### 4.4 Run the engines
 
 After the wizard finishes, your `config\SecurityInsight.custom.ps1` is populated and the SPN + workspace + storage are live. Now run the asset-profiling collectors first (they populate `SI_*_Profile_CL` tables that Risk Analysis joins against):

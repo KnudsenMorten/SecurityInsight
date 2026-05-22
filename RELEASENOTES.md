@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.355
+## v2.2.356
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.356 - clean customer-template restructure (Internal + Community parallels) + remove implicit westeurope default (f38d7ede)
 - release: SecurityInsight v2.2.355 - unattended setup writes SMTP into custom.ps1 for Community + README §4.3.1 unattended-setup reference (05573da0)
 - release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
 - release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
 - release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
 - release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
-- release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.356 — Customer-template restructure (clean Internal + Community parallels); `westeurope` no longer an implicit default anywhere — solution is used worldwide.
+
+### Template restructure
+
+The old `config/SecurityInsight.custom.sample.ps1` was a kitchen-sink 400+ line reference where ~95% was commented-out documentation. Customers couldn't tell what was actually in use vs what was example.
+
+- **`config/SecurityInsight.custom.sample.ps1`** -- NEW clean Internal-flavour template (~60 lines of active settings). For 2linkit-managed / Connect-Platform-equipped tenants: auth via HighPriv_*, SMTP from platform-defaults.ps1, KV pulls via Get-PlatformSecret.
+- **`config/SecurityInsight.custom.community.sample.ps1`** -- NEW parallel Community-flavour template (~80 lines). For standalone deployments: explicit SI_SPN_*, inline SMTP server/port/from, inline OpenAI + Shodan keys (with optional KV-pull stubs).
+- **`config/SecurityInsight.custom.reference.ps1`** -- the old kitchen-sink file kept under this name as a full-reference grimoire. Documents every supported global (cadence overrides, EG label maps, Shodan tuning, AI prompt overrides, schema-discovery knobs, etc.) for advanced customers / discoverability.
+
+### `westeurope` no longer the silent default
+
+User ask: "westeurope must be mentioned as this solution is used by many companies around the world. define it so we can overrule to any location. so don't take for granted that westeurope is the default."
+
+Removed the implicit `westeurope` fallback from:
+
+- **`Setup-SecurityInsight-Unattended.ps1`** (line 242) -- now throws clearly when `Sub.Location` is unset, with the full list of common regions in the error message.
+- **`engine/asset-profiling/Invoke-SIEngineRun.ps1`** (line 218) -- now derives Location from the active Az context's HomeRegion when `$global:SI_Location` is unset (with a warning to set it explicitly), and throws clearly when neither is available.
+- **`Bootstrap-ContainerAppJob.ps1`** (line 38 default parameter, 129 resolution chain) -- empty default; falls back through `$global:SI_Bootstrap_Location` → `$global:SI_Location`, throws clearly when neither is set.
+- **`config/setup-unattended.sample.json`** (`Sub.Location`) -- changed from `"westeurope"` to `null` with an inline comment listing common regions worldwide.
+
+All three samples (`*.sample.ps1`, `setup-unattended.sample.json`) surface `SI_Location` / `Sub.Location` as REQUIRED with `<azure-region>` placeholder + a comment listing 17 common worldwide regions (`westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth`).
+
+### Customer impact
+
+- **Existing customers** with `$global:SI_Location` set in custom.ps1: no change.
+- **Existing customers** with no `$global:SI_Location`: see a new warning on first run pointing them at the setting. Engine still proceeds via Az-context HomeRegion fallback.
+- **New customers** copying from the refreshed sample: must fill in the `<azure-region>` placeholder before first run. Clear error message if they forget.
 
 ---
 

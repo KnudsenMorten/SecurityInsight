@@ -1,14 +1,13 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    SecurityInsight v2.2 -- Internal-flavour customer override template.
+    SecurityInsight v2.2 -- Community-flavour customer override template.
 
 .DESCRIPTION
-    Internal customers use Connect-Platform (PlatformConfiguration repo) which
-    auto-populates SPN cert, SMTP server/port/from, and Az subscription discovery
-    from KV + platform-defaults.ps1 BEFORE this file loads. Result: a typical
-    Internal customer file is short (~60 lines of active settings) -- mostly
-    workspace IDs, recipient lists, engine knobs, and KV pulls.
+    Community customers DON'T have PlatformConfiguration / Connect-Platform.
+    The SPN, SMTP server, OpenAI key, Shodan key etc. all live inline in this
+    file (or in a customer-owned Key Vault that the Get-AzKeyVaultSecret block
+    at the bottom pulls from at runtime).
 
     Copy this file to `SecurityInsight.custom.ps1` (gitignored) and edit the
     values marked with <...> placeholders. Leave the rest as-is or delete the
@@ -24,35 +23,39 @@
     Shodan tuning, AI prompt overrides, schema-discovery, etc.), see
     `SecurityInsight.custom.reference.ps1` in this folder.
 
-    Community customers (no Connect-Platform): start from
-    `SecurityInsight.custom.community.sample.ps1` instead.
+    Internal customers (with Connect-Platform): start from
+    `SecurityInsight.custom.sample.ps1` instead.
 
 .NOTES
-    Flavour : Internal (Connect-Platform / platform-defaults inherited)
+    Flavour : Community (standalone -- no PlatformConfig dependency)
     Layer   : 3 (solution-wide customer overrides)
     Author  : Morten Knudsen, Microsoft MVP
 #>
 
 # ============================================================================
-# 1. AUTH  (SPN + Cert via Connect-Platform / HighPriv_* globals)
+# 1. AUTH  (standalone SPN -- pick ONE of secret OR cert below)
 # ============================================================================
-$global:SpnTenantId              = $global:AzureTenantId
-$global:SpnClientId              = $global:HighPriv_Modern_ApplicationID_Azure
-$global:SpnCertificateThumbprint = $global:HighPriv_Modern_CertificateThumbprint_Azure
-$global:SI_RebuildAuthBlock      = $true   # re-pull from KV on every run
-$global:AutomationFramework      = $true   # use long-name HighPriv_* globals
+$global:SI_SPN_TenantId  = '<your-tenant-id-guid>'
+$global:SI_SPN_AppId     = '<your-spn-app-id-guid>'
+$global:SI_SPN_ObjectId  = '<your-spn-object-id-guid>'   # SP ObjectId, NOT AppId
+
+# SPN secret (rotate via Setup Wizard or your KV procedure)
+$global:SI_SPN_Secret    = '<your-spn-client-secret>'
+
+# OR SPN cert (uncomment + remove the Secret line above to switch)
+# $global:SI_SPN_CertThumbprint    = '<cert-thumbprint>'
+# $global:SI_SPN_CertStoreLocation = 'LocalMachine'   # or 'CurrentUser'
 
 # ============================================================================
 # 2. WORKSPACE + STORAGE
 # ============================================================================
+$global:SI_AzSubscriptionId    = '<sub-id-guid>'
 $global:SI_WorkspaceResourceId = '/subscriptions/<sub-id>/resourcegroups/<rg>/providers/microsoft.operationalinsights/workspaces/<workspace-name>'
 $global:SI_WorkspaceName       = '<workspace-name>'
 $global:SI_DceName             = 'dce-securityinsight'
 $global:SI_DcrResourceGroup    = '<dcr-rg>'
 $global:SI_StorageAccount      = '<storage-account-name>'
 $global:SI_Location            = '<azure-region>'              # REQUIRED. Examples: westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth
-# $global:SI_TableNamePattern  = 'SI_{0}_Profile'              # engine default
-# $global:SI_DcrNamePattern    = 'dcr-si-{0}-profile'          # engine default
 
 # ============================================================================
 # 3. OUTPUT SINKS
@@ -78,12 +81,19 @@ $global:SI_ForceFullRun_PublicIp = $true
 $global:SI_AzureSubscriptionExcludePatterns = @('*Azure for Students*','*Visual Studio*')
 
 # ============================================================================
-# 5. RA MAIL RECIPIENTS  (Server/Port/From inherited from platform-defaults.ps1)
+# 5. SMTP  (inline -- Community has no platform-defaults to inherit from)
 # ============================================================================
+$global:SmtpServer  = '<smtp-host>'                  # e.g. smtp.office365.com, smtp-relay.brevo.com
+$global:SmtpPort    = 587                            # 25=plain/STARTTLS, 465=SMTPS, 587=submission
+$global:SMTPUser    = '<svc-account@example.com>'
+$global:SMTPPassword= '<app-password-or-OAuth-token>'
+$global:SMTPFrom    = '<svc-account@example.com>'
+$global:SMTP_UseSSL = $true
+
 $global:RiskAnalysis_Detailed_SendMail = $true
-$global:RiskAnalysis_Detailed_To       = @('<recipient-1@example.com>','<recipient-2@example.com>')
+$global:RiskAnalysis_Detailed_To       = @('<recipient-1@example.com>')
 $global:RiskAnalysis_Summary_SendMail  = $true
-$global:RiskAnalysis_Summary_To        = @('<recipient-1@example.com>','<recipient-2@example.com>')
+$global:RiskAnalysis_Summary_To        = @('<recipient-1@example.com>')
 
 # ============================================================================
 # 6. RISK ANALYSIS
@@ -96,48 +106,28 @@ $global:AutoBucketCache                = $true
 $global:OverwriteXlsx                  = $true
 
 # ============================================================================
-# 7. AZURE OPENAI  (API key pulled from KV at bottom of file)
+# 7. AZURE OPENAI  (inline -- or pull from KV in section 9)
 # ============================================================================
 $global:OpenAI_endpoint            = 'https://<aoai-account>.openai.azure.com'
 $global:OpenAI_deployment          = '<deployment-name>'
 $global:OpenAI_apiVersion          = '2025-01-01-preview'
 $global:OpenAI_MaxTokensPerRequest = 16384
+$global:OpenAI_apiKey              = '<aoai-api-key>'   # OR leave blank + use KV pull in section 9
 $global:BuildSummaryByAI           = $true
 
 # ============================================================================
-# 8. CMDB + ACTIVITY FRESHNESS
+# 8. PUBLICIP / SHODAN  (only if you run the publicip engine)
 # ============================================================================
-$global:SI_EnableCmdbProvider       = $true
-$global:SI_CmdbRefreshIntervalHours = 24
-$global:SI_ActiveStaleDays          = 30
+$global:SI_Shodan_ApiKey = '<shodan-api-key>'        # OR leave blank + use KV pull in section 9
 
 # ============================================================================
-# 9. CONTAINER APP JOB BOOTSTRAP  (uncomment when running Bootstrap-ContainerAppJob.ps1)
+# 9. KV PULLS  (optional -- replace inline secrets above by uncommenting)
 # ============================================================================
-# $global:SI_Bootstrap_ResourceGroupName       = 'rg-securityinsight'
-# $global:SI_Bootstrap_Location                = '<azure-region>'    # REQUIRED. Match $global:SI_Location above.
-# $global:SI_Bootstrap_AcrName                 = 'acrsecurityinsight'
-# $global:SI_Bootstrap_EnvName                 = 'cae-securityinsight'
-# $global:SI_Bootstrap_ImageTag                = 'latest'
-# $global:SI_Bootstrap_Engines                 = @('endpoint','identity','azure','schema-discovery','risk-analysis')
-# $global:SI_Bootstrap_ScheduleEndpoint        = '0 4 * * *'
-# $global:SI_Bootstrap_ScheduleIdentity        = '30 4 * * *'
-# $global:SI_Bootstrap_ScheduleAzure           = '0 5 * * *'
-# $global:SI_Bootstrap_ScheduleSchemaDiscovery = '0 3 * * 0'
-# $global:SI_Bootstrap_ScheduleRiskAnalysis    = '0 6 * * *'
-# $global:SI_Bootstrap_TriggerNowAfter         = $true
-# $global:SI_Bootstrap_SkipImageBuild          = $true
-# $global:SI_Bootstrap_UseManagedIdentity      = $true
-# $global:SI_Bootstrap_UseKEDA                 = $true
-# $global:SI_Bootstrap_KedaMaxReplicas         = 30
-# $global:SI_RiskAnalysis_ExportContainer      = 'sistaging'
-# $global:SI_RiskAnalysis_ExportPrefix         = 'risk-analysis'
-# $global:SI_RiskAnalysis_SendToLogAnalytics   = $true
-# $global:SI_RiskAnalysis_BuildSummaryByAI     = $true
-
-# ============================================================================
-# 10. KV PULLS  (late-binding -- runs after $global:Context is set)
-# ============================================================================
-if (-not $global:SI_StorageKey)    { $global:SI_StorageKey    = Get-PlatformSecret -Context $global:Context -Name 'SI-StorageKey'    -AsPlainText }
-if (-not $global:SI_Shodan_ApiKey) { $global:SI_Shodan_ApiKey = Get-PlatformSecret -Context $global:Context -Name 'SI-Shodan-ApiKey' -AsPlainText }
-if (-not $global:OpenAI_apiKey)    { $global:OpenAI_apiKey    = Get-PlatformSecret -Context $global:Context -Name 'OpenAI-ApiKey'    -AsPlainText }
+# Requires the SPN to have Get on the named Key Vault secrets + Az.KeyVault module.
+# $kvName = '<your-kv-name>'
+# if (-not $global:SI_SPN_Secret -and $global:SI_SPN_CertThumbprint -eq $null) {
+#     $global:SI_SPN_Secret = (Get-AzKeyVaultSecret -VaultName $kvName -Name 'SI-SPN-Secret'    -AsPlainText -ErrorAction SilentlyContinue)
+# }
+# if (-not $global:OpenAI_apiKey)    { $global:OpenAI_apiKey    = (Get-AzKeyVaultSecret -VaultName $kvName -Name 'OpenAI-ApiKey'   -AsPlainText -ErrorAction SilentlyContinue) }
+# if (-not $global:SI_Shodan_ApiKey) { $global:SI_Shodan_ApiKey = (Get-AzKeyVaultSecret -VaultName $kvName -Name 'SI-Shodan-ApiKey' -AsPlainText -ErrorAction SilentlyContinue) }
+# if (-not $global:SMTPPassword)     { $global:SMTPPassword     = (Get-AzKeyVaultSecret -VaultName $kvName -Name 'SI-SMTP-Password' -AsPlainText -ErrorAction SilentlyContinue) }

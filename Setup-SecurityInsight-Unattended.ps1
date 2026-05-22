@@ -239,7 +239,9 @@ if ($cfg.Flavour -eq 'Internal') {
 # Validate the resolved values
 if (-not $cfg.Sub.TenantId)       { throw "Sub.TenantId not set. Pass -TenantId or set Sub.TenantId in setup-unattended.json." }
 if (-not $cfg.Sub.SubscriptionId) { throw "Sub.SubscriptionId not set. Pass -SubscriptionId or set Sub.SubscriptionId in setup-unattended.json." }
-if (-not $cfg.Sub.Location)       { $cfg.Sub.Location = 'westeurope' }
+if (-not $cfg.Sub.Location) {
+    throw "Sub.Location not set. Pass -Location <azure-region> or set Sub.Location in setup-unattended.json. SecurityInsight is used worldwide -- there is no implicit regional default. Examples: westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth."
+}
 if ($cfg.Flavour -eq 'Internal') {
     if (-not $cfg.Auth_Internal.AppId) { throw "Auth_Internal.AppId not set after Connect-Platform (Modern-AppId KV secret missing?)." }
 }

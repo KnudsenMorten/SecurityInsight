@@ -215,7 +215,22 @@ if ($PSCmdlet.ParameterSetName -ne 'Mock' -and $Sinks -contains 'LA' -and $globa
         $_dceRg   = if ($global:SI_DceResourceGroup) { $global:SI_DceResourceGroup } else { 'rg-securityinsight' }
         $_dcrRg   = if ($global:SI_DcrResourceGroup) { $global:SI_DcrResourceGroup } else { 'rg-securityinsight' }
         $_dceName = if ($global:SI_DceName)          { $global:SI_DceName }          else { 'dce-si-securityinsight' }
-        $_loc     = if ($global:SI_Location)         { $global:SI_Location }         else { 'westeurope' }
+        # v2.2.356 -- no implicit westeurope fallback (solution is used worldwide).
+        # When SI_Location is unset, derive from the resolved Az context's default
+        # location if we have one, else throw. Customer's custom.ps1 should set
+        # $global:SI_Location explicitly (Internal template now surfaces it as required).
+        $_loc = if ($global:SI_Location) {
+            $global:SI_Location
+        } else {
+            $_locFromCtx = $null
+            try { $_locFromCtx = (Get-AzContext -ErrorAction SilentlyContinue).Subscription.ExtendedProperties.HomeRegion } catch {}
+            if ($_locFromCtx) {
+                Write-Warning ("SI_Location not set; using Az-context HomeRegion '{0}'. Set `$global:SI_Location explicitly in config\\SecurityInsight.custom.ps1 to silence this." -f $_locFromCtx)
+                $_locFromCtx
+            } else {
+                throw "SI_Location is not set and no Az-context HomeRegion is available. Set `$global:SI_Location in config\SecurityInsight.custom.ps1 (e.g. 'westeurope', 'eastus', 'australiaeast' -- solution is used worldwide; no implicit default)."
+            }
+        }
         $_wsId    = if ($global:SI_WorkspaceResourceId) { $global:SI_WorkspaceResourceId } else { "/subscriptions/$_subId/resourceGroups/$_wsRg/providers/Microsoft.OperationalInsights/workspaces/$_wsName" }
         $_stAcct  = if ($StorageAccountName)            { $StorageAccountName }            else { $global:SI_StorageAccount }
         $_stRg    = if ($global:SI_StorageResourceGroup) { $global:SI_StorageResourceGroup } else { '' }

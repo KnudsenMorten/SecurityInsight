@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.352
+## v2.2.353
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
 - release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
 - release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
 - release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.326 - fix v2.2.325 KQL syntax: tolong(s,16) invalid in Defender AH; switch to tolong(strcat("0x", hex)) for hex->long conversion (da0afdb7)
 - release: SecurityInsight v2.2.325 - wire up CL-snapshot bucketing: per-bucket SHA256 filter on inline _ep/_id/_az datatable; SHA256-align KQL bucket filter; fixes infinite "bucket 1/122880" escalation loop on large tenants (783eadbf)
 - release: SecurityInsight v2.2.324 - reframe AH shard-sizing log lines from alarming WARN to neutral INFO; long tip emits once per run (3f9f0e16)
-- release: SecurityInsight v2.2.323 - SI_SimulateCLRowCount knob for scale testing; dormant infrastructure for CL-snapshot bucketing (active v2.2.324) (630cf99b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.353 — Hotfix: prestage adopt-if-visible for the storage account. Customer hit `WARNING: storage account ensure failed: The storage account named X is already taken.` when their globally-unique storage-account name was already provisioned in a DIFFERENT RG (or a sibling subscription) than the one prestage derived from defaults.
+
+### Bug
+
+`Invoke-SIPrestageInfra.ps1` did `Get-AzStorageAccount -ResourceGroupName $stRg -Name $StorageAccountName` to detect "exists, skip create". When that returned null (account exists but in a different RG/sub), prestage fell through to `New-AzStorageAccount`, which 4xx'd with "already taken" against the globally-unique storage-account namespace. The downstream engine kept running but had no storage context.
+
+### Fix
+
+In `Invoke-SIPrestageInfra.ps1`, when the RG-scoped lookup misses, broaden to a SUBSCRIPTION-wide probe (`Get-AzStorageAccount` without `-ResourceGroupName` — enumerates everything the SPN has read access to). When found elsewhere:
+
+- Log "found in sub=X rg=Y (not in expected sub=A rg=B) -- adopting existing".
+- Realign the in-memory `$stRg` to the storage account's actual RG so the RBAC-grant block scopes to the right resource.
+
+When the broadened probe ALSO returns null AND the create still fails with "already taken", surface a clear actionable error:
+
+```
+WARNING: storage account 'stevsecurityinsight' is GLOBALLY taken but not visible
+to the SPN (probably owned by a different tenant, or the SPN lacks 'Reader' on the
+sub where it lives). Either rename $global:SI_StorageAccount in custom.ps1, or
+grant the SPN Reader on the owning subscription so the prestage can adopt it.
+```
+
+### Customer fix paths
+
+1. **Grant Reader** on the subscription where the storage account actually lives, then re-run. Prestage will adopt it.
+2. **Rename** `$global:SI_StorageAccount` in `config/SecurityInsight.custom.ps1` to a fresh unique name (3-24 chars, lowercase + digits only).
 
 ---
 

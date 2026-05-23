@@ -92,62 +92,59 @@ if (-not $global:SI_SPN_ObjectId -and $global:SI_SPN_AppId) {
     }
 }
 
-# --- SMTP credential bridge + KV fallback ------------------------------------
-# Why:
-#   2linkit platform-defaults populates $global:HighPriv_SMTP_UserName +
-#   $global:HighPriv_SMTP_Password (pulled from KV names 'SMTPuser' /
-#   'SMTPpassword'). SI engines read $global:SMTPUser / $global:SMTPPassword.
-#   Without a bridge, SMTP fails silently with "no creds, sending anonymous"
-#   even though the secret is loaded under the HighPriv_* names.
+# --- SMTP credential resolution ----------------------------------------------
+# Convention (canonical, post-v2.2.366):
+#   $global:SMTPUser     = SMTP relay LOGIN (auth username)
+#   $global:SMTPPassword = SMTP relay PASSWORD
+#   $global:SMTPFrom     = visible from-address header on outbound mail
 #
-#   Community-flavour customers don't have PlatformConfiguration at all -- for
-#   them we fall back to a direct KV probe (case-insensitive, covers
-#   'SMTPpassword' / 'SMTP-Password' variants).
-# How:
-#   1. Bridge HighPriv_SMTP_* -> SMTPUser/SMTPPassword (free, no KV call).
-#   2. If still empty AND $global:Context exists, probe KV directly.
-#   Same shape as the SPN bridge above. All assignments conditional so a
-#   customer can override in layer 3 (custom.ps1) if needed.
-if (-not $global:SMTPUser -and $global:HighPriv_SMTP_UserName) {
-    $global:SMTPUser = $global:HighPriv_SMTP_UserName
-}
-if (-not $global:SMTPPassword -and $global:HighPriv_SMTP_Password) {
-    $global:SMTPPassword = $global:HighPriv_SMTP_Password
-}
-# v2.2.364 -- SMTPFrom is the visible from-address header on outbound mail.
-# SEMANTICALLY DIFFERENT from SMTPUser, which is the SMTP relay LOGIN. They can
-# coincide (e.g. Office 365 typically uses the same address for both) but must
-# NOT be conflated when the relay uses a service login distinct from the
-# tenant's from address -- e.g. Brevo accepts only XXX@smtp-brevo.com as the
-# auth login but the from-header carries svc-automation@yourdomain.com.
-# Previously SI fell back to SMTPUser as the from when SMTPFrom was empty,
-# which broke Brevo-style relays the moment customers tried to put the Brevo
-# login under SMTPUser (the auth would succeed but the from header was wrong).
-if (-not $global:SMTPFrom -and $global:HighPriv_SMTP_From) {
-    $global:SMTPFrom = $global:HighPriv_SMTP_From
-}
-if ($global:Context) {
-    if (-not $global:SMTPPassword) {
-        foreach ($_smtpKvName in @('SMTPpassword','SMTP-Password')) {
-            try {
-                $_val = Get-PlatformSecret -Context $global:Context -Name $_smtpKvName -AsPlainText -ErrorAction Stop
-                if ($_val) {
-                    $global:SMTPPassword = $_val
-                    Write-Verbose ("SI shared-defaults: SMTPPassword resolved from KV name '$_smtpKvName' (community fallback)")
-                    break
-                }
-            } catch {
-                Write-Verbose ("SI shared-defaults: KV name '$_smtpKvName' not present -- trying next ($($_.Exception.Message))")
-            }
-        }
+# INTERNAL automation pattern (this is your case):
+#   Platform-defaults sets $global:SMTPUser to the FROM ADDRESS (legacy 2linkit
+#   convention -- the variable name is "SMTPUser" but its content is semantically
+#   the from-address). The actual SMTP relay LOGIN + PASSWORD live in Key Vault
+#   under secret names 'SMTPuser' + 'SMTPpassword'. When we have a platform
+#   Context AND Mail_SendAnonymous is OFF, we:
+#     1. Promote platform-defaults' $global:SMTPUser -> $global:SMTPFrom
+#     2. Force-pull SMTPUser + SMTPPassword from KV (override the from-value)
+#   Bridges from $global:HighPriv_SMTP_* (if your platform-defaults uses those)
+#   are honored as a final fallback.
+#
+# COMMUNITY pattern (no platform Context):
+#   Customer sets the actual login in $global:SMTPUser via custom.ps1 directly.
+#   No promote, no KV pull (skipped silently). Customer sets SMTPFrom too if
+#   different from SMTPUser.
+
+# 1. INTERNAL automation: promote from-address + force-pull KV creds
+if ($global:Context -and ($global:Mail_SendAnonymous -eq $false)) {
+    # Promote platform-defaults' SMTPUser -> SMTPFrom (preserves the from address)
+    if (-not $global:SMTPFrom -and $global:SMTPUser) {
+        $global:SMTPFrom = $global:SMTPUser
+        $global:SMTPUser = $null   # clear so KV pull below populates the actual login
+        Write-Verbose "SI shared-defaults: promoted platform-defaults `$global:SMTPUser to `$global:SMTPFrom (legacy 2linkit convention); will pull actual SMTPUser+Password from KV below"
     }
+    # Force-pull SMTPUser from KV (overrides any earlier value)
     if (-not $global:SMTPUser) {
         foreach ($_smtpKvName in @('SMTPuser','SMTP-User')) {
             try {
                 $_val = Get-PlatformSecret -Context $global:Context -Name $_smtpKvName -AsPlainText -ErrorAction Stop
                 if ($_val) {
                     $global:SMTPUser = $_val
-                    Write-Verbose ("SI shared-defaults: SMTPUser resolved from KV name '$_smtpKvName' (community fallback)")
+                    Write-Verbose ("SI shared-defaults: SMTPUser resolved from KV name '$_smtpKvName' (internal automation, Anonymous=false)")
+                    break
+                }
+            } catch {
+                Write-Verbose ("SI shared-defaults: KV name '$_smtpKvName' not present -- trying next ($($_.Exception.Message))")
+            }
+        }
+    }
+    # Pull SMTPPassword from KV
+    if (-not $global:SMTPPassword) {
+        foreach ($_smtpKvName in @('SMTPpassword','SMTP-Password')) {
+            try {
+                $_val = Get-PlatformSecret -Context $global:Context -Name $_smtpKvName -AsPlainText -ErrorAction Stop
+                if ($_val) {
+                    $global:SMTPPassword = $_val
+                    Write-Verbose ("SI shared-defaults: SMTPPassword resolved from KV name '$_smtpKvName' (internal automation, Anonymous=false)")
                     break
                 }
             } catch {
@@ -156,3 +153,16 @@ if ($global:Context) {
         }
     }
 }
+
+# 2. Final fallback bridges from HighPriv_SMTP_* (fire only if still unset)
+if (-not $global:SMTPUser     -and $global:HighPriv_SMTP_UserName) { $global:SMTPUser     = $global:HighPriv_SMTP_UserName }
+if (-not $global:SMTPPassword -and $global:HighPriv_SMTP_Password) { $global:SMTPPassword = $global:HighPriv_SMTP_Password }
+if (-not $global:SMTPFrom     -and $global:HighPriv_SMTP_From)     { $global:SMTPFrom     = $global:HighPriv_SMTP_From }
+
+# 3. Log resolved values (length-only for password) so operators can verify at run start
+Write-Host ("[shared-defaults] SMTP resolved: From={0} | User={1} | Password=[len={2}] | Anonymous={3} | Context={4}" -f `
+    ($(if ($global:SMTPFrom) { $global:SMTPFrom } else { '<NULL>' })), `
+    ($(if ($global:SMTPUser) { $global:SMTPUser } else { '<NULL>' })), `
+    ($(if ($global:SMTPPassword) { ([string]$global:SMTPPassword).Length } else { 0 })), `
+    ($(if ($null -ne $global:Mail_SendAnonymous) { $global:Mail_SendAnonymous } else { '<unset>' })), `
+    ($(if ($global:Context) { 'present' } else { 'absent' })))

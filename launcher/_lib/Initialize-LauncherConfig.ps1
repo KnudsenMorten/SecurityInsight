@@ -340,19 +340,14 @@ function Initialize-LauncherConfig {
         [void]$out.AppendLine(('-' * 100))
 
         # SECTION 1 -- per-layer grouping.
-        # v2.2.367 -- layer labels were drifting: the recorded labels are
-        # 'Layer 1 - Connect-Platform (v2.3)' / 'Layer 1 - platform-defaults
-        # (v2.2 fallback)' / 'Layer 1b - platform-defaults (cross-cutting)'
-        # but the legacy order list only had 'Layer 1 - platform-defaults
-        # (internal)' -- so Layer 1 + 1b were silently dropped from the
-        # grouped section (operators saw the variables only in the alphabetical
-        # aggregated section at the bottom). Adding all real labels in load
-        # order so internal-automation customers see their platform-defaults
-        # values attributed to Layer 1b correctly.
+        # The grouped section iterates this list to bucket variables by source
+        # layer. Labels here must match the strings passed to _CfgRecordLayer
+        # below -- mismatches silently drop a layer from the grouped output
+        # (variables still appear in the alphabetical aggregated section at
+        # the bottom).
         $layerOrder = @(
-            'Layer 1 - Connect-Platform (v2.3)',
-            'Layer 1 - platform-defaults (v2.2 fallback)',
-            'Layer 1 - platform-defaults (internal)',
+            'Layer 1 - Connect-Platform',
+            'Layer 1 - platform-defaults (fallback)',
             'Layer 1b - platform-defaults (cross-cutting)',
             'Layer 2 - shared-defaults',
             'Layer 3 - SecurityInsight.custom',
@@ -439,20 +434,20 @@ function Initialize-LauncherConfig {
     # Convert-V1ToPlatform).
     $platformConfigPath = Join-Path $RepoRoot 'bootstrap\platform-config.json'
     $platformDefaultsPath = Join-Path $RepoRoot 'SOLUTIONS\PlatformConfiguration\config\platform-defaults.ps1'   # v2.2 legacy fallback
-    _CfgStep "Layer 1/5: Connect-Platform (v2.3) or platform-defaults.ps1 (v2.2 fallback)"
+    _CfgStep "Layer 1/5: Connect-Platform or platform-defaults.ps1 (fallback)"
 
     if ($Mode -eq 'internal') {
         if (Test-Path -LiteralPath $platformConfigPath) {
             $aitpsPath = Join-Path $RepoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'
             if (-not (Test-Path -LiteralPath $aitpsPath)) {
-                _CfgInfo "v2.3 platform-config.json present but AutomateITPS module missing at $aitpsPath -- launcher cannot Connect-Platform. Skipping Layer 1."
-                _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
+                _CfgInfo "platform-config.json present but AutomateITPS module missing at $aitpsPath -- launcher cannot Connect-Platform. Skipping Layer 1."
+                _CfgRecordLayer 'Layer 1 - Connect-Platform' $platformConfigPath $false
             } else {
                 try {
                     Import-Module $aitpsPath -Force -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
                     $null = Connect-Platform -ErrorAction Stop
                     _CfgOk ("Connect-Platform succeeded (Modern AppId {0}, KV {1})" -f $global:HighPriv_Modern_ApplicationID_Azure, $global:KV_HighPriv_KeyVaultName)
-                    _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $true
+                    _CfgRecordLayer 'Layer 1 - Connect-Platform' $platformConfigPath $true
                     # ALSO dot-source platform-defaults.ps1 if it exists -- it
                     # holds cross-cutting $global:* (SMTP / Mail / AD / LA)
                     # which Connect-Platform does NOT set. v2.2.183: previously
@@ -465,29 +460,29 @@ function Initialize-LauncherConfig {
                         _CfgRecordLayer 'Layer 1b - platform-defaults (cross-cutting)' $platformDefaultsPath $true
                     }
                 } catch {
-                    _CfgInfo ("Connect-Platform failed: {0}. Falling back to v2.2 platform-defaults.ps1 if present." -f $_.Exception.Message)
+                    _CfgInfo ("Connect-Platform failed: {0}. Falling back to platform-defaults.ps1 if present." -f $_.Exception.Message)
                     if (Test-Path -LiteralPath $platformDefaultsPath) {
                         . $platformDefaultsPath
-                        _CfgOk "loaded v2.2 fallback ($platformDefaultsPath)"
-                        _CfgRecordLayer 'Layer 1 - platform-defaults (v2.2 fallback)' $platformDefaultsPath $true
+                        _CfgOk "loaded fallback ($platformDefaultsPath)"
+                        _CfgRecordLayer 'Layer 1 - platform-defaults (fallback)' $platformDefaultsPath $true
                     } else {
-                        _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
+                        _CfgRecordLayer 'Layer 1 - Connect-Platform' $platformConfigPath $false
                     }
                 }
             }
         } elseif (Test-Path -LiteralPath $platformDefaultsPath) {
             # No v2.3 config -- fall back to v2.2 chain (operator hasn't migrated yet).
             . $platformDefaultsPath
-            _CfgOk "loaded v2.2 platform-defaults.ps1 ($platformDefaultsPath)"
-            _CfgInfo "v2.2 fallback active. Migrate to v2.3 via SOLUTIONS\PlatformConfiguration\INTERNAL\Migrate\Convert-V1ToPlatform.ps1 to use Connect-Platform."
-            _CfgRecordLayer 'Layer 1 - platform-defaults (v2.2 fallback)' $platformDefaultsPath $true
+            _CfgOk "loaded platform-defaults.ps1 ($platformDefaultsPath)"
+            _CfgInfo "legacy platform-defaults active. Migrate via SOLUTIONS\PlatformConfiguration\INTERNAL\Migrate\Convert-V1ToPlatform.ps1 to use Connect-Platform."
+            _CfgRecordLayer 'Layer 1 - platform-defaults (fallback)' $platformDefaultsPath $true
         } else {
             _CfgInfo "absent (no $platformConfigPath, no $platformDefaultsPath) -- skipping"
-            _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
+            _CfgRecordLayer 'Layer 1 - Connect-Platform' $platformConfigPath $false
         }
     } else {
         _CfgInfo "skipped (community mode; Layer 1 only applies in internal / AF deployments)"
-        _CfgRecordLayer 'Layer 1 - Connect-Platform (v2.3)' $platformConfigPath $false
+        _CfgRecordLayer 'Layer 1 - Connect-Platform' $platformConfigPath $false
     }
     # NB: Layer 1.5 (auto-init Initialize-PlatformAutomationFramework) is gone in v2.3.
     # Connect-Platform IS the auto-init -- it returns the same PlatformContext + sets

@@ -1099,8 +1099,19 @@ function Resolve-ProfileCLLetBlocks {
             # handler can size buckets to ~70% of the nginx 1MB cap empirically,
             # instead of using the hardcoded 500 rows/bucket which was 8-10x too
             # conservative for typical ~170 bytes/row CL payloads.
+            # v2.2.362 -- track the MAX bytes-per-row seen during this report's
+            # bucket inlines (not just the most recent). Reasoning: row width
+            # varies per bucket because CL Profile rows have variable-length
+            # string columns; under-estimating bytes-per-row leads to oversized
+            # buckets and a wasted 413'd XDR query. Max-tracking biases toward
+            # safer-smaller buckets at the cost of slightly more buckets than
+            # theoretically optimal -- a worthwhile tradeoff (avoiding a single
+            # 413 round-trip is far more expensive than one extra bucket).
             if ($bucketRows.Count -gt 0) {
-                $script:_LastHybridBytesPerRow = [double]$datatableLet.Length / [double]$bucketRows.Count
+                $_measured = [double]$datatableLet.Length / [double]$bucketRows.Count
+                if ($_measured -gt $script:_LastHybridBytesPerRow) {
+                    $script:_LastHybridBytesPerRow = $_measured
+                }
             }
         }
         elseif ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
@@ -6839,6 +6850,13 @@ $script:_AutoBucketSkipRemainingBuckets = $false
 # from a prior heavier report).
 $script:_LastHybridSnapshotRowCount = 0
 
+# v2.2.362 -- per-report bytes-per-row tracker (the MAX seen during this
+# report's bucket inlines), reset here so a previous report's narrow-row
+# measurement doesn't make the current report over-confident on its first
+# escalation probe. Tracking max (not last) means one wide bucket is enough
+# to size escalation conservatively for the rest of this report.
+$script:_LastHybridBytesPerRow = 0
+
 # v2.2.325 -- always start each report with bucket-state cleared so that
 # non-bucketed report runs (and the first-iteration "is it Detailed" check)
 # never inherit coordinates from the previous report's last bucket.
@@ -7054,22 +7072,24 @@ while (-not $bucketRunSucceeded) {
 
       # v2.2.273 -- 4x growth (was 2x), but ALSO consider the largest CL snapshot
       # row count seen during this report.
-      # v2.2.361 -- size buckets empirically to ~70% of the nginx 1MB cap based on
-      # MEASURED bytes-per-row from the most recent inline serialization, instead
-      # of the hardcoded 500 rows/bucket constant. At a typical CL payload of
-      # ~170 bytes/row that was ~8% of the 1MB cap -- 10x too conservative -- so
-      # the engine over-escalated (e.g. 500K rows -> 1000 buckets) and turned a
-      # ~50min workload into a ~7h one. Measurement-based sizing collapses that
-      # back to ~120 buckets at the same row size, no caps, no magic numbers.
+      # v2.2.361 -- size buckets empirically to a target fraction of the nginx 1MB
+      # cap based on MEASURED bytes-per-row, instead of the hardcoded 500 rows/bucket
+      # constant that was 8-10x too conservative for typical ~170 bytes/row payloads.
+      # v2.2.362 -- bumped headroom from 30% -> 10% (target 90% of 1MB cap) because
+      # v2.2.362 also added per-report reset + max-tracking of bytesPerRow + the
+      # existing 413 catch path triggers escalation. So if 90% turns out tight for
+      # a particular row width, the self-correction kicks in: failed bucket updates
+      # the max measurement, escalation re-derives with the wider real value.
+      # Aggressive sizing wins more than it loses given the self-correcting loop.
       $snapshotJump = 0
       if ($script:_LastHybridSnapshotRowCount -and [int]$script:_LastHybridSnapshotRowCount -gt 0) {
-          # nginx Log Ingestion cap = 1MB. Target 70% to leave headroom for
-          # query body + URL params + per-bucket variance in serialized row size.
-          # bytesPerRow comes from the previous inline call (Resolve-ProfileCLLetBlocks).
+          # nginx Log Ingestion cap = 1MB. Target 90% leaves 10% headroom for KQL
+          # body + URL params + per-bucket variance. bytesPerRow comes from prior
+          # inline calls (Resolve-ProfileCLLetBlocks tracks the max seen this report).
           # Fallback to 170 (median observed at typical CL row width) only on the
           # very first probe when no measurement exists yet.
           $bytesPerRow      = if ($script:_LastHybridBytesPerRow -gt 0) { [double]$script:_LastHybridBytesPerRow } else { 170.0 }
-          $targetBytes      = 700KB   # ~70% of 1MB nginx cap (actual Azure limit, not a stopgap)
+          $targetBytes      = [int](1MB * 0.9)   # 90% of 1MB nginx cap; self-correction handles over-aggressive cases
           $rowsPerBucket    = [int][Math]::Max(1, [Math]::Floor($targetBytes / $bytesPerRow))
           $snapshotJump     = [int][Math]::Ceiling([int]$script:_LastHybridSnapshotRowCount / [double]$rowsPerBucket)
       }
@@ -7077,8 +7097,8 @@ while (-not $bucketRunSucceeded) {
       $nextBucket = [Math]::Min($capBucket, ($jumpCandidates | Measure-Object -Maximum).Maximum)
       if ($snapshotJump -gt 0 -and $snapshotJump -ge ($bucketCountToUse * 4)) {
           $_bpr = if ($script:_LastHybridBytesPerRow -gt 0) { [int]$script:_LastHybridBytesPerRow } else { 170 }
-          $_rpb = [int][Math]::Max(1, [Math]::Floor(700KB / [double]$_bpr))
-          Write-Info ("AutoBucket escalation jump informed by snapshot size + measured row-width ({0} rows / {1} rows-per-bucket @ ~{2} bytes/row, ~70% of nginx 1MB cap = {3} buckets)" -f $script:_LastHybridSnapshotRowCount, $_rpb, $_bpr, $snapshotJump)
+          $_rpb = [int][Math]::Max(1, [Math]::Floor([int](1MB * 0.9) / [double]$_bpr))
+          Write-Info ("AutoBucket escalation jump informed by snapshot size + measured row-width ({0} rows / {1} rows-per-bucket @ ~{2} bytes/row max, ~90% of nginx 1MB cap = {3} buckets)" -f $script:_LastHybridSnapshotRowCount, $_rpb, $_bpr, $snapshotJump)
       }
 
       Write-Info ("Shard sizing: '{0}' increasing shard count {1} -> {2} (auto-tuning for this report's payload)." -f `

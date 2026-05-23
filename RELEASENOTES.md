@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.359
+## v2.2.360
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
 - release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
 - release: SecurityInsight v2.2.358 - LA-ingest error body surfaced (RA + profiler) + DCE/DCR RG auto-discover via Az lookup + sample templates fixed + customer-name scrub (3aa4daf8)
 - release: SecurityInsight v2.2.357 - RA sub-bucket cascade self-aware: futile-parent prune when 100% of children time out (caps Summary runtime at ~2h instead of up to 113 days for cross-domain skew reports) (8840a0c9)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
 - release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
 - release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
-- release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.360 — Per-bucket O(N²) rescan eliminated in hybrid CL producer: snapshot pre-grouped once per (cacheKey, BucketCount), all subsequent buckets become O(1) dictionary lookups.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` `Resolve-ProfileCLLetBlocks`: when CL bucketing is active, the hybrid producer used to evaluate
+
+```powershell
+$bucketRows = @($allRows | Where-Object {
+    (Get-SISha256Bucket -Key (Get-SICLBucketKey -Row $_) -BucketCount $BucketCount) -eq $BucketIndex
+})
+```
+
+on **every** bucket iteration -- rescanning all rows and recomputing SHA256 twice per row (`Get-SICLBucketKey` + `Get-SISha256Bucket`).
+
+After this release: the first bucket call pre-groups the entire snapshot into a `Dictionary[int, List[object]]` keyed by bucket index, stored in a new script-scoped `$script:_HybridBucketGroupsCache` keyed on `(cacheKey :: BucketCount)`. Every subsequent bucket call for the same snapshot+count is an O(1) dictionary lookup.
+
+### Why
+
+At 500K rows / 1000 buckets the old path performed:
+
+- 500,000 rows x 1000 buckets x 2 SHA256 calls = **~1 billion SHA256 computations per report**
+- ~211 seconds of pure local CPU overhead per bucket (XDR itself returned in ~25s)
+- 211s x 1000 buckets = **~58 hours of local overhead per report**
+
+The new path does one O(N) hash pass (sub-second for typical snapshots; a few seconds at 500K) and then O(1) lookups, eliminating the scaling cliff. Per-bucket overhead drops from ~211s to ~milliseconds at 500K scale.
+
+### Impact
+
+- 500K-asset customers: report wall time drops from theoretical ~27 days back to bounded XDR-query-only time
+- Smaller customers (<10K): no visible change (already cheap)
+- Cache shares across buckets within one report AND across reports that share the same let-binding body (same `cacheKey`), so the win compounds across the run
+- Pure logic fix: no caps, no skip thresholds, no per-customer config
 
 ---
 

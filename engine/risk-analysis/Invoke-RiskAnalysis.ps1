@@ -963,8 +963,9 @@ function Resolve-ProfileCLLetBlocks {
         # round-trips per report). The body never changes across buckets within
         # one report, AND most reports use the same _ep / _TargetCmdb let-binding
         # bodies, so a run-wide cache eliminates the duplication entirely.
-        if (-not $script:_HybridSnapshotCache) { $script:_HybridSnapshotCache = @{} }
-        if (-not $script:_HybridRowsCache)     { $script:_HybridRowsCache     = @{} }   # v2.2.323 -- raw rows for per-bucket re-serialize
+        if (-not $script:_HybridSnapshotCache)     { $script:_HybridSnapshotCache     = @{} }
+        if (-not $script:_HybridRowsCache)         { $script:_HybridRowsCache         = @{} }   # v2.2.323 -- raw rows for per-bucket re-serialize
+        if (-not $script:_HybridBucketGroupsCache) { $script:_HybridBucketGroupsCache = @{} }   # v2.2.360 -- pre-grouped rows by bucket index, one-time SHA256 pass
         $bodyHash = [BitConverter]::ToString([System.Security.Cryptography.MD5]::Create().ComputeHash(
                         [System.Text.Encoding]::UTF8.GetBytes($bodyKql))).Replace('-','')
         $cacheKey = $varName + '|' + $bodyHash
@@ -1070,9 +1071,28 @@ function Resolve-ProfileCLLetBlocks {
         }
 
         if ($clBucketingActive) {
-            $bucketRows = @($allRows | Where-Object {
-                (Get-SISha256Bucket -Key (Get-SICLBucketKey -Row $_) -BucketCount $BucketCount) -eq $BucketIndex
-            })
+            # v2.2.360 -- pre-group the snapshot ONCE per (cacheKey, BucketCount).
+            # Pre-this-fix every bucket iteration rescanned $allRows and called
+            # SHA256 twice per row (Get-SICLBucketKey + Get-SISha256Bucket) --
+            # O(N x BucketCount). At 500K rows / 1000 buckets that's ~1B SHA256
+            # calls and ~211s of pure local overhead per bucket. With the cache,
+            # the first bucket pays one O(N) hash pass and all subsequent buckets
+            # do an O(1) dictionary lookup.
+            $groupCacheKey = '{0}::{1}' -f $cacheKey, $BucketCount
+            if (-not $script:_HybridBucketGroupsCache.ContainsKey($groupCacheKey)) {
+                $_groups = New-Object 'System.Collections.Generic.Dictionary[int, System.Collections.Generic.List[object]]'
+                for ($_b = 0; $_b -lt $BucketCount; $_b++) {
+                    $_groups[$_b] = New-Object 'System.Collections.Generic.List[object]'
+                }
+                $_t0 = [datetime]::UtcNow
+                foreach ($_row in $allRows) {
+                    $_idx = Get-SISha256Bucket -Key (Get-SICLBucketKey -Row $_row) -BucketCount $BucketCount
+                    $_groups[$_idx].Add($_row)
+                }
+                $script:_HybridBucketGroupsCache[$groupCacheKey] = $_groups
+                Write-Info ("[hybrid] '{0}' pre-grouped {1} rows into {2} buckets in {3:N1}s (one-time O(N) hash pass; subsequent buckets are O(1) lookups)" -f $varName, @($allRows).Count, $BucketCount, ([datetime]::UtcNow - $_t0).TotalSeconds)
+            }
+            $bucketRows = @($script:_HybridBucketGroupsCache[$groupCacheKey][$BucketIndex])
             $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $bucketRows -BodyKqlForSchemaHint $bodyKql
             Write-Info ("[hybrid] '{0}' bucket {1}/{2}: {3}/{4} row(s) inlined ({5} bytes; CL-bucketed via SHA256)" -f $varName, ($BucketIndex + 1), $BucketCount, $bucketRows.Count, $allRows.Count, $datatableLet.Length)
         }

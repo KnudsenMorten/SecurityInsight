@@ -6885,23 +6885,21 @@ $lastBucketRunError = $null
 # report run so other reports start clean.
 $script:_AutoBucketSkipRemainingBuckets = $false
 
-# v2.2.273 -- per-report snapshot row tracker, reset here so the AutoBucket
-# escalation logic only sees CL snapshot sizes from THIS report (not a leak
-# from a prior heavier report).
-$script:_LastHybridSnapshotRowCount = 0
-
-# v2.2.362 -- per-report bytes-per-row tracker (the MAX seen during this
-# report's bucket inlines), reset here so a previous report's narrow-row
-# measurement doesn't make the current report over-confident on its first
-# escalation probe. Tracking max (not last) means one wide bucket is enough
-# to size escalation conservatively for the rest of this report.
-$script:_LastHybridBytesPerRow = 0
-
-# v2.2.364 -- per-report surrounding-KQL body overhead tracker. The escalation
-# formula budgets `1MB - bodyOverhead` for inline data so the FULL request body
-# (inline + surrounding KQL + URL params) fits under nginx's 1MB cap. Without
-# this, v2.2.362 saw 931KB inline (89%) + ~150KB body still 413 at 91 buckets.
-$script:_LastHybridQueryBodyOverheadBytes = 0
+# v2.2.370 -- DELETED per-report resets for the three hybrid measurement vars
+# (_LastHybridSnapshotRowCount, _LastHybridBytesPerRow, _LastHybridQueryBodyOverheadBytes).
+# Reasoning: resetting per-report meant each new report's first escalation had
+# NO measurement data and fell back to bucketCount*4 growth (8 -> 32 -> 128 ...
+# burning ~150s pre-group per attempt). Reports sharing a let-binding (e.g.
+# Device_Missing_CVEs_Summary + Device_Recommendations_Summary both inline
+# the _ep snapshot) should inherit prior measurements -- the snapshot is
+# IDENTICAL across them via $script:_HybridSnapshotCache. The original
+# v2.2.362 concern (narrow-row report polluting wide-row report) is moot:
+# (a) we max-track within a run, so the inherited value is always >= what's
+# needed, biasing toward MORE buckets, never fewer; (b) over-bucketing
+# wastes a few buckets but never causes 413, which is the asymmetric cost
+# that mattered. Vars are now run-scoped MAX trackers, set in
+# Resolve-ProfileCLLetBlocks. First-report-of-run still falls back to the
+# 170-byte/200KB defaults until the first inline lands a real measurement.
 
 # v2.2.325 -- always start each report with bucket-state cleared so that
 # non-bucketed report runs (and the first-iteration "is it Detailed" check)

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.369
+## v2.2.370
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
 - release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
 - release: SecurityInsight v2.2.368 - removed version numbers from operator-visible layer labels + step messages (Connect-Platform v2.3 -> Connect-Platform, etc.) (be9c7f31)
 - release: SecurityInsight v2.2.367 - config snapshot grouped section now shows Layer 1 (Connect-Platform) + Layer 1b (platform-defaults) which were silently dropped due to stale layer-order label list (bd6ec921)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
 - release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
 - release: SecurityInsight v2.2.341 - log file name now embeds simulation mode + report template (e.g. risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log) for instant test-run triage (f54a22c9)
-- release: SecurityInsight v2.2.340 - slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11/12 in v2.2.339) (e3edbc4e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.370 — AutoBucket measurements now persist across reports within a run (instead of resetting per-report), so Report 2+ inherit Report 1's bytes-per-row + body-overhead + snapshot-row-count and don't re-escalate from scratch via 4x growth.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` -- deleted the per-report resets for three hybrid measurement vars:
+
+- `$script:_LastHybridSnapshotRowCount` (was reset by v2.2.273)
+- `$script:_LastHybridBytesPerRow` (was reset by v2.2.362)
+- `$script:_LastHybridQueryBodyOverheadBytes` (was reset by v2.2.364)
+
+They now persist as run-scoped MAX trackers. First report of a run still falls back to the 170-byte / 200KB defaults until the first inline lands a real measurement; subsequent reports inherit the running max.
+
+### Why
+
+500K stress test observation: Report 2 (DEVICE_RECOMMENDATIONS_SUMMARY) had `AutoBucket cache hit => 8`. The cached 8 buckets were way too big at 500K, so it 413'd and escalated. But with measurements reset, the escalation formula had no data and fell back to `bucketCount * 4`:
+
+```
+8 -> 32  (pre-group 145s) -> 413
+32 -> 128 (pre-group 149s) -> ...
+128 -> 512 -> ...
+```
+
+Each step wasted a full pre-group cycle. Report 1 had already measured 170 bytes/row + ~20KB KQL overhead via the same `_ep` snapshot, but Report 2 didn't inherit it.
+
+The original v2.2.362 reset rationale was "narrow-row report shouldn't pollute wider-row report's first probe". With MAX tracking (v2.2.362's other change) that concern is asymmetric: inheriting a wider measurement means MORE buckets, not fewer -- the safe direction. The dangerous case (under-bucketing -> 413) only happens when we UNDER-estimate, which max-tracking prevents.
+
+### Impact
+
+500K test scenario, Report 2 onwards:
+
+- **Before:** 8 -> 32 -> 128 -> 352 (4 cycles, ~600s of pre-group waste)
+- **After:** 8 -> ~120 directly (1 cycle, ~150s pre-group) -- measurement-informed jump from the first escalation
+
+For runs with many Endpoint reports sharing `_ep`: savings stack. ~10 minutes per affected report skipped.
+
+No risk to correctness: any inherited measurement biases toward over-bucketing (safer), never under-bucketing (which is what causes 413).
 
 ---
 

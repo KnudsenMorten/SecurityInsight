@@ -1796,7 +1796,7 @@ function Invoke-GraphHuntingQuery {
                 if (-not (Test-AdvancedHuntingHasTable -TableName $clTbl)) { $available = $false; break }
             }
         }
-        # v2.2.272 -- diagnostic breadcrumb. Class 1 routing bug (Nordstern):
+        # v2.2.272 -- diagnostic breadcrumb. Class 1 routing bug (the customer):
         # Endpoint_ActiveCompromise_Detected_Detailed had probe say "NOT in AH" yet
         # AH submission still happened. Log the routing decision so the next run
         # tells us which branch actually fired.
@@ -2035,7 +2035,7 @@ function Invoke-GraphHuntingQuery {
 
     [void](Save-RARenderedQuery -Query $Query -Tag 'ah')
     # v2.2.272 -- diagnostic. If a query that referenced SI_*_CL ends up here, log
-    # how it got past the LA-direct branch (Class 1 routing-bug Nordstern paste).
+    # how it got past the LA-direct branch (Class 1 routing-bug paste).
     if ($Query -match '\bSI_[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z][A-Za-z0-9]*)*_CL\b') {
         Write-Diag ("[route] AH submission entered for query containing SI_*_CL -- either EG-hybrid path resolved CL, or LA-direct branch was bypassed.")
     }
@@ -6925,14 +6925,14 @@ while (-not $bucketRunSucceeded) {
                   # v2.2.272 -- BEFORE giving up, ESCALATE bucket count (smaller per-bucket
                   # workload). Only when escalation has already reached $capBucket do we
                   # fall back to the v2.2.198 skip-remaining behaviour. This unblocks heavy
-                  # EG-path-expansion reports on large estates (Nordstern Attack_Paths_*_
+                  # EG-path-expansion reports on large estates (Attack_Paths_*_
                   # Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure)
                   # that previously got stuck at cached BucketCount=2 forever.
                   if ($script:_LastGraphHuntingAllTimedOut) {
                       # v2.2.277 -- ADAPTIVE SUB-BUCKETING. The v2.2.272 behavior
                       # restarted the whole report at 4x bucket count when ANY
                       # bucket timed out, throwing away all already-completed
-                      # buckets. Worse: at scale (e.g. Nordstern 100K-edge tenants)
+                      # buckets. Worse: at scale (e.g. 100K-edge tenants)
                       # the escalation never converges -- each level just shifts
                       # WHICH single bucket happens to be the heavy one, and the
                       # restart cost compounds (~30 min/level x many levels = days).
@@ -7058,7 +7058,7 @@ while (-not $bucketRunSucceeded) {
   # results entirely; we never re-run them.
   if ($failedBucketIndices.Count -gt 0) {
       # v2.2.279 -- depth cap raised 4 -> 6 (modulus up to 4096 x original
-      # BucketCount). Customer's Nordstern run hit the depth=4 cap with one
+      # BucketCount). Customer's the customer run hit the depth=4 cap with one
       # slice still timing out; deeper splits give the recursive partition
       # more room before giving up. Tunable via $global:SI_AutoBucketSubDepthMax.
       $subDepthMax = if ($null -ne $global:SI_AutoBucketSubDepthMax) { [int]$global:SI_AutoBucketSubDepthMax } else { 6 }
@@ -7960,7 +7960,58 @@ elseif ([bool]$global:SendToLogAnalytics) {
 
                 Write-Ok ("ingested to {0}_CL" -f $laTable)
             } catch {
-                Write-Warn ("Log Analytics ingest failed: {0} (continuing -- xlsx + json still on disk)" -f $_.Exception.Message)
+                # v2.2.358 -- surface the raw Azure error body, not just the
+                # generic ".NET '(400) Bad Request'" string. ErrorDetails.Message
+                # carries the JSON body from Invoke-RestMethod 4xx; the response
+                # stream is the fallback when ErrorDetails wasn't populated.
+                # Also dump the full target context so the operator can correlate
+                # against the DCR / table / scope without re-reading the log header.
+                $_azBody = $null
+                if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+                    $_azBody = [string]$_.ErrorDetails.Message
+                } else {
+                    try {
+                        $_respStream = $_.Exception.Response.GetResponseStream()
+                        if ($_respStream) {
+                            if ($_respStream.CanSeek) { $_respStream.Position = 0 }
+                            $_reader = New-Object System.IO.StreamReader($_respStream)
+                            try { $_body = $_reader.ReadToEnd(); if (-not [string]::IsNullOrWhiteSpace($_body)) { $_azBody = $_body } }
+                            finally { $_reader.Close() }
+                        }
+                    } catch { }
+                }
+                # Try to extract the Azure error code from the JSON body for the
+                # one-line summary (full body printed below).
+                $_azCode = $null
+                if ($_azBody) {
+                    try {
+                        $_azObj = $_azBody | ConvertFrom-Json -ErrorAction Stop
+                        if ($_azObj -and $_azObj.error -and $_azObj.error.code) { $_azCode = [string]$_azObj.error.code }
+                    } catch { }
+                }
+                $_codeSuffix = if ($_azCode) { " [code: $_azCode]" } else { '' }
+                Write-Warn ("Log Analytics ingest failed: {0}{1} (continuing -- xlsx + json still on disk)" -f $_.Exception.Message, $_codeSuffix)
+                Write-Warn '----- ingest target context -----'
+                Write-Warn ("  DCR              : {0}  (rg={1})" -f $laDcrName, $global:SI_DcrResourceGroup)
+                Write-Warn ("  DCE              : {0}" -f $laDceName)
+                Write-Warn ("  Table            : {0}" -f $laTable)
+                Write-Warn ("  Workspace        : {0}  (rg={1})" -f $global:SI_WorkspaceName, $global:SI_WorkspaceResourceGroup)
+                Write-Warn ("  Subscription     : {0}" -f $global:SI_AzSubscriptionId)
+                Write-Warn ("  SPN AppId        : {0}" -f $global:SpnClientId)
+                Write-Warn ("  Rows attempted   : {0}" -f @($DataVariable).Count)
+                Write-Warn '----- raw Azure error body -----'
+                if ($_azBody) {
+                    foreach ($_line in ($_azBody -split "`r?`n")) {
+                        if (-not [string]::IsNullOrWhiteSpace($_line)) { Write-Warn ("  {0}" -f $_line.Trim()) }
+                    }
+                } else {
+                    Write-Warn '  (no Azure response body captured; the SDK swallowed it -- run with -Verbose for the full HTTP trace)'
+                }
+                Write-Warn '----- common causes -----'
+                Write-Warn "  - LinkedAuthorizationFailed 'Array' for dataCollectionEndpointId: the DCR has BOTH a stale + the current DCE attached (Azure portal -> DCR -> Properties shows both). Delete the stale entry, or re-create the DCR clean. Often follows a workspace/DCE move."
+                Write-Warn "  - Schema drift: existing DCR/table column types differ from the engine's current row shape ('InvalidTransformOutput: <col> produced:X, output:Y'). Delete the DCR ('$laDcrName') AND the table ('$laTable') in workspace '$($global:SI_WorkspaceName)' -- engine will recreate with the correct shape."
+                Write-Warn "  - SPN missing 'Monitoring Metrics Publisher' on DCR RG '$($global:SI_DcrResourceGroup)' in sub '$($global:SI_AzSubscriptionId)' -- the only role required for log ingest."
+                Write-Warn "  - Body size > nginx 1 MB (rare for RA Summary outputs; common at >5000 rows of wide schema) -- re-run with smaller batch."
             } finally {
                 # Restore caller's verbose preference even on exception path.
                 if ($null -ne $_savedVerbosePreference) { $global:VerbosePreference = $_savedVerbosePreference }

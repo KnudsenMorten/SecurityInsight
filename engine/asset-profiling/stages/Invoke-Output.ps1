@@ -814,16 +814,65 @@ function Write-SIClassificationToLogAnalytics {
         return ('OK -- {0} rows -> {1}_CL via {2}  ({3} auth, CollectionTime={4:o})' -f $DataVariable.Count, $tableName, $dcrName, $authNote, $RunContext.CollectionTime)
     }
     catch {
-        # Surface the full failure so operators don't have to guess from a one-line label.
-        $msg  = $_.Exception.Message
-        $body = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { '' }
+        # v2.2.358 -- surface the full failure with same shape as the RA-engine
+        # LA-ingest catch: error body (ErrorDetails or response-stream fallback),
+        # error code parsed out of the JSON body for the headline, full target
+        # context (matches Write-SIIngestTarget pre-ingest block so operator can
+        # correlate), and a common-cause checklist so the operator has a path
+        # forward instead of just a generic 400 / 401 / 403.
+        $msg = $_.Exception.Message
+        $body = $null
+        if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+            $body = [string]$_.ErrorDetails.Message
+        } else {
+            try {
+                $_respStream = $_.Exception.Response.GetResponseStream()
+                if ($_respStream) {
+                    if ($_respStream.CanSeek) { $_respStream.Position = 0 }
+                    $_reader = New-Object System.IO.StreamReader($_respStream)
+                    try { $_b = $_reader.ReadToEnd(); if (-not [string]::IsNullOrWhiteSpace($_b)) { $body = $_b } }
+                    finally { $_reader.Close() }
+                }
+            } catch { }
+        }
+        $azCode = $null
+        if ($body) {
+            try {
+                $azObj = $body | ConvertFrom-Json -ErrorAction Stop
+                if ($azObj -and $azObj.error -and $azObj.error.code) { $azCode = [string]$azObj.error.code }
+            } catch { }
+        }
+        $codeSuffix = if ($azCode) { " [code: $azCode]" } else { '' }
+
         Write-Host ''
         Write-SIErr '=== LA INGEST FAILED ==='
-        Write-SIErr ('Exception : {0}' -f $msg)
-        if ($body) { Write-SIErr ('Body      : {0}' -f $body) }
+        Write-SIErr ('Exception : {0}{1}' -f $msg, $codeSuffix)
         Write-SIErr ('At        : {0}:{1}' -f $_.InvocationInfo.ScriptName, $_.InvocationInfo.ScriptLineNumber)
+        Write-SIErr '----- ingest target context -----'
+        Write-SIErr ('  Engine           : {0}' -f $RunContext.Engine)
+        Write-SIErr ('  DCR              : {0}  (rg={1})' -f $dcrName, $global:SI_DcrResourceGroup)
+        Write-SIErr ('  DCE              : {0}' -f $global:SI_DceName)
+        Write-SIErr ('  Table            : {0}' -f $tableName)
+        Write-SIErr ('  Workspace        : {0}  (rg={1})' -f $global:SI_WorkspaceName, $global:SI_WorkspaceResourceGroup)
+        Write-SIErr ('  Subscription     : {0}' -f $global:SI_AzSubscriptionId)
+        Write-SIErr ('  SPN AppId        : {0}' -f $spnAppId)
+        Write-SIErr ('  Rows attempted   : {0}' -f @($DataVariable).Count)
+        Write-SIErr ('  Auth method      : {0}' -f $authNote)
+        Write-SIErr '----- raw Azure error body -----'
+        if ($body) {
+            foreach ($_line in ($body -split "`r?`n")) {
+                if (-not [string]::IsNullOrWhiteSpace($_line)) { Write-SIErr ('  {0}' -f $_line.Trim()) }
+            }
+        } else {
+            Write-SIErr '  (no Azure response body captured; SDK swallowed it -- re-run with -Verbose for the full HTTP trace)'
+        }
+        Write-SIErr '----- common causes -----'
+        Write-SIErr "  - LinkedAuthorizationFailed 'Array' for dataCollectionEndpointId: the DCR has BOTH a stale + the current DCE attached (Azure portal -> DCR -> Properties shows both). Delete the stale entry, or re-create the DCR clean."
+        Write-SIErr "  - Schema drift: existing DCR/table column types differ from the engine's current row shape ('InvalidTransformOutput: <col> produced:X, output:Y'). Delete the DCR ('$dcrName') AND the table ('$tableName') in workspace '$($global:SI_WorkspaceName)' -- engine will recreate with the correct shape."
+        Write-SIErr "  - SPN missing 'Monitoring Metrics Publisher' on DCR RG '$($global:SI_DcrResourceGroup)' in sub '$($global:SI_AzSubscriptionId)' -- the only role required for log ingest."
+        Write-SIErr "  - Body size > nginx 1 MB cap on the Log Ingestion endpoint -- if Rows attempted is high (>5K wide-schema), split into smaller batches."
         Write-Host ''
-        return ('FAILED: {0}' -f $msg)
+        return ('FAILED: {0}{1}' -f $msg, $codeSuffix)
     }
     finally {
         # Restore caller's verbose preference even on exception path.

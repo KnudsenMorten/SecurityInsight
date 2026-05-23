@@ -117,7 +117,7 @@ function Write-SIIngestTarget {
 
     # v2.2.348 -- last-resort derivation from $global:SI_WorkspaceResourceId when
     # Prestage hasn't backfilled the canonical globals. Bootstrap paths that skip
-    # Prestage (PingAutomateIT-style) previously printed <unset> for Subscription/
+    # Prestage (AF-internal customer style) previously printed <unset> for Subscription/
     # WorkspaceRG/WorkspaceName even though the ARM id was available all along.
     $sub    = $global:SI_AzSubscriptionId
     $wsName = $global:SI_WorkspaceName
@@ -130,10 +130,46 @@ function Write-SIIngestTarget {
             if (-not $wsName) { $wsName = $matches.name }
         }
     }
-    # DCE RG -- if unset, default to DCR RG (typical installs put both in one RG).
+    # v2.2.358 -- AUTO-DISCOVER DCE + DCR resource groups via live Az lookup
+    # whenever possible, and OVERRIDE configured globals when they don't match.
+    # Customer configs drift (DCR moved to a different RG, customer re-typed
+    # the wrong RG, copy-paste from another tenant) -- the engine should print
+    # the truth, not the lie. Logs a one-line warning when override fires so
+    # the operator knows to fix their custom.ps1.
     $dceRg = $global:SI_DceResourceGroup
     $dcrRg = $global:SI_DcrResourceGroup
-    if (-not $dceRg -and $dcrRg) { $dceRg = $dcrRg }
+
+    # DCE: look up by name across whatever the SPN can see
+    if ($global:SI_DceName -and (Get-Command -Name Get-AzDataCollectionEndpoint -ErrorAction SilentlyContinue)) {
+        try {
+            $_dceObj = Get-AzDataCollectionEndpoint -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Name -eq [string]$global:SI_DceName } |
+                       Select-Object -First 1
+            if ($_dceObj -and $_dceObj.Id -and $_dceObj.Id -match '/resourceGroups/([^/]+)/') {
+                $_actualDceRg = $matches[1]
+                if ($dceRg -and ($dceRg -ne $_actualDceRg)) {
+                    & $_emit ("  [auto-fix] DCE '{0}' actually lives in '{1}', not configured '{2}'. Update `$global:SI_DceResourceGroup in custom.ps1." -f $global:SI_DceName, $_actualDceRg, $dceRg)
+                }
+                $dceRg = $_actualDceRg
+            }
+        } catch { }
+    }
+
+    # DCR: look up by name (the caller passed DcrName)
+    if ($DcrName -and (Get-Command -Name Get-AzDataCollectionRule -ErrorAction SilentlyContinue)) {
+        try {
+            $_dcrObj = Get-AzDataCollectionRule -ErrorAction SilentlyContinue |
+                       Where-Object { $_.Name -eq [string]$DcrName } |
+                       Select-Object -First 1
+            if ($_dcrObj -and $_dcrObj.Id -and $_dcrObj.Id -match '/resourceGroups/([^/]+)/') {
+                $_actualDcrRg = $matches[1]
+                if ($dcrRg -and ($dcrRg -ne $_actualDcrRg)) {
+                    & $_emit ("  [auto-fix] DCR '{0}' actually lives in '{1}', not configured '{2}'. Update `$global:SI_DcrResourceGroup in custom.ps1." -f $DcrName, $_actualDcrRg, $dcrRg)
+                }
+                $dcrRg = $_actualDcrRg
+            }
+        } catch { }
+    }
 
     $_or   = { param($v) if ($v) { [string]$v } else { '<unset>' } }
     & $_emit ('  ingest -> Subscription : {0}' -f (& $_or $sub))

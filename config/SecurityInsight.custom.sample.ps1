@@ -48,7 +48,13 @@ $global:AutomationFramework      = $true   # use long-name HighPriv_* globals
 $global:SI_WorkspaceResourceId = '/subscriptions/<sub-id>/resourcegroups/<rg>/providers/microsoft.operationalinsights/workspaces/<workspace-name>'
 $global:SI_WorkspaceName       = '<workspace-name>'
 $global:SI_DceName             = 'dce-securityinsight'
-$global:SI_DcrResourceGroup    = '<dcr-rg>'
+# DCE and DCR live in the SAME resource group as the workspace by default
+# (engine derives via Az lookup; explicit override only needed when you split
+# resources across multiple RGs, which is unusual). Don't set these unless
+# you've intentionally placed the DCE/DCR in a different RG -- a stale value
+# here makes the engine print a wrong "ingest -> DCR (rg=...)" line.
+# $global:SI_DceResourceGroup  = '<rg>'
+# $global:SI_DcrResourceGroup  = '<rg>'
 $global:SI_StorageAccount      = '<storage-account-name>'
 $global:SI_Location            = '<azure-region>'              # REQUIRED. Examples: westeurope, northeurope, eastus, eastus2, westus2, southcentralus, uksouth, swedencentral, francecentral, germanywestcentral, switzerlandnorth, norwayeast, australiaeast, southeastasia, japaneast, canadacentral, brazilsouth
 # $global:SI_TableNamePattern  = 'SI_{0}_Profile'              # engine default

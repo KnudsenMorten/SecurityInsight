@@ -340,8 +340,20 @@ function Initialize-LauncherConfig {
         [void]$out.AppendLine(('-' * 100))
 
         # SECTION 1 -- per-layer grouping.
+        # v2.2.367 -- layer labels were drifting: the recorded labels are
+        # 'Layer 1 - Connect-Platform (v2.3)' / 'Layer 1 - platform-defaults
+        # (v2.2 fallback)' / 'Layer 1b - platform-defaults (cross-cutting)'
+        # but the legacy order list only had 'Layer 1 - platform-defaults
+        # (internal)' -- so Layer 1 + 1b were silently dropped from the
+        # grouped section (operators saw the variables only in the alphabetical
+        # aggregated section at the bottom). Adding all real labels in load
+        # order so internal-automation customers see their platform-defaults
+        # values attributed to Layer 1b correctly.
         $layerOrder = @(
+            'Layer 1 - Connect-Platform (v2.3)',
+            'Layer 1 - platform-defaults (v2.2 fallback)',
             'Layer 1 - platform-defaults (internal)',
+            'Layer 1b - platform-defaults (cross-cutting)',
             'Layer 2 - shared-defaults',
             'Layer 3 - SecurityInsight.custom',
             'Layer 4 - LauncherConfig.defaults',

@@ -949,6 +949,13 @@ function Resolve-ProfileCLLetBlocks {
     $clBucketingActive = ($BucketCount -gt 1)
 
     $modified = $Query
+    # v2.2.364 -- accumulate inline bytes across all let-blocks processed in this
+    # call so we can derive the surrounding-KQL body overhead (= modified.Length
+    # - totalInlineBytes) at the end. The escalation formula uses this to budget
+    # the FULL query body under nginx's 1MB cap, not just the inline portion --
+    # v2.2.362 targeted 90% of 1MB for inline alone but the full body (inline +
+    # surrounding KQL + URL params) still 413'd at 91 buckets / 931KB inline.
+    $_thisCallInlineBytes = 0
     foreach ($m in $matches2) {
         $varName = $m.Groups['var'].Value
         # Re-extract body from the ORIGINAL query (string-stripped version has placeholders)
@@ -1124,6 +1131,17 @@ function Resolve-ProfileCLLetBlocks {
             $script:_HybridSnapshotCache[$cacheKey] = $datatableLet
         }
         $modified = $modified.Replace($fullBlock, $datatableLet)
+        $_thisCallInlineBytes += [int]$datatableLet.Length
+    }
+    # v2.2.364 -- record the SURROUNDING-KQL body overhead seen by this call so
+    # the AutoBucket escalation formula can budget the FULL request body under
+    # nginx's 1MB cap. Track MAX for the same reason bytesPerRow tracks max:
+    # under-estimating overhead leads to oversized buckets and a 413'd query.
+    if ($_thisCallInlineBytes -gt 0) {
+        $_overhead = [int]$modified.Length - $_thisCallInlineBytes
+        if ($_overhead -gt 0 -and $_overhead -gt [int]$script:_LastHybridQueryBodyOverheadBytes) {
+            $script:_LastHybridQueryBodyOverheadBytes = [int]$_overhead
+        }
     }
     return $modified
 }
@@ -6863,6 +6881,12 @@ $script:_LastHybridSnapshotRowCount = 0
 # to size escalation conservatively for the rest of this report.
 $script:_LastHybridBytesPerRow = 0
 
+# v2.2.364 -- per-report surrounding-KQL body overhead tracker. The escalation
+# formula budgets `1MB - bodyOverhead` for inline data so the FULL request body
+# (inline + surrounding KQL + URL params) fits under nginx's 1MB cap. Without
+# this, v2.2.362 saw 931KB inline (89%) + ~150KB body still 413 at 91 buckets.
+$script:_LastHybridQueryBodyOverheadBytes = 0
+
 # v2.2.325 -- always start each report with bucket-state cleared so that
 # non-bucketed report runs (and the first-iteration "is it Detailed" check)
 # never inherit coordinates from the previous report's last bucket.
@@ -7081,30 +7105,36 @@ while (-not $bucketRunSucceeded) {
       # v2.2.361 -- size buckets empirically to a target fraction of the nginx 1MB
       # cap based on MEASURED bytes-per-row, instead of the hardcoded 500 rows/bucket
       # constant that was 8-10x too conservative for typical ~170 bytes/row payloads.
-      # v2.2.362 -- bumped headroom from 30% -> 10% (target 90% of 1MB cap) because
-      # v2.2.362 also added per-report reset + max-tracking of bytesPerRow + the
-      # existing 413 catch path triggers escalation. So if 90% turns out tight for
-      # a particular row width, the self-correction kicks in: failed bucket updates
-      # the max measurement, escalation re-derives with the wider real value.
-      # Aggressive sizing wins more than it loses given the self-correcting loop.
+      # v2.2.362 -- per-report reset + MAX-tracking of bytesPerRow + 90% inline target.
+      # v2.2.364 -- account for FULL request body, not just inline. v2.2.362 saw 931KB
+      # inline (89%) + ~150KB surrounding KQL body still 413 at 91 buckets because the
+      # 1MB cap is on the FULL request body (inline + KQL + URL params). Now budget:
+      #     inline_budget = total_budget - measured_body_overhead
+      # where measured_body_overhead is the surrounding-KQL bytes captured by
+      # Resolve-ProfileCLLetBlocks (= modified.Length - totalInlineBytes). Both
+      # bytesPerRow and bodyOverhead are tracked as MAX-seen-this-report.
       $snapshotJump = 0
       if ($script:_LastHybridSnapshotRowCount -and [int]$script:_LastHybridSnapshotRowCount -gt 0) {
-          # nginx Log Ingestion cap = 1MB. Target 90% leaves 10% headroom for KQL
-          # body + URL params + per-bucket variance. bytesPerRow comes from prior
-          # inline calls (Resolve-ProfileCLLetBlocks tracks the max seen this report).
-          # Fallback to 170 (median observed at typical CL row width) only on the
-          # very first probe when no measurement exists yet.
+          # nginx Log Ingestion cap = 1MB total request body. Target 95% leaves
+          # 5% (~52KB) for URL params, HTTP headers, and per-bucket variance.
+          $totalBudget      = [int](1MB * 0.95)
+          # Measured overhead from prior inline calls; fallback to 200KB until first
+          # measurement (conservative -- real overhead is typically 100-200KB).
+          $bodyOverhead     = if ($script:_LastHybridQueryBodyOverheadBytes -gt 0) { [int]$script:_LastHybridQueryBodyOverheadBytes } else { 200KB }
+          $inlineBudget     = [int][Math]::Max(64KB, $totalBudget - $bodyOverhead)
+          # Inline bytes-per-row from prior inline calls (max-tracked). Fallback 170 (median observed).
           $bytesPerRow      = if ($script:_LastHybridBytesPerRow -gt 0) { [double]$script:_LastHybridBytesPerRow } else { 170.0 }
-          $targetBytes      = [int](1MB * 0.9)   # 90% of 1MB nginx cap; self-correction handles over-aggressive cases
-          $rowsPerBucket    = [int][Math]::Max(1, [Math]::Floor($targetBytes / $bytesPerRow))
+          $rowsPerBucket    = [int][Math]::Max(1, [Math]::Floor($inlineBudget / $bytesPerRow))
           $snapshotJump     = [int][Math]::Ceiling([int]$script:_LastHybridSnapshotRowCount / [double]$rowsPerBucket)
       }
       $jumpCandidates = @(($bucketCountToUse * 4), ($bucketCountToUse + 1), $snapshotJump)
       $nextBucket = [Math]::Min($capBucket, ($jumpCandidates | Measure-Object -Maximum).Maximum)
       if ($snapshotJump -gt 0 -and $snapshotJump -ge ($bucketCountToUse * 4)) {
           $_bpr = if ($script:_LastHybridBytesPerRow -gt 0) { [int]$script:_LastHybridBytesPerRow } else { 170 }
-          $_rpb = [int][Math]::Max(1, [Math]::Floor([int](1MB * 0.9) / [double]$_bpr))
-          Write-Info ("AutoBucket escalation jump informed by snapshot size + measured row-width ({0} rows / {1} rows-per-bucket @ ~{2} bytes/row max, ~90% of nginx 1MB cap = {3} buckets)" -f $script:_LastHybridSnapshotRowCount, $_rpb, $_bpr, $snapshotJump)
+          $_bov = if ($script:_LastHybridQueryBodyOverheadBytes -gt 0) { [int]$script:_LastHybridQueryBodyOverheadBytes } else { 200KB }
+          $_ib  = [int][Math]::Max(64KB, [int](1MB * 0.95) - $_bov)
+          $_rpb = [int][Math]::Max(1, [Math]::Floor($_ib / [double]$_bpr))
+          Write-Info ("AutoBucket escalation jump informed by snapshot size + measured row-width + measured query-body overhead ({0} rows / {1} rows-per-bucket; budget: {2}KB inline + {3}KB KQL-body = {4}KB total, 95% of nginx 1MB cap; row-width ~{5} bytes/row max = {6} buckets)" -f $script:_LastHybridSnapshotRowCount, $_rpb, [int]($_ib/1KB), [int]($_bov/1KB), [int](([int](1MB * 0.95))/1KB), $_bpr, $snapshotJump)
       }
 
       Write-Info ("Shard sizing: '{0}' increasing shard count {1} -> {2} (auto-tuning for this report's payload)." -f `

@@ -8451,7 +8451,11 @@ if ([bool]$global:BuildSummaryByAI) {
     if ($cached) {
         $shared = $cached.Data
         if ($shared.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$shared.AISummaryText)) {
-            $sharedAge = (Get-Date) - [DateTime]::Parse($shared.GeneratedAt).ToLocalTime()
+            # v2.2.369 -- handle BOTH [DateTime] (when ConvertFrom-Json auto-materialized ISO 8601)
+            # AND [string] (when raw). Pure Parse fails on non-en-US boxes when the input is
+            # already [DateTime] -- implicit ToString uses one culture, Parse uses another.
+            $_gen = if ($shared.GeneratedAt -is [DateTime]) { [DateTime]$shared.GeneratedAt } else { [DateTime]::Parse([string]$shared.GeneratedAt, [System.Globalization.CultureInfo]::InvariantCulture) }
+            $sharedAge = (Get-Date) - $_gen.ToLocalTime()
             if ($sharedAge.TotalHours -le $aiSummaryMaxAgeHours) {
                 $global:AI_SummaryText = [string]$shared.AISummaryText
                 Export-AISummaryWorksheet -Path $global:OutputXlsx -SheetName 'Summary' -SummaryText $global:AI_SummaryText
@@ -9026,7 +9030,8 @@ Rules:
         try {
             $preCallCheck = Get-RATop50CachedFile
             if ($preCallCheck -and $preCallCheck.Data -and $preCallCheck.Data.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$preCallCheck.Data.AISummaryText)) {
-                $preCallAge = (Get-Date) - [DateTime]::Parse($preCallCheck.Data.GeneratedAt).ToLocalTime()
+                $_gen = if ($preCallCheck.Data.GeneratedAt -is [DateTime]) { [DateTime]$preCallCheck.Data.GeneratedAt } else { [DateTime]::Parse([string]$preCallCheck.Data.GeneratedAt, [System.Globalization.CultureInfo]::InvariantCulture) }
+                $preCallAge = (Get-Date) - $_gen.ToLocalTime()
                 if ($preCallAge.TotalHours -le $aiSummaryMaxAgeHours) {
                     Write-Info ("[AISummaryCache] pre-POST race re-check: peer run wrote cache {0:N1}h ago (template '{1}', source={2}). SKIPPING AI POST -- adopting peer's AI text + KPI." -f `
                         $preCallAge.TotalHours, $preCallCheck.Data.SourceTemplate, $preCallCheck.Source)
@@ -9159,7 +9164,8 @@ Rules:
                 $skipWrite = $false
                 if ($existing -and $existing.Data -and $existing.Data.AISummaryText -and -not [string]::IsNullOrWhiteSpace([string]$existing.Data.AISummaryText)) {
                     try {
-                        $existingAge = (Get-Date) - [DateTime]::Parse($existing.Data.GeneratedAt).ToLocalTime()
+                        $_gen = if ($existing.Data.GeneratedAt -is [DateTime]) { [DateTime]$existing.Data.GeneratedAt } else { [DateTime]::Parse([string]$existing.Data.GeneratedAt, [System.Globalization.CultureInfo]::InvariantCulture) }
+                        $existingAge = (Get-Date) - $_gen.ToLocalTime()
                         if ($existingAge.TotalHours -le $aiSummaryMaxAgeHours) {
                             $skipWrite = $true
                             Write-Info ("[AISummaryCache] race detected: peer run wrote cache {0:N1}h ago (template '{1}', source={2}). NOT overwriting -- first-writer-wins. This run's email will be regenerated to use peer's AI text + KPI." -f `
@@ -9387,7 +9393,8 @@ try {
             $finalCheck = Get-RATop50CachedFile
             if ($finalCheck -and $finalCheck.Data -and $finalCheck.Data.PSObject.Properties['GlobalScore'] -and $null -ne $finalCheck.Data.GlobalScore) {
                 try {
-                    $finalAge = (Get-Date) - [DateTime]::Parse($finalCheck.Data.GeneratedAt).ToLocalTime()
+                    $_gen = if ($finalCheck.Data.GeneratedAt -is [DateTime]) { [DateTime]$finalCheck.Data.GeneratedAt } else { [DateTime]::Parse([string]$finalCheck.Data.GeneratedAt, [System.Globalization.CultureInfo]::InvariantCulture) }
+                    $finalAge = (Get-Date) - $_gen.ToLocalTime()
                     if ($finalAge.TotalHours -le $aiSummaryMaxAgeHours -and [string]$finalCheck.Data.SourceTemplate -ne [string]$global:ReportTemplate) {
                         $script:_CachedRAKPI = $finalCheck.Data
                         Write-Info ("[SCORE] final-pre-email re-check: peer run wrote cached KPI {0:N1}h ago (template '{1}', source={2}). Adopting peer's KPI for this run too." -f `

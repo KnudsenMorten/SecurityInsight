@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.364
+## v2.2.365
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.365 - dcr-si-run-health auto-create fixed (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if authenticated mail is enabled but creds are missing (ff5bef13)
 - release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
 - release: SecurityInsight v2.2.363 - startup version banner + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (saves ~2h per affected cross-domain Attack_Paths report) (bfb4c9a6)
 - release: SecurityInsight v2.2.362 - AutoBucket bytesPerRow now per-report reset + MAX-tracked; target bumped 70% -> 90% of nginx 1MB cap (self-correcting loop handles over-aggressive cases) (e931cd52)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.338 - new launcher CLI knob -RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N; new AssetSimulationComplex{Summary,Detailed} Locked templates listing 10 cross-domain reports that exercise source/target bucketing; hardcoded SI_SimulateCLRowCount removed from custom.ps1 (2e01de15)
 - release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
 - release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
-- release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.365 — Run-Health DCR now auto-creates cleanly (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if mail will be sent but credentials are missing.
+
+### What changed
+
+1. **`engine/asset-profiling/shared/Send-SIRunHealthRow.ps1`** — heartbeat row's `CollectionTime` is now explicitly cast to `[datetime]`. Previously it was a string at runtime, which caused AzLogDcrIngestPS's schema derivation to pick `DateTime` for the DCR's `streamDeclarations` but `String` for the `transformKql` output -- Azure rejected the auto-create with `InvalidPayload: CollectionTime [produced:String, output:DateTime]` and the `dcr-si-run-health` DCR was never created. The cast forces consistent type on both sides.
+
+2. **`engine/risk-analysis/Invoke-RiskAnalysis.ps1`** — added SMTP pre-flight validation at engine startup (just before the `[STEP] settings overview` block):
+
+   ```powershell
+   if (Report_SendMail = true) AND (Mail_SendAnonymous = false):
+       require non-empty: SMTPFrom, SMTPUser, SMTPPassword
+       throw early with named missing fields if any
+   ```
+
+### Why
+
+Customer report: deleted `dcr-si-run-health` to clean stale schema → engine repeatedly failed to recreate it because of the type-derivation bug above. The DCR never came back automatically.
+
+Separate customer report: ran full RA Summary for 24min, then mail-dispatch at the END failed with Brevo `Please authenticate first` because SMTPUser content was wrong. Operator spent the entire run unaware mail was misconfigured. Pre-flight now throws at startup so the operator sees the issue immediately.
+
+### Impact
+
+- `dcr-si-run-health` auto-creates cleanly on first run after delete (no more manual portal recreation needed)
+- Mail misconfigurations surface at engine startup (~2 sec into run) instead of after the full Risk Analysis completes (hours later)
+- Pre-flight only fires when mail is actually enabled AND authenticated -- customers using anonymous mail or no mail are unaffected
+- Error message names exactly which credential(s) are missing, with one-line guidance per field
 
 ---
 

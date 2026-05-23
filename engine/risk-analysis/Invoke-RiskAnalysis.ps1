@@ -5765,6 +5765,22 @@ if ([bool]$global:AutomationFramework) {
     $global:RiskDefinitionsCsvPath = (Join-Path $global:SettingsPath "riskscore.index.custom.csv")
 }
 
+# v2.2.365 -- SMTP pre-flight validation at startup. If mail will be sent
+# (Report_SendMail = true) AND anonymous mode is OFF (the default), require
+# all three credentials -- SMTPFrom, SMTPUser, SMTPPassword -- to be non-empty.
+# Throw early so the operator sees the misconfiguration at run start, not
+# after a multi-hour Risk Analysis completes and only the mail-dispatch step
+# at the very end discovers the missing credential.
+if ([bool]$global:Report_SendMail -and ($global:Mail_SendAnonymous -eq $false)) {
+    $_missing = @()
+    if ([string]::IsNullOrWhiteSpace([string]$global:SMTPFrom))     { $_missing += 'SMTPFrom' }
+    if ([string]::IsNullOrWhiteSpace([string]$global:SMTPUser))     { $_missing += 'SMTPUser' }
+    if ([string]::IsNullOrWhiteSpace([string]$global:SMTPPassword)) { $_missing += 'SMTPPassword' }
+    if ($_missing.Count -gt 0) {
+        throw ("SMTP PRE-FLIGHT FAILED -- `$global:Report_SendMail is true and `$global:Mail_SendAnonymous is `$false (authenticated SMTP), but the following credential(s) are empty: {0}. Set them in your custom.ps1 (Layer 3) or platform-defaults.ps1, OR set `$global:Mail_SendAnonymous = `$true if your relay actually accepts anonymous submission. SMTPFrom = visible from-address; SMTPUser = SMTP relay login id; SMTPPassword = SMTP relay password (NOT an API key or Graph token)." -f ($_missing -join ', '))
+    }
+}
+
 # Generic bucketing configuration (for large queries)
 # (kept as GLOBALS only)
 Write-Step "settings overview"

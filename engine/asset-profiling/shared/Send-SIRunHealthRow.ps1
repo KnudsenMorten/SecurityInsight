@@ -54,8 +54,15 @@ function Send-SIRunHealthRow {
         $hostName = $env:COMPUTERNAME
         if (-not $hostName) { $hostName = [System.Net.Dns]::GetHostName() }
 
+        # v2.2.365 -- cast CollectionTime to [datetime] so AzLogDcrIngestPS derives
+        # the column as DateTime in BOTH the streamDeclarations + transformKql when
+        # auto-creating the DCR. Previously the runtime value was a string, which
+        # caused AzLogDcrIngestPS's schema derivation to pick DateTime for one
+        # side but String for the other -- the resulting DCR spec failed Azure's
+        # InvalidPayload validation ('CollectionTime [produced:String, output:DateTime]')
+        # and the DCR was never created. Engine-side cast forces consistent type.
         $row = [pscustomobject]@{
-            CollectionTime    = $RunContext.CollectionTime
+            CollectionTime    = [datetime]$RunContext.CollectionTime
             RunId             = [string]$RunContext.RunId
             Engine            = [string]$RunContext.Engine
             ShardIndex        = [int]$RunContext.ShardIndex

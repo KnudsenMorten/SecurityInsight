@@ -32,7 +32,7 @@ The script binds `http://localhost:8765/`, opens your default browser, and tails
 .\Start-SIViewer.ps1 -Port 9000
 
 # point at a different output folder (e.g. customer dump)
-.\Start-SIViewer.ps1 -OutputDir D:\customers\evida\latest
+.\Start-SIViewer.ps1 -OutputDir D:\customers\<name>\latest
 
 # headless (no auto-launch browser)
 .\Start-SIViewer.ps1 -NoBrowser

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.357
+## v2.2.358
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.358 - LA-ingest error body surfaced (RA + profiler) + DCE/DCR RG auto-discover via Az lookup + sample templates fixed + customer-name scrub (3aa4daf8)
 - release: SecurityInsight v2.2.357 - RA sub-bucket cascade self-aware: futile-parent prune when 100% of children time out (caps Summary runtime at ~2h instead of up to 113 days for cross-domain skew reports) (8840a0c9)
 - release: SecurityInsight v2.2.356 - clean customer-template restructure (Internal + Community parallels) + remove implicit westeurope default (f38d7ede)
 - release: SecurityInsight v2.2.355 - unattended setup writes SMTP into custom.ps1 for Community + README §4.3.1 unattended-setup reference (05573da0)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
 - release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
 - release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
-- release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
 
 ---
 
@@ -43,17 +43,73 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 
 ---
 
+## v2.2.358 — RA log-ingest failures now surface the raw Azure error body + DCE/DCR resource groups auto-discovered via Az lookup (no more stale RGs printed in operator logs).
+
+### Operator can finally troubleshoot LA ingest failures
+
+Before: a 400 `Bad Request` from the Log Ingestion API printed only `[WARN] Log Analytics ingest failed: The remote server returned an error: (400) Bad Request.` -- nothing about WHY. Operator had no path forward.
+
+After: the catch block extracts the raw Azure error body (from `ErrorDetails.Message`, or the response stream as fallback), parses out the error code, and prints:
+
+```
+[WARN] Log Analytics ingest failed: ... [code: LinkedAuthorizationFailed] (continuing -- xlsx + json still on disk)
+[WARN] ----- ingest target context -----
+[WARN]   DCR              : dcr-si-risk-analysis-summary  (rg=rg-securityinsight)
+[WARN]   DCE              : dce-securityinsight
+[WARN]   Table            : SI_RiskAnalysis_Summary
+[WARN]   Workspace        : log-platform-management-securityinsight  (rg=rg-securityinsight)
+[WARN]   Subscription     : <sub-id>
+[WARN]   SPN AppId        : <spn-app-id>
+[WARN]   Rows attempted   : 13216
+[WARN] ----- raw Azure error body -----
+[WARN]   {"error":{"code":"LinkedAuthorizationFailed","message":"The client has permission to perform action 'microsoft.insights/dataCollectionRules/write' on scope '...'; however, the linked property 'properties.dataCollectionEndpointId' has values which are of invalid types 'Array'. The values can only be of type 'String' or Null."}}
+[WARN] ----- common causes -----
+[WARN]   - LinkedAuthorizationFailed 'Array' for dataCollectionEndpointId: ...
+[WARN]   - Schema drift: ...
+[WARN]   - SPN missing 'Monitoring Metrics Publisher' on DCR RG ...
+[WARN]   - Body size > nginx 1 MB ...
+```
+
+The body + target context + common-cause checklist lands in a single block right where the operator looks for it.
+
+### DCE + DCR resource groups now show reality, not stale config
+
+`Write-SIIngestTarget` (the canonical "ingest -> ..." block used by every engine) used to print whatever `$global:SI_DceResourceGroup` / `$global:SI_DcrResourceGroup` said -- including when those were stale. Setup wizards / hand-edits / copy-pasted custom.ps1 from another tenant could leave `'rg-dcr-securityinsight'` in the config while the actual DCR was provisioned in `'rg-securityinsight'`. Operator's log printed the lie.
+
+Now: the helper does a live `Get-AzDataCollectionEndpoint` + `Get-AzDataCollectionRule` lookup by name, derives the actual RG from the returned resource ID, and overrides any wrong configured value. When override fires, it logs:
+
+```
+[INFO]   [auto-fix] DCE 'dce-securityinsight' actually lives in 'rg-securityinsight', not configured 'rg-dce-securityinsight'. Update $global:SI_DceResourceGroup in custom.ps1.
+[INFO]   [auto-fix] DCR 'dcr-si-risk-analysis-summary' actually lives in 'rg-securityinsight', not configured 'rg-dcr-securityinsight'. Update $global:SI_DcrResourceGroup in custom.ps1.
+```
+
+So the printed `ingest -> DCE (rg=...)` / `ingest -> DCR (rg=...)` lines always reflect Azure-side truth, and the operator gets a one-line hint to clean up the stale global.
+
+### Sample templates fixed (root cause of the stale-config drift)
+
+Both `config/SecurityInsight.custom.sample.ps1` and `config/SecurityInsight.custom.community.sample.ps1` used to suggest `$global:SI_DcrResourceGroup = '<dcr-rg>'` as a fillable placeholder -- which made customers think they had to specify a SEPARATE RG for the DCR. In practice DCE/DCR/workspace/storage all live in one RG for nearly every install. The templates now comment out those two globals with a note: "DCE and DCR live in the SAME RG as the workspace by default ... Don't set these unless you've intentionally split."
+
+### Asset-profiling engine (endpoint/identity/azure/publicip) gets the same error treatment
+
+`Invoke-Output.ps1`'s LA-ingest catch had a partial implementation (body when `ErrorDetails.Message` was present, nothing else). Upgraded to match the new RA-engine shape: response-stream fallback when ErrorDetails is empty, error-code parsed out for the headline, full target context block (Engine/DCR/DCE/Table/Workspace/Subscription/SPN AppId/Rows/Auth), and the same common-causes checklist. Now profiler runs get the same operator-actionable output on failure.
+
+### Customer-name scrub
+
+Replaced all customer names (in code comments, RELEASENOTES, README, viewer docs) with generic descriptors per operator instruction. Going forward, public docs use placeholders like "customer A", "the production tenant", "AF-internal customer style" -- never a tenant-identifying name. Saved as a permanent rule in operator's memory so it won't recur.
+
+---
+
 ## v2.2.357 — RA sub-bucket cascade now self-aware: when 100% of a parent's children time out (proving sub-bucketing isn't distributing the work for that slice), don't enqueue grandchildren. Caps worst-case Summary runtime at ~2 hours instead of up to 113 days for reports with cross-domain join skew.
 
 ### Bug confirmed across three customers
 
-Customer logs (Pingala / Evida / dev) all showed `Attack_Paths_Summary_*` reports with `summarize`-aggregations + `_TargetCmdb` cross-domain joins cascading into recursive sub-bucketing that never recovers rows:
+Customer logs (customer A / customer B / dev) all showed `Attack_Paths_Summary_*` reports with `summarize`-aggregations + `_TargetCmdb` cross-domain joins cascading into recursive sub-bucketing that never recovers rows:
 
 | Depth | Sub-buckets | Per-bucket timeout | Time at depth |
 |---|---|---|---|
 | 0 (original) | 2 | 900 s | 30 min |
 | 1 | 8 | 900 s | 2 hours |
-| 2 | 32 | 900 s | **8 hours** (Evida log was here at hour 10) |
+| 2 | 32 | 900 s | **8 hours** (customer B log was here at hour 10) |
 | 3 | 128 | 900 s | 32 hours |
 | 4-6 | 512-8192 | 900 s | 5-85 days |
 
@@ -96,8 +152,8 @@ And the cascade-summary diagnostic:
 
 | Scenario | Before v2.2.357 | After v2.2.357 |
 |---|---|---|
-| Pingala-style Summary run (1 cross-domain report timing out) | 3h 52min wall clock | ~30 min |
-| Evida-style Summary run (multiple reports + deep cascade) | 10h+ at depth=2, still running | ~30-90 min |
+| Customer-A-style Summary run (1 cross-domain report timing out) | 3h 52min wall clock | ~30 min |
+| customer-B-style Summary run (multiple reports + deep cascade) | 10h+ at depth=2, still running | ~30-90 min |
 | Worst case (all 6 cross-domain `Attack_Paths_Summary_*` time out) | Theoretical 85 days at depth=6 | ~2 hours |
 | Normal Summary run (no cross-domain timeouts) | Unchanged | Unchanged |
 
@@ -394,9 +450,9 @@ All three sinks (LA + JSON + Excel) green. Same table + DCR as the legacy engine
 
 The PublicIP engine was a 951-line standalone monolith with its own auth / module-loading / logging / DCR ingest. That divergence caused real bugs:
 
-- Ingest-target diagnostic showed `<unset>` for Subscription / WorkspaceRG / DceRG / DcrRG (PingAutomateIT case): the standalone scanner had no prestage to backfill those globals from `$global:SI_WorkspaceResourceId`.
+- Ingest-target diagnostic showed `<unset>` for Subscription / WorkspaceRG / DceRG / DcrRG (AF-internal customer case): the standalone scanner had no prestage to backfill those globals from `$global:SI_WorkspaceResourceId`.
 - `TerminatingError(Invoke-WebRequest)` flood around DCR provisioning: standalone had no `Invoke-SIQuietBlock` wrapper to suppress AzLogDcrIngestPS' VERBOSE storm.
-- DCE collision guard only fired when Subscription + DceRG were set — both unset in PingAutomateIT, so the LinkedAuthorizationFailed "Array" bug surfaced.
+- DCE collision guard only fired when Subscription + DceRG were set — both unset in AF-internal, so the LinkedAuthorizationFailed "Array" bug surfaced.
 - No cmdb / Tier / server-only / fresh-scan logic ever made it into the pipeline branch (`Get-DiscoveryFromShodan.ps1` only knew ARG + EG + extras), so the container flavour was already silently missing those filters.
 
 Folding into `Invoke-SIEngineRun.ps1` inherits prestage (auto-derive Subscription/RG from `SI_WorkspaceResourceId`), `Invoke-SIQuietBlock`, shared DCE collision guard, schema-driven row builder, shared RunHealth heartbeat — and stops the drift.
@@ -1827,7 +1883,7 @@ Both reports rewritten in v2.2.303 around KQL `make-graph` + `graph-match` (repl
 
 ### Validated against ASM portal
 
-Detailed returns 32 rows in 2 buckets × ~45s each on Nordstern's tenant — exact match with Defender ASM portal's "Device with high severity vulnerabilities allows lateral movement to Azure" attack-path count (32 paths).
+Detailed returns 32 rows in 2 buckets × ~45s each on the customer's tenant — exact match with Defender ASM portal's "Device with high severity vulnerabilities allows lateral movement to Azure" attack-path count (32 paths).
 
 ### Engine fixes shipped alongside
 
@@ -2096,7 +2152,7 @@ Query body changed → new stable hash. AutoBucket cache invalidates once.
 
 ## v2.2.296 — Fix v2.2.295 LA pre-fetch regression + add EG priv-esc-vuln entry-point gate to `Attack_Paths_Detailed_Device_*_Azure`
 
-Two changes, both targeting the bomb-device timeout chain on Nordstern's `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` report.
+Two changes, both targeting the bomb-device timeout chain on the customer's `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` report.
 
 ### Bug — `int(null)` default in `Target_Tier_From_CL` broke LA pre-fetch (regression from v2.2.295)
 
@@ -2138,7 +2194,7 @@ Query body changed → new stable hash. AutoBucket cache invalidates once, re-pr
 
 ## v2.2.295 — Mirror Microsoft ASM filtering: exploit-grade creds only + authoritative target tier from CL
 
-Operator showed Defender ASM portal: only **2 attack paths** in Nordstern's tenant for "Device with high severity vulnerabilities allows lateral movement to Azure". Our query was computing millions of cartesian tuples vs Microsoft's algorithm narrowing to exactly 2. Two structural bugs identified and both fixed.
+Operator showed Defender ASM portal: only **2 attack paths** in the customer's tenant for "Device with high severity vulnerabilities allows lateral movement to Azure". Our query was computing millions of cartesian tuples vs Microsoft's algorithm narrowing to exactly 2. Two structural bugs identified and both fixed.
 
 ### Bug 1 — credential edge filter included non-exploit-grade labels
 
@@ -2177,7 +2233,7 @@ Result: TierEscalation calculations + AttackPathPriorityScore were computed agai
 
 ### Combined effect (expected)
 
-For Nordstern's tenant:
+For the customer's tenant:
 - Cartesian shrinks dramatically (most edges from devices were `user`/`serviceprincipal`/`managedidentity`-typed; dropping them removes 80-95% of the cred set)
 - Tier escalation now computes against authoritative CL Tier, not EG's possibly-null assessment
 - Output rows should converge toward what ASM's portal shows (small N)
@@ -2192,7 +2248,7 @@ Query body changed → new stable hash. AutoBucket cache invalidates once, re-pr
 
 ## v2.2.294 — `Attack_Paths_Detailed_Device_*_Azure`: pre-aggregate at each hop (break multiplicative join chain)
 
-Operator on Nordstern: even after v2.2.290 (additive output) + v2.2.293 (Device-keyed bucketing), bucket 40 still 900s-times out. Root cause confirmed structural per-single-device: ONE super-connected device's full graph traversal exceeds AH's 900s ceiling regardless of bucketing.
+Operator: even after v2.2.290 (additive output) + v2.2.293 (Device-keyed bucketing), bucket 40 still 900s-times out. Root cause confirmed structural per-single-device: ONE super-connected device's full graph traversal exceeds AH's 900s ceiling regardless of bucketing.
 
 ### Root cause (deep dive)
 
@@ -2252,13 +2308,13 @@ Query body changed → new stable hash. AutoBucket cache invalidates once, re-pr
 
 ### Expected behaviour
 
-For Nordstern's tenant: bucket 40 should now complete within 900s (compute reduced 3× for the bomb device). If still timing out, the next layer of optimization is either (a) per-device exclusion at MDE, (b) per-target-tier filter (drop Tier 3 targets), or (c) Sentinel data lake routing if the customer has it provisioned.
+For the customer's tenant: bucket 40 should now complete within 900s (compute reduced 3× for the bomb device). If still timing out, the next layer of optimization is either (a) per-device exclusion at MDE, (b) per-target-tier filter (drop Tier 3 targets), or (c) Sentinel data lake routing if the customer has it provisioned.
 
 ---
 
 ## v2.2.293 — `Attack_Paths_Detailed_Device_*_Azure`: bucket on Device NodeId, not CVE NodeId
 
-Operator on Nordstern: even after v2.2.290 (additive cartesian rewrite) + v2.2.282/288 (stale-device filter), bucket 40 of 64 still 900s-times out and recurses into deep sub-bucketing. Pattern across multiple runs: one specific hash chain (`231` mod 256, `231` mod 1024, ...) consistently overflows.
+Operator: even after v2.2.290 (additive cartesian rewrite) + v2.2.282/288 (stale-device filter), bucket 40 of 64 still 900s-times out and recurses into deep sub-bucketing. Pattern across multiple runs: one specific hash chain (`231` mod 256, `231` mod 1024, ...) consistently overflows.
 
 ### Root cause
 
@@ -2381,7 +2437,7 @@ No behaviour change otherwise — `$null` is still returned, callers using `if (
 
 ## v2.2.290 — Attack_Paths_Detailed_Device YAML rewrite: multiplicative cartesian → additive (per-target rows with packed Cred/Identity sets)
 
-Operator on Nordstern: even with v2.2.282-288 stale-device filter, AutoBucket floor=64 + sub-bucketing, and v2.2.281 floor logic, the `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` query still 900s-times out on the heavy bucket because **the bottleneck is structural, not bucket-count-related**.
+Operator: even with v2.2.282-288 stale-device filter, AutoBucket floor=64 + sub-bucketing, and v2.2.281 floor logic, the `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` query still 900s-times out on the heavy bucket because **the bottleneck is structural, not bucket-count-related**.
 
 ### Root cause
 
@@ -2478,7 +2534,7 @@ Operator: "WARNING: Invoke-SIHuntingQuery (LA): Operation returned an invalid st
 
 **1. Useless error message** — the bare `BadRequest` surfaces nothing about which KQL the LA backend rejected. The DefenderGraph branch of the same function already reads `ErrorDetails.Message` and falls back to the response stream body; the LA branch did neither.
 
-**2. Single attempt drops the row** — when `Invoke-SIHuntingQuery (LA)` is called per-row from `Build-SIAzureProfileRow` (Phase 8/9 Output stage; 1236 rows on Nordstern's last run), one transient backend hiccup means one missing profile row downstream. No retry meant data loss on every transient.
+**2. Single attempt drops the row** — when `Invoke-SIHuntingQuery (LA)` is called per-row from `Build-SIAzureProfileRow` (Phase 8/9 Output stage; 1236 rows on the customer's last run), one transient backend hiccup means one missing profile row downstream. No retry meant data loss on every transient.
 
 ### Fix
 
@@ -2513,11 +2569,11 @@ Customer can tune retry count via `$global:SI_LAQueryMaxRetries = N` in `Securit
 
 ## v2.2.288 — Stale-device filter auto-injects when customer YAML lacks the placeholder
 
-Operator on v2.2.287 launcher log: "i dont see the filter". Even with the v2.2.287 default flip to `'strict'`, the `[INFO] [stale-device] ...` line still didn't appear on Nordstern's run.
+Operator on v2.2.287 launcher log: "i dont see the filter". Even with the v2.2.287 default flip to `'strict'`, the `[INFO] [stale-device] ...` line still didn't appear on the customer's run.
 
 ### Root cause
 
-`RiskAnalysis_Queries_Custom.yaml` carries customer overrides of report bodies by name. When merged with the locked YAML "custom wins on name conflicts" — so for any report Nordstern overrode (Summary + Detailed of `Attack_Paths_*_Device_*_Azure`), the customer's body shipped without the new `__STALE_DEVICE_FILTER__` placeholder I added in v2.2.282 to the locked YAML. `Resolve-StaleDeviceFilterBlock` looked for the placeholder, didn't find it, and bailed early without applying the filter.
+`RiskAnalysis_Queries_Custom.yaml` carries customer overrides of report bodies by name. When merged with the locked YAML "custom wins on name conflicts" — so for any report the customer overrode (Summary + Detailed of `Attack_Paths_*_Device_*_Azure`), the customer's body shipped without the new `__STALE_DEVICE_FILTER__` placeholder I added in v2.2.282 to the locked YAML. `Resolve-StaleDeviceFilterBlock` looked for the placeholder, didn't find it, and bailed early without applying the filter.
 
 ### Fix
 
@@ -2845,7 +2901,7 @@ No behavioural change — purely observability.
 
 ## v2.2.279 — `_Detailed` reports default to BucketCount=32; sub-bucket depth cap 4 → 6
 
-Operator's v2.2.277 run on Nordstern showed two follow-on issues after the sub-bucketing landed:
+Operator's v2.2.277 run showed two follow-on issues after the sub-bucketing landed:
 
 1. The YAML `BucketCount: 64` declared on the heavy attack-paths reports in v2.2.277 wasn't taking effect — log said `Falling back to configured BucketCount=2`. Either customer pulled engine but not YAML, or their per-tenant `RiskAnalysis_Queries_Custom.yaml` overrode the report by name without the new field, dropping the locked default.
 2. Sub-bucketing recursed all the way to depth=4 (modulus 512) and STILL had one bucket index timing out. The depth cap = 4 default was reached with the slice still incomplete.
@@ -2862,9 +2918,9 @@ Summary reports unchanged (default still 2, per-report `BucketCount: 64` from v2
 
 ### (b) Sub-bucket depth cap 4 → 6
 
-`Invoke-RiskAnalysis.ps1:6411`. Nordstern's run reached depth=4 (modulus = `BucketCount × 4^4` = 256× finer than original) with one slice still heavy. Bumping to depth=6 gives the recursive split modulus up to 4096× finer (e.g., starting at 32 → max effective bucket count 32×4096 = 131072 = $capBucket). Tunable via `$global:SI_AutoBucketSubDepthMax`.
+`Invoke-RiskAnalysis.ps1:6411`. the customer's run reached depth=4 (modulus = `BucketCount × 4^4` = 256× finer than original) with one slice still heavy. Bumping to depth=6 gives the recursive split modulus up to 4096× finer (e.g., starting at 32 → max effective bucket count 32×4096 = 131072 = $capBucket). Tunable via `$global:SI_AutoBucketSubDepthMax`.
 
-### Combined effect on Nordstern's case
+### Combined effect on the customer's case
 
 - Detailed report starts at BucketCount=32 (from default) or 64 (if YAML pulled) directly — no probe-fallback round.
 - Heavy slice gets up to 6 levels of recursive split before giving up.
@@ -2872,13 +2928,13 @@ Summary reports unchanged (default still 2, per-report `BucketCount: 64` from v2
 
 ### What's still pending
 
-The persistent hot slice on Nordstern (one bucket index always timing out at every modulus) suggests a single device or path with massive credential fan-out. Even at depth=6 (modulus = 131072), if that one device's tuple count exceeds the AH 900s window, sub-bucketing alone won't help. The architectural fix is YAML query rewrite (narrower target labels, pre-filter, etc.) — separate, riskier change deferred until needed.
+The persistent hot slice on the customer tenant (one bucket index always timing out at every modulus) suggests a single device or path with massive credential fan-out. Even at depth=6 (modulus = 131072), if that one device's tuple count exceeds the AH 900s window, sub-bucketing alone won't help. The architectural fix is YAML query rewrite (narrower target labels, pre-filter, etc.) — separate, riskier change deferred until needed.
 
 ---
 
 ## v2.2.278 — Internal-AutomateIT cert auth: bridge `HighPriv_Modern_*_Azure` globals into `$Spn*` so Graph reconnect uses cert (not secret)
 
-Operator's v2.2.277 run on Nordstern (internal-AutomateIT install, SPN+cert via `Connect-Platform`) showed the Graph 45-minute reconnect printing `Connecting to Microsoft Graph (app+secret)...` even though the customer is on cert. The branch logic in `Connect-GraphHighPriv` (line 480) is correct — it picks cert when `$global:SpnCertificateThumbprint` is non-empty. Bug was the bridge: only `$global:SI_SPN_CertThumbprint` was being copied into `$global:SpnCertificateThumbprint` (community-launcher naming). Internal-AutomateIT uses `$global:HighPriv_Modern_CertificateThumbprint_Azure` (set by `Connect-Platform`), which the bridge didn't see. Cert thumbprint stayed `$null` → Connect-GraphHighPriv fell through to secret branch on every reconnect → reconnect would fail for any customer running cert without a secret as fallback.
+Operator's v2.2.277 run (internal-AutomateIT install, SPN+cert via `Connect-Platform`) showed the Graph 45-minute reconnect printing `Connecting to Microsoft Graph (app+secret)...` even though the customer is on cert. The branch logic in `Connect-GraphHighPriv` (line 480) is correct — it picks cert when `$global:SpnCertificateThumbprint` is non-empty. Bug was the bridge: only `$global:SI_SPN_CertThumbprint` was being copied into `$global:SpnCertificateThumbprint` (community-launcher naming). Internal-AutomateIT uses `$global:HighPriv_Modern_CertificateThumbprint_Azure` (set by `Connect-Platform`), which the bridge didn't see. Cert thumbprint stayed `$null` → Connect-GraphHighPriv fell through to secret branch on every reconnect → reconnect would fail for any customer running cert without a secret as fallback.
 
 ### Fix
 
@@ -2920,7 +2976,7 @@ Same operator log confirmed v2.2.277 sub-bucketing fires correctly: `[sub-bucket
 
 ## v2.2.277 — Adaptive sub-bucketing replaces escalate-and-restart; `BucketCount: 64` declared on heavy attack-paths reports
 
-Operator's v2.2.276 run on Nordstern showed the escalate-and-restart strategy doesn't converge: at every bucket count level (2 → 8 → 32 → 128 → 512 → 2048 → 8192...), exactly ONE bucket times out, the report restarts at 4× higher count, and the cycle repeats. Each level burns ~30 min (200+ buckets at 3s each + 1× 900s timeout). Across the catalog this compounds to days-long runs.
+Operator's v2.2.276 run on the customer tenant showed the escalate-and-restart strategy doesn't converge: at every bucket count level (2 → 8 → 32 → 128 → 512 → 2048 → 8192...), exactly ONE bucket times out, the report restarts at 4× higher count, and the cycle repeats. Each level burns ~30 min (200+ buckets at 3s each + 1× 900s timeout). Across the catalog this compounds to days-long runs.
 
 Operator pushed back on two related ideas: (a) skipping a failed bucket would lose data, (b) `take 50000` row caps would also lose data. Both rejected. The right design preserves every row.
 
@@ -2939,7 +2995,7 @@ Tunable globals:
 - `$global:SI_AutoBucketSubFanOut` (default 4) — K, the split factor per pass
 - `$global:SI_AutoBucketSubDepthMax` (default 4) — recursion depth ceiling
 
-Effect on Nordstern's case: BucketCount=64 → ~63 buckets succeed in ~3min total → 1 bucket times out → split into 4 sub-buckets at modulus 256 → likely all 4 succeed → done. **Total ~5-15 min, lossless, 100% data preserved.** Compared to the v2.2.276 escalation spiral that was ~hours-to-days.
+Effect on the customer's case: BucketCount=64 → ~63 buckets succeed in ~3min total → 1 bucket times out → split into 4 sub-buckets at modulus 256 → likely all 4 succeed → done. **Total ~5-15 min, lossless, 100% data preserved.** Compared to the v2.2.276 escalation spiral that was ~hours-to-days.
 
 ### `BucketCount: 64` on the two heavy attack-paths reports
 
@@ -2972,7 +3028,7 @@ Operator's v2.2.273 run reached `BucketCount=8` after fail-fast escalation, then
 
 Additional small UX fix: a `Write-Info "Retrying attempt N/4 now (call may take up to 900s)..."` line prints AFTER the inter-attempt `Start-Sleep` and BEFORE the actual call. So when the next attempt takes its full 900s, the operator can see the engine is alive and trying — not hung.
 
-### Effect on Nordstern's Attack_Paths_Detailed bucket 8/8 case
+### Effect on the customer's Attack_Paths_Detailed bucket 8/8 case
 
 - Pre-276: `502` → 4 retries × up to 900s = up to 1h on the failing bucket → bucket marked failed → cache stays at 8.
 - Post-276: `502` → fail-fast → outer escalation BucketCount 8 → 32 → continues until success or `$capBucket=131072`.
@@ -3040,7 +3096,7 @@ If you've been running with the locked-leak `cmdbId=1` in your `SI_Endpoint_Prof
 
 ## v2.2.273 — Fail-fast on 900s timeouts + 4x escalation jump + snapshot-aware sizing (sub-hour discovery instead of days)
 
-v2.2.272 unblocked Nordstern's Attack_Paths_*_Device_with_high_severity_*_Azure but the discovery cost was still impractical: 4 inner retries × 900s = 1 hour per bucket failure, multiplied by 9 escalation steps to reach ~1000 buckets = ~9 hours. Across 126 reports that compounds into days.
+v2.2.272 unblocked the customer's Attack_Paths_*_Device_with_high_severity_*_Azure but the discovery cost was still impractical: 4 inner retries × 900s = 1 hour per bucket failure, multiplied by 9 escalation steps to reach ~1000 buckets = ~9 hours. Across 126 reports that compounds into days.
 
 Three changes:
 
@@ -3056,7 +3112,7 @@ Bucket-count growth was `bucketCountToUse * 2` (9 steps: 2 → 1024). Bumped to 
 
 ### 3. Snapshot-row-aware initial jump (`Invoke-RiskAnalysis.ps1:6293-6305`)
 
-`Resolve-ProfileCLLetBlocks` now exposes the largest CL-snapshot row count seen during the current report (`$script:_LastHybridSnapshotRowCount`, reset per report). The escalation logic picks the LARGEST of `bucketCountToUse * 4`, `+1`, and `ceil(snapshotRows / 500)`. So a 100K-row snapshot escalates straight to 200 buckets on the first timeout instead of grinding 2 → 8 → 32 → 128 → 512. A 424-row snapshot (Nordstern's `_TargetCmdb`) still goes 2 → 8 (snapshot heuristic is 1 bucket; max wins so the 4x rule applies).
+`Resolve-ProfileCLLetBlocks` now exposes the largest CL-snapshot row count seen during the current report (`$script:_LastHybridSnapshotRowCount`, reset per report). The escalation logic picks the LARGEST of `bucketCountToUse * 4`, `+1`, and `ceil(snapshotRows / 500)`. So a 100K-row snapshot escalates straight to 200 buckets on the first timeout instead of grinding 2 → 8 → 32 → 128 → 512. A 424-row snapshot (the customer's `_TargetCmdb`) still goes 2 → 8 (snapshot heuristic is 1 bucket; max wins so the 4x rule applies).
 
 Heuristic of 500 rows/bucket is calibrated for typical 4-hop EG-path-expansion + CL-join workloads at the AH 900s ceiling. Will tune per-real-world feedback.
 
@@ -3068,9 +3124,9 @@ AutoBucket cache (`autobucket-cache.json`) still stores the working bucket count
 
 ## v2.2.272 — AutoBucket escalates on 900s timeout instead of skipping; routing diagnostic for the Endpoint_Detailed bug
 
-Two independent issues from Nordstern's v2.2.269 run.
+Two independent issues from the customer's v2.2.269 run.
 
-### 1. AutoBucket gives up too early on heavy queries (Nordstern Attack_Paths_*_Device_with_high_severity_*_Azure)
+### 1. AutoBucket gives up too early on heavy queries (Attack_Paths_*_Device_with_high_severity_*_Azure)
 
 `Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure` and the matching Detailed timed out at 900s on every retry × every bucket — the engine then skipped remaining buckets in the report and moved on, leaving the AutoBucket cache pinned to `=> 2` forever. Operator confirmed the agreed default is `AutoBucketCount=$true` + `AutoBucketMax=131072` (and the customer log shows both are set correctly), so the engine should have escalated on its own.
 
@@ -3078,11 +3134,11 @@ The bug was the v2.2.198 transient-platform-error branch in `Invoke-RiskAnalysis
 
 v2.2.272 inverts the priority: when `_LastGraphHuntingAllTimedOut` is true, **escalate first** (set `$needEscalation=$true` and re-run the whole report at `2 × bucketCountToUse`); only fall back to `_AutoBucketSkipRemainingBuckets` when the next escalation step would exceed `$capBucket`. The cap log line names `$capBucket` explicitly so operators see the ceiling.
 
-Effect on Nordstern: the two failing reports retry with 4, 8, 16... buckets until each fits the 900s window. The AutoBucket cache stores the working count for the next run.
+Effect on the customer tenant: the two failing reports retry with 4, 8, 16... buckets until each fits the 900s window. The AutoBucket cache stores the working count for the next run.
 
 ### 2. Routing diagnostic — Endpoint_ActiveCompromise_Detected_Detailed routed to AH despite probe saying CL not in AH
 
-In Nordstern's run, `Endpoint_ActiveCompromise_Detected_Detailed` (only `SI_Endpoint_Profile_CL`, no XDR tables) probed the table → got "NOT queryable from AH" → set `$available=$false` → should have entered the LA-direct branch and printed "Query touches only Log Analytics tables". Instead, the AH-submission catch handler (`Invoke-RiskAnalysis.ps1:1833-1837`) fired with the schema-not-found warnings, proving the AH path actually ran. Operator pre-confirmed the workspace + table + SPN-cert read access are all correct (`SI_Endpoint_Profile_CL` exists in `log-platform-management-securityinsight-p`, returns rows on direct query).
+In the customer's run, `Endpoint_ActiveCompromise_Detected_Detailed` (only `SI_Endpoint_Profile_CL`, no XDR tables) probed the table → got "NOT queryable from AH" → set `$available=$false` → should have entered the LA-direct branch and printed "Query touches only Log Analytics tables". Instead, the AH-submission catch handler (`Invoke-RiskAnalysis.ps1:1833-1837`) fired with the schema-not-found warnings, proving the AH path actually ran. Operator pre-confirmed the workspace + table + SPN-cert read access are all correct (`SI_Endpoint_Profile_CL` exists in `log-platform-management-securityinsight-p`, returns rows on direct query).
 
 Static read of the routing logic (`Invoke-RiskAnalysis.ps1:1398-1703`) doesn't reveal how `$available=$false` could become "AH submission". Three Write-Diag breadcrumbs added so the next failing run pinpoints the actual flow:
 
@@ -4639,7 +4695,7 @@ A second visible bug: the AI prompt's section header was a literal "## Top 25 ri
 
 ### Token / cost impact
 
-For a 20K-row Detailed run on Nordstern: rollup output is ~50 asset entries + ~50 finding entries = ~10K input tokens. Plus boilerplate ~5K = **~15K input tokens to AI** (was ~10K with the raw top-50 dump). Output unchanged (~8K).
+For a 20K-row Detailed run on the customer tenant: rollup output is ~50 asset entries + ~50 finding entries = ~10K input tokens. Plus boilerplate ~5K = **~15K input tokens to AI** (was ~10K with the raw top-50 dump). Output unchanged (~8K).
 
 Cost on gpt-4o:
 - Previous: ~$0.10 / run
@@ -4719,7 +4775,7 @@ Set `$global:Mail_SendAnonymous = $true` explicitly in `LauncherConfig.custom.ps
 
 ### Verification context
 
-A complete v2.2.221 run on Nordstern tenant confirmed all earlier fixes (v2.2.219 AssetTags filter, v2.2.220 AssetName/Id/Type column_ifexists, v2.2.221 AadDeviceId column_ifexists sweep) work end-to-end:
+A complete v2.2.221 run on the customer tenant tenant confirmed all earlier fixes (v2.2.219 AssetTags filter, v2.2.220 AssetName/Id/Type column_ifexists, v2.2.221 AadDeviceId column_ifexists sweep) work end-to-end:
 - Device_Missing_CVEs_Detailed: 2,469 rows in 1 bucket
 - Device_Recommendations_Detailed: 143,065 -> 11,089 unique rows after dedup
 - Azure_Recommendations_Detailed: 148 rows (`_ap` pre-fetch succeeded)
@@ -7713,7 +7769,7 @@ Reports now return 0 rows on tenants where the column is missing (correct — th
 
 ## v2.2.87 — RA: separate transient-platform errors from row-overflow; add re-auth + same-bucket retry
 
-**Customer-side fail observed 2026-05-07** (kv-evida-automation-p / AUTOSENTINEL01): a single Attack_Paths_Summary report escalated `64 → 128 → 256 → 512` buckets because every bucket hit `A task was canceled`. With ~15s per bucket × 512 buckets, that's **~2 hours JUST for one report**, blocking every other report queued behind it. The xlsx never produced.
+**Customer fail observed 2026-05-07** (<KV name>/<hostname>): a single Attack_Paths_Summary report escalated `64 → 128 → 256 → 512` buckets because every bucket hit `A task was canceled`. With ~15s per bucket × 512 buckets, that's **~2 hours JUST for one report**, blocking every other report queued behind it. The xlsx never produced.
 
 **Root cause**: `Test-IsBucketOverflowError` matched `"a task was canceled"` / `"timeout"` / `"timed out"` and treated them as "row-overflow → escalate buckets". But Defender Graph Hunting API also throws `TaskCanceledException` when:
 - An access token expired mid-run (long RA jobs commonly outlive 1h tokens)

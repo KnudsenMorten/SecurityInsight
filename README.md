@@ -947,7 +947,7 @@ Copy `config/setup-unattended.sample.json` to `config/setup-unattended.json` (gi
 | `Smtp` | `Server` | SMTP relay hostname (e.g. `AZWE-S-RLAY-P01.casa.dk`, `smtp.office365.com`, `smtp-relay.brevo.com`) | **n/a — Internal reads SMTP from `PlatformConfiguration/config/platform-defaults.ps1`** | required for emails |
 | `Smtp` | `Port` | 25=plain/STARTTLS, 465=SMTPS, 587=submission-with-STARTTLS | n/a | `587` |
 | `Smtp` | `User` / `Password` | SMTP auth creds. Omit for unauthenticated relays | n/a | `null` |
-| `Smtp` | `From` | Default From address (e.g. `svc-automation@nordstern.dk`) | n/a | required |
+| `Smtp` | `From` | Default From address (e.g. `svc-automation@example.com`) | n/a | required |
 | `Smtp` | `UseSsl` | STARTTLS / SMTPS on transport | n/a | `true` |
 | `Smtp` | `MailTo` / `DetailedTo` / `SummaryTo` | Recipient lists. `MailTo` is the cross-engine default; per-mode overrides for RA | n/a | one of them required |
 

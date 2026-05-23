@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.366
+## v2.2.367
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.367 - config snapshot grouped section now shows Layer 1 (Connect-Platform) + Layer 1b (platform-defaults) which were silently dropped due to stale layer-order label list (bd6ec921)
 - release: SecurityInsight v2.2.366 - SMTP resolution rewritten for internal-automation convention: promote platform-defaults SMTPUser to SMTPFrom + force-pull actual login+password from KV (SMTPuser/SMTPpassword) (da09c0e6)
 - release: SecurityInsight v2.2.365 - dcr-si-run-health auto-create fixed (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if authenticated mail is enabled but creds are missing (ff5bef13)
 - release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.340 - slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11/12 in v2.2.339) (e3edbc4e)
 - release: SecurityInsight v2.2.339 - expand AssetSimulationComplexSummary to include Azure_Recommendations_Summary; expand AssetSimulationComplexDetailed to include Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed (668df5e4)
 - release: SecurityInsight v2.2.338 - new launcher CLI knob -RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N; new AssetSimulationComplex{Summary,Detailed} Locked templates listing 10 cross-domain reports that exercise source/target bucketing; hardcoded SI_SimulateCLRowCount removed from custom.ps1 (2e01de15)
-- release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.367 — Config snapshot grouped section now correctly includes Layer 1 (Connect-Platform) + Layer 1b (platform-defaults), which were silently dropped by a stale layer-order label list.
+
+### What changed
+
+`launcher/_lib/Initialize-LauncherConfig.ps1` -- the snapshot writer's `$layerOrder` array (line ~343) had a label drift: it listed `'Layer 1 - platform-defaults (internal)'` (a label no longer emitted by `_CfgRecordLayer`), but the actual labels in use are:
+
+- `'Layer 1 - Connect-Platform (v2.3)'`
+- `'Layer 1 - platform-defaults (v2.2 fallback)'`
+- `'Layer 1b - platform-defaults (cross-cutting)'`
+
+None of those matched the layer-order list, so the grouped section silently skipped them. Variables set by Connect-Platform (HighPriv_Modern_*, AzureTenantId, etc.) and platform-defaults (SMTPserver, AutomationName, TenantShort, Mail_*, etc.) only appeared in the alphabetical aggregated section at the bottom of the snapshot.
+
+### Why
+
+Internal-automation customer reported that `$global:SMTPUser` / `$global:Mail_SendAnonymous` set by their platform-defaults weren't visible under "[Layer 1b - platform-defaults]" in the grouped section -- the section was just missing entirely. They couldn't visually verify their platform-defaults values without scrolling down to the aggregated section + manually checking each variable's `[L1b ...]` attribution.
+
+### Impact
+
+- Snapshots now show a `[Layer 1 - Connect-Platform (v2.3)]` group with HighPriv_*, AzureTenantId, KV_HighPriv_*, etc.
+- And a `[Layer 1b - platform-defaults (cross-cutting)]` group with SMTPserver, SMTPUser, Mail_*, AutomationName, etc.
+- Operators can verify their platform-defaults values at a glance, grouped by source
+
+No engine behavior change -- purely a snapshot-formatting fix.
 
 ---
 

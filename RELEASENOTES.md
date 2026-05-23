@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.361
+## v2.2.362
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.362 - AutoBucket bytesPerRow now per-report reset + MAX-tracked; target bumped 70% -> 90% of nginx 1MB cap (self-correcting loop handles over-aggressive cases) (e931cd52)
 - release: SecurityInsight v2.2.361 - AutoBucket escalation sizes buckets to ~70% of nginx 1MB cap via MEASURED bytes-per-row; eliminates 8-10x over-escalation (500K: 1000 buckets -> ~120 buckets) (935a8cca)
 - release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
 - release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
 - release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
 - release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
-- release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.362 — AutoBucket bytes-per-row measurement now resets per-report + tracks MAX (not last); target bumped from 70% -> 90% of nginx 1MB cap because the self-correcting loop handles over-aggressive sizing gracefully.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
+
+1. **Per-report reset** of `$script:_LastHybridBytesPerRow` (alongside the existing `_LastHybridSnapshotRowCount` reset). Without this, a narrow-row report (e.g. ~120 bytes/row Endpoint Profile) would pollute the next report's first escalation probe -- a wider-row report (e.g. ~400 bytes/row cross-domain Attack_Path) would inherit the previous narrow estimate, over-shoot the cap on first probe, and burn a 413'd XDR query before self-correcting.
+
+2. **MAX tracking within report** (was last-only). Each bucket's measured `bytesPerRow` is compared against the running max for this report; only updates if larger. Reasoning: row width varies per bucket because CL Profile string columns have variable length. Under-estimating leads to a wasted 413 round-trip; over-estimating costs one extra bucket. Asymmetric: max-bias is the safer choice.
+
+3. **Target bumped 70% -> 90% of nginx 1MB cap** (~944KB). The previous 30% headroom was over-conservative now that (1) + (2) are in place. If 90% turns out tight for a particular row width, the existing 413 catch path triggers escalation, the failed bucket's measurement updates the MAX, and the next attempt re-derives with the now-known wider value. Aggressive sizing wins more than it loses given the self-correcting loop.
+
+### Why
+
+Combined with v2.2.361, this closes the loop:
+
+- v2.2.361: replaced hardcoded 500 rows/bucket with measured bytes-per-row -- gave us the dial
+- v2.2.362: per-report reset + max-tracking + 90% target -- makes the dial self-correcting AND aggressive
+
+### Impact
+
+For 500K-asset reports at typical CL row widths:
+
+- **v2.2.360 (baseline):** ~120 buckets (v2.2.361 sizing at 70%)
+- **v2.2.362 (this):** ~93 buckets (90% target) -- 22% fewer buckets -> ~22% faster
+
+For reports with WIDE rows (e.g. 600 bytes/row): per-report reset prevents first-probe over-shoot. Max-tracking biases conservative within report. 413 still triggers escalation if our estimate misses -- but it self-corrects on the very next attempt using the actual failed payload's measurement.
+
+No caps. No hardcoded magic numbers. Self-correcting per measurement.
 
 ---
 

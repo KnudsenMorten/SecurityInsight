@@ -114,6 +114,18 @@ if (-not $global:SMTPUser -and $global:HighPriv_SMTP_UserName) {
 if (-not $global:SMTPPassword -and $global:HighPriv_SMTP_Password) {
     $global:SMTPPassword = $global:HighPriv_SMTP_Password
 }
+# v2.2.364 -- SMTPFrom is the visible from-address header on outbound mail.
+# SEMANTICALLY DIFFERENT from SMTPUser, which is the SMTP relay LOGIN. They can
+# coincide (e.g. Office 365 typically uses the same address for both) but must
+# NOT be conflated when the relay uses a service login distinct from the
+# tenant's from address -- e.g. Brevo accepts only XXX@smtp-brevo.com as the
+# auth login but the from-header carries svc-automation@yourdomain.com.
+# Previously SI fell back to SMTPUser as the from when SMTPFrom was empty,
+# which broke Brevo-style relays the moment customers tried to put the Brevo
+# login under SMTPUser (the auth would succeed but the from header was wrong).
+if (-not $global:SMTPFrom -and $global:HighPriv_SMTP_From) {
+    $global:SMTPFrom = $global:HighPriv_SMTP_From
+}
 if ($global:Context) {
     if (-not $global:SMTPPassword) {
         foreach ($_smtpKvName in @('SMTPpassword','SMTP-Password')) {

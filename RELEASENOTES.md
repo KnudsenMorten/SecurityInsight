@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.363
+## v2.2.364
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
 - release: SecurityInsight v2.2.363 - startup version banner + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (saves ~2h per affected cross-domain Attack_Paths report) (bfb4c9a6)
 - release: SecurityInsight v2.2.362 - AutoBucket bytesPerRow now per-report reset + MAX-tracked; target bumped 70% -> 90% of nginx 1MB cap (self-correcting loop handles over-aggressive cases) (e931cd52)
 - release: SecurityInsight v2.2.361 - AutoBucket escalation sizes buckets to ~70% of nginx 1MB cap via MEASURED bytes-per-row; eliminates 8-10x over-escalation (500K: 1000 buckets -> ~120 buckets) (935a8cca)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
 - release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
 - release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
-- release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.364 — AutoBucket escalation now accounts for FULL request body (inline + surrounding KQL), not just inline; bytes-per-row tracker tracks MAX per report; SMTPFrom bridges from `$global:HighPriv_SMTP_From` if defined.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
+
+1. **Full query body budget.** v2.2.362 targeted 90% of 1MB for the inline datatable alone, but the FULL request body (inline + surrounding KQL + URL params) still 413'd at 91 buckets / 931KB inline (the 1MB cap is on the full body, not just inline). v2.2.364 now measures surrounding-KQL body overhead per `Resolve-ProfileCLLetBlocks` call (= `modified.Length - sum(inline bytes)`) and uses it in the escalation formula:
+
+   ```
+   inlineBudget = (0.95 * 1MB) - measured_body_overhead
+   rowsPerBucket = inlineBudget / measured_bytes_per_row
+   ```
+
+   Both overhead and bytes-per-row are tracked as MAX-seen-this-report.
+
+2. **Per-report reset** of `$script:_LastHybridQueryBodyOverheadBytes` (alongside the existing per-report resets of row count + bytes-per-row), so a previous report's narrow KQL body doesn't make the current report's first probe over-confident.
+
+`launcher/_lib/SecurityInsight.shared-defaults.ps1`:
+
+3. **SMTPFrom bridge** from `$global:HighPriv_SMTP_From` (alongside the existing `HighPriv_SMTP_UserName` / `HighPriv_SMTP_Password` bridges). Safe no-op when the platform-defaults layer doesn't define `HighPriv_SMTP_From`. Reinforces the v2.2.359 convention: `SMTPUser` = SMTP relay LOGIN, `SMTPFrom` = visible from-address header. The two are semantically distinct (Brevo-style relays use a service-account login like `XXX@smtp-brevo.com` while the from header carries the tenant's `svc-automation@yourdomain.com`).
+
+### Why
+
+At 500K assets the v2.2.362 escalation formula over-shot the nginx cap because it only budgeted the inline payload, not the surrounding KQL body. Real measurement from running stress test: 931KB inline (89% of 1MB) + ~150KB surrounding KQL = ~1.08MB → 413. Engine re-escalated 91 → 364 buckets (which worked at 251KB inline), wasting one round-trip. v2.2.364 budgets both sides correctly so the first escalation produces a fitting bucket count.
+
+### Impact
+
+For 500K-asset reports at typical CL row widths (~170 bytes/row, ~150KB surrounding KQL):
+
+- **v2.2.362:** 91 buckets attempted → 413 → re-escalate to 364 → works. One wasted round-trip per report.
+- **v2.2.364:** ~107 buckets attempted on first escalation → fits → no wasted round-trip.
+
+No caps. Pure measure-and-adapt: the engine reads BOTH measured quantities (bytes-per-row + body-overhead) and sizes buckets to land just under the actual Azure cap.
 
 ---
 

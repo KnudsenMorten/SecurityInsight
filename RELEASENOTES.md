@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.362
+## v2.2.363
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.363 - startup version banner + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (saves ~2h per affected cross-domain Attack_Paths report) (bfb4c9a6)
 - release: SecurityInsight v2.2.362 - AutoBucket bytesPerRow now per-report reset + MAX-tracked; target bumped 70% -> 90% of nginx 1MB cap (self-correcting loop handles over-aggressive cases) (e931cd52)
 - release: SecurityInsight v2.2.361 - AutoBucket escalation sizes buckets to ~70% of nginx 1MB cap via MEASURED bytes-per-row; eliminates 8-10x over-escalation (500K: 1000 buckets -> ~120 buckets) (935a8cca)
 - release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
@@ -33,13 +34,61 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
 - release: SecurityInsight v2.2.335 - lift the single-let-binding gate on CL-bucketing; multi-let cross-domain reports (Attack_Paths with _SourceCmdb + _TargetCmdb) now bucket each let independently and stay lossless via v2.2.334's EG-skip (4ee27bd2)
 - release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
-- release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.363 — Engine version banner printed at startup + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (cross-domain reports skip 2-3h of provably-futile sub-bucketing).
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
+
+1. **Startup version banner.** After `$global:RA_SolutionVersion` is resolved from the VERSION file walk-up, the engine now prints one line at startup so operators can verify which release is actually running:
+   ```
+   [INFO] SecurityInsight RiskAnalysis engine v2.2.363 (<script path>)
+   ```
+   Previously the version was stamped into Excel headers, email subjects, and the LA `SolutionVersion` column -- but never announced at startup. Operators had to inspect output artifacts after the run to confirm which release ran.
+
+2. **EARLY-ABORT futile sub-bucket pass.** When the report has `$script:_SkipEGBucketForCrossDomain = $true` (cross-domain join key like `Target_AzureResourceId_Guid` that isn't in the EG-side bucket coalesce list) AND 100% of outer buckets timed out at 900s, the entire sub-bucket pass is now skipped immediately. Previously the engine would burn ~60min per parent (4 sub-buckets x 900s timeout each) before v2.2.357's futile-prune detected per-parent futility at depth=1 and pruned grandchildren.
+
+### Why
+
+A real customer log showed `Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources` on a small tenant (5815 CL rows, 287KB inline) timing out both outer buckets at 900s, then sub-bucketing parent 0/2 into 4 children -- all 4 timed out at 900s = 60min wasted -- then futile-prune correctly skipped the 4 grandchildren. Engine then started parent 1/2 and would have burned another 60min the same way.
+
+The engine already had two strong signals to know this was futile from the start:
+
+- `$script:_SkipEGBucketForCrossDomain = $true` (logged: "suppressing EG-side bucket filter so per-bucket joins stay lossless")
+- 100% of outer buckets failed at 900s (the parent-level evidence)
+
+Sub-bucketing the CL side doesn't reduce EG-side work for cross-domain reports (EG is the bottleneck, and the suppressed EG-side bucket filter means each sub-bucket does full EG traversal). With both signals true, the sub-bucket pass is provably futile from the start -- same logic family as v2.2.357 (empirical futile detection), just engaged one level earlier.
+
+### Impact
+
+For cross-domain Attack_Paths reports on tenants where they can't complete:
+
+- **Before:** 2 outer buckets x 4 sub-buckets x 900s = **2h** wasted per affected report, then 0 rows shipped
+- **After:** Skipped immediately, 0 rows shipped, ~2h reclaimed per affected report
+- **Across 6 cross-domain Attack_Paths_Summary reports:** up to **12h reclaimed per Summary run**
+
+The skip log message names the report and the root cause so operators know to prioritize the per-report YAML rewrite:
+```
+AutoBucket sub-bucketing pass SKIPPED for report 'Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources' --
+EG-side bucket filter is suppressed for this report (cross-domain join key) AND 100% of outer buckets (2/2) timed out
+at 900s. Sub-bucketing the CL inline cannot reduce EG-side work (the bottleneck), so attempting it would burn ~60min
+per parent (~120min total) to re-prove what we already know. Report ships with 0 row(s) from successful buckets
+(likely 0). To service this report at this customer's scale, the YAML query needs a per-report rewrite that moves
+`summarize by` from cmdb* columns to EG-native columns + post-augments CL data client-side.
+```
+
+Reports where SOME outer buckets succeeded still attempt sub-bucketing -- the v2.2.357 per-parent futile-prune still handles the per-parent cases at depth=1.
+
+No caps. No skip thresholds. Pure empirical detection: two existing engine signals combined to recognize an impossible scenario and skip the futile work.
 
 ---
 

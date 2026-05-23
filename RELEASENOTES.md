@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.356
+## v2.2.357
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.357 - RA sub-bucket cascade self-aware: futile-parent prune when 100% of children time out (caps Summary runtime at ~2h instead of up to 113 days for cross-domain skew reports) (8840a0c9)
 - release: SecurityInsight v2.2.356 - clean customer-template restructure (Internal + Community parallels) + remove implicit westeurope default (f38d7ede)
 - release: SecurityInsight v2.2.355 - unattended setup writes SMTP into custom.ps1 for Community + README §4.3.1 unattended-setup reference (05573da0)
 - release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
@@ -33,13 +34,74 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
 - release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
 - release: SecurityInsight v2.2.328 - CL bucket-key prefers EpJoinKey (the projected join key) so 70%+ of rows stop collapsing to bucket 0; fixes pathological bucketing skew on real _ep shapes (a9985007)
-- release: SecurityInsight v2.2.327 - $global:SI_SimulateCLRowCount knob now applies regardless of CL-bucketing path; refactor Resolve-ProfileCLLetBlocks to fetch+pad ONCE in shared cache, then branch on serialize (2670877d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.357 — RA sub-bucket cascade now self-aware: when 100% of a parent's children time out (proving sub-bucketing isn't distributing the work for that slice), don't enqueue grandchildren. Caps worst-case Summary runtime at ~2 hours instead of up to 113 days for reports with cross-domain join skew.
+
+### Bug confirmed across three customers
+
+Customer logs (Pingala / Evida / dev) all showed `Attack_Paths_Summary_*` reports with `summarize`-aggregations + `_TargetCmdb` cross-domain joins cascading into recursive sub-bucketing that never recovers rows:
+
+| Depth | Sub-buckets | Per-bucket timeout | Time at depth |
+|---|---|---|---|
+| 0 (original) | 2 | 900 s | 30 min |
+| 1 | 8 | 900 s | 2 hours |
+| 2 | 32 | 900 s | **8 hours** (Evida log was here at hour 10) |
+| 3 | 128 | 900 s | 32 hours |
+| 4-6 | 512-8192 | 900 s | 5-85 days |
+
+Root cause: the hybrid path detects cross-domain join keys (e.g. `Target_AzureResourceId_Guid`) that aren't in the EG bucket-coalesce list and **suppresses the EG-side bucket filter** so per-bucket joins stay lossless. Correct for correctness -- but the consequence is each sub-bucket still does FULL EG-side work + slightly smaller CL inline data. The work isn't being distributed by the bucket filter, so every child times out the SAME way as the parent regardless of how many ways it's split. The cascade kept doing the same losing strategy 4096+ times.
+
+### Fix: empirical futile-parent detection (no arbitrary depth cap)
+
+New logic in the sub-bucketing BFS loop (`Invoke-RiskAnalysis.ps1` ~line 7059):
+
+1. **Track per-parent timeout count.** Each parent has up to `$subFanOut` (4) children. When a child times out at the 900 s HttpClient ceiling, increment `$parentTimeoutCount[$parentKey]`.
+2. **After all $subFanOut children of a parent have been attempted**, if 100% timed out → that's empirical proof that splitting this slice further won't help (the bucket filter isn't distributing the work). **Purge any of that parent's grandchildren from the BFS queue** before they're attempted.
+3. **Sibling parents whose children DID succeed continue normally** -- the prune is per-subtree, not global.
+
+This is purely logic-based, not an arbitrary limit:
+- Reports where sub-bucketing actually distributes work (most reports) → see no behavior change; cascade continues as before.
+- Reports where sub-bucketing is provably futile (cross-domain join skew) → cascade stops at depth=1 for the affected subtree. Sibling subtrees that DO produce rows are retained.
+- The `$global:SI_AutoBucketSubDepthMax` config knob still controls the upper cap for the cases where splitting IS helping.
+
+### Operator-visible log additions
+
+When EG-side bucket filter was suppressed during the report's main pass, the cascade-start warning gets a hint:
+
+```
+AutoBucket sub-bucketing pass: 2 bucket(s) timed out at BucketCount=2; splitting each into 4 sub-buckets per pass (max depth 6). Successful buckets retained (0 rows so far) -- NOTE: EG-side bucket filter was suppressed for this report (cross-domain join key). Sub-bucketing may not distribute work; futile-prune will engage if all children timeout.
+```
+
+When the futile-prune fires:
+
+```
+[sub-bucket] FUTILE-PRUNE: parent=0/2 depth=1 -- all 4/4 children timed out at 900s; splitting deeper won't help (bucket filter not distributing work). Pruned 16 grandchildren that would have produced 0 rows. Successful sibling-parent rows retained.
+```
+
+And the cascade-summary diagnostic:
+
+```
+[sub-bucket] pass complete; total rows after sub-bucketing: 247. Note: 96 futile sub-bucket attempts skipped (would have cost 1440 minutes of additional 900s timeouts). Report has structural cardinality skew on the bucket key -- consider re-keying via the YAML's `crossDomainBucketCoalesce:` block if available.
+```
+
+### Customer impact
+
+| Scenario | Before v2.2.357 | After v2.2.357 |
+|---|---|---|
+| Pingala-style Summary run (1 cross-domain report timing out) | 3h 52min wall clock | ~30 min |
+| Evida-style Summary run (multiple reports + deep cascade) | 10h+ at depth=2, still running | ~30-90 min |
+| Worst case (all 6 cross-domain `Attack_Paths_Summary_*` time out) | Theoretical 85 days at depth=6 | ~2 hours |
+| Normal Summary run (no cross-domain timeouts) | Unchanged | Unchanged |
+
+No new config knobs required. No reports skipped or rows lost beyond what the cascade was already going to give up on. The engine just stops doing **provably useless** work.
 
 ---
 

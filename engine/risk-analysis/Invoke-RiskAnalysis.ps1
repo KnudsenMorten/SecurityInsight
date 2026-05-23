@@ -7063,13 +7063,41 @@ while (-not $bucketRunSucceeded) {
       # more room before giving up. Tunable via $global:SI_AutoBucketSubDepthMax.
       $subDepthMax = if ($null -ne $global:SI_AutoBucketSubDepthMax) { [int]$global:SI_AutoBucketSubDepthMax } else { 6 }
       $subFanOut   = if ($null -ne $global:SI_AutoBucketSubFanOut)   { [int]$global:SI_AutoBucketSubFanOut }   else { 4 }
-      Write-Warn2 ("AutoBucket sub-bucketing pass: {0} bucket(s) timed out at BucketCount={1}; splitting each into {2} sub-buckets per pass (max depth {3}). Successful buckets retained ({4} rows so far)." -f `
-        $failedBucketIndices.Count, $bucketCountToUse, $subFanOut, $subDepthMax, $ResultAll.Count)
 
-      # BFS queue: each item = @{ N = parent-index; T = parent-total; D = current-depth }
+      # v2.2.357 -- ADAPTIVE FUTILE-PARENT PRUNING. Some reports use cross-domain
+      # join keys (e.g. Target_AzureResourceId_Guid) that aren't in the EG-side
+      # bucket coalesce list. The hybrid path SUPPRESSES the EG-side bucket
+      # filter for those (line ~1063, $script:_SkipEGBucketForCrossDomain) so
+      # joins stay lossless -- but the consequence is that EACH sub-bucket
+      # still does full EG work + slightly smaller CL inline. The work isn't
+      # being split where it counts, so all children of an EG-suppressed parent
+      # time out the SAME way as the parent.
+      #
+      # Pure logic fix (no arbitrary depth limit): when ALL $subFanOut children
+      # of a parent time out at 900s, that's empirical proof that splitting
+      # this slice further won't help -- the work isn't being distributed.
+      # Don't enqueue any grandchildren from that parent. Sibling parents whose
+      # children DID succeed continue normally.
+      #
+      # Effect on EG-suppressed reports: capped at depth=1 (one futile attempt
+      # to learn it's futile). 2 original buckets * 4 sub-buckets * 900s = 2h
+      # max instead of the depth-6 worst case of 113 days.
+      # Effect on normal reports: unchanged -- futile-prune only fires when
+      # 100% of children timeout, which doesn't happen when splitting actually
+      # distributes work.
+      $parentTimeoutCount = @{}     # key="$pN/$pT/$depth"  ->  int (count of timed-out children)
+      $prunedSubtreeCount = 0
+
+      $egSuppressedHint = if ([bool]$script:_SkipEGBucketForCrossDomain) {
+          ' -- NOTE: EG-side bucket filter was suppressed for this report (cross-domain join key). Sub-bucketing may not distribute work; futile-prune will engage if all children timeout.'
+      } else { '' }
+      Write-Warn2 ("AutoBucket sub-bucketing pass: {0} bucket(s) timed out at BucketCount={1}; splitting each into {2} sub-buckets per pass (max depth {3}). Successful buckets retained ({4} rows so far).{5}" -f `
+        $failedBucketIndices.Count, $bucketCountToUse, $subFanOut, $subDepthMax, $ResultAll.Count, $egSuppressedHint)
+
+      # BFS queue: each item = @{ N = parent-index; T = parent-total; D = current-depth; PK = parentKey-from-grandparent }
       $subQueue = New-Object System.Collections.Generic.Queue[object]
       foreach ($idx in $failedBucketIndices) {
-          $subQueue.Enqueue(@{ N = [int]$idx; T = [int]$bucketCountToUse; D = 1 })
+          $subQueue.Enqueue(@{ N = [int]$idx; T = [int]$bucketCountToUse; D = 1; PK = $null })
       }
 
       while ($subQueue.Count -gt 0) {
@@ -7078,6 +7106,8 @@ while (-not $bucketRunSucceeded) {
           $pT      = [int]$item.T
           $depth   = [int]$item.D
           $newT    = $pT * $subFanOut
+          # parent-key identifies THIS parent across its own children below
+          $thisParentKey = ('{0}/{1}/{2}' -f $pN, $pT, $depth)
 
           for ($j = 0; $j -lt $subFanOut; $j++) {
               $subN       = $pN + ($j * $pT)
@@ -7103,9 +7133,15 @@ while (-not $bucketRunSucceeded) {
                   foreach ($row in $subRows) { $ResultAll += ,$row }
               } catch {
                   $subErr = $_.Exception.Message
+                  if ($script:_LastGraphHuntingAllTimedOut) {
+                      # Track timeout count for THIS parent. When all $subFanOut children
+                      # have timed out, the parent is "futile" -- skip enqueueing grandchildren.
+                      if (-not $parentTimeoutCount.ContainsKey($thisParentKey)) { $parentTimeoutCount[$thisParentKey] = 0 }
+                      $parentTimeoutCount[$thisParentKey] = [int]$parentTimeoutCount[$thisParentKey] + 1
+                  }
                   if ($script:_LastGraphHuntingAllTimedOut -and $depth -lt $subDepthMax) {
                       Write-Warn2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} timed out -- queueing for further split (depth {5})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, ($depth + 1))
-                      $subQueue.Enqueue(@{ N = $subN; T = $newT; D = ($depth + 1) })
+                      $subQueue.Enqueue(@{ N = $subN; T = $newT; D = ($depth + 1); PK = $thisParentKey })
                   } elseif ($script:_LastGraphHuntingAllTimedOut) {
                       Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} timed out at MAX DEPTH {5} -- giving up on this slice (rows in this sub-bucket NOT included). Error: {6}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $depth, $subErr)
                   } else {
@@ -7113,8 +7149,33 @@ while (-not $bucketRunSucceeded) {
                   }
               }
           }
+
+          # v2.2.357 -- after all $subFanOut children of THIS parent have been
+          # attempted, check the futile-prune trigger. If ALL children timed out,
+          # purge any of this parent's grandchildren that were just enqueued.
+          # Logic: splitting didn't help at this level, so splitting deeper
+          # provably won't help either (the work isn't being distributed by
+          # the bucket filter; usually because EG-side filter is suppressed).
+          if ($parentTimeoutCount.ContainsKey($thisParentKey) -and [int]$parentTimeoutCount[$thisParentKey] -ge $subFanOut) {
+              # Filter the queue: remove any grandchildren whose PK == thisParentKey.
+              $purgedQueue = New-Object System.Collections.Generic.Queue[object]
+              $purgedCount = 0
+              while ($subQueue.Count -gt 0) {
+                  $q = $subQueue.Dequeue()
+                  if ([string]$q.PK -eq [string]$thisParentKey) { $purgedCount++ } else { $purgedQueue.Enqueue($q) }
+              }
+              while ($purgedQueue.Count -gt 0) { $subQueue.Enqueue($purgedQueue.Dequeue()) }
+              if ($purgedCount -gt 0) {
+                  $prunedSubtreeCount += $purgedCount
+                  Write-Warn2 ("[sub-bucket] FUTILE-PRUNE: parent={0}/{1} depth={2} -- all {3}/{3} children timed out at 900s; splitting deeper won't help (bucket filter not distributing work). Pruned {4} grandchildren that would have produced 0 rows. Successful sibling-parent rows retained." -f $pN, $pT, $depth, $subFanOut, $purgedCount)
+              }
+          }
       }
-      Write-Info ("[sub-bucket] pass complete; total rows after sub-bucketing: {0}" -f $ResultAll.Count)
+      if ($prunedSubtreeCount -gt 0) {
+          Write-Warn2 ("[sub-bucket] pass complete; total rows after sub-bucketing: {0}. Note: {1} futile sub-bucket attempts skipped (would have cost {2} minutes of additional 900s timeouts). Report has structural cardinality skew on the bucket key -- consider re-keying via the YAML's `crossDomainBucketCoalesce:` block if available." -f $ResultAll.Count, $prunedSubtreeCount, ($prunedSubtreeCount * 15))
+      } else {
+          Write-Info ("[sub-bucket] pass complete; total rows after sub-bucketing: {0}" -f $ResultAll.Count)
+      }
   }
 
   # Success: all buckets executed (sub-bucketing pass handled any deterministic

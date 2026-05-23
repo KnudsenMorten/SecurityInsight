@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.365
+## v2.2.366
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.366 - SMTP resolution rewritten for internal-automation convention: promote platform-defaults SMTPUser to SMTPFrom + force-pull actual login+password from KV (SMTPuser/SMTPpassword) (da09c0e6)
 - release: SecurityInsight v2.2.365 - dcr-si-run-health auto-create fixed (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if authenticated mail is enabled but creds are missing (ff5bef13)
 - release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
 - release: SecurityInsight v2.2.363 - startup version banner + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (saves ~2h per affected cross-domain Attack_Paths report) (bfb4c9a6)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.339 - expand AssetSimulationComplexSummary to include Azure_Recommendations_Summary; expand AssetSimulationComplexDetailed to include Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed (668df5e4)
 - release: SecurityInsight v2.2.338 - new launcher CLI knob -RunAssetSimulation FullSummary|ComplexSummary|FullDetailed|ComplexDetailed -AssetSimulationAmount N; new AssetSimulationComplex{Summary,Detailed} Locked templates listing 10 cross-domain reports that exercise source/target bucketing; hardcoded SI_SimulateCLRowCount removed from custom.ps1 (2e01de15)
 - release: SecurityInsight v2.2.337 - add _si_PrimaryEntityId projection-alias to CL bucket-key + cross-domain lists; fixes Identity_Admin_LogonTo_VulnerableDevice_Summary (and siblings) escalating to 131072 on full-Locked Summary (c61cd625)
-- release: SecurityInsight v2.2.336 - stop flagging EpJoinKey as cross-domain; designed-alignment Endpoint single-let path keeps using EG bucket filter (faster per-bucket queries, no behaviour change) (45cc6055)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.366 — SMTP credential resolution rewritten to match the internal-automation convention: platform-defaults' `$global:SMTPUser` is treated as the FROM address and promoted to `$global:SMTPFrom`, while the actual SMTP relay LOGIN + PASSWORD are force-pulled from KV (`SMTPuser` / `SMTPpassword`). Resolved values printed at startup.
+
+### What changed
+
+`launcher/_lib/SecurityInsight.shared-defaults.ps1` — full rewrite of the SMTP block. Three phases:
+
+1. **Internal automation pattern** (fires when `$global:Context` exists AND `$global:Mail_SendAnonymous = $false`):
+   - Promote platform-defaults' `$global:SMTPUser` (semantically the from-address in legacy 2linkit convention) into `$global:SMTPFrom`
+   - Clear `$global:SMTPUser` and pull the actual relay LOGIN from KV secret `SMTPuser` (or `SMTP-User`)
+   - Pull `$global:SMTPPassword` from KV secret `SMTPpassword` (or `SMTP-Password`)
+
+2. **HighPriv_SMTP_* fallback bridges** — fire only if values are still unset after phase 1 (covers tenants whose platform-defaults uses the `HighPriv_*` naming directly).
+
+3. **Startup log line** — `[shared-defaults] SMTP resolved: From=... | User=... | Password=[len=N] | Anonymous=... | Context=...` so operators can verify the resolution at run start without waiting for the mail-dispatch log near end-of-run.
+
+### Why
+
+Customer (internal-automation platform user) had `$global:SMTPUser = "svc-automation@<tenant>.eu"` set by their platform-defaults as the FROM address (legacy convention -- variable name mismatched the semantic intent). The actual SMTP relay LOGIN + PASSWORD live in KV under `SMTPuser` / `SMTPpassword`.
+
+Previous SI behavior (v2.2.359-365): the bridge code was conditional `if (-not $global:SMTPUser)`, so platform-defaults' value (the from-address) "won" and the KV lookup never fired. SI ended up using the from-address as the SMTP login -- Brevo rejected the AUTH with `5.7.0 Please authenticate first`.
+
+New v2.2.366 behavior: when running under internal automation with authenticated mail, ALWAYS promote+pull so SMTPUser ends up containing the actual relay login from KV, never the from-address.
+
+### Impact
+
+- Internal-automation customers (platform-defaults sets SMTPUser as from-address + KV holds SMTPuser/SMTPpassword): mail dispatch now uses the correct credentials end-to-end without any custom.ps1 override
+- Community customers (no Context): unchanged -- they set SMTPUser as the actual login in their custom.ps1 directly
+- SMTP pre-flight (v2.2.365) still catches misconfigurations early; combined with v2.2.366's correct resolution, the startup log shows exactly what was resolved before any reports run
 
 ---
 

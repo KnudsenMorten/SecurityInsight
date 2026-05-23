@@ -6590,6 +6590,12 @@ try {
     }
 } catch { }
 
+# v2.2.363 -- announce the engine version at startup so operators can verify
+# which release is actually running (not just which release the launcher loaded).
+# Stamped values (Excel header, email subject, LA SolutionVersion column, etc.)
+# all derive from $global:RA_SolutionVersion which was just populated above.
+Write-Info ("SecurityInsight RiskAnalysis engine v{0} ({1})" -f $global:RA_SolutionVersion, $PSCommandPath)
+
 foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
   try {
 
@@ -7149,6 +7155,32 @@ while (-not $bucketRunSucceeded) {
       $parentTimeoutCount = @{}     # key="$pN/$pT/$depth"  ->  int (count of timed-out children)
       $prunedSubtreeCount = 0
 
+      # v2.2.363 -- EARLY-ABORT FUTILE SUB-BUCKET PASS. When EG-side bucket
+      # filter is suppressed for this report (cross-domain key not in EG
+      # coalesce list) AND 100% of the outer buckets timed out at 900s,
+      # the sub-bucket pass is provably futile from the start: sub-bucketing
+      # the CL inline doesn't reduce EG work (the actual bottleneck), and
+      # the parent-level evidence already proves the EG side can't complete
+      # within 900s for any partition of this snapshot. Skip the entire
+      # sub-bucket pass instead of burning ~60min per parent (4 children *
+      # 900s) to re-prove what we already know.
+      #
+      # Same logic family as v2.2.357 (empirical futile-prune of grandchildren),
+      # one level earlier: instead of waiting for 4/4 children to timeout per
+      # parent, use (EG-suppression flag) + (100% outer-bucket failure) as
+      # combined proof.
+      #
+      # If only SOME outer buckets failed (e.g. 2/8), the EG work IS bounded
+      # enough for some partitions -- still try sub-bucketing the failing ones
+      # since they MIGHT split usefully; v2.2.357 futile-prune still catches
+      # the per-parent futile cases at depth=1.
+      $allOuterFailedWithEgSuppressed = ([bool]$script:_SkipEGBucketForCrossDomain -and $failedBucketIndices.Count -eq [int]$bucketCountToUse)
+      if ($allOuterFailedWithEgSuppressed) {
+          Write-Warn2 ("AutoBucket sub-bucketing pass SKIPPED for report '{0}' -- EG-side bucket filter is suppressed for this report (cross-domain join key) AND 100% of outer buckets ({1}/{1}) timed out at 900s. Sub-bucketing the CL inline cannot reduce EG-side work (the bottleneck), so attempting it would burn ~{2}min per parent (~{3}min total) to re-prove what we already know. Report ships with {4} row(s) from successful buckets (likely 0). To service this report at this customer's scale, the YAML query needs a per-report rewrite that moves `summarize by` from cmdb* columns to EG-native columns + post-augments CL data client-side." -f $ReportName, $failedBucketIndices.Count, ($subFanOut * 15), ($failedBucketIndices.Count * $subFanOut * 15), $ResultAll.Count)
+          $failedBucketIndices.Clear()
+          # Fall through past the BFS pass; report finishes immediately with whatever successful buckets produced.
+      } else {
+
       $egSuppressedHint = if ([bool]$script:_SkipEGBucketForCrossDomain) {
           ' -- NOTE: EG-side bucket filter was suppressed for this report (cross-domain join key). Sub-bucketing may not distribute work; futile-prune will engage if all children timeout.'
       } else { '' }
@@ -7237,6 +7269,7 @@ while (-not $bucketRunSucceeded) {
       } else {
           Write-Info ("[sub-bucket] pass complete; total rows after sub-bucketing: {0}" -f $ResultAll.Count)
       }
+      }   # v2.2.363 -- close `else` branch of $allOuterFailedWithEgSuppressed
   }
 
   # Success: all buckets executed (sub-bucketing pass handled any deterministic

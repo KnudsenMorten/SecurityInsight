@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.360
+## v2.2.361
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.361 - AutoBucket escalation sizes buckets to ~70% of nginx 1MB cap via MEASURED bytes-per-row; eliminates 8-10x over-escalation (500K: 1000 buckets -> ~120 buckets) (935a8cca)
 - release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
 - release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
 - release: SecurityInsight v2.2.358 - LA-ingest error body surfaced (RA + profiler) + DCE/DCR RG auto-discover via Az lookup + sample templates fixed + customer-name scrub (3aa4daf8)
@@ -33,13 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.334 - cross-domain CL-bucketing now LOSSLESS: Get-SICLBucketKey learned projection-aliased keys (Target_AzureResourceId_Guid/Source_AadDeviceId/FinalTargetId/etc) AND Replace-BucketFilterBlock skips EG-side filter when CL key isn't in EG's coalesce list -- 8 cross-domain reports (6 Attack_Paths + 2 Identity_Admin_LogonTo_*) now produce real data on large tenants (bd2aa07a)
 - release: SecurityInsight v2.2.333 - extend Resolve-ProfileAugmentPlan regex to also match `where <col> != ""` inequality form; cross-domain Attack_Paths reports whose let-bodies end with that shape now activate 2-phase (where summarize-by gate permits) (1f4e522e)
 - release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
-- release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.361 — AutoBucket escalation now sizes buckets to ~70% of the nginx 1MB cap based on MEASURED bytes-per-row, replacing the hardcoded 500 rows/bucket constant that was 8-10x too conservative for typical CL payloads.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
+
+1. **New measurement** in `Resolve-ProfileCLLetBlocks`: after each successful CL inline, record `$script:_LastHybridBytesPerRow = datatableLen / bucketRows.Count`. Free side-effect of work already happening.
+
+2. **Escalation formula rewrite** (was line 7055):
+
+   ```powershell
+   # Before:
+   $snapshotJump = ceil(rowCount / 500)
+
+   # After:
+   $rowsPerBucket = floor(700KB / $script:_LastHybridBytesPerRow)
+   $snapshotJump  = ceil(rowCount / $rowsPerBucket)
+   ```
+
+   `700KB` = ~70% of the actual nginx 1MB Log Ingestion cap (the real Azure-enforced limit, not a stopgap knob) -- leaves 30% headroom for KQL body + URL params + per-bucket variance in serialized row width.
+
+### Why
+
+The hardcoded 500 rows/bucket assumed a much larger row width than CL Profile actually emits. Real measurements from the running stress test:
+
+- 500K simulation at BucketCount=1000: 87,836 bytes per bucket (8% of 1MB cap)
+- 15K simulation at BucketCount=3:     840,477 bytes per bucket (80% of 1MB cap, well-tuned)
+
+Both at ~170 bytes/row. So the 500-rows constant only matched reality at ~2KB rows -- 10x bigger than actual CL Profile rows.
+
+### Impact
+
+At 500K rows / ~170 bytes per row:
+
+- **Old:** 500K / 500 = 1000 buckets -> 1000 x 25s XDR = ~7h per report
+- **New:** 700KB / 170 = ~4100 rows/bucket -> 500K / 4100 = ~120 buckets -> 120 x 25s = **~50 min per report**
+
+**~7x speedup on top of v2.2.360.** Stacks: v2.2.360 fixed local CPU overhead (O(N^2) -> O(N) hash), v2.2.361 fixes query count (over-escalation). Combined, a 500K-asset Summary report drops from theoretical 27 days to ~50 minutes.
+
+No caps. No skip thresholds. Pure measure-and-adapt: the engine reads the actual bytes it serialized, derives the optimal rows-per-bucket from the real Azure cap, and sizes accordingly.
 
 ---
 

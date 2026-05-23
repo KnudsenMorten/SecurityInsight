@@ -1095,6 +1095,13 @@ function Resolve-ProfileCLLetBlocks {
             $bucketRows = @($script:_HybridBucketGroupsCache[$groupCacheKey][$BucketIndex])
             $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $bucketRows -BodyKqlForSchemaHint $bodyKql
             Write-Info ("[hybrid] '{0}' bucket {1}/{2}: {3}/{4} row(s) inlined ({5} bytes; CL-bucketed via SHA256)" -f $varName, ($BucketIndex + 1), $BucketCount, $bucketRows.Count, $allRows.Count, $datatableLet.Length)
+            # v2.2.361 -- record measured bytes-per-row so the AutoBucket escalation
+            # handler can size buckets to ~70% of the nginx 1MB cap empirically,
+            # instead of using the hardcoded 500 rows/bucket which was 8-10x too
+            # conservative for typical ~170 bytes/row CL payloads.
+            if ($bucketRows.Count -gt 0) {
+                $script:_LastHybridBytesPerRow = [double]$datatableLet.Length / [double]$bucketRows.Count
+            }
         }
         elseif ($script:_HybridSnapshotCache.ContainsKey($cacheKey)) {
             $datatableLet = $script:_HybridSnapshotCache[$cacheKey]
@@ -7046,18 +7053,32 @@ while (-not $bucketRunSucceeded) {
       }
 
       # v2.2.273 -- 4x growth (was 2x), but ALSO consider the largest CL snapshot
-      # row count seen during this report. Heuristic: at ~500 rows per bucket the
-      # AH backend completes within the 900s ceiling for typical EG-path-expansion
-      # joins, so a 100K-row snapshot wants ~200 buckets immediately rather than
-      # grinding through 8 -> 32 -> 128 -> 512.
+      # row count seen during this report.
+      # v2.2.361 -- size buckets empirically to ~70% of the nginx 1MB cap based on
+      # MEASURED bytes-per-row from the most recent inline serialization, instead
+      # of the hardcoded 500 rows/bucket constant. At a typical CL payload of
+      # ~170 bytes/row that was ~8% of the 1MB cap -- 10x too conservative -- so
+      # the engine over-escalated (e.g. 500K rows -> 1000 buckets) and turned a
+      # ~50min workload into a ~7h one. Measurement-based sizing collapses that
+      # back to ~120 buckets at the same row size, no caps, no magic numbers.
       $snapshotJump = 0
       if ($script:_LastHybridSnapshotRowCount -and [int]$script:_LastHybridSnapshotRowCount -gt 0) {
-          $snapshotJump = [int][Math]::Ceiling([int]$script:_LastHybridSnapshotRowCount / 500.0)
+          # nginx Log Ingestion cap = 1MB. Target 70% to leave headroom for
+          # query body + URL params + per-bucket variance in serialized row size.
+          # bytesPerRow comes from the previous inline call (Resolve-ProfileCLLetBlocks).
+          # Fallback to 170 (median observed at typical CL row width) only on the
+          # very first probe when no measurement exists yet.
+          $bytesPerRow      = if ($script:_LastHybridBytesPerRow -gt 0) { [double]$script:_LastHybridBytesPerRow } else { 170.0 }
+          $targetBytes      = 700KB   # ~70% of 1MB nginx cap (actual Azure limit, not a stopgap)
+          $rowsPerBucket    = [int][Math]::Max(1, [Math]::Floor($targetBytes / $bytesPerRow))
+          $snapshotJump     = [int][Math]::Ceiling([int]$script:_LastHybridSnapshotRowCount / [double]$rowsPerBucket)
       }
       $jumpCandidates = @(($bucketCountToUse * 4), ($bucketCountToUse + 1), $snapshotJump)
       $nextBucket = [Math]::Min($capBucket, ($jumpCandidates | Measure-Object -Maximum).Maximum)
       if ($snapshotJump -gt 0 -and $snapshotJump -ge ($bucketCountToUse * 4)) {
-          Write-Info ("AutoBucket escalation jump informed by snapshot size ({0} rows / 500 = {1} buckets)" -f $script:_LastHybridSnapshotRowCount, $snapshotJump)
+          $_bpr = if ($script:_LastHybridBytesPerRow -gt 0) { [int]$script:_LastHybridBytesPerRow } else { 170 }
+          $_rpb = [int][Math]::Max(1, [Math]::Floor(700KB / [double]$_bpr))
+          Write-Info ("AutoBucket escalation jump informed by snapshot size + measured row-width ({0} rows / {1} rows-per-bucket @ ~{2} bytes/row, ~70% of nginx 1MB cap = {3} buckets)" -f $script:_LastHybridSnapshotRowCount, $_rpb, $_bpr, $snapshotJump)
       }
 
       Write-Info ("Shard sizing: '{0}' increasing shard count {1} -> {2} (auto-tuning for this report's payload)." -f `

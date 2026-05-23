@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.358
+## v2.2.359
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
 - release: SecurityInsight v2.2.358 - LA-ingest error body surfaced (RA + profiler) + DCE/DCR RG auto-discover via Az lookup + sample templates fixed + customer-name scrub (3aa4daf8)
 - release: SecurityInsight v2.2.357 - RA sub-bucket cascade self-aware: futile-parent prune when 100% of children time out (caps Summary runtime at ~2h instead of up to 113 days for cross-domain skew reports) (8840a0c9)
 - release: SecurityInsight v2.2.356 - clean customer-template restructure (Internal + Community parallels) + remove implicit westeurope default (f38d7ede)
@@ -33,13 +34,39 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.332 - Resolve-ProfileAugmentPlan regex now matches defensive where-isnotempty(tostring(column_ifexists(...))) shape; cross-domain Attack_Paths (single AND multi-let) flow through 2-phase post-augment instead of bombing on 2-4MB inline bodies (bac3e277)
 - release: SecurityInsight v2.2.331 - drop composite DeviceKey|FindingKey bucket key on *_Detailed reports; Detailed now uses device-only bucketing identical to Summary which re-enables CL-bucketing for Detailed; fixes Device_Missing_CVEs_Detailed hitting escalation cap (eab564c3)
 - release: SecurityInsight v2.2.330 - AutoBucketReportCap is now OPT-IN (default off); production tenants never silently capped; debug knob marked REMOVE-ME for next release after the per-report join-key parser lands (7158e1c6)
-- release: SecurityInsight v2.2.329 - per-report soft cap on AutoBucket escalation (default 256) so cross-domain reports with misaligned bucket keys fail fast instead of burning 30 min escalating to 131,072 (c724d2ed)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.359 — SMTP credential resolution now bridges platform `HighPriv_SMTP_*` globals + falls back to direct KV probe under multiple secret-name conventions.
+
+### What changed
+
+`launcher/_lib/SecurityInsight.shared-defaults.ps1` learned two new things, both gated so a customer override in layer 3 (`custom.ps1`) always wins:
+
+1. **Bridge** — if `$global:HighPriv_SMTP_UserName` / `$global:HighPriv_SMTP_Password` are populated (e.g. by an internal platform-defaults layer that uses the `HighPriv_*` naming) and `$global:SMTPUser` / `$global:SMTPPassword` are empty, bridge them. Same shape as the existing SPN `HighPriv_Modern_* -> SI_SPN_*` bridge directly above it. Free, no KV call.
+
+2. **KV fallback** — if `$global:SMTPUser` / `$global:SMTPPassword` are STILL empty and `$global:Context` exists, probe KV directly. Probe order:
+   - Password: `SMTPpassword` -> `SMTP-Password`
+   - User:     `SMTPuser`     -> `SMTP-User`
+
+   First non-empty wins (KV name lookups are case-insensitive, so `SMTPpassword` resolves a secret stored as `smtppassword` or `SMTPpassword` equivalently).
+
+### Why
+
+Different SI deployments use different conventions for SMTP secret naming in KV. Before this release a tenant whose platform layer pulled creds into `HighPriv_SMTP_*` (or whose KV held `SMTPpassword` / `SMTPuser` rather than the dash-style `Smtp-Password` / `Smtp-User`) would see SMTP fall back to anonymous send -- silently broken delivery. The bridge + fallback chain covers all known naming variants without requiring any per-tenant config.
+
+### Impact
+
+- Customers using `HighPriv_SMTP_*` from internal platform-defaults: SMTP now works without touching `custom.ps1`.
+- Customers whose KV holds creds under `SMTPpassword` / `SMTPuser` (PascalCase, no dash): resolved automatically.
+- Customers whose KV holds creds under the canonical `Smtp-Password` / `Smtp-User` (platform-defaults canonical path): unchanged -- platform-defaults wins layer 1, bridge + fallback skipped.
+- Community customers without PlatformConfiguration: unchanged -- `$global:Context` not set, fallback silently skipped, customer puts creds inline in `custom.community.ps1`.
 
 ---
 

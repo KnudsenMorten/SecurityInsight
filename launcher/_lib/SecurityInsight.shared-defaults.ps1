@@ -91,3 +91,56 @@ if (-not $global:SI_SPN_ObjectId -and $global:SI_SPN_AppId) {
         Write-Verbose ("SI shared-defaults: SPN ObjectId lookup failed -- engines that need it will retry: $($_.Exception.Message)")
     }
 }
+
+# --- SMTP credential bridge + KV fallback ------------------------------------
+# Why:
+#   2linkit platform-defaults populates $global:HighPriv_SMTP_UserName +
+#   $global:HighPriv_SMTP_Password (pulled from KV names 'SMTPuser' /
+#   'SMTPpassword'). SI engines read $global:SMTPUser / $global:SMTPPassword.
+#   Without a bridge, SMTP fails silently with "no creds, sending anonymous"
+#   even though the secret is loaded under the HighPriv_* names.
+#
+#   Community-flavour customers don't have PlatformConfiguration at all -- for
+#   them we fall back to a direct KV probe (case-insensitive, covers
+#   'SMTPpassword' / 'SMTP-Password' variants).
+# How:
+#   1. Bridge HighPriv_SMTP_* -> SMTPUser/SMTPPassword (free, no KV call).
+#   2. If still empty AND $global:Context exists, probe KV directly.
+#   Same shape as the SPN bridge above. All assignments conditional so a
+#   customer can override in layer 3 (custom.ps1) if needed.
+if (-not $global:SMTPUser -and $global:HighPriv_SMTP_UserName) {
+    $global:SMTPUser = $global:HighPriv_SMTP_UserName
+}
+if (-not $global:SMTPPassword -and $global:HighPriv_SMTP_Password) {
+    $global:SMTPPassword = $global:HighPriv_SMTP_Password
+}
+if ($global:Context) {
+    if (-not $global:SMTPPassword) {
+        foreach ($_smtpKvName in @('SMTPpassword','SMTP-Password')) {
+            try {
+                $_val = Get-PlatformSecret -Context $global:Context -Name $_smtpKvName -AsPlainText -ErrorAction Stop
+                if ($_val) {
+                    $global:SMTPPassword = $_val
+                    Write-Verbose ("SI shared-defaults: SMTPPassword resolved from KV name '$_smtpKvName' (community fallback)")
+                    break
+                }
+            } catch {
+                Write-Verbose ("SI shared-defaults: KV name '$_smtpKvName' not present -- trying next ($($_.Exception.Message))")
+            }
+        }
+    }
+    if (-not $global:SMTPUser) {
+        foreach ($_smtpKvName in @('SMTPuser','SMTP-User')) {
+            try {
+                $_val = Get-PlatformSecret -Context $global:Context -Name $_smtpKvName -AsPlainText -ErrorAction Stop
+                if ($_val) {
+                    $global:SMTPUser = $_val
+                    Write-Verbose ("SI shared-defaults: SMTPUser resolved from KV name '$_smtpKvName' (community fallback)")
+                    break
+                }
+            } catch {
+                Write-Verbose ("SI shared-defaults: KV name '$_smtpKvName' not present -- trying next ($($_.Exception.Message))")
+            }
+        }
+    }
+}

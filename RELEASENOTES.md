@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.368
+## v2.2.369
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
 - release: SecurityInsight v2.2.368 - removed version numbers from operator-visible layer labels + step messages (Connect-Platform v2.3 -> Connect-Platform, etc.) (be9c7f31)
 - release: SecurityInsight v2.2.367 - config snapshot grouped section now shows Layer 1 (Connect-Platform) + Layer 1b (platform-defaults) which were silently dropped due to stale layer-order label list (bd6ec921)
 - release: SecurityInsight v2.2.366 - SMTP resolution rewritten for internal-automation convention: promote platform-defaults SMTPUser to SMTPFrom + force-pull actual login+password from KV (SMTPuser/SMTPpassword) (da09c0e6)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
 - release: SecurityInsight v2.2.341 - log file name now embeds simulation mode + report template (e.g. risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log) for instant test-run triage (f54a22c9)
 - release: SecurityInsight v2.2.340 - slim both Complex templates to a focused 7-report set covering every CL-bucketing shape exactly once (was 11/12 in v2.2.339) (e3edbc4e)
-- release: SecurityInsight v2.2.339 - expand AssetSimulationComplexSummary to include Azure_Recommendations_Summary; expand AssetSimulationComplexDetailed to include Device_Missing_CVEs_Detailed + Device_Recommendations_Detailed (668df5e4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.369 — AISummaryCache read crash fixed: `[DateTime]::Parse($cached.GeneratedAt)` failed on non-en-US boxes (da-DK etc.) when `ConvertFrom-Json` had auto-materialized the ISO 8601 string to `[DateTime]`.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` -- four cache-read sites (lines ~8454, 9029, 9162, 9390) handled `$cached.GeneratedAt` by calling `[DateTime]::Parse()` directly. Now they branch on type: if the value is already `[DateTime]` (because `ConvertFrom-Json` auto-materialized the ISO 8601 string), use it directly; otherwise parse the string with `InvariantCulture`.
+
+```powershell
+$_gen = if ($cached.GeneratedAt -is [DateTime]) { [DateTime]$cached.GeneratedAt }
+        else { [DateTime]::Parse([string]$cached.GeneratedAt, [System.Globalization.CultureInfo]::InvariantCulture) }
+$age = (Get-Date) - $_gen.ToLocalTime()
+```
+
+### Why
+
+The cache file's `GeneratedAt` is written as ISO 8601 round-trip format (`2026-05-22T23:28:25.9628774Z`). `ConvertFrom-Json` auto-materializes that string to a `[DateTime]`. The old code then called `[DateTime]::Parse($x)` -- when `$x` is already `[DateTime]`, PowerShell implicitly ToString's it before Parse. The ToString uses one culture, Parse uses another, and on non-en-US boxes they disagree:
+
+- Implicit ToString -> `05/22/2026 23:28:25` (MM/dd format)
+- Parse on da-DK -> "month 22 doesn't exist" -> `ParentContainsErrorRecordException`
+
+Engine crashed during AI summary step with "Engine failed: Exception calling 'Parse'..." after the reports + xlsx + ingest had all succeeded -- the run's data shipped, but the AI summary email didn't.
+
+### Impact
+
+- Cache reads work on any culture (en-US, da-DK, etc.)
+- No more "Engine failed" at AI summary on non-en-US locales
+- Pure read-path fix; cache write was already culture-invariant (uses `.ToString('o')`)
 
 ---
 

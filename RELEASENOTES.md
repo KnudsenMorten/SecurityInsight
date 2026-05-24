@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.373
+## v2.2.374
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.374 - same row-builder optimization stack from Azure (v2.2.371/372) applied to Endpoint + Identity + PublicIp: pre-filter emit fields + per-row availKeys fast-null + Add-Member elimination (8afcd07e)
 - release: SecurityInsight v2.2.373 - Properties ConvertTo-Json depth 15 -> 8 (~30-50 ms/row saved) + InvariantCulture DateTime parses across asset-profiling row-builders + Get-SIRiskFactors (prevents non-en-US crash + minor speedup) (708954ac)
 - release: SecurityInsight v2.2.372 - Azure profile row builder: per-field required-source pre-computation + per-row availKeys fast-null path + switch-Regex replaced with if/StartsWith. Skips ~58% of always-null field iteration (the 182-of-311 cols problem) (7539e6c8)
 - release: SecurityInsight v2.2.371 - Azure profile row builder pre-filtered schema + hashtable-union risk record (no Add-Member loop) + fingerprint cache silent 404/409 + SHA256 fallback for non-ASCII AssetIds (Danish chars no longer fail PUT) (bbbfab92)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
 - release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
 - release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
-- release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.374 — Same row-builder optimization stack from Azure (v2.2.371/372) applied to Endpoint + Identity + PublicIp row builders.
+
+### What changed
+
+Three row builders mirror the Azure changes:
+
+`engine/asset-profiling/shared/Build-EndpointProfileRow.ps1`
+`engine/asset-profiling/shared/Build-IdentityProfileRow.ps1`
+`engine/asset-profiling/shared/Build-PublicIpProfileRow.ps1`
+
+Each got:
+
+1. **`Get-SIxxxFieldRequiredKeys` helper** — given a schema field, returns the list of metadata keys whose presence is REQUIRED for the field to possibly resolve non-null.
+   - Endpoint: keymap entry (single key) + `EG_RawData` for `source=exposureGraph`
+   - Identity: keymap entry (single key) + `ENTRA_EgRawData` for `source=exposureGraph`
+   - PublicIp: keymap entry (single key) + `SHODAN_RawJson` for `source=shodan` + `EG_RawData` for `source=exposureGraph`
+
+2. **Pre-filtered emit-fields cache** in `Get-SIxxxSchema` — skips per-row re-evaluation of emit/purpose/name flags.
+
+3. **Per-row availKeys HashSet + fast-null path** in the build function — when a field's required source keys are all absent on this record, set `$row[fname] = $null` directly without calling Resolve.
+
+4. **Add-Member loop -> hashtable union** for the risk-factor wrapper record (Endpoint + Identity only; PublicIp's risk factor path doesn't use a wrapper).
+
+### Why
+
+Asset-profiling row builders share the same architectural pattern but each engine paid the same ~50% wasted iteration overhead per row. Customer 13K-asset Azure run was the visible offender, but Endpoint (typically 10-100K assets at scale) and Identity (typically 1-10K users + SPNs) hit the same cost class.
+
+### Impact
+
+Expected per-row reductions on each engine, mirroring Azure's measured v2.2.371→.372 delta (457ms → 183ms = 60%):
+
+- **Endpoint**: similar fast-null win expected (most schema fields are MDE-* or EG-* and many rows lack one or the other)
+- **Identity**: similar (some users have AAD-only, some have on-prem sync, some have SPN data)
+- **PublicIp**: smaller schema but Shodan-source fields fast-null on IPs without Shodan records
+
+RA query contract preserved — column emission unchanged across all engines.
 
 ---
 

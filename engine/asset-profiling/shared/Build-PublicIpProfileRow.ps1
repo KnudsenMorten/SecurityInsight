@@ -21,11 +21,43 @@ if (-not (Get-Variable -Name _SISchemaCache -Scope Script -ErrorAction SilentlyC
     $script:_SISchemaCache = @{}
 }
 
+function Get-SIPublicIpFieldRequiredKeys {
+    <# v2.2.374 -- mirror of the Azure helper. Given a schema field, return the
+       list of metadata keys whose presence is REQUIRED for the field to
+       possibly resolve to non-null. Empty list = no fast-null possible. #>
+    param($Field)
+    $src  = [string]$Field.source
+    $name = [string]$Field.name
+    $keys = New-Object System.Collections.Generic.List[string]
+    if ($script:_SIPublicIpKeyMap.ContainsKey($name)) {
+        [void]$keys.Add([string]$script:_SIPublicIpKeyMap[$name])
+    }
+    if ($src -eq 'shodan')        { [void]$keys.Add('SHODAN_RawJson') }
+    if ($src -eq 'exposureGraph') { [void]$keys.Add('EG_RawData') }
+    return $keys
+}
+
 function Get-SIPublicIpSchema {
     if ($script:_SISchemaCache.ContainsKey('PublicIpSchema')) { return $script:_SISchemaCache['PublicIpSchema'] }
     . (Join-Path $PSScriptRoot 'Get-SISchemaWithCustomMerge.ps1')
     $schema = Get-SISchemaWithCustomMerge -Engine publicip
     $script:_SISchemaCache['PublicIpSchema'] = $schema
+    # v2.2.374 -- pre-filter emit-able fields once + annotate each with
+    # _SIRequiredKeys so per-row iteration can fast-null fields whose required
+    # source data isn't present. Same pattern as Azure v2.2.371/372.
+    $script:_SISchemaCache['PublicIpEmitFields'] = @(
+        $schema.fields | Where-Object {
+            $fn = [string]$_.name
+            $fn -and `
+            (-not $_.PSObject.Properties['emit'] -or $_.emit -ne $false) -and `
+            ([string]$_.purpose -notin 'enrichment','forensic','raw') -and `
+            ($fn -notin 'CollectHash','EnrichHash','PostureHash','ClassifyHash')
+        } | ForEach-Object {
+            $reqKeys = Get-SIPublicIpFieldRequiredKeys -Field $_
+            Add-Member -InputObject $_ -MemberType NoteProperty -Name '_SIRequiredKeys' -Value $reqKeys -Force
+            $_
+        }
+    )
     return $schema
 }
 
@@ -414,19 +446,38 @@ function Build-SIPublicIpProfileRow {
         RunContext        = $RunContext
     }
 
+    # v2.2.374 -- use cached emit-fields + per-row availKeys fast-null path.
+    # Same pattern as Build-AzureProfileRow v2.2.371/372.
     $row = [ordered]@{}
     $row['TimeGenerated'] = $Record.TimeGenerated
-    foreach ($f in $schema.fields) {
-        if ($f.PSObject.Properties['emit'] -and $f.emit -eq $false) { continue }
-        if ($f.purpose -in 'enrichment','forensic','raw') { continue }
-        if ($f.name -in 'CollectHash','EnrichHash','PostureHash','ClassifyHash') { continue }
-
+    $availKeys = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+    if ($meta -is [System.Collections.IDictionary]) {
+        foreach ($k in $meta.Keys) {
+            $v = $meta[$k]
+            if ($null -ne $v -and "$v" -ne '') { [void]$availKeys.Add([string]$k) }
+        }
+    } else {
+        foreach ($p in $meta.PSObject.Properties) {
+            if ($null -ne $p.Value -and "$p.Value" -ne '') { [void]$availKeys.Add([string]$p.Name) }
+        }
+    }
+    foreach ($f in $script:_SISchemaCache['PublicIpEmitFields']) {
+        $fname = [string]$f.name
+        # Fast-null path: if field requires source keys and NONE are populated, emit null directly.
+        $reqKeys = $f._SIRequiredKeys
+        $skipResolve = $false
+        if ($f.source -ne 'derived' -and $reqKeys -and $reqKeys.Count -gt 0) {
+            $hasAny = $false
+            foreach ($rk in $reqKeys) { if ($availKeys.Contains($rk)) { $hasAny = $true; break } }
+            if (-not $hasAny) { $skipResolve = $true }
+        }
+        if ($skipResolve) { $row[$fname] = $null; continue }
         $val = if ($f.source -eq 'derived') {
             Get-SIDerivedValue -Field $f -Context $ctx
         } else {
             Resolve-SISourceValue -Field $f -Record $Record
         }
-        $row[$f.name] = $val
+        $row[$fname] = $val
     }
 
     $row['Properties'] = $properties

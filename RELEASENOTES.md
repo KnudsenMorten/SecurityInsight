@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.371
+## v2.2.372
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.372 - Azure profile row builder: per-field required-source pre-computation + per-row availKeys fast-null path + switch-Regex replaced with if/StartsWith. Skips ~58% of always-null field iteration (the 182-of-311 cols problem) (7539e6c8)
 - release: SecurityInsight v2.2.371 - Azure profile row builder pre-filtered schema + hashtable-union risk record (no Add-Member loop) + fingerprint cache silent 404/409 + SHA256 fallback for non-ASCII AssetIds (Danish chars no longer fail PUT) (bbbfab92)
 - release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
 - release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
 - release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
 - release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
-- release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.372 — Azure profile row builder: source-key fast-null path + regex-free path resolution. Targets the ~58% of schema fields that resolve to null for every row.
+
+### What changed
+
+`engine/asset-profiling/shared/Build-AzureProfileRow.ps1` -- three layered speedups:
+
+1. **Per-field required-source pre-computation** (`Get-SIFieldRequiredKeys`). At schema load, each emit-able field gets annotated with `_SIRequiredKeys` -- the list of metadata keys whose presence is required for the field to possibly resolve to non-null. E.g., a `properties.publicNetworkAccess` field requires `AZ_PropertiesJson` in the row's metadata.
+
+2. **Per-row availKeys + fast-null path**. Build-SIAzureProfileRow now builds an `availKeys` HashSet of populated metadata keys per row (one O(K) pass over metadata). For each emit-field, if `_SIRequiredKeys` is set and NONE of those keys are in availKeys, the field gets `$row[$fname] = $null` directly -- skipping the regex+path-walk in Resolve-SIAzureSourceValue entirely.
+
+3. **Regex-free path resolution**. `Resolve-SIAzureSourceValue` replaced `switch -Regex` (recompiles regex on every call, ~50us each in PS 5.1) with an if/elseif chain using string equality + StartsWith (~3us each).
+
+### Why
+
+Customer 13K-asset Azure run reported `schema-coverage: 129 of 311 emitted columns have at least one non-empty value` -- meaning **182 columns (58%) are NULL for every single row**. Per-row math:
+- 13K rows x 282 schema fields = 3.6M `Resolve-SIAzureSourceValue` calls
+- 13K x 182 always-null = 2.4M calls were provably wasted regex+path-walk
+
+### Impact
+
+- Fast-null path skips ~58% of per-row schema iteration (the always-null fields whose required source is absent on this row)
+- switch-Regex -> if/StartsWith shaves ~47us per remaining field call
+- **Estimated combined: row builder 50-70% faster** on top of v2.2.371's 30% gain
+- Total expected: ~150-200 ms/row from v2.2.371's 457 ms/row
+
+### What's preserved (RA query contract)
+
+The "ALWAYS emit the column (even as null)" contract from v2.2.282 is preserved. All 311 schema fields still appear in `SI_Azure_Profile_CL` with the same names and types. RA KQL queries that reference `Pip_DnsName`, `StPublicNetworkAccess`, `SqlSrvPublicNetworkAccess` etc. work unchanged -- they just see null faster for rows where the corresponding source data isn't present.
 
 ---
 

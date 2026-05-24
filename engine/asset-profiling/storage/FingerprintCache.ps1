@@ -31,21 +31,29 @@ function Initialize-SIFingerprintTable {
     }
 
     $url = 'https://{0}.table.core.windows.net/Tables' -f $Context.AccountName
-    $body = ConvertTo-Json @{ TableName = $TableName } -Compress
+    $bodyJson = ConvertTo-Json @{ TableName = $TableName } -Compress
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
     $date = ConvertTo-SIRfc1123Date
     $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $url
 
-    $headers = @{
-        'x-ms-date'    = $date
-        'x-ms-version' = '2020-08-04'   # min for Bearer-token Table REST
-        'Accept'       = 'application/json;odata=nometadata'
-        'Content-Type' = 'application/json'
-        'Authorization'= $auth
-    }
+    # v2.2.371 -- raw HttpWebRequest so the common 409 (table already exists)
+    # doesn't leave a `PS>TerminatingError(Invoke-RestMethod): ... 409 Conflict.`
+    # line in the transcript on every run.
+    $req = [System.Net.HttpWebRequest]::CreateHttp($url)
+    $req.Method      = 'POST'
+    $req.ContentType = 'application/json'
+    $req.Accept      = 'application/json;odata=nometadata'
+    $req.Headers.Add('x-ms-date',     $date)
+    $req.Headers.Add('x-ms-version',  '2020-08-04')   # min for Bearer-token Table REST
+    $req.Headers.Add('Authorization', $auth)
     try {
-        Invoke-RestMethod -Method Post -Uri $url -Headers $headers -Body $body -ErrorAction Stop | Out-Null
-    } catch {
-        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -ne 409) { throw }
+        $reqStream = $req.GetRequestStream()
+        try { $reqStream.Write($bodyBytes, 0, $bodyBytes.Length) } finally { $reqStream.Close() }
+        $resp = $req.GetResponse()
+        $resp.Close()
+    } catch [System.Net.WebException] {
+        $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        if ($code -ne 409) { throw }   # 409 = table already exists, silent
     }
     return $TableName
 }
@@ -75,20 +83,43 @@ function Get-SIFingerprintRecord {
     $url = "https://$($Context.AccountName).table.core.windows.net/$TableName(PartitionKey='$pkLit',RowKey='current')"
     $date = ConvertTo-SIRfc1123Date
     $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $url
-    $headers = @{
-        'x-ms-date'    = $date
-        'x-ms-version' = '2020-08-04'
-        'Accept'       = 'application/json;odata=nometadata'
-        'Authorization'= $auth
-    }
+
+    # v2.2.371 -- use raw HttpWebRequest instead of Invoke-RestMethod so a 404
+    # cache miss (the most common path on fresh asset IDs) doesn't leave a
+    # `PS>TerminatingError(Invoke-RestMethod): ... (404) Not Found.` line in
+    # the PowerShell transcript. The cmdlet treats 4xx as terminating errors
+    # that the transcript records BEFORE try/catch sees them; the raw .NET
+    # call surfaces 4xx as a normal WebException we silently handle.
+    $req = [System.Net.HttpWebRequest]::CreateHttp($url)
+    $req.Method  = 'GET'
+    $req.Accept  = 'application/json;odata=nometadata'
+    $req.Headers.Add('x-ms-date',     $date)
+    $req.Headers.Add('x-ms-version',  '2020-08-04')
+    $req.Headers.Add('Authorization', $auth)
     try {
-        return Invoke-RestMethod -Method Get -Uri $url -Headers $headers -ErrorAction Stop
-    } catch {
-        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 404) { return $null }
-        # Surface the AssetId + Azure JSON error body (the error path was bare
-        # "400 Bad Request" before; impossible to tell which row crashed).
-        $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
-        throw ('Get-SIFingerprintRecord GET failed for asset={0}: {1}' -f $AssetId, $detail)
+        $resp = $req.GetResponse()
+        try {
+            $reader = New-Object System.IO.StreamReader($resp.GetResponseStream())
+            try {
+                $body = $reader.ReadToEnd()
+                if ([string]::IsNullOrWhiteSpace($body)) { return $null }
+                return ($body | ConvertFrom-Json)
+            } finally { $reader.Close() }
+        } finally { $resp.Close() }
+    } catch [System.Net.WebException] {
+        $errResp = $_.Exception.Response
+        $code = if ($errResp) { [int]$errResp.StatusCode } else { 0 }
+        if ($code -eq 404) { return $null }   # cache miss -- silent, no transcript noise
+        # Non-404: read the response body for the detailed Azure error and re-throw.
+        $detail = ''
+        if ($errResp) {
+            try {
+                $errReader = New-Object System.IO.StreamReader($errResp.GetResponseStream())
+                try { $detail = $errReader.ReadToEnd() } finally { $errReader.Close() }
+            } catch { }
+        }
+        if (-not $detail) { $detail = $_.Exception.Message }
+        throw ('Get-SIFingerprintRecord GET failed for asset={0} (HTTP {1}): {2}' -f $AssetId, $code, $detail)
     }
 }
 
@@ -122,26 +153,28 @@ function _Get-SIAzureErrorBody {
 function _Invoke-SITableDelete {
     <# DELETE an Azure Table entity by PK + RowKey. Idempotent: 404 (entity
        absent) is treated as success. Used by Set-SIFingerprintRecord's
-       self-heal-on-400 path + -ForceOverwrite path. v2.2.315. #>
+       self-heal-on-400 path + -ForceOverwrite path. v2.2.315.
+       v2.2.371 -- switched to raw HttpWebRequest so the common idempotent-404
+       case doesn't leave a transcript line. #>
     param(
         [Parameter(Mandatory)][object]$Context,
         [Parameter(Mandatory)][string]$Url
     )
     $date = ConvertTo-SIRfc1123Date
     $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $Url
-    $headers = @{
-        'x-ms-date'    = $date
-        'x-ms-version' = '2020-08-04'
-        'Accept'       = 'application/json;odata=nometadata'
-        'Authorization'= $auth
-        'If-Match'     = '*'   # unconditional delete
-    }
+    $req = [System.Net.HttpWebRequest]::CreateHttp($Url)
+    $req.Method = 'DELETE'
+    $req.Accept = 'application/json;odata=nometadata'
+    $req.Headers.Add('x-ms-date',     $date)
+    $req.Headers.Add('x-ms-version',  '2020-08-04')
+    $req.Headers.Add('Authorization', $auth)
+    $req.Headers.Add('If-Match',      '*')   # unconditional delete
     try {
-        Invoke-RestMethod -Method Delete -Uri $Url -Headers $headers -ErrorAction Stop | Out-Null
-        return $true
-    } catch {
+        $resp = $req.GetResponse()
+        try { return $true } finally { $resp.Close() }
+    } catch [System.Net.WebException] {
         $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
-        if ($code -eq 404) { return $true }   # already absent
+        if ($code -eq 404) { return $true }   # already absent (silent)
         return $false
     }
 }

@@ -136,6 +136,25 @@ function ConvertTo-SIRfc1123Date {
 function ConvertTo-SISafeKey {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Key)
-    return ($Key -replace '[/\\#?''"+% \u0000-\u001f\u007f-\u009f]', '_').ToLowerInvariant()
+    # First-line sanitization: replace the chars Azure Tables outright forbids
+    # in PK/RK (slash/backslash/hash/question/quotes/plus/percent/space/control).
+    $sanitized = ($Key -replace '[/\\#?''"+% \u0000-\u001f\u007f-\u009f]', '_').ToLowerInvariant()
+    # v2.2.371 -- belt-and-braces: Azure Tables docs say PK accepts most Unicode,
+    # but in practice non-ASCII chars (Danish a-ring, o-slash, ae etc.) and very
+    # long keys have returned `InvalidInput` (HTTP 400) on PUT. Customer log
+    # showed two ScheduledQueryRule assets with Danish chars in the name failing
+    # Set-SIFingerprintRecord. When the sanitized key contains ANY non-ASCII
+    # char or exceeds a safe length budget, fall back to SHA256 -- the
+    # 64-hex-char key is always valid PK/RK material, and the deterministic
+    # hash means Get and Set produce the same key on every run. The original
+    # AssetId is preserved as `original_asset_id` row property for debugging.
+    if ($sanitized -match '[^\x00-\x7f]' -or $sanitized.Length -gt 512) {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Key))
+            return 'h_' + ([BitConverter]::ToString($bytes) -replace '-','').ToLowerInvariant()
+        } finally { $sha.Dispose() }
+    }
+    return $sanitized
 }
 

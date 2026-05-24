@@ -47,6 +47,20 @@ function Get-SIAzureSchema {
     . (Join-Path $PSScriptRoot 'Get-SISchemaWithCustomMerge.ps1')
     $schema = Get-SISchemaWithCustomMerge -Engine azure
     $script:_SISchemaCache['AzureSchema'] = $schema
+    # v2.2.371 -- pre-filter the EMIT-able fields once at first call so per-row
+    # iteration doesn't re-check emit/purpose/name flags for ~282 fields on
+    # every row. At ~13K rows that's ~3.6M wasted property checks. Cached as
+    # an [array] (not pipeline) so the foreach in Build-SIAzureProfileRow gets
+    # an O(1) length lookup.
+    $script:_SISchemaCache['AzureEmitFields'] = @(
+        $schema.fields | Where-Object {
+            $fn = [string]$_.name
+            $fn -and `
+            (-not $_.PSObject.Properties['emit'] -or $_.emit -ne $false) -and `
+            ([string]$_.purpose -notin 'enrichment','forensic','raw') -and `
+            ($fn -notin 'CollectHash','EnrichHash','PostureHash','ClassifyHash','EntityIds')
+        }
+    )
     return $schema
 }
 
@@ -385,15 +399,11 @@ function Build-SIAzureProfileRow {
     $alreadySet = New-Object System.Collections.Generic.HashSet[string]
     foreach ($k in $row.Keys) { [void]$alreadySet.Add([string]$k) }
 
-    foreach ($f in $schema.fields) {
+    # v2.2.371 -- iterate the pre-filtered emit-fields cache built in
+    # Get-SIAzureSchema instead of re-checking emit/purpose/name flags per row.
+    foreach ($f in $script:_SISchemaCache['AzureEmitFields']) {
         $fname = [string]$f.name
-        if ([string]::IsNullOrWhiteSpace($fname)) { continue }
         if ($alreadySet.Contains($fname)) { continue }
-        if ($f.PSObject.Properties['emit'] -and $f.emit -eq $false) { continue }
-        $purpose = [string]$f.purpose
-        if ($purpose -in 'enrichment','forensic','raw') { continue }
-        if ($fname -in 'CollectHash','EnrichHash','PostureHash','ClassifyHash','EntityIds') { continue }   # computed elsewhere
-
         # ALWAYS emit the column (even as $null) so AzLogDcrIngestPS
         # discovers it in the schema-sample dataset and adds it to the DCR + LA
         # table. Previously we only set non-null values, which meant sparse
@@ -557,9 +567,14 @@ function Build-SIAzureProfileRow {
     if (-not (Get-Command -Name Get-SIAzureRiskFactors -ErrorAction SilentlyContinue)) {
         . (Join-Path $PSScriptRoot 'Get-SIRiskFactors.ps1')
     }
-    $rfRecord = [pscustomobject]@{ Verdict = $verdict; Metadata = $meta }
-    foreach ($k in $row.Keys) { Add-Member -InputObject $rfRecord -MemberType NoteProperty -Name $k -Value $row[$k] -Force }
-    $rf = Get-SIAzureRiskFactors -Record $rfRecord
+    # v2.2.371 -- avoid Add-Member-per-key (~300 Add-Member calls per row).
+    # Get-SIRecordValue walks Record.<key> | Record.Verdict.<key> | Record.Metadata.<key>;
+    # building the pscustomobject from a single hashtable union is ~50x faster
+    # than the equivalent Add-Member loop on PS 5.1.
+    $rfHash = @{} + $row
+    $rfHash['Verdict']  = $verdict
+    $rfHash['Metadata'] = $meta
+    $rf = Get-SIAzureRiskFactors -Record ([pscustomobject]$rfHash)
     foreach ($k in $rf.Keys) { $row[$k] = $rf[$k] }
 
     # AssetName: cross-engine alias resolved by walking provider sources in

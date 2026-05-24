@@ -124,6 +124,7 @@
    - 5.5 [Exclude an asset finding per report](#55-exclude-asset-tag)
    - 5.6 [Scalar overrides per report (e.g. CVE minimum age)](#56-scalar-overrides)
    - 5.7 [Weighted risk-factor rules (per-engine field-driven uplifts)](#57-weighted-risk-factors)
+   - 5.8 [Detailed report severity scope (defaults + how to widen)](#58-detailed-report-severity-scope)
 6. [Severity & Criticality Definitions](#severity--criticality-definitions)
    - 6.1 [Severity definitions](#severity-definitions)
    - 6.2 [Criticality definitions](#criticality-definitions)
@@ -2176,6 +2177,44 @@ Inside the report's KQL the engine looks for sentinels
 `//__WEIGHTED_FACTORS_BEGIN__` ... `//__WEIGHTED_FACTORS_END__` and rewrites
 the bracketed block. Any report YAML can adopt this — most shipped queries
 already include the sentinels for endpoint + identity + azure engines.
+
+---
+
+<a id="58-detailed-report-severity-scope"></a>
+### 5.8 Detailed report severity scope (defaults + how to widen)
+
+Three high-volume Detailed reports ship with a **trimmed `SecuritySeverityScope`** so the Excel + risk-scoring runtime stays bounded on large tenants (10K+ assets). The engine post-filter at row-emit time drops out-of-scope rows **before** scoring, sort, and Excel export, so trimming scope is the cheapest lever for wall-clock.
+
+| Report | Shipped scope | Dropped | Why |
+|---|---|---|---|
+| `Device_Missing_CVEs_Detailed` | Very High, High, Medium-High, Medium | Low | Low CVEs are mostly noise at per-(Asset × CVE) granularity. **Medium kept** — Medium-CVSS CVEs can be exploit-chained. |
+| `Device_Recommendations_Detailed` | Very High, High, Medium-High | Low + Medium | TVM configuration baselines are hygiene-heavy at Medium tier (CIS-style optional hardening). Drowns Critical/High signal at scale. |
+| `Azure_Recommendations_Detailed` | Very High, High, Medium-High | Low + Medium | Azure EG recommendations at Medium tier are cost/perf/best-practice drift, not security risk. |
+
+The remaining 56 Detailed reports keep all five severities (Very High → Low) because their inherent row count is small enough that scope trimming would lose actionable signal without buying meaningful runtime.
+
+**Important:** the trim affects **Excel + email output only**.
+- LA ingest (`SI_RiskAnalysis_Detailed_CL`) **still receives every severity** — dashboards, KQL queries, and Azure Monitor alerts retain full fidelity.
+- The **Summary** variants of all three reports retain the full severity distribution (aggregated counts).
+
+**To widen the scope** (put Low or Medium back for one of these three): there is no runtime `$global:*` override for `SecuritySeverityScope` — the engine reads scope directly from `risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml`. Edit that file in your deployment:
+
+```yaml
+- ReportName: Device_Recommendations_Detailed
+  ...
+  SecuritySeverityScope:
+  - Very High
+  - High
+  - Medium-High
+  - Medium    # ← uncomment to restore
+  - Low       # ← uncomment to restore
+```
+
+Re-run the engine; no restart of anything else required. Track the edit in your fork/branch so future SI releases don't surprise you with a re-trim (the shipped defaults will reapply on `git pull`).
+
+**To widen via the customer YAML overlay** (survives upgrades but high maintenance): § 5.2's merge is **full-entry replace** on `ReportName` collision, not field-level patch. To override `SecuritySeverityScope:` for one of these three reports via your custom YAML you have to copy the **entire** locked report entry (purpose, scope blocks, OutputPropertyOrder, full ReportQuery KQL — typically 100-400 lines) into `engine/risk-analysis/_source/SecurityInsight_RiskAnalysis_Custom.yaml` and re-declare it with the widened scope. Each future SI release that changes the locked query (bucket logic, EG schema migration, weighted-factor sentinel changes) will then **not** apply to your overlaid copy — you own that report's lifecycle from that point on.
+
+For most tenants the in-place edit of `RiskAnalysis_Queries_Locked.yaml` is the lower-friction path; for tenants that take SI releases via `git pull` and want a clean diff, the overlay is the audit-friendlier path.
 
 ---
 

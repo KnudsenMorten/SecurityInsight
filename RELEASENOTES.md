@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.377
+## v2.2.378
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.378 - fingerprint cache opt-in (default OFF) + 3 fixes: UTF-16 truncation ceiling (60000->30000 chars), OData-code-aware self-heal (only retry on InvalidInput, not PropertyValueTooLarge), raw-HttpWebRequest PUT helper kills PS>TerminatingError(Invoke-RestMethod) transcript noise (5c3197f1)
 - release: SecurityInsight v2.2.377 - docs: README §5.8 covers v2.2.376 Detailed-scope trim (shipped defaults table + widen-scope guidance) (0c561c62)
 - release: SecurityInsight v2.2.376 - trim Detailed scope on Device_Missing_CVEs (drop Low) + Device_Recommendations + Azure_Recommendations (drop Low+Medium) to bound Excel/risk-scoring runtime on large tenants (77db3b3d)
 - release: SecurityInsight v2.2.375 - fix 'join' operator: Failed to resolve column 'EntryPointAadDeviceId' in Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure (2eba7f90)
@@ -33,13 +34,66 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
 - release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
 - release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
-- release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.378 — Fingerprint cache is opt-in (default OFF) + 3 fingerprint-cache bug fixes: correct UTF-16 truncation ceiling, OData-code-aware self-heal, transcript-noise elimination on PUT.
+
+### What changed
+
+#### 1. Fingerprint cache default flipped to OFF (opt-in)
+
+`launcher/_lib/SecurityInsight.shared-defaults.ps1` — new global:
+```powershell
+$global:SI_FingerprintCache_Enabled = $false   # opt-in; was always-on pre-v2.2.378
+```
+
+`engine/asset-profiling/stages/Invoke-Collect.ps1` — `Get-SIFingerprintRecord` call wrapped in the gate. When disabled, `$cached` stays `$null` so the cadence-not-due skip never fires and every asset proceeds (same as `ForceFullRun=$true`).
+
+`engine/asset-profiling/stages/Invoke-Classify.ps1` — entire `Set-SIFingerprintRecord` block (verdict JSON build + truncate + PUT) wrapped in the gate. When disabled, zero PUTs occur.
+
+One-shot startup log at Collect-stage entry tells the operator what state they're in:
+```
+ [INFO] fingerprint cache: DISABLED (opt-in via $global:SI_FingerprintCache_Enabled = $true)
+ [INFO] fingerprint cache: ENABLED  (Get on cadence skip-gate, Set on Classify verdict)
+```
+
+#### 2. Truncation threshold was wrong (60000 -> 30000 UTF-16 chars)
+
+`engine/asset-profiling/stages/Invoke-Classify.ps1` line ~910 -- the `if ($verdictJson.Length -gt 60000)` guard counted **UTF-16 characters** but compared against what an operator might mistake for a **byte budget**. Azure Tables string-property cap is **32,768 UTF-16 chars (== 64 KB)**, so a 60000-char verdict was already 120 KB UTF-16 -- nearly double the limit. SPN rows with heavy TierSources (many role assignments) still tripped `PropertyValueTooLarge` despite the guard. Threshold dropped to 30000 chars so even fully-ASCII verdicts stay comfortably under the cap.
+
+#### 3. Self-heal only on column-type drift (`InvalidInput`)
+
+`engine/asset-profiling/storage/FingerprintCache.ps1` -- the 400 self-heal (`DELETE` + retry `PUT`) only helps when the row's existing column type locks out the new write. For `PropertyValueTooLarge` (body content too big) or any other 400, the retry uses the **same body** and fails with the same code -- pure wasted work + double the transcript noise. Self-heal is now gated on OData code `InvalidInput`; all other 400s surface immediately with the `[OdataCode]` tag in the error message so operators can grep cause classes.
+
+#### 4. Transcript noise from `Invoke-RestMethod` PUT eliminated
+
+New raw-HttpWebRequest helper `_Invoke-SITablePut` (mirror of the existing `_Invoke-SITableDelete` and `Get-SIFingerprintRecord` patterns from v2.2.371). All three PUT call sites converted. Pre-fix every 400 fingerprint-cache PUT left a `PS>TerminatingError(Invoke-RestMethod): "The remote server returned an error: (400) Bad Request."` line in the PowerShell transcript -- recorded by the PS host BEFORE try/catch sees the error, so the existing try/catch couldn't suppress it. The raw .NET path surfaces 4xx as a normal `WebException` the caller silently inspects. Dead `$headers` block in `Set-SIFingerprintRecord` removed.
+
+### Why
+
+A customer running `ForceFullRun=$true` permanently (the common case for daily-cron tenants) writes to the fingerprint cache on every run but **never reads it** -- the cache is pure overhead, and any 400 it generates is transcript noise during operator review. One identity engine run in a recent customer's log produced **~50+ pages** of `PS>TerminatingError(Invoke-RestMethod)` lines from per-asset PUTs failing on SPN rows with `InvalidInput` and `PropertyValueTooLarge`. Combined with the underlying bugs (wrong truncation ceiling, useless self-heal on body-content failures), the cache was actively making operations worse for the tenants that didn't benefit from it.
+
+Tenants that DO run incremental and benefit from the cache opt in with one line in `SecurityInsight.custom.ps1`. Containers are unaffected either way -- the cache is a per-asset optimization, not a coordination mechanism.
+
+### Impact
+
+- **Default behavior change**: fresh installs and tenants that haven't set the global will see zero fingerprint cache writes. The Collect stage summary `cadence-skipped` count will read 0 on every run (no cache means no shortcuts). Risk-analysis + Excel output unaffected.
+- **Pingala-style tenants**: zero noise. The 4 engines that previously each generated 50+ TerminatingError lines per run are silent on the fingerprint path.
+- **Opt-in tenants**: same behavior as before MINUS the three bug fixes -- so smaller verdicts (30K char cap), fewer useless retries, no transcript noise even on 400. The opt-in path is strictly better than the pre-v2.2.378 always-on path.
+
+### Operator note
+
+To restore the prior always-on behavior for one tenant, add to `SecurityInsight.custom.ps1`:
+```powershell
+$global:SI_FingerprintCache_Enabled = $true
+```
 
 ---
 

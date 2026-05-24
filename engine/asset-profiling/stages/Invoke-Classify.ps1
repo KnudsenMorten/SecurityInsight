@@ -896,42 +896,47 @@ function Invoke-SIClassify {
         # transient throttling) was terminating the entire stage and losing
         # all classification work. Now per-asset failures are warnings only.
         #
-        # v2.2.315 -- ALWAYS write the fingerprint cache (pre-v2.2.315 skipped
-        # writes when ForceFullRun=true, but customers like fischer.de run
-        # ForceFullRun=true permanently and the cache stayed empty forever ->
-        # next non-Force run read stale data). On ForceFullRun, the write uses
-        # -ForceOverwrite (DELETE+PUT) so column-type drift from prior runs
-        # self-heals; otherwise the helper auto-heals on 400 with the same
-        # DELETE+PUT path.
-        try {
-            $verdictJson = $verdict | ConvertTo-Json -Compress -Depth 8
-            # Azure Tables property limit: 64KB. Truncate verdict JSON if it
-            # blew up (heavy TierSources for users with many roles can hit it).
-            if ($verdictJson.Length -gt 60000) {
-                $verdictJson = '{"truncated":true,"reason":"verdict JSON > 60KB","SI_Tier":' + $verdict.SI_Tier + '}'
+        # Cache is opt-in via $global:SI_FingerprintCache_Enabled (default
+        # $false in shared-defaults.ps1). When disabled, skip the writes
+        # entirely -- ForceFullRun tenants never read the cache, so the
+        # writes are pure overhead + transcript noise from 400s on identity
+        # rows with large role/permission JSON.
+        if ($global:SI_FingerprintCache_Enabled -eq $true) {
+            try {
+                $verdictJson = $verdict | ConvertTo-Json -Compress -Depth 8
+                # Azure Tables string-property limit: 32,768 UTF-16 chars
+                # (== 64KB). Truncate the verdict to ~30K chars so even if
+                # the payload contains non-ASCII surrogates the resulting
+                # UTF-16 byte length stays comfortably under the cap.
+                # Previous 60000 ceiling was a bug -- it counted UTF-16
+                # chars but compared against a byte budget, so SPN rows
+                # with heavy TierSources still tripped PropertyValueTooLarge.
+                if ($verdictJson.Length -gt 30000) {
+                    $verdictJson = '{"truncated":true,"reason":"verdict JSON > 30K UTF-16 chars","SI_Tier":' + $verdict.SI_Tier + '}'
+                }
+                $_fpProperties = @{
+                    si_tier          = $verdict.SI_Tier
+                    si_verdict       = $verdictJson
+                    last_seen_run_id = $RunContext.RunId
+                    last_seen_at     = ([datetime]::UtcNow.ToString('o'))
+                }
+                if ($RunContext.ForceFullRun) {
+                    Set-SIFingerprintRecord -Context $RunContext.StorageContext `
+                                             -TableName $RunContext.FingerprintTable `
+                                             -AssetId $r.AssetId `
+                                             -Properties $_fpProperties `
+                                             -ForceOverwrite
+                } else {
+                    Set-SIFingerprintRecord -Context $RunContext.StorageContext `
+                                             -TableName $RunContext.FingerprintTable `
+                                             -AssetId $r.AssetId `
+                                             -Properties $_fpProperties
+                }
+            } catch {
+                $msg = $_.Exception.Message
+                if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
+                Write-Warning ('Fingerprint cache write failed for {0} -- {1} (continuing)' -f $r.AssetId, $msg)
             }
-            $_fpProperties = @{
-                si_tier          = $verdict.SI_Tier
-                si_verdict       = $verdictJson
-                last_seen_run_id = $RunContext.RunId
-                last_seen_at     = ([datetime]::UtcNow.ToString('o'))
-            }
-            if ($RunContext.ForceFullRun) {
-                Set-SIFingerprintRecord -Context $RunContext.StorageContext `
-                                         -TableName $RunContext.FingerprintTable `
-                                         -AssetId $r.AssetId `
-                                         -Properties $_fpProperties `
-                                         -ForceOverwrite
-            } else {
-                Set-SIFingerprintRecord -Context $RunContext.StorageContext `
-                                         -TableName $RunContext.FingerprintTable `
-                                         -AssetId $r.AssetId `
-                                         -Properties $_fpProperties
-            }
-        } catch {
-            $msg = $_.Exception.Message
-            if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-            Write-Warning ('Fingerprint cache write failed for {0} -- {1} (continuing)' -f $r.AssetId, $msg)
         }
     }
 

@@ -150,6 +150,40 @@ function _Get-SIAzureErrorBody {
     return [string]$ErrorRecord.Exception.Message
 }
 
+function _Invoke-SITablePut {
+    <# PUT (insert-or-replace) an Azure Table entity. Raw HttpWebRequest so
+       a 4xx (the common column-type-drift `InvalidInput` and the
+       large-payload `PropertyValueTooLarge` cases) doesn't leave a
+       `PS>TerminatingError(Invoke-RestMethod)` line in the PowerShell
+       transcript -- Invoke-RestMethod records 4xx as a terminating error
+       BEFORE try/catch sees it; the raw .NET path surfaces the same 4xx
+       as a normal WebException the caller can inspect via `.Response`.
+       Lets WebException propagate so the caller's `_Get-SIAzureErrorBody`
+       can read the error body + parse the OData code. #>
+    param(
+        [Parameter(Mandatory)][object]$Context,
+        [Parameter(Mandatory)][string]$Url,
+        [Parameter(Mandatory)][string]$Body
+    )
+    $date = ConvertTo-SIRfc1123Date
+    $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $Url
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+    $req = [System.Net.HttpWebRequest]::CreateHttp($Url)
+    $req.Method        = 'PUT'
+    $req.ContentType   = 'application/json'
+    $req.Accept        = 'application/json;odata=nometadata'
+    $req.ContentLength = $bodyBytes.Length
+    $req.Headers.Add('x-ms-date',     $date)
+    $req.Headers.Add('x-ms-version',  '2020-08-04')
+    $req.Headers.Add('Authorization', $auth)
+    # Note: NO If-Match header -- presence would switch the operation to
+    # Update-Entity (404 on new rows). Omission == Insert-or-Replace.
+    $reqStream = $req.GetRequestStream()
+    try { $reqStream.Write($bodyBytes, 0, $bodyBytes.Length) } finally { $reqStream.Close() }
+    $resp = $req.GetResponse()
+    $resp.Close()
+}
+
 function _Invoke-SITableDelete {
     <# DELETE an Azure Table entity by PK + RowKey. Idempotent: 404 (entity
        absent) is treated as success. Used by Set-SIFingerprintRecord's
@@ -210,17 +244,9 @@ function Set-SIFingerprintRecord {
     $pkLit = [Uri]::EscapeDataString(($pk -replace "'", "''"))
     $url = "https://$($Context.AccountName).table.core.windows.net/$TableName(PartitionKey='$pkLit',RowKey='current')"
     $body = $entity | ConvertTo-Json -Compress -Depth 5
-    $date = ConvertTo-SIRfc1123Date
-    $auth = Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $url
-    # Insert-or-Replace semantics: PUT WITHOUT If-Match. Including If-Match
-    # would switch the operation to Update-Entity (which 404s when the row is new).
-    $headers = @{
-        'x-ms-date'    = $date
-        'x-ms-version' = '2020-08-04'
-        'Accept'       = 'application/json;odata=nometadata'
-        'Content-Type' = 'application/json'
-        'Authorization'= $auth
-    }
+    # _Invoke-SITablePut signs + builds headers internally. Insert-or-Replace
+    # semantics (no If-Match) are baked into the helper -- caller just passes
+    # the URL + body.
 
     if ($ForceOverwrite) {
         # v2.2.315 -- caller wants guaranteed-fresh column types. DELETE then PUT.
@@ -228,43 +254,55 @@ function Set-SIFingerprintRecord {
         # column locks out subsequent writes whose JSON marshals it differently.
         [void](_Invoke-SITableDelete -Context $Context -Url $url)
         try {
-            Invoke-RestMethod -Method Put -Uri $url -Headers $headers -Body $body -ErrorAction Stop | Out-Null
+            _Invoke-SITablePut -Context $Context -Url $url -Body $body
             return
         } catch {
             $detail = _Get-SIAzureErrorBody -ErrorRecord $_
-            throw ('Set-SIFingerprintRecord PUT (force-overwrite) failed for asset={0}: {1}' -f $AssetId, $detail)
+            $odataCode = if ($detail -match '"code"\s*:\s*"([^"]+)"') { $matches[1] } else { $null }
+            $codeTag = if ($odataCode) { (' [{0}]' -f $odataCode) } else { '' }
+            throw ('Set-SIFingerprintRecord PUT (force-overwrite) failed for asset={0}{1}: {2}' -f $AssetId, $codeTag, $detail)
         }
     }
 
     try {
-        Invoke-RestMethod -Method Put -Uri $url -Headers $headers -Body $body -ErrorAction Stop | Out-Null
+        _Invoke-SITablePut -Context $Context -Url $url -Body $body
     } catch {
-        # v2.2.315 -- self-heal on 400. The dominant 400 cause is property-type
-        # drift across writes (e.g. si_tier was Edm.Int32 from a prior schema,
-        # current PUT marshals it as Edm.String). DELETE clears the column-type
-        # lock; the re-PUT succeeds with fresh types from the current JSON.
-        # 404 (entity absent) shouldn't reach here -- Insert-or-Replace creates;
-        # other status codes (401/403/500) bypass the self-heal.
+        # Self-heal logic: only retry on column-type drift (Azure Table
+        # OData code `InvalidInput`), where DELETE clears the column-type
+        # lock so the re-PUT succeeds with fresh types. Skip the self-heal
+        # for body-content failures (`PropertyValueTooLarge`, malformed
+        # JSON, etc.) -- a second PUT with the same body will fail with
+        # the same code and just doubles the transcript noise.
         $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
         $firstDetail = _Get-SIAzureErrorBody -ErrorRecord $_
-        if ($code -eq 400) {
+
+        # Parse OData error code from the response body. Format:
+        # {"odata.error":{"code":"<Code>","message":{...}}}
+        $odataCode = $null
+        if ($firstDetail -match '"code"\s*:\s*"([^"]+)"') { $odataCode = $matches[1] }
+
+        if ($code -eq 400 -and $odataCode -eq 'InvalidInput') {
             try {
                 [void](_Invoke-SITableDelete -Context $Context -Url $url)
-                # Re-sign because $date moved on (clock skew); rebuild header for second PUT.
-                $date2 = ConvertTo-SIRfc1123Date
-                $auth2 = Get-SITableAuthorizationHeader -Context $Context -Date $date2 -Url $url
-                $headers['x-ms-date']     = $date2
-                $headers['Authorization'] = $auth2
-                Invoke-RestMethod -Method Put -Uri $url -Headers $headers -Body $body -ErrorAction Stop | Out-Null
-                Write-Verbose ('Set-SIFingerprintRecord self-healed (DELETE+PUT) for asset={0} after first PUT 400: {1}' -f $AssetId, ($firstDetail -replace "`r?`n",' '))
+                # _Invoke-SITablePut re-signs internally with a fresh
+                # x-ms-date header, so the second attempt doesn't carry
+                # the stale signature from the failed first attempt.
+                _Invoke-SITablePut -Context $Context -Url $url -Body $body
+                Write-Verbose ('Set-SIFingerprintRecord self-healed (DELETE+PUT) for asset={0} after first PUT 400 InvalidInput: {1}' -f $AssetId, ($firstDetail -replace "`r?`n",' '))
                 return
             } catch {
                 $finalDetail = _Get-SIAzureErrorBody -ErrorRecord $_
-                throw ('Set-SIFingerprintRecord PUT failed for asset={0} (self-heal also failed). First 400: {1} -- Final: {2}' -f $AssetId, ($firstDetail -replace "`r?`n",' '), ($finalDetail -replace "`r?`n",' '))
+                throw ('Set-SIFingerprintRecord PUT failed for asset={0} (self-heal also failed). First 400 InvalidInput: {1} -- Final: {2}' -f $AssetId, ($firstDetail -replace "`r?`n",' '), ($finalDetail -replace "`r?`n",' '))
             }
         }
-        # Non-400: don't retry. Bubble up with body if available.
-        throw ('Set-SIFingerprintRecord PUT failed for asset={0}: {1}' -f $AssetId, $firstDetail)
+
+        # PropertyValueTooLarge / other 400 / non-400: no self-heal possible.
+        # Surface the OData code so the caller can decide (the truncation
+        # guard in Invoke-Classify already caps si_verdict; if a row still
+        # trips PropertyValueTooLarge here it's another property the guard
+        # doesn't reach -- a real bug worth seeing in the warning).
+        $codeTag = if ($odataCode) { (' [{0}]' -f $odataCode) } else { '' }
+        throw ('Set-SIFingerprintRecord PUT failed for asset={0}{1}: {2}' -f $AssetId, $codeTag, $firstDetail)
     }
 }
 

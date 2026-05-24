@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.378
+## v2.2.379
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.379 - stop shipping SMTPPort + SMTP_UseSSL defaults in LauncherConfig.defaults.ps1; customer relays vary too widely (on-prem :25 unauthenticated vs M365 :587 TLS vs Brevo :465) for a safe shipped default (dc0b508f)
 - release: SecurityInsight v2.2.378 - fingerprint cache opt-in (default OFF) + 3 fixes: UTF-16 truncation ceiling (60000->30000 chars), OData-code-aware self-heal (only retry on InvalidInput, not PropertyValueTooLarge), raw-HttpWebRequest PUT helper kills PS>TerminatingError(Invoke-RestMethod) transcript noise (5c3197f1)
 - release: SecurityInsight v2.2.377 - docs: README §5.8 covers v2.2.376 Detailed-scope trim (shipped defaults table + widen-scope guidance) (0c561c62)
 - release: SecurityInsight v2.2.376 - trim Detailed scope on Device_Missing_CVEs (drop Low) + Device_Recommendations + Azure_Recommendations (drop Low+Medium) to bound Excel/risk-scoring runtime on large tenants (77db3b3d)
@@ -33,13 +34,56 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
 - release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
 - release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
-- release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.379 — Stop shipping `$global:SMTPPort` + `$global:SMTP_UseSSL` defaults in `LauncherConfig.defaults.ps1` -- those values are per-tenant and must come from the customer.
+
+### What changed
+
+`launcher/risk-analysis/LauncherConfig.defaults.ps1` -- removed the two guarded defaults:
+```powershell
+if (-not (Test-Path variable:global:SMTPPort))    { $global:SMTPPort    = 587 }      # ← removed
+if (-not (Test-Path variable:global:SMTP_UseSSL)) { $global:SMTP_UseSSL = $true }    # ← removed
+```
+
+These never had safe shipped values. Customer relays vary too widely:
+- internal on-prem MTAs typically run on `:25` unauthenticated, `SMTP_UseSSL=$false`
+- M365 / Office365 relays run on `:587` with TLS
+- Brevo / SendGrid auth relays run on `:587` (TLS) or `:465` (SMTPS)
+
+Shipping `587 + UseSSL=$true` as a Layer 4 default broke internal-VM tenants whose platform-defaults file didn't explicitly set `SMTPPort=25` -- the guarded set fired and silently overrode their environment.
+
+The other four SMTP variables (`SmtpServer`, `SMTPUser`, `SMTPPassword`, `SMTPFrom`) were already correctly left unset by the defaults file; this release brings `SMTPPort` + `SMTP_UseSSL` into line with that policy.
+
+### Why
+
+Customer SMTP environments differ in three independent dimensions (port, TLS, auth) that don't have a single safe default. "Most-common modern relay" assumptions are wrong as often as right -- and when wrong, they silently mask the customer's actual config rather than failing loudly. Per the project convention: per-tenant infrastructure values belong in `platform-defaults.ps1` (internal automation) or `SecurityInsight.custom.ps1` (community); shipped engine defaults set only values that are universally safe.
+
+### Impact
+
+- **Customers whose platform-defaults.ps1 already sets `SMTPPort` + `SMTP_UseSSL`**: zero change -- those layers always won anyway.
+- **Customers relying on the shipped 587/TLS defaults (silently)**: must add the lines explicitly to their customer config. The engine's fail-fast SMTP check (added in v2.2.366) will surface the missing variables loudly if they're needed for an actual mail send. Sample values are in `launcher/risk-analysis/LauncherConfig.custom.sample.ps1` lines 91-92 (commented Brevo + community-typical defaults).
+
+### Operator note
+
+If you previously depended on the shipped 587/TLS defaults, add to `SecurityInsight.custom.ps1`:
+```powershell
+$global:SMTPPort    = 587
+$global:SMTP_UseSSL = $true
+```
+
+For internal-automation tenants with on-prem MTA, add to `platform-defaults.ps1`:
+```powershell
+$global:SMTPPort    = 25
+$global:SMTP_UseSSL = $false
+```
 
 ---
 

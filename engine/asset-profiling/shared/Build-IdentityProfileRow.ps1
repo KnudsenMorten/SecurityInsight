@@ -37,12 +37,43 @@ if (-not (Get-Variable -Name _SISchemaCache -Scope Script -ErrorAction SilentlyC
 # SCHEMA + CATALOG LOADERS
 # ---------------------------------------------------------------------------
 
+function Get-SIIdentityFieldRequiredKeys {
+    <# v2.2.374 -- mirror of the Azure helper. Given a schema field, return the
+       list of metadata keys whose presence is REQUIRED for the field to
+       possibly resolve to non-null. Empty list = no fast-null possible. #>
+    param($Field)
+    $src  = [string]$Field.source
+    $name = [string]$Field.name
+    $keys = New-Object System.Collections.Generic.List[string]
+    if ($script:_SIEntraKeyMap.ContainsKey($name)) {
+        [void]$keys.Add([string]$script:_SIEntraKeyMap[$name])
+    }
+    if ($src -eq 'exposureGraph') { [void]$keys.Add('ENTRA_EgRawData') }
+    return $keys
+}
+
 function Get-SIIdentitySchema {
     if ($script:_SISchemaCache.ContainsKey('IdentitySchema')) { return $script:_SISchemaCache['IdentitySchema'] }
     # locked + custom merge (profiles/identity.schema.json + profiles-custom/identity.schema.custom.json)
     . (Join-Path $PSScriptRoot 'Get-SISchemaWithCustomMerge.ps1')
     $schema = Get-SISchemaWithCustomMerge -Engine identity
     $script:_SISchemaCache['IdentitySchema'] = $schema
+    # v2.2.374 -- pre-filter emit-able fields once + annotate each with
+    # _SIRequiredKeys so per-row iteration can fast-null fields whose required
+    # source data isn't present. Same pattern as Azure v2.2.371/372.
+    $script:_SISchemaCache['IdentityEmitFields'] = @(
+        $schema.fields | Where-Object {
+            $fn = [string]$_.name
+            $fn -and `
+            (-not $_.PSObject.Properties['emit'] -or $_.emit -ne $false) -and `
+            ([string]$_.purpose -notin 'enrichment','forensic','raw') -and `
+            ($fn -notin 'CollectHash','EnrichHash','PostureHash','ClassifyHash')
+        } | ForEach-Object {
+            $reqKeys = Get-SIIdentityFieldRequiredKeys -Field $_
+            Add-Member -InputObject $_ -MemberType NoteProperty -Name '_SIRequiredKeys' -Value $reqKeys -Force
+            $_
+        }
+    )
     return $schema
 }
 
@@ -606,13 +637,33 @@ function Build-SIIdentityProfileRow {
     }
 
     # ---- Iterate schema.fields, emit ONLY declared fields per field.purpose/emit ----
+    # v2.2.374 -- use cached emit-fields + per-row availKeys fast-null path.
+    # Same pattern as Build-AzureProfileRow v2.2.371/372.
     $row = [ordered]@{}
     $row['TimeGenerated'] = $Record.TimeGenerated
-    foreach ($f in $schema.fields) {
-        if ($f.PSObject.Properties['emit'] -and $f.emit -eq $false) { continue }
-        if ($f.purpose -in 'enrichment','forensic','raw') { continue }
-        if ($f.name -in 'CollectHash','EnrichHash','PostureHash','ClassifyHash') { continue }   # computed below
-
+    $_meta = if ($Record.Metadata) { $Record.Metadata } else { @{} }
+    $availKeys = New-Object System.Collections.Generic.HashSet[string] ([System.StringComparer]::OrdinalIgnoreCase)
+    if ($_meta -is [System.Collections.IDictionary]) {
+        foreach ($k in $_meta.Keys) {
+            $v = $_meta[$k]
+            if ($null -ne $v -and "$v" -ne '') { [void]$availKeys.Add([string]$k) }
+        }
+    } else {
+        foreach ($p in $_meta.PSObject.Properties) {
+            if ($null -ne $p.Value -and "$p.Value" -ne '') { [void]$availKeys.Add([string]$p.Name) }
+        }
+    }
+    foreach ($f in $script:_SISchemaCache['IdentityEmitFields']) {
+        $fname = [string]$f.name
+        # Fast-null path: if field requires source keys and NONE are populated, emit null directly.
+        $reqKeys = $f._SIRequiredKeys
+        $skipResolve = $false
+        if ($f.source -ne 'derived' -and $reqKeys -and $reqKeys.Count -gt 0) {
+            $hasAny = $false
+            foreach ($rk in $reqKeys) { if ($availKeys.Contains($rk)) { $hasAny = $true; break } }
+            if (-not $hasAny) { $skipResolve = $true }
+        }
+        if ($skipResolve) { $row[$fname] = $null; continue }
         $val = if ($f.source -eq 'derived') {
             Get-SIDerivedValue -Field $f -Context $ctx
         } else {
@@ -633,7 +684,7 @@ function Build-SIIdentityProfileRow {
                 try { $val = ConvertTo-Json -InputObject $val -Compress -Depth 12 } catch { }
             }
         }
-        $row[$f.name] = $val
+        $row[$fname] = $val
     }
 
     $row['Properties'] = $properties
@@ -671,9 +722,11 @@ function Build-SIIdentityProfileRow {
     if (-not (Get-Command -Name Get-SIIdentityRiskFactors -ErrorAction SilentlyContinue)) {
         . (Join-Path $PSScriptRoot 'Get-SIRiskFactors.ps1')
     }
-    $rfRecord = [pscustomobject]@{ Verdict = $verdict; Metadata = $Record.Metadata }
-    foreach ($k in $row.Keys) { Add-Member -InputObject $rfRecord -MemberType NoteProperty -Name $k -Value $row[$k] -Force }
-    $rf = Get-SIIdentityRiskFactors -Record $rfRecord
+    # v2.2.374 -- avoid Add-Member-per-key loop. Same hashtable-union trick as v2.2.371 Azure.
+    $rfHash = @{} + $row
+    $rfHash['Verdict']  = $verdict
+    $rfHash['Metadata'] = $Record.Metadata
+    $rf = Get-SIIdentityRiskFactors -Record ([pscustomobject]$rfHash)
     foreach ($k in $rf.Keys) { $row[$k] = $rf[$k] }
 
     # ---- Hashes (4 per-stage) over schema-declared fields by writtenBy ----

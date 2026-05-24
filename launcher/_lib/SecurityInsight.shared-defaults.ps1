@@ -59,6 +59,29 @@ $global:Location               = 'westeurope'
 # in SecurityInsight.custom.ps1 (Layer 3, loads after this file).
 $global:SI_UseStorageOAuth     = $true
 
+# --- Fingerprint cache (default = DISABLED, opt-in) ---
+# The fingerprint cache (Azure Table 'sifingerprint') stores per-asset hash +
+# computed SI_Tier verdict so the Collect stage can SKIP assets whose source
+# signals haven't changed since the prior run (cadence-not-due short-circuit).
+#
+# Default is OFF because:
+#   (a) tenants running ForceFullRun=true on every cron tick (the common case)
+#       never read the cache -- the writes are pure overhead + 64KB property
+#       limit collisions on identity rows with large role/permission JSON;
+#   (b) the cache writes generate transcript noise (PS>TerminatingError(Invoke-
+#       RestMethod) lines) that obscure real errors during operator review;
+#   (c) when disabled, the Collect skip-gate degrades to "ForceFullRun-only" --
+#       safe because the engine still emits every row, just without the
+#       per-asset shortcut.
+#
+# Customers running incremental (ForceFullRun=$false) WHERE the cache actually
+# saves classifier work opt in via:
+#   $global:SI_FingerprintCache_Enabled = $true   # in SecurityInsight.custom.ps1
+#
+# Containers are unaffected either way -- the cache is a per-asset optimization,
+# not a coordination mechanism. KEDA replicas don't share state through it.
+$global:SI_FingerprintCache_Enabled = $false
+
 # --- Subscription ---
 # INTERNAL (AF) mode: the platform-defaults.ps1 layer sets
 # $global:MainLogAnalyticsWorkspaceSubId; Initialize-LauncherConfig derives

@@ -112,6 +112,16 @@ function Invoke-SICollect {
         [Parameter(Mandatory)][object]$RunContext
     )
 
+    # One-shot visibility: tell the operator whether the cadence skip-gate
+    # has any cached state to work against. When the cache is disabled
+    # (the default) the skip-gate degrades to "ForceFullRun-only" -- every
+    # asset proceeds regardless of last-seen-at.
+    if ($global:SI_FingerprintCache_Enabled -eq $true) {
+        Write-Host ' [INFO] fingerprint cache: ENABLED  (Get on cadence skip-gate, Set on Classify verdict)'
+    } else {
+        Write-Host ' [INFO] fingerprint cache: DISABLED (opt-in via $global:SI_FingerprintCache_Enabled = $true)'
+    }
+
     $assets = Read-SIStageShards -Context $RunContext.StorageContext `
                                   -ContainerName $RunContext.StagingContainer `
                                   -RunId $RunContext.RunId `
@@ -612,9 +622,17 @@ function Invoke-SICollect {
         #   2. Cache miss                   -- first time we've seen this asset
         #   3. Cadence elapsed              -- last_seen_at + cadence(tier) < now
         # Otherwise SKIP.
-        $cached = Get-SIFingerprintRecord -Context $RunContext.StorageContext `
-                                           -TableName $RunContext.FingerprintTable `
-                                           -AssetId $assetId
+        #
+        # Cache is opt-in via $global:SI_FingerprintCache_Enabled (default
+        # $false in shared-defaults.ps1). When disabled, $cached stays $null
+        # so the cadence-not-due gate never fires and every asset proceeds.
+        if ($global:SI_FingerprintCache_Enabled -eq $true) {
+            $cached = Get-SIFingerprintRecord -Context $RunContext.StorageContext `
+                                               -TableName $RunContext.FingerprintTable `
+                                               -AssetId $assetId
+        } else {
+            $cached = $null
+        }
 
         $skipReason = $null
         if (-not $RunContext.ForceFullRun -and $null -ne $cached) {

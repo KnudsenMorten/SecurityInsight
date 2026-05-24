@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.374
+## v2.2.375
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.375 - fix 'join' operator: Failed to resolve column 'EntryPointAadDeviceId' in Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure (2eba7f90)
 - release: SecurityInsight v2.2.374 - same row-builder optimization stack from Azure (v2.2.371/372) applied to Endpoint + Identity + PublicIp: pre-filter emit fields + per-row availKeys fast-null + Add-Member elimination (8afcd07e)
 - release: SecurityInsight v2.2.373 - Properties ConvertTo-Json depth 15 -> 8 (~30-50 ms/row saved) + InvariantCulture DateTime parses across asset-profiling row-builders + Get-SIRiskFactors (prevents non-en-US crash + minor speedup) (708954ac)
 - release: SecurityInsight v2.2.372 - Azure profile row builder: per-field required-source pre-computation + per-row availKeys fast-null path + switch-Regex replaced with if/StartsWith. Skips ~58% of always-null field iteration (the 182-of-311 cols problem) (7539e6c8)
@@ -33,13 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
 - release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
 - release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
-- release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.375 — Fix `'join' operator: Failed to resolve column named 'EntryPointAadDeviceId'` in `Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure`.
+
+### What changed
+
+`risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml` — the Detailed query's `summarize ... by EntryPointDeviceId, EntryPointDevice, TargetAzureAssetId, TargetAzureAsset, TargetLabel` (after `graph-match`) dropped `EntryPointAadDeviceId`. The downstream `| join kind=leftouter (_SourceCmdb) on $left.EntryPointAadDeviceId == $right.Source_AadDeviceId` (added in v2.2.317 to bring source-device cmdb + Tier into Detailed) then failed at query-submit time.
+
+Fix: preserve the column through the summarize via `EntryPointAadDeviceId = take_any(EntryPointAadDeviceId)`. `take_any` is correct because each device has at most one aadDeviceId (1:1 with `EntryPointDeviceId`), so the value is deterministic per group.
+
+### Why
+
+The Summary variant of this report builds `_Paths` without a summarize between graph-match and the cmdb join, so the column survives naturally. The Detailed variant aggregates per (EntryPointDevice × TargetAzureAsset) to roll up vectors and credentials, which strips any projected column not in the `by` clause and not aggregated — including `EntryPointAadDeviceId`. The 2-phase post-augment regex only inspects let-binding alias columns, not graph-match projections, so this bug was invisible to the strip-verification path.
+
+### Impact
+
+- Customer-visible: this Detailed report now completes instead of erroring out at submission. No other reports affected (`EntryPointAadDeviceId` is unique to this query family, and the Summary variant was already correct).
+- Cost: zero — `take_any` adds no aggregation overhead vs the existing `take_any(RoleScopeName)` siblings.
 
 ---
 

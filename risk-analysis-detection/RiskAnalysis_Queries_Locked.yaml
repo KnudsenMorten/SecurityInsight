@@ -8845,14 +8845,18 @@ Reports:
                 DeviceEdge =~ "frequently logged in by",                                                 "Interactive logon",
                 tostring(DeviceEdge))
         | summarize
-                EntryVectors      = make_set(EntryVector),
-                DeviceEdges       = make_set(DeviceEdge),
-                CredentialNodes   = make_set(iff(set_has_element(FirstHopCategories, "secret"), FirstHopNode, ""), 10),
-                FirstHopLabels    = make_set(FirstHopLabel),
-                ReachedIdentities = make_set(ReachedIdentity),
-                ViaRoleScope      = take_any(RoleScopeName),
-                ViaRoleScopeType  = take_any(RoleScopeLabel),
-                MaxCvssScore      = max(MaxCvssScore)
+                EntryVectors          = make_set(EntryVector),
+                DeviceEdges           = make_set(DeviceEdge),
+                CredentialNodes       = make_set(iff(set_has_element(FirstHopCategories, "secret"), FirstHopNode, ""), 10),
+                FirstHopLabels        = make_set(FirstHopLabel),
+                ReachedIdentities     = make_set(ReachedIdentity),
+                ViaRoleScope          = take_any(RoleScopeName),
+                ViaRoleScopeType      = take_any(RoleScopeLabel),
+                // Preserve aadDeviceId through summarize so the downstream
+                // leftouter-join to _SourceCmdb on EntryPointAadDeviceId resolves.
+                // 1:1 with EntryPointDeviceId, so take_any returns the deterministic value.
+                EntryPointAadDeviceId = take_any(EntryPointAadDeviceId),
+                MaxCvssScore          = max(MaxCvssScore)
             by EntryPointDeviceId, EntryPointDevice, TargetAzureAssetId, TargetAzureAsset, TargetLabel
         | extend CredentialNodes = set_difference(CredentialNodes, dynamic([""]))
         | extend TargetType = case(
@@ -24207,22 +24211,28 @@ ReportTemplates:
 
     - ReportName: AssetSimulationComplexSummary
       ReportPurpose: |
-        v2.2.340 -- focused set of 7 Summary reports that together cover every CL-bucketing
-        shape in one pass: 2 single-let Endpoint Summary (Device_Missing_CVEs,
-        Device_Recommendations), 1 single-let Azure Summary (Azure_Recommendations),
-        3 multi-let cross-domain Attack_Paths Summary covering Identity Group Membership,
-        Device with high-severity vulnerabilities lateral, and Credential-based lateral,
-        and 1 cross-domain Identity_Admin_LogonTo_VulnerableDevice. Pair with the
-        launcher's `-RunAssetSimulation ComplexSummary -AssetSimulationAmount N` knob
-        to validate source/target bucketing on a small tenant in ~5-10 min.
+        v2.2.359 -- extended to 10 Summary reports covering EVERY cross-domain
+        Attack_Paths_Summary_* (all 6 use `summarize` + `_TargetCmdb` and were the
+        primary cascade-blowup offenders pre-v2.2.357). Single-let Endpoint
+        (Device_Missing_CVEs, Device_Recommendations), single-let Azure
+        (Azure_Recommendations), 6 cross-domain Attack_Paths Summary (covers
+        Github->Azure, PublicIP->VM, Identity Group Membership, Data Sensitivity,
+        Device-high-sev-vuln lateral, and Credential-based lateral), plus 1
+        cross-domain Identity_Admin_LogonTo_VulnerableDevice. Pair with the
+        launcher's `-RunAssetSimulation ComplexSummary -AssetSimulationAmount N`
+        knob to validate v2.2.357 futile-prune + v2.2.358 error-body surfacing
+        + bucketing under load in ~10-15 min.
       ReportsIncluded:
       - Name: Device_Missing_CVEs_Summary
       - Name: Device_Recommendations_Summary
+      - Name: Azure_Recommendations_Summary
+      - Name: Attack_Paths_Summary_Github_to_Azure_Resources
+      - Name: Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
       - Name: Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
+      - Name: Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials
       - Name: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
       - Name: Attack_Paths_Summary_Credential_Based_Lateral_Movement
       - Name: Identity_Admin_LogonTo_VulnerableDevice_Summary
-      - Name: Azure_Recommendations_Summary
 
     - ReportName: AssetSimulationComplexDetailed
       ReportPurpose: |

@@ -118,12 +118,14 @@ $global:ExportDestination = $null
 # when the variable hasn't been populated by a higher-priority layer.
 if (-not (Test-Path variable:global:SendMail))           { $global:SendMail           = $false }
 if (-not (Test-Path variable:global:MailTo))             { $global:MailTo             = @() }
-if (-not (Test-Path variable:global:SMTPPort))           { $global:SMTPPort           = 587 }
-if (-not (Test-Path variable:global:SMTP_UseSSL))        { $global:SMTP_UseSSL        = $true }
 if (-not (Test-Path variable:global:Mail_SendAnonymous)) { $global:Mail_SendAnonymous = $false }
-# $global:SmtpServer / $global:SMTPUser / $global:SMTPPassword / $global:SMTPFrom
-# have no sensible engine default -- customer provides them. Unset == $null, which
-# is what the engine's fail-fast check expects.
+# $global:SmtpServer / $global:SMTPUser / $global:SMTPPassword / $global:SMTPFrom /
+# $global:SMTPPort / $global:SMTP_UseSSL have no sensible shipped default -- they
+# vary per relay (internal-VM uses an on-prem relay on :25 unauthenticated;
+# community typically uses Office365 on :587 + TLS; some tenants use Brevo on
+# :465 with auth). Customer provides them in either platform-defaults (internal)
+# or SecurityInsight.custom.ps1 (community). Unset == $null, which is what the
+# engine's fail-fast check expects.
 
 
 # ============================================================================

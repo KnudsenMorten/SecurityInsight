@@ -213,7 +213,8 @@ function Get-SIDerivedValue {
             if ($parsed.PSObject.Properties['last_update']) { $lastUpdate = [string]$parsed.last_update }
             if ([string]::IsNullOrWhiteSpace($lastUpdate)) { return ($null -ne $parsed) }
             try {
-                $dt = [datetime]::Parse($lastUpdate)
+                # v2.2.373 -- InvariantCulture parse so non-en-US boxes don't fail on M/d/yyyy strings.
+                $dt = [datetime]::Parse($lastUpdate, [System.Globalization.CultureInfo]::InvariantCulture)
                 $age = ([datetime]::UtcNow - $dt.ToUniversalTime()).TotalDays
                 return ($age -le $stale)
             } catch { return ($null -ne $parsed) }
@@ -278,7 +279,8 @@ function Get-SIDerivedValue {
             $parsed = Get-SIShodanParsed -Meta $meta
             if ($null -eq $parsed -or -not $parsed.PSObject.Properties['last_update']) { return -1 }
             try {
-                $ts = [datetime]::Parse([string]$parsed.last_update)
+                # v2.2.373 -- InvariantCulture parse so non-en-US boxes don't fail on M/d/yyyy strings.
+                $ts = [datetime]::Parse([string]$parsed.last_update, [System.Globalization.CultureInfo]::InvariantCulture)
                 return [int]([math]::Floor(([datetime]::UtcNow - $ts.ToUniversalTime()).TotalDays))
             } catch { return -1 }
         }

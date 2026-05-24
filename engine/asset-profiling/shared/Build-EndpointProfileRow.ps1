@@ -405,7 +405,8 @@ function Get-SIDerivedValue {
             $lastSeen = if ($meta.MDE_LastSeen) { [string]$meta.MDE_LastSeen } else { [string](Get-SIEgValue $meta 'lastSeen') }
             if ([string]::IsNullOrWhiteSpace($lastSeen)) { return $false }
             try {
-                $dt = [datetime]::Parse($lastSeen)
+                # v2.2.373 -- InvariantCulture parse so non-en-US boxes don't fail on M/d/yyyy strings.
+                $dt = [datetime]::Parse($lastSeen, [System.Globalization.CultureInfo]::InvariantCulture)
                 $age = ([datetime]::UtcNow - $dt.ToUniversalTime()).TotalDays
                 return ($age -le $stale)
             } catch { return $false }

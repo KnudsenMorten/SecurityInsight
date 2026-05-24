@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.376
+## v2.2.377
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.377 - docs: README §5.8 covers v2.2.376 Detailed-scope trim (shipped defaults table + widen-scope guidance) (0c561c62)
 - release: SecurityInsight v2.2.376 - trim Detailed scope on Device_Missing_CVEs (drop Low) + Device_Recommendations + Azure_Recommendations (drop Low+Medium) to bound Excel/risk-scoring runtime on large tenants (77db3b3d)
 - release: SecurityInsight v2.2.375 - fix 'join' operator: Failed to resolve column 'EntryPointAadDeviceId' in Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure (2eba7f90)
 - release: SecurityInsight v2.2.374 - same row-builder optimization stack from Azure (v2.2.371/372) applied to Endpoint + Identity + PublicIp: pre-filter emit fields + per-row availKeys fast-null + Add-Member elimination (8afcd07e)
@@ -33,13 +34,36 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
 - release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
 - release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
-- release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.377 — Docs: new README § 5.8 covering the v2.2.376 Detailed-scope trim (shipped defaults table + how to widen via YAML edit or custom overlay).
+
+### What changed
+
+`README.md` — new § 5.8 "Detailed report severity scope (defaults + how to widen)" inserted between § 5.7 (Weighted risk-factor rules) and § 6 (Severity & Criticality Definitions). TOC entry added at line 127.
+
+Covers:
+- Shipped `SecuritySeverityScope:` for the three trimmed Detailed reports (Device_Missing_CVEs_Detailed, Device_Recommendations_Detailed, Azure_Recommendations_Detailed)
+- Per-report rationale (CVE Detailed keeps Medium because exploit-chain potential; config-baseline Detailed reports drop Medium because hygiene-heavy)
+- LA + Summary still receive full severity distribution (the trim is Excel/email-only)
+- Two paths to widen scope: in-place YAML edit (low friction, lost on `git pull`) vs custom YAML overlay (survives upgrades but full-entry replace, high maintenance)
+
+The auto-generated `docs/risk-analysis-detection.md` was NOT regenerated in this release -- the doc-generator output diverged structurally from the checked-in version (26K-line churn from formatting drift), which would mask the actual scope change. Operators wanting current per-report scope reference should regenerate locally via `engine/risk-analysis/tools/Build-QueriesDoc.ps1`.
+
+### Why
+
+§ 5.8 closes the documentation gap around v2.2.376's scope trim. Without it, customers seeing fewer rows in Detailed Excel exports would have no anchor to understand the change or restore the pre-trim behavior.
+
+### Impact
+
+- README-only; no engine, no query, no schema change.
 
 ---
 

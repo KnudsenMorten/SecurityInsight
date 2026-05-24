@@ -365,8 +365,12 @@ function Build-SIAzureProfileRow {
         if ([string]::IsNullOrWhiteSpace([string]$egLastSeen)) {
             [bool]$hasArg
         } else {
+            # v2.2.373 -- ConvertFrom-Json (which produced EG_LastSeen) may have
+            # already materialized this as [DateTime]. If so, use directly. If
+            # it's a string, parse with InvariantCulture so non-en-US boxes
+            # (da-DK etc) don't crash on M/d/yyyy-format strings.
             try {
-                $dt = [datetime]::Parse([string]$egLastSeen)
+                $dt = if ($egLastSeen -is [DateTime]) { [DateTime]$egLastSeen } else { [DateTime]::Parse([string]$egLastSeen, [System.Globalization.CultureInfo]::InvariantCulture) }
                 $age = ([datetime]::UtcNow - $dt.ToUniversalTime()).TotalDays
                 ($age -le $stale)
             } catch { [bool]$hasArg }
@@ -604,7 +608,13 @@ function Build-SIAzureProfileRow {
             cmdb = $collectCmdb
         }
     }
-    $row['Properties'] = try { $propertiesObj | ConvertTo-Json -Depth 15 -Compress -WarningAction SilentlyContinue } catch { '{}' }
+    # v2.2.373 -- reduced ConvertTo-Json depth from 15 to 8. Real Azure ARG
+    # property trees rarely exceed 6 levels (deepest known: VM
+    # .properties.osProfile.windowsConfiguration.winRM.listeners[].protocol = 6).
+    # Plus our 2-level wrapper (azure -> properties) = 8. Depth 15 had ConvertTo-Json
+    # walking impossible depths AND testing the recursion-limit on every nested
+    # value, which dominates the per-row JSON cost. Depth 8 is the safe ceiling.
+    $row['Properties'] = try { $propertiesObj | ConvertTo-Json -Depth 8 -Compress -WarningAction SilentlyContinue } catch { '{}' }
 
     # ---- EntityIds (cross-engine correlation handles) ----
     # Always emit AzureResourceId (when known) + EG NodeId (when known). Then

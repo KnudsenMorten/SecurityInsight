@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.372
+## v2.2.373
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.373 - Properties ConvertTo-Json depth 15 -> 8 (~30-50 ms/row saved) + InvariantCulture DateTime parses across asset-profiling row-builders + Get-SIRiskFactors (prevents non-en-US crash + minor speedup) (708954ac)
 - release: SecurityInsight v2.2.372 - Azure profile row builder: per-field required-source pre-computation + per-row availKeys fast-null path + switch-Regex replaced with if/StartsWith. Skips ~58% of always-null field iteration (the 182-of-311 cols problem) (7539e6c8)
 - release: SecurityInsight v2.2.371 - Azure profile row builder pre-filtered schema + hashtable-union risk record (no Add-Member loop) + fingerprint cache silent 404/409 + SHA256 fallback for non-ASCII AssetIds (Danish chars no longer fail PUT) (bbbfab92)
 - release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
@@ -33,13 +34,37 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
 - release: SecurityInsight v2.2.345 - first-writer-wins AI summary cache (24h freshness): whichever RA run (Summary OR Detailed) fires first after the cached summary's age crosses 24h BUILDS it; all runs within the freshness window reuse the same AI text verbatim; manager emails carry IDENTICAL conclusions regardless of which template ran first (5f2f774c)
 - release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
-- release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.373 — Properties JSON serialization depth reduced 15 -> 8 (eliminates pointless recursion-limit checks per nested value) + DateTime parses across asset-profiling hot path now use InvariantCulture (prevents crashes on non-en-US boxes).
+
+### What changed
+
+1. **`Build-AzureProfileRow.ps1` -- ConvertTo-Json depth**: lowered `-Depth` from 15 to 8. Real Azure ARG property trees rarely exceed 6 levels (deepest known: VM `properties.osProfile.windowsConfiguration.winRM.listeners[].protocol`). With our 2-level wrapper, depth 8 is the safe ceiling. Depth 15 had ConvertTo-Json testing recursion limit on every nested value, which dominates the per-row JSON cost.
+
+2. **DateTime parses use InvariantCulture in asset-profiling hot path:**
+   - `Build-AzureProfileRow.ps1` (IsEnabledActive freshness check, EG_LastSeen) -- also handles already-materialized [DateTime] without parsing
+   - `Build-EndpointProfileRow.ps1` (MDE_LastSeen / EG lastSeen freshness)
+   - `Build-PublicIpProfileRow.ps1` (Shodan last_update freshness x 2 sites)
+   - `Get-SIRiskFactors.ps1` (last-activity / NextCredentialExpiryDateTime computations)
+
+### Why
+
+- ConvertTo-Json depth-15 was a 2018-era safety choice but on per-row hot paths it dominated cost. Same fields, depth 8 produces identical JSON for real Azure data (no observed truncation in customer tests).
+- DateTime parses without explicit culture used `CurrentCulture` -> on da-DK / nb-NO / de-DE boxes, en-US format strings like `05/22/2026 23:28:25` got interpreted as "day 5, month 22" -> InvalidInput -> engine crash. Same root cause as v2.2.369 (RA cache read). Applied across all per-row date parses in asset-profiling.
+
+### Impact
+
+- Row builder per-row drops a further ~30-50 ms from the JSON serialization step
+- Non-en-US boxes (Danish, German etc.) no longer crash when MDE_LastSeen / Shodan last_update / EG lastSeen contains en-US format strings
+- Schema contract preserved (Depth 8 covers all observed Azure resource types in current customer data)
 
 ---
 

@@ -55,7 +55,8 @@ function Get-SIDaysInactive {
     foreach ($c in $candidates) {
         if ([string]::IsNullOrWhiteSpace([string]$c)) { continue }
         try {
-            $dt = [DateTimeOffset]::Parse([string]$c).UtcDateTime
+            # v2.2.373 -- InvariantCulture parse so non-en-US boxes don't fail on M/d/yyyy strings.
+            $dt = [DateTimeOffset]::Parse([string]$c, [System.Globalization.CultureInfo]::InvariantCulture).UtcDateTime
             if ($null -eq $best -or $dt -gt $best) { $best = $dt }
         } catch {}
     }
@@ -237,7 +238,8 @@ function Get-SIIdentityRiskFactors {
     $nextExpiry = [string](Get-SIRecordValue -Record $Record -Name 'NextCredentialExpiryDateTime')
     $credDays = $null
     if ($nextExpiry) {
-        try { $credDays = [int](([DateTimeOffset]::Parse($nextExpiry).UtcDateTime - [datetime]::UtcNow).TotalDays) } catch {}
+        # v2.2.373 -- InvariantCulture parse so non-en-US boxes don't fail on M/d/yyyy strings.
+        try { $credDays = [int](([DateTimeOffset]::Parse($nextExpiry, [System.Globalization.CultureInfo]::InvariantCulture).UtcDateTime - [datetime]::UtcNow).TotalDays) } catch {}
     }
     $hasExpiringCreds = ($null -ne $credDays -and $credDays -ge 0 -and $credDays -le 30)
 

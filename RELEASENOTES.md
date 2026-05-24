@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.375
+## v2.2.376
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.376 - trim Detailed scope on Device_Missing_CVEs (drop Low) + Device_Recommendations + Azure_Recommendations (drop Low+Medium) to bound Excel/risk-scoring runtime on large tenants (77db3b3d)
 - release: SecurityInsight v2.2.375 - fix 'join' operator: Failed to resolve column 'EntryPointAadDeviceId' in Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure (2eba7f90)
 - release: SecurityInsight v2.2.374 - same row-builder optimization stack from Azure (v2.2.371/372) applied to Endpoint + Identity + PublicIp: pre-filter emit fields + per-row availKeys fast-null + Add-Member elimination (8afcd07e)
 - release: SecurityInsight v2.2.373 - Properties ConvertTo-Json depth 15 -> 8 (~30-50 ms/row saved) + InvariantCulture DateTime parses across asset-profiling row-builders + Get-SIRiskFactors (prevents non-en-US crash + minor speedup) (708954ac)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.349 - hotfix follow-up to v2.2.348 publicip pipeline migration (060b4fad)
 - release: SecurityInsight v2.2.348 - fold PublicIP into shared asset-profiling pipeline; retire standalone Invoke-PublicIpScanner.ps1 (953d938e)
 - release: SecurityInsight v2.2.347 - hotfix YAML: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure was missing the let _SourceCmdb declaration; join referenced an undeclared name -> AH 400 -> 0 rows; restored the let-binding from the Summary variant byte-for-byte (65068003)
-- release: SecurityInsight v2.2.346 - multi-host AI summary cache: shared file now mirrors to sistaging/risk-analysis/RiskAnalysis_Top50_Shared.json blob in addition to local OUTPUT/ so two replicas share the same 24h cache; lookup chain: local-first (cheap), blob-fallback (warm), build-fresh (cold) (716720ab)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.376 — Trim Detailed scope on three high-volume reports to keep Excel export + risk-scoring runtime bounded.
+
+### What changed
+
+`risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml` — narrowed `SecuritySeverityScope:` on three Detailed reports:
+
+| Report | Before | After | Rationale |
+|---|---|---|---|
+| `Device_Missing_CVEs_Detailed` | VeryHigh, High, Medium-High, Medium, **Low** | VeryHigh, High, Medium-High, Medium | Low CVEs are mostly noise at per-(Asset x CVE) row granularity; Medium kept because Medium-CVSS CVEs can be exploit-chained |
+| `Device_Recommendations_Detailed` | VeryHigh, High, Medium-High, Medium, **Low** | VeryHigh, High, Medium-High | TVM configuration baselines are hygiene-heavy at Medium tier (CIS-style optional hardening) |
+| `Azure_Recommendations_Detailed` | VeryHigh, High, Medium-High, Medium, **Low** | VeryHigh, High, Medium-High | Azure EG recommendations are cost/perf/best-practice drift at Medium tier, not security risk |
+
+The engine's post-filter at `Invoke-RiskAnalysis.ps1:6784` drops rows whose `SecuritySeverity` is outside scope, so the row count shrinks **before** risk-scoring, sort, and Excel export.
+
+### Why
+
+Customer 13K-asset Detailed run took ~8h, dominated by:
+- `Device_Recommendations_Detailed`: **79,965 rows** -> risk scoring 5,482s (91 min) + sort 392s + Excel 1,040s (17 min) = ~2.5h on one report.
+- `Device_Missing_CVEs_Detailed`: **18,614 rows**.
+- Run total: **108K rows** in Excel (vs Summary's 1,508 rows in 50 min).
+
+Excel itself handles 1,048,576 rows; the runtime ceiling is OpenXML export speed + risk-scoring (~68ms/row) + final sort. Trimming scope was the lowest-risk knob: the three trimmed reports are the high-volume offenders, and `Low` / `Medium` findings in the configuration-drift family are precisely the hygiene noise that drowns triage value at scale. CVE Detailed retains Medium intentionally — Medium-CVSS CVEs are still exploit-chain candidates.
+
+### Impact
+
+- Detailed run wall-clock expected to drop ~40-60% on the three trimmed reports (proportional to row-count reduction; CVE distribution varies per tenant).
+- All severities still flow to **LA upload** (the LA sink runs before the scope post-filter when emitting raw classified rows), so dashboards and KQL queries against `SI_RiskFindings_*_CL` retain full fidelity.
+- All severities still appear in the **Summary** variants (aggregated counts include Low/Medium).
+- The 57 other Detailed reports are untouched.
+
+### Restoring the dropped severities
+
+There is no runtime override for `SecuritySeverityScope` -- the engine reads the scope directly from `RiskAnalysis_Queries_Locked.yaml`. To restore Low (or Low + Medium) for a specific tenant, edit the report's `SecuritySeverityScope:` block in that file in the customer's deployment.
 
 ---
 

@@ -406,12 +406,14 @@ Reports:
       - High - tier 1
       - Medium - tier 2
       - Low - tier 3
+      # Low severity intentionally excluded from Detailed scope -- per-(Asset x CVE)
+      # row explosion at scale (80K+ rows seen on 13K assets). Low findings remain
+      # visible in the Summary variant (aggregated counts) and in the LA upload.
       SecuritySeverityScope:
       - Very High
       - High
       - Medium-High
       - Medium
-      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
@@ -1116,12 +1118,14 @@ Reports:
       - High - tier 1
       - Medium - tier 2
       - Low - tier 3
+      # Low + Medium intentionally excluded from Detailed scope -- TVM configuration
+      # baselines are hygiene-heavy at Medium tier (CIS-style optional hardening) and
+      # produce 80K+ per-(Asset x ConfigurationId) rows on 13K-asset tenants. Summary
+      # variant aggregates the full distribution; LA still receives every row.
       SecuritySeverityScope:
       - Very High
       - High
       - Medium-High
-      - Medium
-      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
@@ -1705,12 +1709,14 @@ Reports:
       - High - tier 1
       - Medium - tier 2
       - Low - tier 3
+      # Low + Medium intentionally excluded from Detailed scope -- Azure EG recommendations
+      # are hygiene-heavy at Medium tier (cost/perf/best-practice drift, not security risk)
+      # and per-(Asset x Recommendation) rows explode at scale. Summary aggregates the full
+      # distribution; LA still receives every row.
       SecuritySeverityScope:
       - Very High
       - High
       - Medium-High
-      - Medium
-      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.370
+## v2.2.371
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.371 - Azure profile row builder pre-filtered schema + hashtable-union risk record (no Add-Member loop) + fingerprint cache silent 404/409 + SHA256 fallback for non-ASCII AssetIds (Danish chars no longer fail PUT) (bbbfab92)
 - release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
 - release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
 - release: SecurityInsight v2.2.368 - removed version numbers from operator-visible layer labels + step messages (Connect-Platform v2.3 -> Connect-Platform, etc.) (be9c7f31)
@@ -33,13 +34,49 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.344 - hotfix: Resolve-ProfileAugmentPlan now verifies every stripped letvar is no longer referenced anywhere in the modified query; if a downstream join/projection still uses it, abort 2-phase entirely so hybrid path handles the report via inline datatable (32ec81cb)
 - release: SecurityInsight v2.2.343 - hotfix: rehydrate JSON-roundtripped hashtables + HashSets when Detailed loads Summary's shared Top-50; without this Detailed crashed at \$f.AssetRiskScores.GetEnumerator() because ConvertFrom-Json turned the hashtable into PSCustomObject (d8310970)
 - release: SecurityInsight v2.2.342 - cross-run Top-50 stability: Summary writes shared RiskAnalysis_Top50_Shared.json; Detailed reads it; AI temperature dropped to 0; manager emails from Summary and Detailed now show IDENTICAL Top-50 even on different cadences (4a0afba4)
-- release: SecurityInsight v2.2.341 - log file name now embeds simulation mode + report template (e.g. risk-analysis_internal-vm_ComplexSummary_AssetSimulationComplexSummary_20260521T101530Z.log) for instant test-run triage (f54a22c9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.371 — Azure profile row builder ~2-5x faster + fingerprint cache silent on expected 404/409 + SHA256 fallback for non-ASCII / long AssetIds (Danish chars no longer fail `Set-SIFingerprintRecord` with HTTP 400).
+
+### What changed
+
+**1. `engine/asset-profiling/shared/Build-AzureProfileRow.ps1` -- per-row speedup**
+
+The Output phase row-builder was measured at ~649 ms/row on a 13.5K-asset customer run (2.5 hours for Output phase alone, 75% of the engine's total runtime). Two targeted hot-spots fixed:
+
+- **Schema iteration pre-filter** (`Get-SIAzureSchema`). The per-row iteration over ~282 schema fields re-evaluated `emit`, `purpose`, and name-blocklist checks every time. Filtered once at first call, cached as `$script:_SISchemaCache['AzureEmitFields']`. Eliminates ~3.6M redundant property checks across a 13K-asset run.
+- **Risk-factor wrapper construction** (line ~561). Was building the `$rfRecord` pscustomobject with an Add-Member-per-key loop (~300 Add-Member calls per row -- one of PS 5.1's slowest operations). Replaced with a single hashtable union + `[pscustomobject]$hash` cast, ~50x faster per row.
+
+**2. `engine/asset-profiling/storage/StorageContext.ps1` -- non-ASCII SafeKey**
+
+`ConvertTo-SISafeKey` now falls back to a SHA256 hash (`h_<64hex>`) when the sanitized key contains non-ASCII chars OR exceeds 512 chars. Customer log showed `Set-SIFingerprintRecord PUT failed ... InvalidInput` for two ScheduledQueryRule assets with Danish chars in the name (`stoppet på avd host`, `ikke kørt i 4 timer`). Hash fallback ensures every AssetId produces a valid PK regardless of content. The original AssetId is still preserved in the `original_asset_id` row property for human-readable debugging in Storage Explorer.
+
+**3. `engine/asset-profiling/storage/FingerprintCache.ps1` -- silent 404/409**
+
+`Get-SIFingerprintRecord`, `_Invoke-SITableDelete`, and `Initialize-SIFingerprintTable` switched from `Invoke-RestMethod` to raw `[System.Net.HttpWebRequest]` for the expected-failure paths:
+
+- `Get-SIFingerprintRecord` -- 404 cache miss is the dominant first-run case
+- `_Invoke-SITableDelete` -- 404 (entity absent) is idempotent success
+- `Initialize-SIFingerprintTable` -- 409 (table exists) is idempotent success
+
+`Invoke-RestMethod` treats 4xx as terminating errors that PowerShell's transcript records BEFORE try/catch catches them. The raw .NET path surfaces 4xx as a normal WebException we silently handle, so the transcript stays clean. The customer's 13K-asset Azure run had hundreds of `PS>TerminatingError(Invoke-RestMethod): ... (404)` noise lines from these expected misses.
+
+### Why
+
+Customer Azure run took **6.4 hours for 13,579 resources** -- ~74% of that in Output phase (mostly row builder), with a side issue of two assets failing fingerprint cache writes outright due to Danish chars in their resource names, plus transcript pollution from hundreds of expected 404/409 misses.
+
+### Impact
+
+- Row builder: targeting ~250-300 ms/row from ~649 ms/row -- shaves roughly **1 hour off Output phase** on this customer's scale
+- Fingerprint cache: 100% of assets now get persisted regardless of Unicode chars in their resource names
+- Transcript noise: hundreds of `PS>TerminatingError` lines per run gone; operators can `grep "TerminatingError"` to find real failures
 
 ---
 

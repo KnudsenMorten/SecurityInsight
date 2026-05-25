@@ -8905,8 +8905,21 @@ if ([bool]$global:BuildSummaryByAI) {
 
         $assetRanked = @()
         if ($assetAgg.Count -gt 0) {
+            # v2.2.381: surface CRITICALITY first. Operators were getting
+            # Tier 3 (Low) assets at the top because sum-of-findings overran
+            # weighting -- an asset with 361 low-severity findings beat a
+            # Tier 0 asset with 50. Sort tier ASC (0 first), then weighted
+            # risk score DESC inside the tier. Missing/unparseable tier
+            # sorts last (99) so it doesn't pollute the top.
             $assetRanked = $assetAgg.Values |
-                Sort-Object -Property @{Expression="TotalRiskScore_Weighted";Descending=$true}, @{Expression="TotalRiskScore";Descending=$true}, @{Expression="Findings";Descending=$true} |
+                Sort-Object -Property `
+                    @{Expression = {
+                        $t = [string]$_.TierLevel
+                        if ($t -match 'tier\s*(\d+)') { [int]$Matches[1] } else { 99 }
+                    }; Ascending = $true}, `
+                    @{Expression="TotalRiskScore_Weighted";Descending=$true}, `
+                    @{Expression="TotalRiskScore";Descending=$true}, `
+                    @{Expression="Findings";Descending=$true} |
                 Select-Object -First $TopAssetsN
         }
 
@@ -9003,7 +9016,7 @@ You are a security advisor AI.
 
 You MUST focus on ASSETS and prioritize remediation by RiskScore.
 You are given:
-A) An asset rollup (top $assetActualN, already ranked by Weighted Risk Score).
+A) An asset rollup (top $assetActualN, ranked by Criticality Tier first (Tier 0 highest), then Weighted Risk Score within tier).
 B) A finding rollup (top $findingActualN, already ranked by Weighted Risk Score).
    Each finding lists its TopAffectedAssets so you can pair "what to fix" with "where".
 
@@ -9030,7 +9043,7 @@ One bullet per asset, in rank order. Use ONLY the two score numbers provided
 invent a 'MaxRiskScore' field. Format numbers with thousands separators.
 Output EXACTLY $assetActualN bullets (one per asset rollup entry).
 
-- **<Rank>. <AssetName>** -- Tier **<Tier>** | Total Risk Score **<TotalRiskScore>** | Weighted Risk Score **<WeightedRiskScore>** | Findings **<Count>** | Domains: <Domains>
+- **<Rank>. <AssetName>** -- Tier **<Tier>** | Weighted Risk Score **<WeightedRiskScore>** | Total Risk Score **<TotalRiskScore>** | Findings **<Count>** | Domains: <Domains>
 
 ## Top $findingActualN critical findings
 
@@ -9047,7 +9060,7 @@ For each of the Top $drilldownN assets (same order as the asset rollup), output 
 
 ### <Rank>. <AssetName>
 
-- **Tier:** <Tier> | **Total Risk Score:** <TotalRiskScore> | **Weighted Risk Score:** <WeightedRiskScore>
+- **Tier:** <Tier> | **Weighted Risk Score:** <WeightedRiskScore> | **Total Risk Score:** <TotalRiskScore>
 - **Why it is high risk:** <one sentence citing the two top TopItems>
 - **Top 5 actions to reduce risk FAST:**
   - **<Action>** -- <Why> | <Expected impact> | _References: <ConfigName> [<ConfigId>]_

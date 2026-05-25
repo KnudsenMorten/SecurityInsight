@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.380
+## v2.2.381
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.381 - Top-50 risky assets ranks by Criticality Tier first (Tier 0 at top), then Weighted Risk Score within tier + display flips Weighted before Total (3541bb57)
 - release: SecurityInsight v2.2.380 - smarter AutoBucket escalation (A+B+C): budget 95%->75% + JSON-escape x1.15 on bytesPerRow (A), growth floor 4x->2x (B), adversarial ceiling capping next rows-per-bucket at 0.7x prior 413 failure value per report (C). Fewer probe-and-rehash cycles, less wasted O(N) hash overhead. (bc774c5c)
 - release: SecurityInsight v2.2.379 - stop shipping SMTPPort + SMTP_UseSSL defaults in LauncherConfig.defaults.ps1; customer relays vary too widely (on-prem :25 unauthenticated vs M365 :587 TLS vs Brevo :465) for a safe shipped default (dc0b508f)
 - release: SecurityInsight v2.2.378 - fingerprint cache opt-in (default OFF) + 3 fixes: UTF-16 truncation ceiling (60000->30000 chars), OData-code-aware self-heal (only retry on InvalidInput, not PropertyValueTooLarge), raw-HttpWebRequest PUT helper kills PS>TerminatingError(Invoke-RestMethod) transcript noise (5c3197f1)
@@ -33,13 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
 - release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
 - release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
-- release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.381 — Top-50 risky assets now ranks by Criticality Tier first (Tier 0 / Critical at top), then Weighted Risk Score within tier. Display flips to put Weighted Risk Score before Total Risk Score so the score that drives prioritisation is read first.
+
+### Why
+
+The previous sort was pure `WeightedRiskScore DESC, TotalRiskScore DESC, Findings DESC`. When a Tier 3 (Low) asset accumulated hundreds of low-severity findings, the summed score outranked Tier 0 (Critical) assets with fewer but higher-impact findings — operators saw helpdesk noise machines at the top of "Top 50 risky" while business-critical servers slipped down the list. Tier is a deliberate human signal of business value; the AI summary should respect it before reading per-finding scores.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1`:
+
+- **Sort key flip** (asset rollup feeding the AI summary): now `Tier ASC, then WeightedRiskScore DESC, then TotalRiskScore DESC, then Findings DESC`. Tier extracted from the `tier N` substring of `CriticalityTierLevel`; missing/unparseable tier sorts last (`99`) so it never pollutes the top.
+- **AI prompt label order**: every line that emits both scores now reads `Weighted Risk Score <N> | Total Risk Score <N>` (was the reverse). Applies to both the "Top N risky assets" section and the "Top N asset drilldown" section.
+- **AI prompt description**: the asset-rollup description sentence now reads "ranked by Criticality Tier first (Tier 0 highest), then Weighted Risk Score within tier" so the AI never re-orders by Weighted Score.
+
+### Migration notes
+
+- No config knobs, no opt-out — the new sort is the only sort.
+- No score-math change. Both scores stay numerically identical; only the order in which assets appear (and the order labels are printed) changes.
+- If an environment has empty CMDB / no tier resolution for any asset, every asset hits the `99` fallback and the secondary sort (Weighted Risk Score DESC) reproduces the previous behaviour — no behavioural regression for the no-CMDB case.
 
 ---
 

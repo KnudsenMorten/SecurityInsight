@@ -6907,6 +6907,18 @@ $script:_AutoBucketSkipRemainingBuckets = $false
 $script:_CurrentBucketCount = 0
 $script:_CurrentBucketIndex = 0
 
+# v2.2.380 -- adversarial fitting cache: per-report record of the actual
+# rows-per-bucket value that the XDR backend rejected with nginx 413. Used by
+# the escalation block as a hard ceiling on the next rows-per-bucket budget
+# (cap = 0.7 x failed_value), so each escalation step learns from real
+# overflow data instead of multiplying buckets blindly. Keyed by ReportName
+# because per-row width + surrounding KQL body vary per report -- a failure
+# in report A doesn't predict report B. Run-scoped (memoize across reports
+# in the same run), report-scoped lookup.
+if ($null -eq $script:_LastFailedRowsPerBucketByReport) {
+    $script:_LastFailedRowsPerBucketByReport = @{}
+}
+
 while (-not $bucketRunSucceeded) {
 
   # Reset results on each (re)run so we don't keep partial data from a failing bucket count
@@ -6999,8 +7011,19 @@ while (-not $bucketRunSucceeded) {
                       # Loop continues; same bucket retried at same bucketCountToUse.
                   } else {
                       $lastBucketRunError = $errMsg
-                      Write-Info ("bucket {0}/{1}: shard too large after {2} probes -- increasing shard count and re-running report." -f `
-                        $bucketNo, $bucketCountToUse, $bucketOverflowRetries)
+                      # v2.2.380 -- record actual rows-per-bucket that failed,
+                      # so the escalation block can size the NEXT attempt from
+                      # real overflow data instead of guessing (option C).
+                      $_snapshot = if ($script:_LastHybridSnapshotRowCount) { [int]$script:_LastHybridSnapshotRowCount } else { 0 }
+                      if ($_snapshot -gt 0 -and $bucketCountToUse -gt 0) {
+                          $_failedRpb = [int][Math]::Ceiling($_snapshot / [double]$bucketCountToUse)
+                          $script:_LastFailedRowsPerBucketByReport[$ReportName] = $_failedRpb
+                          Write-Info ("bucket {0}/{1}: shard too large after {2} probes (~{3} rows/bucket failed); recording for adversarial escalation -- increasing shard count and re-running report." -f `
+                            $bucketNo, $bucketCountToUse, $bucketOverflowRetries, $_failedRpb)
+                      } else {
+                          Write-Info ("bucket {0}/{1}: shard too large after {2} probes -- increasing shard count and re-running report." -f `
+                            $bucketNo, $bucketCountToUse, $bucketOverflowRetries)
+                      }
                       $needEscalation    = $true
                       $bucketAttemptDone = $true
                       $resp              = $null
@@ -7127,28 +7150,64 @@ while (-not $bucketRunSucceeded) {
       # where measured_body_overhead is the surrounding-KQL bytes captured by
       # Resolve-ProfileCLLetBlocks (= modified.Length - totalInlineBytes). Both
       # bytesPerRow and bodyOverhead are tracked as MAX-seen-this-report.
+      # v2.2.380 -- three changes:
+      #   A1) budget target 95% -> 75% of 1MB. 95% left only ~52KB for HTTP
+      #       headers, Bearer tokens, JSON-string-escape inflation of inline
+      #       payload, per-bucket variance. Empirically the smart calc was
+      #       under-budgeting and reports still 413'd on the first attempt;
+      #       75% leaves a comfortable 256KB margin.
+      #   A2) bytesPerRow x 1.15 to model JSON-escape inflation on the wire.
+      #       Inline bytes measured by Resolve-ProfileCLLetBlocks are raw KQL
+      #       string length; the HTTP POST body wraps that KQL as a JSON string
+      #       field where every \" -> \\\", \\n -> \\\\n etc, typical 10-15%.
+      #   B)  growth floor 4x -> 2x. The 4x floor used to bypass the smart calc
+      #       entirely when current bucket count was small; now the smart calc
+      #       (informed by A1+A2 + adversarial ceiling below) is allowed to win.
+      #   C)  adversarial ceiling. If a prior escalation cycle THIS RUN already
+      #       recorded a rows-per-bucket value that the XDR backend rejected
+      #       for THIS report, cap the next rows-per-bucket at 0.7 x failed
+      #       value -- i.e. the smart calc may say "1500 rows/bucket fits" but
+      #       if reality just disproved 5877, we know 1500 is overly optimistic
+      #       and clamp to floor(0.7 * 5877) = 4114 instead. Converges in 2 hops
+      #       on average instead of the prior 4x leap that overshot drastically.
       $snapshotJump = 0
       if ($script:_LastHybridSnapshotRowCount -and [int]$script:_LastHybridSnapshotRowCount -gt 0) {
-          # nginx Log Ingestion cap = 1MB total request body. Target 95% leaves
-          # 5% (~52KB) for URL params, HTTP headers, and per-bucket variance.
-          $totalBudget      = [int](1MB * 0.95)
+          # nginx Log Ingestion cap = 1MB total request body. Target 75% leaves
+          # 25% (~256KB) for URL params, HTTP headers + Bearer token (8-16KB),
+          # JSON-string-escape inflation of inline payload, per-bucket variance.
+          $totalBudget      = [int](1MB * 0.75)
           # Measured overhead from prior inline calls; fallback to 200KB until first
           # measurement (conservative -- real overhead is typically 100-200KB).
           $bodyOverhead     = if ($script:_LastHybridQueryBodyOverheadBytes -gt 0) { [int]$script:_LastHybridQueryBodyOverheadBytes } else { 200KB }
           $inlineBudget     = [int][Math]::Max(64KB, $totalBudget - $bodyOverhead)
           # Inline bytes-per-row from prior inline calls (max-tracked). Fallback 170 (median observed).
-          $bytesPerRow      = if ($script:_LastHybridBytesPerRow -gt 0) { [double]$script:_LastHybridBytesPerRow } else { 170.0 }
+          # JSON-escape multiplier 1.15 models the wire-bytes inflation of the
+          # raw inline KQL when wrapped as a JSON string field in the HTTP POST.
+          $bytesPerRowRaw   = if ($script:_LastHybridBytesPerRow -gt 0) { [double]$script:_LastHybridBytesPerRow } else { 170.0 }
+          $bytesPerRow      = $bytesPerRowRaw * 1.15
           $rowsPerBucket    = [int][Math]::Max(1, [Math]::Floor($inlineBudget / $bytesPerRow))
+          # Adversarial ceiling: if THIS report previously 413'd at a known
+          # rows-per-bucket, cap rowsPerBucket at 0.7 x that value.
+          if ($script:_LastFailedRowsPerBucketByReport.ContainsKey($ReportName)) {
+              $_failedRpb = [int]$script:_LastFailedRowsPerBucketByReport[$ReportName]
+              $_advCap    = [int][Math]::Floor(0.7 * [double]$_failedRpb)
+              if ($_advCap -gt 0 -and $_advCap -lt $rowsPerBucket) {
+                  $rowsPerBucket = $_advCap
+              }
+          }
           $snapshotJump     = [int][Math]::Ceiling([int]$script:_LastHybridSnapshotRowCount / [double]$rowsPerBucket)
       }
-      $jumpCandidates = @(($bucketCountToUse * 4), ($bucketCountToUse + 1), $snapshotJump)
+      $jumpCandidates = @(($bucketCountToUse * 2), ($bucketCountToUse + 1), $snapshotJump)
       $nextBucket = [Math]::Min($capBucket, ($jumpCandidates | Measure-Object -Maximum).Maximum)
-      if ($snapshotJump -gt 0 -and $snapshotJump -ge ($bucketCountToUse * 4)) {
-          $_bpr = if ($script:_LastHybridBytesPerRow -gt 0) { [int]$script:_LastHybridBytesPerRow } else { 170 }
-          $_bov = if ($script:_LastHybridQueryBodyOverheadBytes -gt 0) { [int]$script:_LastHybridQueryBodyOverheadBytes } else { 200KB }
-          $_ib  = [int][Math]::Max(64KB, [int](1MB * 0.95) - $_bov)
-          $_rpb = [int][Math]::Max(1, [Math]::Floor($_ib / [double]$_bpr))
-          Write-Info ("AutoBucket escalation jump informed by snapshot size + measured row-width + measured query-body overhead ({0} rows / {1} rows-per-bucket; budget: {2}KB inline + {3}KB KQL-body = {4}KB total, 95% of nginx 1MB cap; row-width ~{5} bytes/row max = {6} buckets)" -f $script:_LastHybridSnapshotRowCount, $_rpb, [int]($_ib/1KB), [int]($_bov/1KB), [int](([int](1MB * 0.95))/1KB), $_bpr, $snapshotJump)
+      if ($snapshotJump -gt 0 -and $snapshotJump -ge ($bucketCountToUse * 2)) {
+          $_bpr   = if ($script:_LastHybridBytesPerRow -gt 0) { [int]$script:_LastHybridBytesPerRow } else { 170 }
+          $_bov   = if ($script:_LastHybridQueryBodyOverheadBytes -gt 0) { [int]$script:_LastHybridQueryBodyOverheadBytes } else { 200KB }
+          $_ib    = [int][Math]::Max(64KB, [int](1MB * 0.75) - $_bov)
+          $_rpb   = [int][Math]::Max(1, [Math]::Floor($_ib / ($_bpr * 1.15)))
+          $_advTag = if ($script:_LastFailedRowsPerBucketByReport.ContainsKey($ReportName)) {
+              (' [adversarial ceiling: prior failure {0} rows/bucket -> cap {1}]' -f $script:_LastFailedRowsPerBucketByReport[$ReportName], [int][Math]::Floor(0.7 * [double]$script:_LastFailedRowsPerBucketByReport[$ReportName]))
+          } else { '' }
+          Write-Info ("AutoBucket escalation jump informed by snapshot + measured row-width + JSON-escape x1.15 + body overhead ({0} rows / {1} rows-per-bucket; budget: {2}KB inline + {3}KB KQL-body = {4}KB total, 75% of nginx 1MB cap; row-width ~{5} bytes/row x 1.15 = {6} buckets){7}" -f $script:_LastHybridSnapshotRowCount, $_rpb, [int]($_ib/1KB), [int]($_bov/1KB), [int](([int](1MB * 0.75))/1KB), $_bpr, $snapshotJump, $_advTag)
       }
 
       Write-Info ("Shard sizing: '{0}' increasing shard count {1} -> {2} (auto-tuning for this report's payload)." -f `

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.379
+## v2.2.380
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.380 - smarter AutoBucket escalation (A+B+C): budget 95%->75% + JSON-escape x1.15 on bytesPerRow (A), growth floor 4x->2x (B), adversarial ceiling capping next rows-per-bucket at 0.7x prior 413 failure value per report (C). Fewer probe-and-rehash cycles, less wasted O(N) hash overhead. (bc774c5c)
 - release: SecurityInsight v2.2.379 - stop shipping SMTPPort + SMTP_UseSSL defaults in LauncherConfig.defaults.ps1; customer relays vary too widely (on-prem :25 unauthenticated vs M365 :587 TLS vs Brevo :465) for a safe shipped default (dc0b508f)
 - release: SecurityInsight v2.2.378 - fingerprint cache opt-in (default OFF) + 3 fixes: UTF-16 truncation ceiling (60000->30000 chars), OData-code-aware self-heal (only retry on InvalidInput, not PropertyValueTooLarge), raw-HttpWebRequest PUT helper kills PS>TerminatingError(Invoke-RestMethod) transcript noise (5c3197f1)
 - release: SecurityInsight v2.2.377 - docs: README §5.8 covers v2.2.376 Detailed-scope trim (shipped defaults table + widen-scope guidance) (0c561c62)
@@ -33,13 +34,58 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
 - release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
 - release: SecurityInsight v2.2.351 - hotfix to v2.2.350: backfill Risk Score KPI into pre-v2.2.350 cache files when cached AI text is adopted (0e18b24b)
-- release: SecurityInsight v2.2.350 - Risk Score KPI cached alongside AI summary so Summary + Detailed emails show identical headline GlobalScore within 24h freshness window (d7c639f1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.380 — Smarter AutoBucket escalation: tighter budget, no more 4x leap, adversarial fitting from real overflow data. Converges in fewer hops, fewer wasted O(N) hash re-passes.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` -- three combined changes (A + B + C) to the bucket-count escalation logic at the cross-domain hybrid path:
+
+**A. Tighter budget (was over-promising)**
+
+- Total request-body budget: **95% -> 75% of 1MB**. 95% left only ~52KB for HTTP headers + Bearer token (8-16KB), JSON-string-escape inflation, and per-bucket variance. 75% leaves a comfortable ~256KB margin.
+- New JSON-escape multiplier on inline bytes-per-row: **bytesPerRow x 1.15**. Inline bytes measured by `Resolve-ProfileCLLetBlocks` are raw KQL string length. The HTTP POST body wraps that KQL as a JSON string field where every `\"` becomes `\\\"`, every newline becomes `\\n`, etc -- typical 10-15% inflation that the prior calc ignored.
+
+**B. Drop hardcoded growth floor 4x -> 2x**
+
+The escalation logic picked the MAX of (`bucketCount * 4`, `bucketCount + 1`, `snapshotJump`). The 4x floor used to bypass the smart calc entirely when bucket counts were small -- so a 2->8 escalation that the smart calc thought should be 2->5 ended up at 2->8 unconditionally. Floor lowered to 2x so the smart calc (informed by A1+A2 + adversarial ceiling below) is allowed to win.
+
+**C. Adversarial ceiling from real overflow data**
+
+When a bucket attempt 413s after 3 retries, the engine now records the actual rows-per-bucket value that the XDR backend rejected, keyed by `ReportName`. On the next escalation cycle, the smart calc's `rowsPerBucket` is capped at **floor(0.7 x failedRowsPerBucket)** -- i.e. if reality just disproved 5,877 rows/bucket, future tries can't exceed 4,114 regardless of what the static byte budget claims would fit.
+
+Per-report (not per-run) because per-row width + surrounding KQL body vary per report -- a failure in report A doesn't predict report B. Accumulates across the whole run for the SAME report so a single report that needs multiple escalations converges in 2 hops on average instead of overshooting with the 4x leap.
+
+### Why
+
+Observed pattern across multiple 500K stress runs and customer production runs:
+
+```
+[INFO] AutoBucket escalation jump informed by snapshot... = 86 buckets
+[INFO] Shard sizing: 'Device_Missing_CVEs_Summary' increasing shard count 2 -> 86
+[INFO] bucket 1/86: shard too large after 3 probes        # 413 even at 86
+[INFO] Shard sizing: ... 86 -> 344                        # 4x leap overshoots
+[INFO] '_ep' pre-grouped 500000 rows into 344 buckets in 200s   # O(N) re-hash
+```
+
+The smart calc said 86 should fit but execution still 413'd, so the 4x floor kicked in and jumped to 344 (likely overshooting -- 150-180 might have sufficed). Each escalation step triggers a fresh O(N) hash re-pass on the 500K-row snapshot -- 200-600s depending on PS version. Over a single report, the prior escalation chain 8 -> 32 -> 124 -> 496 cost ~30-40 minutes in re-hash overhead BEFORE execution even started.
+
+Customer-visible: this delay is the dominant wall-clock cost on the high-fanout cross-domain Attack_Paths Summary reports.
+
+### Impact
+
+- Today's `2 -> 86 -> 344` (3 escalations, 2 retry cycles, ~10 min re-hash) typically becomes `2 -> ~120 -> ~180` (3 escalations but 0-1 retry cycles, ~3-5 min re-hash).
+- Engine no longer wastes a probe-and-rehash cycle when the smart calc was within 2x of correct -- the adversarial ceiling clamps the next try based on real overflow data.
+- Lower 75% budget means slightly more buckets per report when the smart calc was already correct -- trades a few extra buckets for higher first-try success rate. On 500K stress: ~10-15% more buckets total but ~30-50% less wall-clock due to fewer escalation cycles.
+- No YAML changes. No report-query changes. No customer config changes.
 
 ---
 

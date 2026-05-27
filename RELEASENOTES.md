@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.382
+## v2.2.383
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.383 - AutoBucketCache challenger (stale-hash eviction + median anomaly + 7d confirmation TTL) + PTC 24h rebuild skip (8988966e)
 - release: SecurityInsight v2.2.382 - silence PS>TerminatingError noise when SI_RunHealth DCR is bound to a different DCE (4d1fa039)
 - release: SecurityInsight v2.2.381 - Top-50 risky assets ranks by Criticality Tier first (Tier 0 at top), then Weighted Risk Score within tier + display flips Weighted before Total (3541bb57)
 - release: SecurityInsight v2.2.380 - smarter AutoBucket escalation (A+B+C): budget 95%->75% + JSON-escape x1.15 on bytesPerRow (A), growth floor 4x->2x (B), adversarial ceiling capping next rows-per-bucket at 0.7x prior 413 failure value per report (C). Fewer probe-and-rehash cycles, less wasted O(N) hash overhead. (bc774c5c)
@@ -33,13 +34,52 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.356 - clean customer-template restructure (Internal + Community parallels) + remove implicit westeurope default (f38d7ede)
 - release: SecurityInsight v2.2.355 - unattended setup writes SMTP into custom.ps1 for Community + README §4.3.1 unattended-setup reference (05573da0)
 - release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
-- release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.383 — AutoBucketCache challenger (stale-hash auto-eviction + median-anomaly detection + confirmation TTL) and 24h skip on the privileged-tier classifier.
+
+### Why
+
+**AutoBucketCache challenger.** The cache stored bucket counts keyed by `<reportName>|<queryHash>` and trusted them unconditionally. Two failure modes piled up:
+
+1. **Stale-hash siblings.** Every YAML query edit creates a new hash → new cache key. The old keys never get deleted. A single report can accumulate 8+ entries across query revisions, only one of which is "live."
+2. **Cross-workload poison.** A large simulation run that legitimately needed 256 buckets writes 256 to the cache. A subsequent small-env run loads 256 and grinds through buckets that should have collapsed to 2 — turning a one-minute job into a 13-hour job. We saw this exact failure on a real run.
+
+The cache was monotonically biased upward — it grew on success but never shrunk on data-shape change. Earlier proposals to fix this (sniff probe / data-volume-aware key / time-based decay) all either added per-run overhead on healthy entries or required additional metadata. Statistical-anomaly detection on the cache itself is the better fit: outliers are visible in the data we already have.
+
+**Privileged tier classifier 24h skip.** The classifier rebuilds `privilege-tier-catalog.custom.json` from scratch every run — 4 AI batch calls + JSON export — and the catalog moves on the order of days, not hours. Re-running it inside 24h reproduces the same output for AI cost + minutes of latency. The Risk Analysis cron schedule fires the classifier nightly; with the 24h skip it now no-ops unless explicitly forced.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` — three new helpers + three wires:
+
+- **Layer 1 — `Remove-AutoBucketStaleSiblings`**: on every cache touch for `<R>|<currentHash>`, evict any other entries matching prefix `<R>|` (different hash = drift from older YAML revisions). Persists back if anything moved. Trims `__confirmed` sidecar entries for evicted keys too. Result: one entry per report.
+- **Layer 2 — `Test-AutoBucketChallenger`**: computes median across all OTHER live entries (excluding the queried key itself and the `__confirmed` sidecar). If `cached > 10 × median` AND no recent confirmation stamp → flag as suspect. Falls through to the exponential-probe path; the probe writes back whatever it converges on. Skipped when the cache has < 10 live entries (sample too small to flag).
+- **Layer 3 — `Set-AutoBucketConfirmed`**: stamps `confirmedAt` (ISO 8601 UTC) in a reserved `__confirmed` sidecar key after every probe converges OR after the end-of-run cascade write. Layer 2 skips entries with a confirmation < `ConfirmDays` (default 7) old, so legitimately heavy reports that pass the challenger probe aren't re-challenged every run.
+- All three layers configurable via globals: `$global:AutoBucketChallenger_MedianMultiplier` (default 10), `$global:AutoBucketChallenger_MinEntries` (default 10), `$global:AutoBucketChallenger_ConfirmDays` (default 7). Hard floors (multiplier ≥ 2, min ≥ 2) prevent misconfiguration from disabling the challenger silently.
+
+`engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1`:
+
+- **24h rebuild skip**: at the top of `Main` (after the RunHealth Start heartbeat fires), check `(Get-Item $OutputFile).LastWriteTimeUtc`. If < 24h old, log a SUCCESS line and return — heartbeat still records the run as completed. Override via `$global:ForcePrivilegedTierProfilerRebuild = $true` in `SecurityInsight.custom.ps1`.
+
+### Migration notes
+
+- **Cache file format**: backward compatible. Old caches (`{ "key": int }`) read fine. New caches add a sibling `__confirmed` key with timestamps. A v2.2.382 engine reading a v2.2.383 cache silently ignores the `__confirmed` sidecar (`Get-CacheValue` only looks up real query keys).
+- **Cache write contract preserved**: the existing "only write on success" invariant is unchanged. Both write sites (probe converge + end-of-run cascade) gate on `$bucketRunSucceeded`. The new `Set-AutoBucketConfirmed` writes ride those same gates.
+- **First-run impact on existing populated caches**: the first time each query is touched after upgrade, Layer 1 trims sibling hashes (~50% size reduction on caches with rolled-over YAML); Layer 2 then evaluates against the cleaned median. Outliers either pass the probe (confirmed for 7d) or get corrected on the spot. Steady-state cost on healthy caches: zero extra XDR calls.
+- **PTC skip is opt-out per run**: set `$global:ForcePrivilegedTierProfilerRebuild = $true` to force. Leave unset (default) for the 24h skip behaviour. No effect on the catalog's correctness — the existing baseline-vs-custom merge in `Initialize-SIIdentityCatalog` continues to work whether the catalog was rebuilt today or yesterday.
+- **Telemetry coverage unchanged**: the PTC skip still fires Start + End RunHealth heartbeats, so cron-monitoring sees the run completed even when no work was done.
+
+### Verification
+
+Engine helpers unit-tested before ship (8/8 pass): report-name parsing, sibling eviction, median+TTL challenger fires correctly above 10× threshold, skips on recent confirmation, skips when sample is too small to be reliable, `Set-AutoBucketConfirmed` writes ISO 8601 timestamp.
 
 ---
 

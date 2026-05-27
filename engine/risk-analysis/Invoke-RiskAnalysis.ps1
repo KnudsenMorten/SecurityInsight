@@ -6394,6 +6394,143 @@ function Set-CacheValue {
   }
 }
 
+# v2.2.383 -- reserved sidecar key under which confirmedAt timestamps for the
+# AutoBucket challenger live. Real cache keys are of the form
+# '<ReportName>|<QueryHash>' so the '__confirmed' prefix cannot collide.
+$script:AutoBucketConfirmedKey = '__confirmed'
+
+function Get-AutoBucketReportName {
+  # The cache key shape is '<ReportName>|<QueryHash>' (Get-StableQueryHash32
+  # produces a UInt32). Returns '' for malformed keys + for the reserved
+  # '__confirmed' sidecar.
+  param([Parameter(Mandatory=$true)][string]$QueryKey)
+  if ([string]::IsNullOrWhiteSpace($QueryKey)) { return '' }
+  if ($QueryKey.StartsWith('__')) { return '' }
+  $i = $QueryKey.LastIndexOf('|')
+  if ($i -lt 1) { return '' }
+  return $QueryKey.Substring(0, $i)
+}
+
+function Remove-AutoBucketStaleSiblings {
+  <#
+    v2.2.383 Layer 1 -- stale-hash auto-eviction. When the engine touches
+    cache key '<R>|<currentHash>', any other entries matching prefix '<R>|'
+    are leftover query-content drift from earlier YAML revisions and can
+    never be re-validated against current code. Evict them so the median
+    used by the challenger (Layer 2) reflects only live entries.
+
+    Mutates $Cache.Value in-place. Returns the number of siblings evicted
+    so the caller can decide whether to persist the cleaned cache.
+  #>
+  param(
+    [Parameter(Mandatory=$true)][ref]$Cache,
+    [Parameter(Mandatory=$true)][string]$QueryKey
+  )
+  if ($Cache.Value -isnot [hashtable]) { return 0 }
+  $reportName = Get-AutoBucketReportName -QueryKey $QueryKey
+  if ([string]::IsNullOrWhiteSpace($reportName)) { return 0 }
+  $prefix = ($reportName + '|')
+  $toEvict = New-Object System.Collections.Generic.List[string]
+  foreach ($k in $Cache.Value.Keys) {
+    $ks = [string]$k
+    if ($ks -eq $QueryKey) { continue }                    # keep the live one
+    if ($ks -eq $script:AutoBucketConfirmedKey) { continue } # keep the sidecar
+    if ($ks.StartsWith($prefix)) { [void]$toEvict.Add($ks) }
+  }
+  foreach ($k in $toEvict) {
+    [void]$Cache.Value.Remove($k)
+    # Also drop any matching confirmedAt sidecar entry.
+    if ($Cache.Value.ContainsKey($script:AutoBucketConfirmedKey) -and
+        $Cache.Value[$script:AutoBucketConfirmedKey] -is [hashtable] -and
+        $Cache.Value[$script:AutoBucketConfirmedKey].ContainsKey($k)) {
+      [void]$Cache.Value[$script:AutoBucketConfirmedKey].Remove($k)
+    }
+  }
+  return $toEvict.Count
+}
+
+function Test-AutoBucketChallenger {
+  <#
+    v2.2.383 Layer 2+3 -- median-challenger with confirmation TTL. Returns
+    $true if the cached value is statistically suspect (>= 10x median of
+    other live entries) AND was not recently confirmed by a challenger
+    re-probe. Returns $false to trust the cached value as-is.
+
+    Math: median is computed over OTHER live entries (excluding $QueryKey
+    itself so an outlier doesn't pull up its own comparison set, and
+    excluding the '__confirmed' sidecar). If the cache has fewer than
+    MinEntries live values, return $false -- sample too small to flag.
+
+    TTL: if a confirmedAt timestamp exists for $QueryKey within the last
+    ConfirmDays days, return $false -- the value was re-probed recently
+    enough that we don't want to burn another probe.
+
+    Multiplier + MinEntries + ConfirmDays come from $global:* knobs with
+    safe defaults (10x, 10 entries, 7 days) so operators can dial without
+    touching code.
+  #>
+  param(
+    [Parameter(Mandatory=$true)][object]$Cache,
+    [Parameter(Mandatory=$true)][string]$QueryKey,
+    [Parameter(Mandatory=$true)][int]$CachedValue
+  )
+  if ($Cache -isnot [hashtable]) { return $false }
+
+  $multiplier = if ($global:AutoBucketChallenger_MedianMultiplier) { [int]$global:AutoBucketChallenger_MedianMultiplier } else { 10 }
+  $minEntries = if ($global:AutoBucketChallenger_MinEntries)        { [int]$global:AutoBucketChallenger_MinEntries }        else { 10 }
+  $confirmDays = if ($global:AutoBucketChallenger_ConfirmDays)      { [int]$global:AutoBucketChallenger_ConfirmDays }       else { 7 }
+  if ($multiplier -lt 2) { $multiplier = 2 }
+  if ($minEntries -lt 2) { $minEntries = 2 }
+
+  # Confirmation TTL short-circuit.
+  if ($Cache.ContainsKey($script:AutoBucketConfirmedKey) -and
+      $Cache[$script:AutoBucketConfirmedKey] -is [hashtable] -and
+      $Cache[$script:AutoBucketConfirmedKey].ContainsKey($QueryKey)) {
+    $stampRaw = [string]$Cache[$script:AutoBucketConfirmedKey][$QueryKey]
+    $stamp = [datetime]::MinValue
+    if ([datetime]::TryParse($stampRaw, [ref]$stamp)) {
+      $ageDays = ([datetime]::UtcNow - $stamp.ToUniversalTime()).TotalDays
+      if ($ageDays -le $confirmDays) { return $false }
+    }
+  }
+
+  # Median across OTHER live entries.
+  $others = New-Object System.Collections.Generic.List[int]
+  foreach ($k in $Cache.Keys) {
+    $ks = [string]$k
+    if ($ks -eq $QueryKey) { continue }
+    if ($ks -eq $script:AutoBucketConfirmedKey) { continue }
+    $v = $Cache[$k]
+    $vi = 0
+    if ([int]::TryParse([string]$v, [ref]$vi)) {
+      if ($vi -ge 1) { [void]$others.Add($vi) }
+    }
+  }
+  if ($others.Count -lt ($minEntries - 1)) { return $false }
+  $sorted = $others.ToArray() | Sort-Object
+  $n = $sorted.Length
+  $median = if ($n % 2 -eq 1) { [int]$sorted[[int]($n / 2)] } else { [int](($sorted[$n / 2 - 1] + $sorted[$n / 2]) / 2) }
+  if ($median -lt 1) { $median = 1 }
+  return ($CachedValue -gt ($multiplier * $median))
+}
+
+function Set-AutoBucketConfirmed {
+  # v2.2.383 Layer 3 -- stamp confirmedAt sidecar so future runs skip the
+  # challenger probe for ConfirmDays days. Called after a challenger re-probe
+  # converges on a value (whether or not that value changed -- a confirmed
+  # 'still 229' is just as valuable as a corrected 'now 32').
+  param(
+    [Parameter(Mandatory=$true)][ref]$Cache,
+    [Parameter(Mandatory=$true)][string]$QueryKey
+  )
+  if ($Cache.Value -isnot [hashtable]) { return }
+  if (-not $Cache.Value.ContainsKey($script:AutoBucketConfirmedKey) -or
+      $Cache.Value[$script:AutoBucketConfirmedKey] -isnot [hashtable]) {
+    $Cache.Value[$script:AutoBucketConfirmedKey] = @{}
+  }
+  $Cache.Value[$script:AutoBucketConfirmedKey][$QueryKey] = ([datetime]::UtcNow.ToString('o'))
+}
+
 function Get-OptimalBucketCount {
   param(
     [Parameter(Mandatory=$true)][string]$QueryKey,
@@ -6428,17 +6565,40 @@ function Get-OptimalBucketCount {
   # Cache on disk (optional)
   $cachePath = $null
   $cache = $null
+  $script:_AutoBucketWasChallenged = $false   # v2.2.383 -- set true when Layer 2 fires
   if ([bool]$global:AutoBucketCache -and -not [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
     $cachePath = Get-AutoBucketCachePath -SettingsPath $global:SettingsPath
     $cache = Read-AutoBucketCache -Path $cachePath
+
+    # v2.2.383 Layer 1 -- evict stale-hash siblings (other entries with the
+    # same '<ReportName>|' prefix but different hash) so the median used by
+    # Layer 2 reflects only current-hash entries. Persist back if any moved.
+    $_cacheRefL1 = [ref]$cache
+    $_evicted = Remove-AutoBucketStaleSiblings -Cache $_cacheRefL1 -QueryKey $QueryKey
+    $cache = $_cacheRefL1.Value
+    if ($_evicted -gt 0) {
+      Write-Info ("AutoBucket cache: evicted {0} stale-hash sibling(s) for '{1}'" -f $_evicted, (Get-AutoBucketReportName -QueryKey $QueryKey))
+      try { Write-AutoBucketCache -Path $cachePath -CacheObject $cache } catch {}
+    }
+
     # Read-AutoBucketCache returns a hashtable, but keep the older getter for safety
     $cached = Get-CacheValue -Cache $cache -Key $QueryKey
     if ($null -ne $cached) {
       $ci = [int]$cached
       if ($ci -ge $MinBucketCount -and $ci -le $MaxBucketCount) {
-        Write-Info ("AutoBucket cache hit: '{0}' => {1}" -f $QueryKey, $ci)
-        $script:AutoBucketMemo[$QueryKey] = $ci
-        return $ci
+        # v2.2.383 Layer 2+3 -- if the cached value is way above the median
+        # of all other live entries AND no recent confirmation stamp exists,
+        # the value is statistically suspect (likely poison from an unrelated
+        # larger workload). Fall through to the probe path; the probe write
+        # at the bottom of this function will stamp confirmedAt either way.
+        if (Test-AutoBucketChallenger -Cache $cache -QueryKey $QueryKey -CachedValue $ci) {
+          Write-Info ("AutoBucket challenger: '{0}' cached={1} flagged as suspect (>10x median of other live entries) -- re-probing." -f $QueryKey, $ci)
+          $script:_AutoBucketWasChallenged = $true
+        } else {
+          Write-Info ("AutoBucket cache hit: '{0}' => {1}" -f $QueryKey, $ci)
+          $script:AutoBucketMemo[$QueryKey] = $ci
+          return $ci
+        }
       } elseif ($ci -lt $MinBucketCount) {
         Write-Info ("AutoBucket cache hit '{0}' => {1} ignored (below YAML floor {2}; re-probing from floor)" -f $QueryKey, $ci, $MinBucketCount)
       }
@@ -6530,8 +6690,18 @@ function Get-OptimalBucketCount {
   if ($cachePath) {
     $cacheRef = [ref]$cache
     Set-CacheValue -Cache $cacheRef -Key $QueryKey -Value $optimal
+    # v2.2.383 Layer 3 -- always stamp confirmedAt after a probe converges
+    # (whether or not Layer 2 fired). A 'still 229' confirmation buys the
+    # entry ConfirmDays of skipped challenger probes; a 'corrected from
+    # 229 to 32' write also gets stamped so the new value isn't itself
+    # re-challenged before it has a chance to prove itself.
+    Set-AutoBucketConfirmed -Cache $cacheRef -QueryKey $QueryKey
     $cache = $cacheRef.Value
     try { Write-AutoBucketCache -Path $cachePath -CacheObject $cache } catch {}
+    if ($script:_AutoBucketWasChallenged) {
+      $_outcome = if ($optimal -eq [int]$cached) { 'confirmed' } else { 'corrected' }
+      Write-Info ("AutoBucket challenger: '{0}' {1} -- cached={2}, probed={3}" -f $QueryKey, $_outcome, $cached, $optimal)
+    }
   }
 
   return $optimal
@@ -7390,6 +7560,14 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
       $cache2 = Read-AutoBucketCache -Path $cachePath2
       if ($null -eq $cache2) { $cache2 = @{} }
       $cache2[$queryKey] = [int]$bucketCountToUse
+      # v2.2.383 Layer 3 -- stamp confirmedAt for the end-of-run cascade write
+      # too. This is the path where the engine escalated past the cached
+      # value (e.g. cache said 62, run cascaded to 130). The new value is
+      # battle-tested via an actual full report run, so the confirmation
+      # is even stronger than the probe-path confirmation.
+      $_cacheRefL3 = [ref]$cache2
+      Set-AutoBucketConfirmed -Cache $_cacheRefL3 -QueryKey $queryKey
+      $cache2 = $_cacheRefL3.Value
       Write-AutoBucketCache -Path $cachePath2 -CacheObject $cache2
     }
   } catch { }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.381
+## v2.2.382
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.382 - silence PS>TerminatingError noise when SI_RunHealth DCR is bound to a different DCE (4d1fa039)
 - release: SecurityInsight v2.2.381 - Top-50 risky assets ranks by Criticality Tier first (Tier 0 at top), then Weighted Risk Score within tier + display flips Weighted before Total (3541bb57)
 - release: SecurityInsight v2.2.380 - smarter AutoBucket escalation (A+B+C): budget 95%->75% + JSON-escape x1.15 on bytesPerRow (A), growth floor 4x->2x (B), adversarial ceiling capping next rows-per-bucket at 0.7x prior 413 failure value per report (C). Fewer probe-and-rehash cycles, less wasted O(N) hash overhead. (bc774c5c)
 - release: SecurityInsight v2.2.379 - stop shipping SMTPPort + SMTP_UseSSL defaults in LauncherConfig.defaults.ps1; customer relays vary too widely (on-prem :25 unauthenticated vs M365 :587 TLS vs Brevo :465) for a safe shipped default (dc0b508f)
@@ -33,13 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.355 - unattended setup writes SMTP into custom.ps1 for Community + README §4.3.1 unattended-setup reference (05573da0)
 - release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
 - release: SecurityInsight v2.2.353 - prestage adopt-if-visible for storage account (6e16740d)
-- release: SecurityInsight v2.2.352 - cache re-checked at decision points (pre-AI-POST + pre-KPI-backfill) so parallel Summary + Detailed runs converge on identical GlobalScore (182fc6a0)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.382 — Silence `PS>TerminatingError(...)` transcript noise when `SI_RunHealth` DCR is bound to a different DCE than the engine is configured to use. Pre-flight check skips the heartbeat post cleanly instead of letting the AzLogDcrIngestPS module throw + the transcript echo the failure three times per shard.
+
+### Why
+
+Customers whose `dcr-si-run-health` was provisioned outside the `Setup-SecurityInsight` bootstrap flow (or whose DCE was re-created without rebinding the DCR) saw three lines of raw JSON in every run transcript:
+
+```
+PS>TerminatingError(Invoke-WebRequest): "{ ...code: OperationFailed,
+  message: 'The data collection endpoint FQDN ... is not associated
+  with the data collection rule with immutable Id ...' }"
+>> TerminatingError(): "Log Ingestion API request failed. HTTP Status: 403 Response: "
+>> TerminatingError(): "Log Ingestion API request failed. HTTP Status: 403 Response: "
+```
+
+The engine already caught the underlying exception (telemetry never gates the run, and `Send-SIRunHealthRow` has had try/catch + `Write-Verbose` since the first cut), but PowerShell 7's transcript engine writes `PS>TerminatingError(...)` markers **before** the catch handler runs. So no amount of try/catch, `2>$null`, or `$ErrorActionPreference='SilentlyContinue'` inside `Send-SIRunHealthRow` could suppress them — the only mitigation is to not make the call when it'll fail.
+
+### What changed
+
+`engine/asset-profiling/shared/Send-SIRunHealthRow.ps1`:
+
+- **New helper `Test-SIRunHealthDcrReachable`** — does a single `Invoke-AzRestMethod` GET against the DCR's ARM resource id (`...providers/Microsoft.Insights/dataCollectionRules/<dcr>?api-version=2023-03-11`) and compares `properties.dataCollectionEndpointId` to the DCE the engine is configured to use. Returns `$false` ONLY when both sides resolve and CONFIRM a mismatch; in every other case (no `Az.Accounts` loaded, DCR doesn't exist yet, DCR uses workspace-default ingestion, network/auth/parse failure during pre-flight, ...) returns `$true` so telemetry is never suppressed for the wrong reason. `Invoke-AzRestMethod` returns a response object regardless of HTTP status, so the pre-flight itself never throws a terminating error.
+- **`Send-SIRunHealthRow` now calls the pre-flight** after auth resolution and bails silently on confirmed mismatch (verbose-only log line explains the skip + suggests the fix: `az monitor data-collection rule update` or re-running `Setup-SecurityInsight`).
+
+### Migration notes
+
+- No config knobs, no opt-out. The pre-flight is best-effort and fails-open; if anything about your environment causes the pre-flight itself to error (no `Az.Accounts` module, RBAC drift on the DCR resource, network blip), the engine falls back to the legacy behaviour and just lets the AzLogDcrIngestPS module attempt + fail + show the noise as before.
+- Environments whose `dcr-si-run-health` correctly references their configured DCE see no behaviour change (pre-flight passes → call proceeds → row ingests).
+- The fix only touches the asset-profiling RunHealth heartbeat. The Risk Analysis equivalent (`SI_RunHealth_CL` post in `Invoke-RiskAnalysis.ps1`) already runs after the SPN+ARM auth probe completes, so it doesn't suffer the same boot-time race.
+- Permanent fix is still on the bootstrap side: re-running `Setup-SecurityInsight` rebinds the DCR to the configured DCE. The pre-flight is the cosmetic mitigation for the gap between drift and re-bootstrap.
 
 ---
 

@@ -15,6 +15,75 @@
       ErrorMessage, Computer, CollectionTime
 #>
 
+function Test-SIRunHealthDcrReachable {
+    <#
+        Pre-flight: verify the SI_RunHealth DCR's dataCollectionEndpointId
+        matches the DCE the engine is configured to use. Returns:
+
+          $true  -- safe to post (association OK, DCR not yet created,
+                    DCR uses workspace-default ingestion, or pre-flight
+                    inconclusive for any reason).
+          $false -- CONFIRMED mismatch; skip the post to avoid the
+                    PS>TerminatingError(...) transcript markers that the
+                    AzLogDcrIngestPS module's Invoke-WebRequest would
+                    otherwise emit when the Log Ingestion API rejects
+                    the post with "DCE FQDN is not associated with DCR".
+
+        v2.2.382 -- added because the actual post failure is caught
+        engine-side (Send-SIRunHealthRow has try/catch + Write-Verbose),
+        but PowerShell 7's transcript engine writes the terminating-error
+        marker BEFORE the catch handler runs, so it cannot be suppressed
+        from inside Send-SIRunHealthRow. Detecting the mismatch up-front
+        via Az.Accounts/Invoke-AzRestMethod (which never throws on non-2xx)
+        lets us skip the noisy call cleanly. Pre-flight failures
+        (network/auth/anything) return $true so we never suppress
+        telemetry for the wrong reason.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SubscriptionId,
+        [Parameter(Mandatory)][string]$DcrResourceGroup,
+        [Parameter(Mandatory)][string]$DcrName,
+        [string]$DceResourceGroup,
+        [string]$DceName
+    )
+
+    # No Az.Accounts -> no pre-flight. Proceed.
+    if (-not (Get-Command -Name 'Invoke-AzRestMethod' -ErrorAction SilentlyContinue)) { return $true }
+
+    # Engine config incomplete (no DCE known) -> can't compare. Proceed.
+    if ([string]::IsNullOrWhiteSpace($DceName) -or [string]::IsNullOrWhiteSpace($DceResourceGroup)) { return $true }
+
+    try {
+        $dcrPath = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Insights/dataCollectionRules/{2}?api-version=2023-03-11' -f `
+                        $SubscriptionId, $DcrResourceGroup, $DcrName)
+        $resp = Invoke-AzRestMethod -Path $dcrPath -Method GET -ErrorAction SilentlyContinue 4>$null 2>$null
+        if (-not $resp -or [int]$resp.StatusCode -ne 200) {
+            # DCR not reachable / does not exist yet / RBAC drift -- let the
+            # actual call attempt creation via CheckCreateUpdate-TableDcr-Structure.
+            return $true
+        }
+        $dcrBody = $null
+        try { $dcrBody = $resp.Content | ConvertFrom-Json -ErrorAction Stop } catch { return $true }
+        $boundDceId = [string]$dcrBody.properties.dataCollectionEndpointId
+        if ([string]::IsNullOrWhiteSpace($boundDceId)) {
+            # DCR uses workspace-default ingestion (no explicit DCE) -- post will work.
+            return $true
+        }
+        $expectedDceId = ('/subscriptions/{0}/resourceGroups/{1}/providers/Microsoft.Insights/dataCollectionEndpoints/{2}' -f `
+                            $SubscriptionId, $DceResourceGroup, $DceName)
+        if ($boundDceId -ieq $expectedDceId) { return $true }
+
+        Write-Verbose ("Send-SIRunHealthRow: pre-flight detected DCR/DCE mismatch -- DCR '{0}' is bound to '{1}' but engine is configured to use '{2}'. Skipping post to avoid PS>TerminatingError(...) transcript noise. Fix: rebind the DCR via 'az monitor data-collection rule update' or recreate via Setup-SecurityInsight." -f `
+                        $DcrName, $boundDceId, $expectedDceId)
+        return $false
+    } catch {
+        # Pre-flight itself errored -- don't suppress telemetry on a false negative.
+        Write-Verbose ('Send-SIRunHealthRow: pre-flight error (proceeding anyway) -- {0}' -f $_.Exception.Message)
+        return $true
+    }
+}
+
 function Send-SIRunHealthRow {
     [CmdletBinding()]
     param(
@@ -117,6 +186,25 @@ function Send-SIRunHealthRow {
         # unique when one SPN spans internal + community tenants.
         $tableName = 'SI_RunHealth'
         $dcrName   = if (-not [string]::IsNullOrWhiteSpace([string]$global:SI_RunHealth_DcrName)) { [string]$global:SI_RunHealth_DcrName } else { 'dcr-si-run-health' }
+
+        # v2.2.382 -- pre-flight check the DCR/DCE association before calling
+        # AzLogDcrIngestPS. The actual post failure is already caught by the
+        # outer try/catch in this function, but PowerShell 7's transcript
+        # engine writes PS>TerminatingError(...) markers BEFORE the catch
+        # handler runs, so they cannot be suppressed from inside the catch.
+        # Pre-flight via Invoke-AzRestMethod (non-throwing) lets us skip the
+        # noisy call cleanly when we can confirm the DCR is bound to a
+        # different DCE than the engine uses. ANY pre-flight failure (network,
+        # auth, 404, ...) returns $true so telemetry is never suppressed for
+        # the wrong reason.
+        if (-not (Test-SIRunHealthDcrReachable `
+                        -SubscriptionId   $global:SI_AzSubscriptionId `
+                        -DcrResourceGroup $global:SI_DcrResourceGroup `
+                        -DcrName          $dcrName `
+                        -DceResourceGroup $global:SI_DceResourceGroup `
+                        -DceName          $global:SI_DceName)) {
+            return
+        }
 
         # Provision/update DCR + table from the single-row schema sample. AzLogDcrIngestPS
         # is idempotent so the per-replica overhead after first-run is just a cache hit.

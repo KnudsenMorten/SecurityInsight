@@ -1215,6 +1215,24 @@ function Main {
     Write-Log "SecurityInsight Identity Tiering - Starting" "INFO"
     Write-Log "Output: $OutputFile" "INFO"
 
+    # v2.2.383 -- 24h rebuild skip. If the catalog was rebuilt in the last 24h
+    # the AI pass + 4 batch calls + JSON export would just reproduce the same
+    # output (the catalog moves on the order of days, not hours). Skip and
+    # let the heartbeat record a clean run. Override via custom.ps1:
+    #     $global:ForcePrivilegedTierProfilerRebuild = $true
+    $_forceRebuild = [bool]$global:ForcePrivilegedTierProfilerRebuild
+    if (-not $_forceRebuild -and (Test-Path -LiteralPath $OutputFile)) {
+        $_lastWrite = (Get-Item -LiteralPath $OutputFile).LastWriteTimeUtc
+        $_ageHours = ([datetime]::UtcNow - $_lastWrite).TotalHours
+        if ($_ageHours -lt 24) {
+            Write-Log ("Skipping rebuild -- existing catalog is {0:n1}h old (<24h). Override with `$global:ForcePrivilegedTierProfilerRebuild = `$true in SecurityInsight.custom.ps1." -f $_ageHours) "SUCCESS"
+            return
+        }
+        Write-Log ("Existing catalog is {0:n1}h old (>=24h) -- rebuilding." -f $_ageHours) "INFO"
+    } elseif ($_forceRebuild -and (Test-Path -LiteralPath $OutputFile)) {
+        Write-Log "ForcePrivilegedTierProfilerRebuild=`$true -- rebuilding regardless of catalog age." "INFO"
+    }
+
     Write-Log "=== SECTION A: AD Built-in Groups (name-based AI tiering) ===" "INFO"
     Write-Log "Catalog size: $($BuiltInADGroups.Count) built-in group names (hardcoded list)." "INFO"
     Write-Log "Classification method: Azure OpenAI tiers each group name into Tier 0/1/2/3." "INFO"

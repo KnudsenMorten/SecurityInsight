@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.383
+## v2.2.384
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.384 - SMTP KV-pull gate fix (v2.2.359 bridge was dead code on most launchers) (36cc2955)
 - release: SecurityInsight v2.2.383 - AutoBucketCache challenger (stale-hash eviction + median anomaly + 7d confirmation TTL) + PTC 24h rebuild skip (8988966e)
 - release: SecurityInsight v2.2.382 - silence PS>TerminatingError noise when SI_RunHealth DCR is bound to a different DCE (4d1fa039)
 - release: SecurityInsight v2.2.381 - Top-50 risky assets ranks by Criticality Tier first (Tier 0 at top), then Weighted Risk Score within tier + display flips Weighted before Total (3541bb57)
@@ -33,13 +34,56 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.357 - RA sub-bucket cascade self-aware: futile-parent prune when 100% of children time out (caps Summary runtime at ~2h instead of up to 113 days for cross-domain skew reports) (8840a0c9)
 - release: SecurityInsight v2.2.356 - clean customer-template restructure (Internal + Community parallels) + remove implicit westeurope default (f38d7ede)
 - release: SecurityInsight v2.2.355 - unattended setup writes SMTP into custom.ps1 for Community + README §4.3.1 unattended-setup reference (05573da0)
-- release: SecurityInsight v2.2.354 - setup grants Contributor at target subscription; SPN footprint is exactly Reader@MG-root + Contributor@target-sub (never Owner) (429c6a35)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.384 — Fix the v2.2.359 SMTP KV-pull gate so it actually fires. The previous condition was dead code on every launcher that sets `Mail_SendAnonymous` via `LauncherConfig.defaults` (Layer 4) instead of `platform-defaults.ps1` (Layer 1b).
+
+### Why
+
+v2.2.359 added the SMTP credential bridge — fall back to KV for `SMTPUser` + `SMTPPassword` when the platform Context is present. The gate it wrapped the KV pull in was:
+
+```powershell
+if ($global:Context -and ($global:Mail_SendAnonymous -eq $false)) { ... }
+```
+
+`Mail_SendAnonymous` for most asset-profiling / RA launchers is set in `LauncherConfig.defaults.ps1` (Layer 4), which loads **after** `SecurityInsight.shared-defaults.ps1` (Layer 2). At gate-evaluation time the variable was still `$null`. `$null -eq $false` evaluates to `$false` in PowerShell, so the KV pull silently no-op'd and operators got `User=<NULL> | Password=[len=0] | Anonymous=<unset>` in the resolved-SMTP log line even when their KV had both `SMTPuser` + `SMTPpassword` secrets ready to use.
+
+The bridge worked for the narrow case where an operator set `Mail_SendAnonymous = $false` directly in `platform-defaults.ps1` (Layer 1b). Most customers don't — they rely on the per-launcher default.
+
+### What changed
+
+`launcher/_lib/SecurityInsight.shared-defaults.ps1` — one-line condition flip from "opt-out" to "opt-in":
+
+```powershell
+# BEFORE: KV pull fires only when Mail_SendAnonymous is exactly $false
+if ($global:Context -and ($global:Mail_SendAnonymous -eq $false)) { ... }
+
+# AFTER (v2.2.384): KV pull fires whenever Context is present UNLESS the
+# customer has explicitly opted into anonymous SMTP
+if ($global:Context -and ($global:Mail_SendAnonymous -ne $true)) { ... }
+```
+
+Verification matrix:
+
+| `$global:Mail_SendAnonymous` | Before (v2.2.359-.383) | After (v2.2.384) |
+|---|---|---|
+| `$null` (unset at Layer 2) | gate **false** → KV pull skipped (broken) | gate **true** → KV pull fires (fixed) |
+| `$false` (legacy explicit) | gate true → fires (working) | gate true → fires (preserved) |
+| `$true` (anonymous opt-in) | gate false → skipped (correct) | gate false → skipped (preserved) |
+
+### Migration notes
+
+- No config change needed. Customers whose KV holds the `SMTPuser` + `SMTPpassword` secrets (any casing — Azure KV secret names are case-insensitive) and whose engine launcher leaves `Mail_SendAnonymous` at the default get automatic credential resolution on next run.
+- Customers using anonymous SMTP (no auth) must already have `$global:Mail_SendAnonymous = $true` in their `platform-defaults.ps1` or `SecurityInsight.custom.ps1` — that path is unchanged.
+- The `[shared-defaults] SMTP resolved: ...` log line at the start of every engine run is the verification surface. After upgrade, customers in the broken state above should see `User=<value from KV> | Password=[len=N] | Anonymous=False` instead of `User=<NULL> | Password=[len=0] | Anonymous=<unset>`.
+- Final fallback bridges from `$global:HighPriv_SMTP_*` (the v1 convention) still fire as the last resort if neither the customer nor KV provided the creds — no behavioural change there.
 
 ---
 

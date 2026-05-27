@@ -138,7 +138,16 @@ if (-not $global:SI_SPN_ObjectId -and $global:SI_SPN_AppId) {
 #   different from SMTPUser.
 
 # 1. INTERNAL automation: promote from-address + force-pull KV creds
-if ($global:Context -and ($global:Mail_SendAnonymous -eq $false)) {
+# v2.2.384 -- gate flipped from `-eq $false` to `-ne $true`. The previous gate
+# only fired when SOMETHING upstream (Layer 1b or earlier) had explicitly set
+# $global:Mail_SendAnonymous = $false. Most launchers set it via Layer 4
+# (LauncherConfig.defaults), which runs AFTER this Layer 2 file -- so at gate
+# evaluation time the variable was still $null, and `$null -eq $false` evaluates
+# to $false in PowerShell, so the KV pull silently no-op'd. The new condition
+# fires whenever Context is present UNLESS the customer has explicitly opted
+# in to anonymous SMTP via $global:Mail_SendAnonymous = $true (which still
+# correctly bypasses KV credential resolution).
+if ($global:Context -and ($global:Mail_SendAnonymous -ne $true)) {
     # Promote platform-defaults' SMTPUser -> SMTPFrom (preserves the from address)
     if (-not $global:SMTPFrom -and $global:SMTPUser) {
         $global:SMTPFrom = $global:SMTPUser

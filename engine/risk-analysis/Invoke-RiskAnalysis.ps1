@@ -9719,14 +9719,38 @@ try {
                 $cachedSevByDomain[$p.Name] = $bucket
             }
         }
+        # v2.2.386 -- derive SevCount + TotalRows from the cached SevByDomain so
+        # the email KPI table's Total row equals the sum of its per-domain rows.
+        # Pre-v2.2.386: per-domain rows used cached (from peer template), Total
+        # row used live (this template's run-specific row count). Detailed's live
+        # tally happened to match its per-domain sum (1:1 per row); Summary's
+        # live tally collapsed many asset-findings into one row -- so Summary's
+        # Total cell showed e.g. 248 while per-domain summed to 1107. Operators
+        # saw "Total = sum of per-domain" violated for Summary template only.
+        # Deriving from cached per-domain makes the invariant hold by construction
+        # regardless of which template's tally the cache stored.
+        $derivedSevCount  = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0 }
+        $derivedTotalRows = 0
+        if ($cachedSevByDomain.Count -gt 0) {
+            foreach ($_dn in $cachedSevByDomain.Keys) {
+                foreach ($_sk in @('Critical','High','Medium','Low','Other')) {
+                    if ($cachedSevByDomain[$_dn].ContainsKey($_sk)) {
+                        $derivedSevCount[$_sk] += [int]$cachedSevByDomain[$_dn][$_sk]
+                    }
+                }
+                if ($cachedSevByDomain[$_dn].ContainsKey('Total')) {
+                    $derivedTotalRows += [int]$cachedSevByDomain[$_dn]['Total']
+                }
+            }
+        }
         $global:RA_KPI = [pscustomobject]@{
             GlobalScore  = $cachedScore
             Band         = if ($c.Band) { [string]$c.Band } else { $band }
             RiskLevel    = if ($c.RiskLevel) { [string]$c.RiskLevel } else { $bcRiskLevel }
             DomainScore  = if ($cachedDomainScore.Count -gt 0) { $cachedDomainScore } else { $domainScore }
-            SevCount     = $sevCount       # live -- per-row tally is run-specific anyway
+            SevCount     = if ($cachedSevByDomain.Count -gt 0) { $derivedSevCount }  else { $sevCount }
             SevByDomain  = if ($cachedSevByDomain.Count -gt 0) { $cachedSevByDomain } else { $sevByDomain }
-            TotalRows    = $rows.Count    # live -- reflects this run's data
+            TotalRows    = if ($cachedSevByDomain.Count -gt 0) { $derivedTotalRows } else { $rows.Count }
             Direction    = 'higher-is-better'
         }
         Write-Info ("[SCORE] OVERRIDE with cached values from AI summary cache: live={0} -> cached={1} (template '{2}' won the cache; ensures Summary + Detailed emails show identical headline KPI within {3}h window)." -f `
@@ -9757,14 +9781,31 @@ try {
                         $cachedSevByDomain[$p.Name] = $bucket
                     }
                 }
+                # v2.2.386 -- mirror the SevCount/TotalRows derivation from the primary
+                # cache-rehydrate block so the email Total row equals sum of per-domain
+                # rows for race-detected backfills too.
+                $derivedSevCount2  = @{ Critical = 0; High = 0; Medium = 0; Low = 0; Other = 0 }
+                $derivedTotalRows2 = 0
+                if ($cachedSevByDomain.Count -gt 0) {
+                    foreach ($_dn in $cachedSevByDomain.Keys) {
+                        foreach ($_sk in @('Critical','High','Medium','Low','Other')) {
+                            if ($cachedSevByDomain[$_dn].ContainsKey($_sk)) {
+                                $derivedSevCount2[$_sk] += [int]$cachedSevByDomain[$_dn][$_sk]
+                            }
+                        }
+                        if ($cachedSevByDomain[$_dn].ContainsKey('Total')) {
+                            $derivedTotalRows2 += [int]$cachedSevByDomain[$_dn]['Total']
+                        }
+                    }
+                }
                 $global:RA_KPI = [pscustomobject]@{
                     GlobalScore  = [int]$cachedNow.Data.GlobalScore
                     Band         = if ($cachedNow.Data.Band)      { [string]$cachedNow.Data.Band }      else { $global:RA_KPI.Band }
                     RiskLevel    = if ($cachedNow.Data.RiskLevel) { [string]$cachedNow.Data.RiskLevel } else { $global:RA_KPI.RiskLevel }
                     DomainScore  = if ($cachedDomainScore.Count -gt 0) { $cachedDomainScore } else { $global:RA_KPI.DomainScore }
-                    SevCount     = $global:RA_KPI.SevCount
+                    SevCount     = if ($cachedSevByDomain.Count -gt 0) { $derivedSevCount2 }  else { $global:RA_KPI.SevCount }
                     SevByDomain  = if ($cachedSevByDomain.Count -gt 0) { $cachedSevByDomain } else { $global:RA_KPI.SevByDomain }
-                    TotalRows    = $global:RA_KPI.TotalRows
+                    TotalRows    = if ($cachedSevByDomain.Count -gt 0) { $derivedTotalRows2 } else { $global:RA_KPI.TotalRows }
                     Direction    = 'higher-is-better'
                 }
                 $script:_RACacheNeedsKPIUpdate = $false

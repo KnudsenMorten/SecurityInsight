@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.385
+## v2.2.386
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.386 - Summary-template Total row now matches per-domain rows when 24h cache wins (56f62a00)
 - release: SecurityInsight v2.2.385 - KPI table Total/per-domain arithmetic fix + AI snapshot source attribution (d816a63b)
 - release: SecurityInsight v2.2.384 - SMTP KV-pull gate fix (v2.2.359 bridge was dead code on most launchers) (36cc2955)
 - release: SecurityInsight v2.2.383 - AutoBucketCache challenger (stale-hash eviction + median anomaly + 7d confirmation TTL) + PTC 24h rebuild skip (8988966e)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
 - release: SecurityInsight v2.2.358 - LA-ingest error body surfaced (RA + profiler) + DCE/DCR RG auto-discover via Az lookup + sample templates fixed + customer-name scrub (3aa4daf8)
 - release: SecurityInsight v2.2.357 - RA sub-bucket cascade self-aware: futile-parent prune when 100% of children time out (caps Summary runtime at ~2h instead of up to 113 days for cross-domain skew reports) (8840a0c9)
-- release: SecurityInsight v2.2.356 - clean customer-template restructure (Internal + Community parallels) + remove implicit westeurope default (f38d7ede)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.386 — Summary-template KPI Total row now matches per-domain rows when the 24h cache reuse is in effect. Closes a v2.2.385 follow-up where Detailed-template totals were fixed but Summary-template totals still pulled from a different scope than per-domain rows.
+
+### Why
+
+After v2.2.385 landed, the customer-reported screenshot showed Detailed template correctly summing (per-domain 945+96+66+0 = 1107 ≡ Total cell 1107), but the matching Summary-template email of the same run-window showed per-domain 945+96+66+0 = 1107 ≡ Total cell **248** — a 4.5× discrepancy.
+
+Root cause: when v2.2.350's 24h KPI cache wins for the second template (Summary in this case), `SevByDomain` is rehydrated from the cache (so per-domain rows show the first template's counts), but `SevCount` + `TotalRows` stay LIVE (computed from this template's own row count). Detailed-template's live row count equals its per-domain sum 1:1 (one row per asset-finding), so the asymmetry was invisible there. Summary-template collapses many asset-findings into a single aggregate row, so its live row count is ~4-5× smaller than the cached per-domain sums → Total cell looks tiny next to the inherited per-domain rows.
+
+### What changed
+
+`engine/risk-analysis/Invoke-RiskAnalysis.ps1` — primary cache-rehydrate block (line ~9722) **and** race-detected backfill block (line ~9760):
+
+- **Derive `SevCount` from cached `SevByDomain`** when the cache wins — sum Critical/High/Medium/Low/Other across all rehydrated domains. Total row's per-severity cells now match the column sum of per-domain rows by construction.
+- **Derive `TotalRows` from cached `SevByDomain`** — sum the per-domain `Total` field. Total row's Total cell now matches the column sum of per-domain Total cells.
+- When cache does NOT win (live computation), behaviour is unchanged: SevCount + TotalRows come from this run's live tally.
+
+Same fix applied to both cache-rehydrate sites so race-detected backfills (concurrent peer wrote between AI summary creation and KPI commit) also benefit.
+
+### Migration notes
+
+- **Summary-template emails will show LARGER Total cells after upgrade** — they'll now equal the per-domain row sum (e.g. 1107 in the customer screenshot) instead of the artificially-small live-collapsed row count (248). This is the correct number for "how many findings does the headline KPI represent across this 24h cache window."
+- **Detailed-template emails unchanged numerically** — Detailed's live tally already matched its per-domain sum 1:1, so derivation produces the same value as the prior live path.
+- **No config knobs, no opt-out.** Pure render-side consistency fix.
+- **Headline KPI score unchanged.** GlobalScore comes from the cached weighted-domain-average; this commit only affects the Total row of the dashboard table, not score math.
+
+### Verification
+
+Derivation logic unit-tested against the customer's actual screenshot numbers (Endpoint 91/650/204/0/945, Identity 0/55/18/23/96, Azure 3/59/3/1/66, PublicIP 0/0/0/0/0) — produces C=94 H=764 M=225 L=24 Total=1107 exactly matching Detailed-template's correct totals.
 
 ---
 

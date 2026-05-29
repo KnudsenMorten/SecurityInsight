@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.386
+## v2.2.387
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.387 - Connect-PlatformBootstrap Auto-mode now falls back from MI to Certificate on cross-tenant failure (IMDS reachable + Tenant-A MI vs Tenant-B target sub) (15bcb393)
 - release: SecurityInsight v2.2.386 - Summary-template Total row now matches per-domain rows when 24h cache wins (56f62a00)
 - release: SecurityInsight v2.2.385 - KPI table Total/per-domain arithmetic fix + AI snapshot source attribution (d816a63b)
 - release: SecurityInsight v2.2.384 - SMTP KV-pull gate fix (v2.2.359 bridge was dead code on most launchers) (36cc2955)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
 - release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
 - release: SecurityInsight v2.2.358 - LA-ingest error body surfaced (RA + profiler) + DCE/DCR RG auto-discover via Az lookup + sample templates fixed + customer-name scrub (3aa4daf8)
-- release: SecurityInsight v2.2.357 - RA sub-bucket cascade self-aware: futile-parent prune when 100% of children time out (caps Summary runtime at ~2h instead of up to 113 days for cross-domain skew reports) (8840a0c9)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.387 — `Connect-PlatformBootstrap` Auto mode now falls back from Managed Identity to Certificate when the local VM's MI lives in a different tenant than the target (cross-tenant launcher scenario). Closes a silent "MI succeeded probe, MI auth failed, hard-throw" gap.
+
+### Why
+
+Customer scenario: a VM hosted in **Tenant A** runs the SI launcher against **Tenant B** (no MI relationship — config has `BootstrapAppId` + `BootstrapThumbprint` pointing at a Tenant B SPN cert in the VM's cert store, `BootstrapAuth: "Auto"`).
+
+What happened before v2.2.387: the Auto probe at `Connect-PlatformBootstrap.ps1:147` hits the local IMDS endpoint (`169.254.169.254`) and gets a 200 — because the VM IS Azure-hosted, just in the wrong tenant. Auto then resolves to `ManagedIdentity` and `Connect-AzAccount -Identity -Tenant <Tenant-B>` immediately throws `"The provided account MSI@... does not have access to subscription ..."`. The MI branch's `catch` re-threw, the launcher fell back to `platform-defaults.ps1` (which doesn't connect — it just defines variables), so the bootstrap was effectively un-authenticated for the rest of the run.
+
+The Auto contract was supposed to be "MI if reachable AND works; else cert" — but the code only honoured the "reachable" half of that.
+
+### What changed
+
+`FUNCTIONS/AutomateITPS/Public/Connect/Connect-PlatformBootstrap.ps1`:
+
+- **Hoisted the Certificate auth into a script block** (`$connectCert`) so it can be invoked from either the Certificate branch OR as a fallback from the MI branch — PowerShell `switch` does not fall through by default.
+- **MI branch now wraps `Connect-AzAccount -Identity` in a soft-fail** instead of an immediate re-throw. If MI fails AND `BootstrapAppId + BootstrapThumbprint` are present in `platform-config.json`, the cert script block runs immediately as the fallback. Only when cert creds are absent does the original "MI failed" error throw.
+- **Updated the throw message** to call out the cross-tenant case explicitly so future operators see the exact remediation (`Set BootstrapAuth:"Certificate"` or add cert creds).
+- **`$AuthMethod` is rewritten to `"Certificate"` after the fall-through** so the KV smoke-test log line at line ~270 reflects the actual auth method that worked, not the originally-requested one.
+
+### Migration notes
+
+- **No config change required for the cross-tenant scenario** — `BootstrapAuth: "Auto"` now does the right thing automatically as long as both `BootstrapAppId` and `BootstrapThumbprint` are set.
+- **Customers who still want the strict "MI only, fail loudly" semantics** can pin `BootstrapAuth: "ManagedIdentity"` — the fallback only fires from the MI branch when reached via Auto OR explicit-MI WITH cert creds also configured.
+- **No effect on the happy path** — Azure-hosted VM in the SAME tenant as the target sub: MI succeeds on the first call, fallback never enters.
+
+### Verification
+
+Parse-checked. Behavioural test path:
+
+1. VM in Tenant A, target sub in Tenant B, `BootstrapAuth: "Auto"`, cert installed in `Cert:\LocalMachine\My\<thumbprint>` → MI throws "no access to subscription", fallback fires, `Connect-AzAccount -ServicePrincipal -CertificateThumbprint` succeeds against Tenant B, KV smoke-test passes.
+2. Same VM, `BootstrapAuth: "Auto"`, cert NOT installed → MI throws, fallback skipped (no cert creds present in config OR cert missing from store), the updated cross-tenant remediation hint shows in the throw.
+3. Azure-hosted VM in correct tenant, `BootstrapAuth: "Auto"` → MI succeeds first-try, no change in behaviour.
 
 ---
 

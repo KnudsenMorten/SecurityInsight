@@ -183,10 +183,45 @@ function Connect-PlatformBootstrap {
     Import-Module Az.KeyVault -ErrorAction Stop -WarningAction SilentlyContinue
 
     # ---- 4. Connect per resolved method ----------------------------------
+    # Certificate auth is hoisted into a script block so the MI branch can invoke
+    # it as a cross-tenant fallback (Auto-mode contract: "MI if reachable AND
+    # works; else cert"). Returns the Az context object.
+    $connectCert = {
+        if ([string]::IsNullOrWhiteSpace($appId) -or [string]::IsNullOrWhiteSpace($thumb)) {
+            throw "Connect-PlatformBootstrap: AuthMethod=Certificate but BootstrapAppId / BootstrapThumbprint missing from $ConfigPath. Run Initialize-PlatformVm without -BootstrapAuth ManagedIdentity, or set BootstrapAuth='ManagedIdentity' in the config."
+        }
+
+        $certPath = "Cert:\LocalMachine\My\$thumb"
+        $cert     = Get-Item -LiteralPath $certPath -ErrorAction SilentlyContinue
+        if (-not $cert) {
+            $certPath = "Cert:\CurrentUser\My\$thumb"
+            $cert     = Get-Item -LiteralPath $certPath -ErrorAction SilentlyContinue
+        }
+        if (-not $cert) {
+            throw "Connect-PlatformBootstrap: Bootstrap cert with thumbprint $thumb not found in LocalMachine\My or CurrentUser\My. Install the cert before connecting."
+        }
+        if ($cert.NotAfter -lt (Get-Date)) {
+            throw "Connect-PlatformBootstrap: Bootstrap cert with thumbprint $thumb expired on $($cert.NotAfter.ToString('u')). Rotate via Update-PlatformBootstrapCert."
+        }
+        Write-Verbose ("Connect-PlatformBootstrap: cert OK ({0}, expires {1:u})" -f $cert.Subject, $cert.NotAfter)
+
+        $ctx = Connect-AzAccount `
+                    -ServicePrincipal `
+                    -ApplicationId         $appId `
+                    -CertificateThumbprint $thumb `
+                    -TenantId              $tenantId `
+                    -Subscription          $subId `
+                    -ErrorAction Stop `
+                    -WarningAction SilentlyContinue
+        Write-Verbose ("Connect-PlatformBootstrap: Az context = {0} (cert, tenant {1}, sub {2})" -f $ctx.Context.Account.Id, $tenantId, $subId)
+        return $ctx
+    }
+
     switch ($AuthMethod) {
 
         'ManagedIdentity' {
             Write-Verbose "Connect-PlatformBootstrap: connecting via Managed Identity"
+            $miFailed = $false ; $miError = $null
             try {
                 $azContext = Connect-AzAccount `
                                 -Identity `
@@ -195,47 +230,41 @@ function Connect-PlatformBootstrap {
                                 -ErrorAction Stop `
                                 -WarningAction SilentlyContinue
             } catch {
-                throw @"
-Connect-PlatformBootstrap: Connect-AzAccount -Identity failed -- $($_.Exception.Message)
+                $miFailed = $true ; $miError = $_.Exception.Message
+            }
+
+            # Cross-tenant fall-through: IMDS reachable (Auto picked MI) but the
+            # local VM's MI lives in a DIFFERENT tenant than $tenantId, so
+            # Connect-AzAccount -Identity throws "does not have access to
+            # subscription...". If the config has cert creds, retry as
+            # Certificate -- Auto-mode contract: "MI if reachable AND works; else cert."
+            if ($miFailed) {
+                $canRetryCert = -not [string]::IsNullOrWhiteSpace($appId) -and -not [string]::IsNullOrWhiteSpace($thumb)
+                if ($canRetryCert) {
+                    Write-Verbose ("Connect-PlatformBootstrap: MI failed ($miError) -- BootstrapAppId+Thumbprint present, falling back to Certificate (cross-tenant scenario)")
+                    $azContext = & $connectCert
+                    $AuthMethod = 'Certificate'   # for KV smoke-test log line below
+                } else {
+                    throw @"
+Connect-PlatformBootstrap: Connect-AzAccount -Identity failed -- $miError
 Likely causes:
   - Host is NOT Azure-managed (on-prem VM without Arc). Use -AuthMethod Certificate.
+  - VM's MI lives in a different tenant than the target tenant ($tenantId). Set
+    'BootstrapAuth':'Certificate' in platform-config.json (with BootstrapAppId +
+    BootstrapThumbprint), or pass -AuthMethod Certificate.
   - System-assigned Managed Identity not enabled on this VM/Container.
     Azure VM:           Update-AzVM -ResourceGroupName x -Name y -IdentityType SystemAssigned
     Container Apps Job: configure 'identity: { type: SystemAssigned }' in the job spec
     Function/App Svc:   Identity blade -> System assigned -> On
 "@
+                }
+            } else {
+                Write-Verbose ("Connect-PlatformBootstrap: Az context = {0} (MI, tenant {1}, sub {2})" -f $azContext.Context.Account.Id, $tenantId, $subId)
             }
-            Write-Verbose ("Connect-PlatformBootstrap: Az context = {0} (MI, tenant {1}, sub {2})" -f $azContext.Context.Account.Id, $tenantId, $subId)
         }
 
         'Certificate' {
-            if ([string]::IsNullOrWhiteSpace($appId) -or [string]::IsNullOrWhiteSpace($thumb)) {
-                throw "Connect-PlatformBootstrap: AuthMethod=Certificate but BootstrapAppId / BootstrapThumbprint missing from $ConfigPath. Run Initialize-PlatformVm without -BootstrapAuth ManagedIdentity, or set BootstrapAuth='ManagedIdentity' in the config."
-            }
-
-            $certPath = "Cert:\LocalMachine\My\$thumb"
-            $cert     = Get-Item -LiteralPath $certPath -ErrorAction SilentlyContinue
-            if (-not $cert) {
-                $certPath = "Cert:\CurrentUser\My\$thumb"
-                $cert     = Get-Item -LiteralPath $certPath -ErrorAction SilentlyContinue
-            }
-            if (-not $cert) {
-                throw "Connect-PlatformBootstrap: Bootstrap cert with thumbprint $thumb not found in LocalMachine\My or CurrentUser\My. Install the cert before connecting."
-            }
-            if ($cert.NotAfter -lt (Get-Date)) {
-                throw "Connect-PlatformBootstrap: Bootstrap cert with thumbprint $thumb expired on $($cert.NotAfter.ToString('u')). Rotate via Update-PlatformBootstrapCert."
-            }
-            Write-Verbose ("Connect-PlatformBootstrap: cert OK ({0}, expires {1:u})" -f $cert.Subject, $cert.NotAfter)
-
-            $azContext = Connect-AzAccount `
-                            -ServicePrincipal `
-                            -ApplicationId         $appId `
-                            -CertificateThumbprint $thumb `
-                            -TenantId              $tenantId `
-                            -Subscription          $subId `
-                            -ErrorAction Stop `
-                            -WarningAction SilentlyContinue
-            Write-Verbose ("Connect-PlatformBootstrap: Az context = {0} (cert, tenant {1}, sub {2})" -f $azContext.Context.Account.Id, $tenantId, $subId)
+            $azContext = & $connectCert
         }
 
         default { throw "Connect-PlatformBootstrap: unknown AuthMethod '$AuthMethod'." }

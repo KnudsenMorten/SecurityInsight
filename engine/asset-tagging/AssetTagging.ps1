@@ -1640,12 +1640,16 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         $name = Get-DeviceNameFromRow -Row $r
         $id   = Get-SenseDeviceIdFromRow -Row $r
 
+        # v2.2.398: drop the per-row "Skipping Defender row -- Missing
+        # SenseDeviceId" + "Skipping Defender device -- Not found"
+        # warnings. These fired hundreds of times per rule for
+        # un-onboarded devices (CanBeOnboarded / InsufficientInfo /
+        # Unsupported buckets are full of switches / APs / IoT that
+        # never had an MDE machine record). The aggregate "Skipped
+        # Defender rows -- Count" summary below still tells the
+        # operator how many rows were dropped and why.
         if ([string]::IsNullOrWhiteSpace($id)) {
           $skippedNoSenseId++
-          Write-WarnBlock -Title "Skipping Defender row" -Fields ([ordered]@{
-            Reason = "Missing SenseDeviceId"
-            Name   = $name
-          }) -SeparatorBefore
           continue
         }
 
@@ -1655,11 +1659,6 @@ foreach ($rule in @($Yaml.AssetTagging)) {
         }
         catch {
           if ($SuppressErrors) {
-            Write-WarnBlock -Title "Suppressed Defender existence check error" -Fields ([ordered]@{
-              Name  = $name
-              Id    = $id
-              Error = $_.Exception.Message
-            }) -SeparatorBefore
             $exists = $false
           }
           else {
@@ -1669,11 +1668,6 @@ foreach ($rule in @($Yaml.AssetTagging)) {
 
         if (-not $exists) {
           $skippedNotFound++
-          Write-WarnBlock -Title "Skipping Defender device" -Fields ([ordered]@{
-            Reason = "Not found in Defender (404 or inaccessible)"
-            Name   = $name
-            Id     = $id
-          }) -SeparatorBefore
           continue
         }
 

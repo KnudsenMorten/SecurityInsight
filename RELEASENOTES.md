@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.389
+## v2.2.390
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.390 -- asset-tagging EnabledByConfigFlag: + asset-tagging.config.json + 3 OnboardingStatus auto-exclude rules (9ae0e77b)
+- chore(SI): gitignore *.corrupted safety-net backups from .custom.yaml description-block repair pass (b0d34e0a)
 - release: SecurityInsight v2.2.389 -- propagate excludeAssets: reference into all 549 profiling sample headers + _TEMPLATE Use Case 3 (d4fc91b1)
 - release: SecurityInsight v2.2.388 -- per-detection asset exclusion (excludeAssets:) for profiling rules (dee3494d)
 - release: SecurityInsight v2.2.387 - Connect-PlatformBootstrap Auto-mode now falls back from MI to Certificate on cross-tenant failure (IMDS reachable + Tenant-A MI vs Tenant-B target sub) (15bcb393)
@@ -32,14 +34,58 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
 - release: SecurityInsight v2.2.363 - startup version banner + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (saves ~2h per affected cross-domain Attack_Paths report) (bfb4c9a6)
 - release: SecurityInsight v2.2.362 - AutoBucket bytesPerRow now per-report reset + MAX-tracked; target bumped 70% -> 90% of nginx 1MB cap (self-correcting loop handles over-aggressive cases) (e931cd52)
-- release: SecurityInsight v2.2.361 - AutoBucket escalation sizes buckets to ~70% of nginx 1MB cap via MEASURED bytes-per-row; eliminates 8-10x over-escalation (500K: 1000 buckets -> ~120 buckets) (935a8cca)
-- release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.390 — Asset-tagging `EnabledByConfigFlag:` field + new `asset-tagging.config.json` + 3 OnboardingStatus auto-exclude rules
+
+### Why
+
+Customer asks: "I have devices that Defender XDR can't fully onboard (`Can be onboarded` / `Insufficient info` / `Unsupported`). They keep showing up in profiling + RA reports as Tier-something garbage. Can I flip one switch per bucket to make them invisible to SI?"
+
+### What's new
+
+Three pieces, all additive:
+
+1. **New JSON config** at `config/asset-tagging.config.sample.json` (copy to `asset-tagging.config.json`, gitignored). Carries three booleans under `AutoExcludeRules`:
+
+   ```json
+   {
+     "AutoExcludeRules": {
+       "ExcludeCanBeOnboarded":   false,
+       "ExcludeInsufficientInfo": false,
+       "ExcludeUnsupported":      false
+     }
+   }
+   ```
+
+2. **New YAML field `EnabledByConfigFlag:`** on AssetTagging rules. Engine reads the JSON config at startup; a rule with this field only fires when the boolean at the named dotted path resolves to `true`. Rules without the field always fire (back-compat).
+
+3. **Three new auto-exclude tagging rules** in `asset-profiling-enrichment/endpoint/AssetTagging.AutoExclude.locked.yaml`, one per OnboardingStatus bucket. Each is gated by the corresponding flag. When enabled, the rule queries `DeviceInfo` for the matching `OnboardingStatus`, tags each device with `Auto-<bucket>--Excluded--SI`, which the existing `RiskAnalysisGlobalExclusions.custom.json` already honors via `ExcludedAssetTags: ["--Excluded--SI"]` — so the device drops out of every RA report AND every profiling rule on the next run.
+
+### Files changed
+
+- `engine/asset-tagging/AssetTagging.ps1` — loads `asset-tagging.config.json`, adds `Test-TaggingConfigFlag` helper, gates each rule on `EnabledByConfigFlag` before execution. Fail-closed (missing config / missing path / non-bool leaf all evaluate as `false`).
+- `config/asset-tagging.config.sample.json` — new sample config with the three flags documented inline.
+- `asset-profiling-enrichment/endpoint/AssetTagging.AutoExclude.locked.yaml` — new rule file with three OnboardingStatus exclusion rules.
+- `.gitignore` — `config/asset-tagging.config.json` (per-tenant, sample stays tracked).
+
+### How to use it
+
+```powershell
+cd SOLUTIONS\SecurityInsight\config
+Copy-Item asset-tagging.config.sample.json asset-tagging.config.json
+notepad asset-tagging.config.json     # flip the booleans you want
+# Run the tagging engine -- gated rules now fire only for enabled flags
+```
+
+Existing customers see zero behaviour change until they create the JSON file and flip a flag. Custom rules in `AssetTagging.custom.yaml` continue to work unchanged.
 
 ---
 

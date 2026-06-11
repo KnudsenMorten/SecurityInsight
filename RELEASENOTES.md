@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.394
+## v2.2.395
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.395 -- asset-tagging Auto-* rules now project SenseDeviceId (was DeviceId, engine extractor never matched) + per-device 'Tagging device X with tag Y' verbose log (db21918b)
 - release: SecurityInsight v2.2.394 -- asset-tagging Defender hunting via REST (drop Start-MgSecurityHuntingQuery) -- fixes Microsoft.Graph.Authentication assembly-version conflict on PS 5.1 (b25b6a8c)
 - release: SecurityInsight v2.2.393 -- asset-tagging fix: probe config/asset-tagging.config.json (not $SettingsPath) + back-compat for pre-v2.2.392 AssetTagging.AutoExclude.locked.yaml (983d0c0c)
 - release: SecurityInsight v2.2.392 -- rename AssetTagging.AutoExclude.locked.yaml -> AssetTagging.locked.yaml (engine default filename) (4b9b8da5)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
 - release: SecurityInsight v2.2.368 - removed version numbers from operator-visible layer labels + step messages (Connect-Platform v2.3 -> Connect-Platform, etc.) (be9c7f31)
 - release: SecurityInsight v2.2.367 - config snapshot grouped section now shows Layer 1 (Connect-Platform) + Layer 1b (platform-defaults) which were silently dropped due to stale layer-order label list (bd6ec921)
-- release: SecurityInsight v2.2.366 - SMTP resolution rewritten for internal-automation convention: promote platform-defaults SMTPUser to SMTPFrom + force-pull actual login+password from KV (SMTPuser/SMTPpassword) (da09c0e6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.395 — Asset-tagging Auto-* rules: project `SenseDeviceId` + per-device verbose tagging log
+
+### Symptom
+
+After v2.2.394, the three Auto-Exclude rules ran, the name-pattern filter narrowed the row sets correctly, but every device was skipped with `Reason: Missing SenseDeviceId` and the rules ended with `no taggable devices found; skipping`.
+
+### Root cause
+
+The KQL in `AssetTagging.locked.yaml` projected the column `DeviceId` (DeviceInfo's native ID column), but the engine's row-to-machine extractor (`Get-SenseDeviceIdFromRow` in `engine/asset-tagging/AssetTagging.ps1`) only looks for `SenseDeviceId` / `senseDeviceId` -- the column name used by the existing custom rules that pull the ID out of `ExposureGraphNodes.EntityIds`. So the rows came back with valid MDE machine IDs, just under a property name the engine didn't recognize.
+
+### Fix 1 -- KQL column rename
+
+All three Auto-* rules now project `SenseDeviceId = DeviceId` instead of plain `DeviceId`. Values are identical (DeviceInfo's `DeviceId` IS the MDE machine ID); only the column name changed so the engine's existing extractor picks it up. No engine-side widening was needed.
+
+### Fix 2 -- per-device verbose tagging output
+
+The Defender batch path emits a single `Defender tagging batch` block with `Count` + a first-5 preview, then `Apply-TagBulkWithSplit` hits the bulk MDE endpoint and logs a single `Defender bulk tag applied` line with the count. Operators couldn't see WHICH machines got which tag without cross-referencing MDE.
+
+Added per-device verbose lines right before the bulk call:
+
+```
+[INFO] Tagging device desktop-vjdfuj7 (<senseDeviceId>) with tag 'Auto-CanBeOnboarded--Excluded--SI'
+[INFO] Tagging device desktop-u6hr6kj (<senseDeviceId>) with tag 'Auto-CanBeOnboarded--Excluded--SI'
+...
+```
+
+Purely additive; the existing summary blocks remain. When `DeviceName` is missing the line falls back to the SenseDeviceId on its own.
+
+### Files changed
+
+- `asset-profiling-enrichment/endpoint/AssetTagging.locked.yaml` -- all 3 Auto-* rules: `project DeviceId, ...` -> `project SenseDeviceId = DeviceId, ...`.
+- `engine/asset-tagging/AssetTagging.ps1` -- per-device `Tagging device <name> (<id>) with tag '<tag>'` line in the DEFENDERGRAPH chunk loop.
+
+### How to apply
+
+- Pull, rerun the asset-tagging launcher. You should now see per-device `Tagging device ...` lines followed by `Defender bulk tag applied Count=N` for each of the three Auto-* rules whose name-pattern filter survived.
 
 ---
 

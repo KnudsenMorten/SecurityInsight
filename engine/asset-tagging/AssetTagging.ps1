@@ -1731,6 +1731,18 @@ foreach ($rule in @($Yaml.AssetTagging)) {
           Machines = $namesPreview
         }) -SeparatorBefore
 
+        # v2.2.395: per-device verbose so operators can see EXACTLY which
+        # machines are getting which tag (Apply-TagBulkWithSplit hits the
+        # bulk MDE endpoint and only logs a count). The bulk OK line still
+        # follows below; this is purely additive visibility.
+        foreach ($d in $chunk) {
+          if ([string]::IsNullOrWhiteSpace($d.Name) -or $d.Name -like '<unknown*') {
+            Write-Info ("Tagging device {0} with tag '{1}'" -f $d.Id, $assetTagName)
+          } else {
+            Write-Info ("Tagging device {0} ({1}) with tag '{2}'" -f $d.Name, $d.Id, $assetTagName)
+          }
+        }
+
         try {
           Apply-TagBulkWithSplit -AccessHeaders $AccessHeaders -Devices $chunk -Tag $assetTagName -SuppressErrors $SuppressErrors
         }

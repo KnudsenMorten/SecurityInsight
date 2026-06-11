@@ -1,35 +1,47 @@
 # ============================================================================
 # Auto-Exclude tagging rules driven by config/asset-tagging.config.json
 #
-# Three rules, one per Defender XDR OnboardingStatus bucket. Each rule is
-# GATED by a boolean in the JSON config (path under 'AutoExcludeRules'):
+# FOUR independent rules. They are NOT ANDed together: each is its own
+# Defender query and each gets its own MDE bulk-tag pass. A device that
+# matches MULTIPLE rules gets multiple Auto-* tags (which is fine -- the
+# downstream '--Excluded--SI' suffix machinery doesn't care which
+# Auto-* tag carried it).
 #
-#   EnabledByConfigFlag: AutoExcludeRules.ExcludeCanBeOnboarded
-#   EnabledByConfigFlag: AutoExcludeRules.ExcludeInsufficientInfo
-#   EnabledByConfigFlag: AutoExcludeRules.ExcludeUnsupported
+# Rules and the JSON config flags that gate them:
 #
-# When a flag is false (default), the engine skips that rule entirely --
-# no tag is written, no Defender Graph call is made, no MDE API call.
-# When a flag is true, the rule runs as a normal tagging rule: queries
-# ExposureGraphNodes for device nodes matching the OnboardingStatus bucket
-# and stamps each device with an MDE machine tag of '<bucket>--Excluded--SI'.
+#   1. Auto-CanBeOnboarded--Excluded--SI
+#        EnabledByConfigFlag: AutoExcludeRules.ExcludeCanBeOnboarded
+#        Tags every EG device whose rawData.onboardingStatus is
+#        'canBeOnboarded'. No name scoping.
 #
-# KQL roots in ExposureGraphNodes -- same modern pattern as the existing
-# legacy custom tagging rules. SenseDeviceId is extracted from EntityIds
-# via mv-apply. The current AssetTags list (deviceManualTags +
-# deviceDynamicTags from rawData) is checked against the target
-# AssetTagName via 'array_index_of(...) == -1' so a 1-hour cron only
-# touches the DELTA -- already-tagged devices are filtered out at the
-# KQL layer and never hit the MDE bulk endpoint.
+#   2. Auto-InsufficientInfo--Excluded--SI
+#        EnabledByConfigFlag: AutoExcludeRules.ExcludeInsufficientInfo
+#        Tags every EG device whose rawData.onboardingStatus is
+#        'insufficientInfo'. No name scoping.
 #
-# Downstream effect (with the existing RiskAnalysisGlobalExclusions.custom.json):
-#   - Risk Analysis reports filter via 'ExcludedAssetTags: ["--Excluded--SI"]'
-#     -- the tagged devices drop out of every RA report on the next run.
-#   - Profiling rules read the same AssetTags column -- the tagged devices
-#     skip tier assignment.
+#   3. Auto-Unsupported--Excluded--SI
+#        EnabledByConfigFlag: AutoExcludeRules.ExcludeUnsupported
+#        Tags every EG device whose rawData.onboardingStatus is
+#        'unsupported'. No name scoping.
 #
-# Result: ONE flag flip in the JSON config quietly removes a whole
-# OnboardingStatus bucket from SI's risk picture. No KQL editing needed.
+#   4. Auto-NamePattern--Excluded--SI
+#        EnabledByConfigFlag: AutoExcludeRules.ExcludeByDeviceNamePattern
+#        Tags every EG device whose NodeName matches any entry in
+#        DeviceNamePatterns.{StartsWith, Contains, MatchesRegex}.
+#        No OnboardingStatus scoping -- e.g. desktop-* boxes get tagged
+#        whether they're 'onboarded', 'canBeOnboarded', or anything else.
+#
+# Delta semantics:
+#   Each rule's KQL ends with 'where array_index_of(AssetTagsArray,
+#   AssetTagName) == -1', so devices already carrying the target tag
+#   are filtered out at the KQL layer. A 1-hour cron only touches the
+#   actual delta -- no MDE bulk call for devices already tagged.
+#
+# Downstream effect (RiskAnalysisGlobalExclusions.custom.json):
+#   - RA reports filter via 'ExcludedAssetTags: ["--Excluded--SI"]'.
+#   - Profiling rules read the same AssetTags column.
+#   The four Auto-* tags all carry the '--Excluded--SI' suffix, so
+#   tagged devices drop out of RA + profiling on the next run.
 # ============================================================================
 
 AssetTagging:
@@ -37,20 +49,18 @@ AssetTagging:
   - AssetTagName: Auto-CanBeOnboarded--Excluded--SI
     Mode: Prod
     QueryEngine: DefenderGraph
-    ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeCanBeOnboarded
     Description: |
       Tags every ExposureGraphNodes device whose rawData.onboardingStatus
-      = 'canBeOnboarded' (Defender sees the device but the Sense agent
-      hasn't enrolled it yet). Already-tagged devices are filtered upstream
-      via array_index_of so a 1-hour cron only processes the delta.
+      is 'canBeOnboarded'. Already-tagged devices are filtered upstream
+      via array_index_of, so a 1-hour cron only processes the delta.
     Query:
       - |
         ExposureGraphNodes
         | where NodeLabel has "device"
         | extend rawData = todynamic(NodeProperties).rawData
         | where tobool(rawData.isExcluded) == false
-        | where tolower(tostring(rawData.onboardingStatus)) == "canbeonboarded"
+        | where tostring(rawData.onboardingStatus) matches regex @"(?i)^can.*onboard"
         | project NodeId, NodeName, NodeLabel, rawData, EntityIds
         | extend
             deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
@@ -75,20 +85,18 @@ AssetTagging:
   - AssetTagName: Auto-InsufficientInfo--Excluded--SI
     Mode: Prod
     QueryEngine: DefenderGraph
-    ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeInsufficientInfo
     Description: |
       Tags every ExposureGraphNodes device whose rawData.onboardingStatus
-      = 'insufficientInfo' (Defender has telemetry traces but not enough
-      signal to classify the device). Already-tagged devices are filtered
-      upstream via array_index_of so a 1-hour cron only processes the delta.
+      is 'insufficientInfo'. Already-tagged devices are filtered upstream
+      via array_index_of, so a 1-hour cron only processes the delta.
     Query:
       - |
         ExposureGraphNodes
         | where NodeLabel has "device"
         | extend rawData = todynamic(NodeProperties).rawData
         | where tobool(rawData.isExcluded) == false
-        | where tolower(tostring(rawData.onboardingStatus)) == "insufficientinfo"
+        | where tostring(rawData.onboardingStatus) matches regex @"(?i)^insuff"
         | project NodeId, NodeName, NodeLabel, rawData, EntityIds
         | extend
             deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
@@ -113,21 +121,18 @@ AssetTagging:
   - AssetTagName: Auto-Unsupported--Excluded--SI
     Mode: Prod
     QueryEngine: DefenderGraph
-    ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeUnsupported
     Description: |
       Tags every ExposureGraphNodes device whose rawData.onboardingStatus
-      = 'unsupported' (legacy / appliance OS that Defender can't onboard).
-      Use when retired or EOL devices keep appearing in EG with no path
-      to remediation. Already-tagged devices are filtered upstream via
-      array_index_of so a 1-hour cron only processes the delta.
+      is 'unsupported'. Already-tagged devices are filtered upstream via
+      array_index_of, so a 1-hour cron only processes the delta.
     Query:
       - |
         ExposureGraphNodes
         | where NodeLabel has "device"
         | extend rawData = todynamic(NodeProperties).rawData
         | where tobool(rawData.isExcluded) == false
-        | where tolower(tostring(rawData.onboardingStatus)) == "unsupported"
+        | where tostring(rawData.onboardingStatus) =~ "unsupported"
         | project NodeId, NodeName, NodeLabel, rawData, EntityIds
         | extend
             deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
@@ -145,6 +150,45 @@ AssetTagging:
             AssetTagType = "Asset--Excluded--SI",
             AssetTag     = "Auto-Unsupported",
             AssetTagName = strcat("Auto-Unsupported", "--Excluded--SI")
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+        | project NodeId, NodeName, DeviceName, OnboardingStatus, SenseDeviceId, DeviceInventoryId, AssetTags, AssetTagType, AssetTag, AssetTagName
+
+  - AssetTagName: Auto-NamePattern--Excluded--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    ApplyDeviceNamePatterns: true
+    EnabledByConfigFlag: AutoExcludeRules.ExcludeByDeviceNamePattern
+    Description: |
+      Tags every ExposureGraphNodes device whose NodeName matches any
+      entry in DeviceNamePatterns.{StartsWith, Contains, MatchesRegex}
+      from the JSON config. INDEPENDENT of OnboardingStatus -- e.g. a
+      'desktop-*' box gets tagged whether it's already onboarded,
+      onboardable, or unsupported. Already-tagged devices are filtered
+      upstream via array_index_of.
+    Query:
+      - |
+        ExposureGraphNodes
+        | where NodeLabel has "device"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
+        | extend
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags))
+        | extend AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e=entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId")
+          )
+        | extend DeviceName = NodeName
+        | extend OnboardingStatus = tostring(rawData.onboardingStatus)
+        | extend
+            AssetTagType = "Asset--Excluded--SI",
+            AssetTag     = "Auto-NamePattern",
+            AssetTagName = strcat("Auto-NamePattern", "--Excluded--SI")
         | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
         | where array_index_of(AssetTagsArray, AssetTagName) == -1
         | project NodeId, NodeName, DeviceName, OnboardingStatus, SenseDeviceId, DeviceInventoryId, AssetTags, AssetTagType, AssetTag, AssetTagName

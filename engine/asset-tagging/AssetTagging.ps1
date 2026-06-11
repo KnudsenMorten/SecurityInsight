@@ -450,8 +450,48 @@ function Ensure-GraphAuth {
 
 function Invoke-DefenderGraphQuery {
   param([Parameter(Mandatory)][string]$Query)
-  Ensure-GraphAuth
-  Start-MgSecurityHuntingQuery -Query $Query
+  # v2.2.394: drop Start-MgSecurityHuntingQuery (Microsoft.Graph.Security)
+  # and hit the Graph REST endpoint directly. PS 5.1 sessions routinely
+  # hit "Assembly with same name is already loaded" when Microsoft.Graph.*
+  # modules get loaded by different upstream callers (Connect-MgGraph,
+  # Az.Accounts, the profiling engine, etc.) and their bundled
+  # Microsoft.Graph.Authentication versions disagree. REST avoids the
+  # entire module-version graph and uses the same Get-SIGraphToken /
+  # /security/runHuntingQuery approach as Invoke-SIHuntingQuery in the
+  # profiling engine.
+  $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  . (Join-Path $siRoot 'auth\Get-SIGraphToken.ps1')
+  $token = Get-SIGraphToken -Resource Graph
+  try {
+    $resp = Invoke-RestMethod -Method Post `
+      -Uri 'https://graph.microsoft.com/v1.0/security/runHuntingQuery' `
+      -Headers @{ Authorization = ('Bearer ' + $token); 'Content-Type' = 'application/json' } `
+      -Body (@{ Query = $Query } | ConvertTo-Json -Compress)
+  } catch {
+    $msg = $_.Exception.Message
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+      $msg = $_.ErrorDetails.Message
+    } elseif ($_.Exception.Response) {
+      $stream = $null; $reader = $null
+      try {
+        $stream = $_.Exception.Response.GetResponseStream()
+        $reader = New-Object System.IO.StreamReader($stream)
+        $body = $reader.ReadToEnd()
+        if ($body) { $msg = ('{0} | body: {1}' -f $msg, $body) }
+      } catch {
+      } finally {
+        if ($reader) { try { $reader.Dispose() } catch {} }
+        if ($stream) { try { $stream.Dispose() } catch {} }
+      }
+    }
+    throw ('Defender hunting query failed: {0}' -f $msg)
+  }
+  $rawRows = @()
+  if     ($resp.results) { $rawRows = @($resp.results) }
+  elseif ($resp.Results) { $rawRows = @($resp.Results) }
+  # Drop any *@odata.* property pairs row-by-row so the downstream
+  # field-getter logic doesn't trip on metadata noise.
+  return @($rawRows | ForEach-Object { ConvertTo-PSObjectDeep $_ -StripOData })
 }
 
 function Invoke-AzureResourceGraphQuery {
@@ -1569,11 +1609,10 @@ foreach ($rule in @($Yaml.AssetTagging)) {
     if ($queryEngine -eq 'DEFENDERGRAPH') {
 
       Write-Info "running hunting query against engine: DEFENDERGRAPH .... Please wait !"
-      $resp = Invoke-DefenderGraphQuery -Query $query
-
-      if (-not $resp.Results) { Write-Info "no results"; continue }
-
-      $rows = @(ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties -StripOData)
+      # v2.2.394: Invoke-DefenderGraphQuery now returns a flat array of
+      # PSCustomObject rows (REST shape); no more .Results.AdditionalProperties
+      # SDK-style indirection.
+      $rows = @(Invoke-DefenderGraphQuery -Query $query)
       if (-not $rows -or $rows.Count -eq 0) { Write-Info "no results"; continue }
 
       # ApplyDeviceNamePatterns: row-level filter applied here, AFTER

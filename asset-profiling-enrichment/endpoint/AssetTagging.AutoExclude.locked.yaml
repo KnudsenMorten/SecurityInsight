@@ -29,6 +29,7 @@ AssetTagging:
   - AssetTagName: Auto-CanBeOnboarded--Excluded--SI
     Mode: Prod
     QueryEngine: DefenderGraph
+    ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeCanBeOnboarded
     Description: |
       Tags every DeviceInfo row whose OnboardingStatus = 'Can be onboarded'
@@ -48,6 +49,7 @@ AssetTagging:
   - AssetTagName: Auto-InsufficientInfo--Excluded--SI
     Mode: Prod
     QueryEngine: DefenderGraph
+    ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeInsufficientInfo
     Description: |
       Tags every DeviceInfo row whose OnboardingStatus = 'Insufficient info'
@@ -67,6 +69,7 @@ AssetTagging:
   - AssetTagName: Auto-Unsupported--Excluded--SI
     Mode: Prod
     QueryEngine: DefenderGraph
+    ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeUnsupported
     Description: |
       Tags every DeviceInfo row whose OnboardingStatus = 'Unsupported'

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.390
+## v2.2.391
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.391 -- ApplyDeviceNamePatterns: config-driven name filter, removes hard-coded prefixes from KQL (6ac4600d)
 - release: SecurityInsight v2.2.390 -- asset-tagging EnabledByConfigFlag: + asset-tagging.config.json + 3 OnboardingStatus auto-exclude rules (9ae0e77b)
 - chore(SI): gitignore *.corrupted safety-net backups from .custom.yaml description-block repair pass (b0d34e0a)
 - release: SecurityInsight v2.2.389 -- propagate excludeAssets: reference into all 549 profiling sample headers + _TEMPLATE Use Case 3 (d4fc91b1)
@@ -33,13 +34,58 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.365 - dcr-si-run-health auto-create fixed (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if authenticated mail is enabled but creds are missing (ff5bef13)
 - release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
 - release: SecurityInsight v2.2.363 - startup version banner + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (saves ~2h per affected cross-domain Attack_Paths report) (bfb4c9a6)
-- release: SecurityInsight v2.2.362 - AutoBucket bytesPerRow now per-report reset + MAX-tracked; target bumped 70% -> 90% of nginx 1MB cap (self-correcting loop handles over-aggressive cases) (e931cd52)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.391 — Asset-tagging `ApplyDeviceNamePatterns:` -- config-driven name filter, removes the need for hard-coded name patterns in KQL
+
+### Why
+
+v2.2.390 shipped the three OnboardingStatus auto-exclude rules, but a customer pointed out that scoping (`where Name startswith "<their prefix>"`) was traditionally hard-coded inside each rule's KQL. That mixes engine logic with customer data and forces the operator to edit YAML/KQL every time their naming convention changes. The same hard-coded pattern appeared in pre-existing custom rules (e.g. the `xxxxxprefix-` literal).
+
+### What's new
+
+1. **JSON config gains `DeviceNamePatterns`** with three arrays:
+   - `StartsWith` (CI prefix match)
+   - `Contains` (CI substring match)
+   - `MatchesRegex` (CI .NET regex match)
+
+   Empty arrays = no scoping; populated = OR semantics across all three arrays.
+
+2. **New YAML field `ApplyDeviceNamePatterns: true`** on any AssetTagging rule. When set, the engine row-filters the KQL output against the config patterns BEFORE writing tags. Lives at the row level (post-KQL), so KQL stays clean and shared across customers.
+
+3. The three v2.2.390 auto-exclude rules all opt in to `ApplyDeviceNamePatterns: true`. With no `DeviceNamePatterns.*` populated, they match every matching-OnboardingStatus device (unchanged from v2.2.390). With `StartsWith: ["desktop-"]` set, they only tag devices whose name starts with that prefix.
+
+### Files changed
+
+- `engine/asset-tagging/AssetTagging.ps1` — `Test-DeviceNameMatchesConfigPatterns` helper + post-KQL row filter when rule has `ApplyDeviceNamePatterns: true`. Reads `DeviceName` (falling back to `NodeName`) per row.
+- `config/asset-tagging.config.sample.json` — new `DeviceNamePatterns` block with the three arrays + inline docs.
+- `asset-profiling-enrichment/endpoint/AssetTagging.AutoExclude.locked.yaml` — three rules now carry `ApplyDeviceNamePatterns: true`.
+
+### How to scope per-customer
+
+```json
+{
+  "AutoExcludeRules": {
+    "ExcludeCanBeOnboarded":   true,
+    "ExcludeInsufficientInfo": true,
+    "ExcludeUnsupported":      true
+  },
+  "DeviceNamePatterns": {
+    "StartsWith":   [ "desktop-" ],
+    "Contains":     [],
+    "MatchesRegex": []
+  }
+}
+```
+
+The customer never touches KQL again to change scope.
 
 ---
 

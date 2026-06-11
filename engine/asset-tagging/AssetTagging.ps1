@@ -1455,6 +1455,52 @@ function Test-TaggingConfigFlag {
   return $false
 }
 
+# Resolves DeviceNamePatterns.* from the JSON config and tests whether
+# a given device name matches ANY entry across StartsWith / Contains /
+# MatchesRegex (OR semantics). When all three arrays are empty (the
+# default), returns $true unconditionally -- the customer gets "no
+# scoping" until they populate at least one array. Used by the
+# ApplyDeviceNamePatterns: post-KQL row filter.
+function Test-DeviceNameMatchesConfigPatterns {
+  param(
+    [string]$DeviceName,
+    [string]$OrNodeName   # secondary -- many DefenderGraph queries project NodeName instead of DeviceName
+  )
+  $name = if (-not [string]::IsNullOrWhiteSpace($DeviceName)) { $DeviceName } else { $OrNodeName }
+  if ([string]::IsNullOrWhiteSpace($name)) { return $false }
+
+  if (-not $assetTaggingConfig -or -not $assetTaggingConfig.DeviceNamePatterns) { return $true }
+  $p = $assetTaggingConfig.DeviceNamePatterns
+
+  $startsWith   = @($p.StartsWith   | Where-Object { $_ })
+  $contains     = @($p.Contains     | Where-Object { $_ })
+  $matchesRegex = @($p.MatchesRegex | Where-Object { $_ })
+
+  # All three empty == no scoping requested == match everything.
+  if ($startsWith.Count -eq 0 -and $contains.Count -eq 0 -and $matchesRegex.Count -eq 0) { return $true }
+
+  $lc = $name.ToLowerInvariant()
+  foreach ($pat in $startsWith) {
+    if ($lc.StartsWith(([string]$pat).ToLowerInvariant())) { return $true }
+  }
+  foreach ($pat in $contains) {
+    if ($lc.Contains(([string]$pat).ToLowerInvariant())) { return $true }
+  }
+  foreach ($pat in $matchesRegex) {
+    try {
+      if ([System.Text.RegularExpressions.Regex]::IsMatch(
+            $name,
+            [string]$pat,
+            [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) {
+        return $true
+      }
+    } catch {
+      Write-Warning ("DeviceNamePatterns.MatchesRegex entry '{0}' is invalid regex; skipping: {1}" -f $pat, $_.Exception.Message)
+    }
+  }
+  return $false
+}
+
 foreach ($rule in @($Yaml.AssetTagging)) {
 
   $ruleMode    = Get-RuleMode $rule.Mode
@@ -1476,6 +1522,13 @@ foreach ($rule in @($Yaml.AssetTagging)) {
     Write-Info ("Rule '{0}' enabled via config flag '{1}'" -f $rule.AssetTagName, $rule.EnabledByConfigFlag)
   }
 
+  # ApplyDeviceNamePatterns: opt-in flag on the rule (boolean, default
+  # false). When true, the engine -- AFTER receiving rows from KQL --
+  # filters them against DeviceNamePatterns.* in the JSON config. Lives
+  # in config (not KQL) so a customer never has to edit a KQL `where`
+  # clause to change their device-name scope.
+  $ruleApplyDeviceNamePatterns = ($rule.ApplyDeviceNamePatterns -eq $true)
+
   if (-not $rule.Query) { continue }
 
   foreach ($queryItem in @($rule.Query)) {
@@ -1495,6 +1548,20 @@ foreach ($rule in @($Yaml.AssetTagging)) {
 
       $rows = @(ConvertTo-PSObjectDeep $resp.Results.AdditionalProperties -StripOData)
       if (-not $rows -or $rows.Count -eq 0) { Write-Info "no results"; continue }
+
+      # ApplyDeviceNamePatterns: row-level filter applied here, AFTER
+      # KQL execution. Reads DeviceNamePatterns.* (StartsWith / Contains
+      # / MatchesRegex) from the JSON config and drops rows whose
+      # DeviceName / NodeName doesn't match any entry. When ALL three
+      # arrays are empty, the helper returns $true for every row, so the
+      # rule effectively gets "no scoping" (intended -- it lets a
+      # customer leave the patterns at default until they need them).
+      if ($ruleApplyDeviceNamePatterns) {
+        $before = $rows.Count
+        $rows = @($rows | Where-Object { Test-DeviceNameMatchesConfigPatterns -DeviceName ([string]$_.DeviceName) -OrNodeName ([string]$_.NodeName) })
+        Write-Info ("ApplyDeviceNamePatterns: {0} -> {1} row(s) after DeviceNamePatterns.* filter" -f $before, $rows.Count)
+        if (-not $rows -or $rows.Count -eq 0) { Write-Info "no results after name-pattern filter"; continue }
+      }
 
       $assetTagName = [string]($rows | Select-Object -First 1).AssetTagName
       if ([string]::IsNullOrWhiteSpace($assetTagName)) { Write-Warn2 "query returned rows but AssetTagName is empty; skipping"; continue }

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.395
+## v2.2.396
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.396 -- Auto-* rules rewritten on ExposureGraphNodes (modern) + AssetTags delta filter via array_index_of so 1h cron only processes new un-tagged devices (e3d28540)
 - release: SecurityInsight v2.2.395 -- asset-tagging Auto-* rules now project SenseDeviceId (was DeviceId, engine extractor never matched) + per-device 'Tagging device X with tag Y' verbose log (db21918b)
 - release: SecurityInsight v2.2.394 -- asset-tagging Defender hunting via REST (drop Start-MgSecurityHuntingQuery) -- fixes Microsoft.Graph.Authentication assembly-version conflict on PS 5.1 (b25b6a8c)
 - release: SecurityInsight v2.2.393 -- asset-tagging fix: probe config/asset-tagging.config.json (not $SettingsPath) + back-compat for pre-v2.2.392 AssetTagging.AutoExclude.locked.yaml (983d0c0c)
@@ -33,13 +34,45 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
 - release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
 - release: SecurityInsight v2.2.368 - removed version numbers from operator-visible layer labels + step messages (Connect-Platform v2.3 -> Connect-Platform, etc.) (be9c7f31)
-- release: SecurityInsight v2.2.367 - config snapshot grouped section now shows Layer 1 (Connect-Platform) + Layer 1b (platform-defaults) which were silently dropped due to stale layer-order label list (bd6ec921)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.396 — Asset-tagging Auto-* rules: rewrite on ExposureGraphNodes + delta filter via `array_index_of(AssetTagsArray, AssetTagName) == -1`
+
+### Why
+
+v2.2.395 alias-fixed the SenseDeviceId column name but the three Auto-* rules still queried `DeviceInfo` directly, with no skip-if-already-tagged gate. On a 1-hour cron that means the engine would re-emit MDE bulk-tag calls every run for the same devices forever, wasting MDE API quota and noisy in the launcher log. The existing legacy custom tagging rules (e.g. `Temp-Client-Devices--excluded--SI`) are rooted in `ExposureGraphNodes` with a `where array_index_of(AssetTagsArray, AssetTagName) == -1` delta filter that makes the cron only touch the actual delta -- this release brings the Auto-* rules in line with that pattern.
+
+### What changed
+
+All three Auto-* rules (`Auto-CanBeOnboarded`, `Auto-InsufficientInfo`, `Auto-Unsupported`) now follow the canonical modern shape:
+
+1. **Source = `ExposureGraphNodes`** filtered on `NodeLabel has "device"` and `tobool(rawData.isExcluded) == false`.
+2. **OnboardingStatus filter** via `tolower(tostring(rawData.onboardingStatus))` against `"canbeonboarded"` / `"insufficientinfo"` / `"unsupported"` -- mirrors the existing `AssetProfileByApplicationServiceDetection/ADDomainController.locked.yaml` pattern that uses `... == "onboarded"`.
+3. **AssetTags built** from `rawData.deviceManualTags ++ rawData.deviceDynamicTags`, joined with `;`, stored back as a column so the engine -- and the delta filter -- can read it.
+4. **SenseDeviceId + DeviceInventoryId** extracted from `EntityIds` via `mv-apply` (same `anyif(...)` summarize pattern as the existing legacy custom rule).
+5. **Delta gate**: `extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))` then `where array_index_of(AssetTagsArray, AssetTagName) == -1`. Devices already carrying the Auto-* tag are dropped at the KQL layer and never hit `Apply-TagBulkWithSplit`.
+
+DeviceName comes from `NodeName`. The final projection still emits the columns the engine consumes downstream (`SenseDeviceId`, `DeviceName`, `AssetTagName`, etc).
+
+### Operational effect on a 1-hour cron
+
+- First run: every matching un-tagged device gets the bulk MDE tag. Per-device verbose log (from v2.2.395) confirms each one.
+- Subsequent runs: only NEW devices in each OnboardingStatus bucket appear in the row set. The MDE bulk endpoint is not called for devices already carrying the Auto-* tag.
+
+### Files changed
+
+- `asset-profiling-enrichment/endpoint/AssetTagging.locked.yaml` -- all three Auto-* rules rewritten on ExposureGraphNodes + delta filter; header comments updated to match.
+
+### How to apply
+
+- Pull, rerun the asset-tagging launcher. On the first run the previously-tagged batch is empty (already in the tag list); newly-discovered un-onboarded devices get tagged. On the next hourly run only fresh deltas appear.
 
 ---
 

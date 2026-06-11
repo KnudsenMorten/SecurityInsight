@@ -1336,6 +1336,20 @@ $lockedExists = Test-Path -LiteralPath $lockedPath
 $customExists = Test-Path -LiteralPath $customPath
 $legacyExists = Test-Path -LiteralPath $legacyPath
 
+# v2.2.393 back-compat: customers who pulled v2.2.390/391 before the
+# v2.2.392 rename have 'AssetTagging.AutoExclude.locked.yaml' on disk.
+# If the configured locked file doesn't exist but the pre-rename name
+# does, transparently fall back so the engine still loads.
+if (-not $lockedExists) {
+  $preRenamedLocked = Join-Path $SettingsPath 'AssetTagging.AutoExclude.locked.yaml'
+  if (Test-Path -LiteralPath $preRenamedLocked) {
+    Write-Warn2 ("Locked YAML '{0}' not found; falling back to pre-v2.2.392 filename 'AssetTagging.AutoExclude.locked.yaml'." -f $LockedYamlFile)
+    $lockedPath    = $preRenamedLocked
+    $LockedYamlFile = 'AssetTagging.AutoExclude.locked.yaml'
+    $lockedExists  = $true
+  }
+}
+
 $rulesLocked = @()
 $rulesCustom = @()
 
@@ -1419,17 +1433,30 @@ Write-Info ("AssetTagging rules loaded: Locked={0}, Custom={1}, Effective={2}" -
 
 Write-Step "starting asset tag enforcement"
 
-# 2026-06-11: load optional asset-tagging.config.json (sibling of
-# SecurityInsight.custom.ps1). Used to gate per-rule execution via the
-# YAML field 'EnabledByConfigFlag:' (dotted path under root, e.g.
+# 2026-06-11: load optional asset-tagging.config.json. Canonical location
+# is 'config/asset-tagging.config.json' under the SI solution root (sibling
+# of SecurityInsight.custom.ps1). For back-compat we also probe
+# $SettingsPath. Used to gate per-rule execution via the YAML field
+# 'EnabledByConfigFlag:' (dotted path under root, e.g.
 # 'AutoExcludeRules.ExcludeCanBeOnboarded'). When the file is missing
 # we treat every flag as false -- meaning gated rules silently skip.
 $assetTaggingConfig = $null
 try {
-  $taggingConfigPath = Join-Path $SettingsPath 'asset-tagging.config.json'
-  if (Test-Path -LiteralPath $taggingConfigPath) {
+  # SI root = parent of engine\asset-tagging\ (two levels up from this script).
+  $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+  $candidateConfigPaths = @(
+    (Join-Path $siRoot 'config\asset-tagging.config.json'),
+    (Join-Path $SettingsPath 'asset-tagging.config.json')
+  )
+  $taggingConfigPath = $null
+  foreach ($cand in $candidateConfigPaths) {
+    if (Test-Path -LiteralPath $cand) { $taggingConfigPath = $cand; break }
+  }
+  if ($taggingConfigPath) {
     $assetTaggingConfig = Get-Content -Raw -LiteralPath $taggingConfigPath | ConvertFrom-Json
     Write-Info "Loaded asset-tagging config from $taggingConfigPath"
+  } else {
+    Write-Info ("No asset-tagging.config.json found -- gated rules will skip. Looked in: {0}" -f ($candidateConfigPaths -join '; '))
   }
 } catch {
   Write-Warning ("Failed to load asset-tagging.config.json -- treating every EnabledByConfigFlag as false: {0}" -f $_.Exception.Message)

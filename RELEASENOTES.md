@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.392
+## v2.2.393
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.393 -- asset-tagging fix: probe config/asset-tagging.config.json (not $SettingsPath) + back-compat for pre-v2.2.392 AssetTagging.AutoExclude.locked.yaml (983d0c0c)
 - release: SecurityInsight v2.2.392 -- rename AssetTagging.AutoExclude.locked.yaml -> AssetTagging.locked.yaml (engine default filename) (4b9b8da5)
 - release: SecurityInsight v2.2.391 -- ApplyDeviceNamePatterns: config-driven name filter, removes hard-coded prefixes from KQL (6ac4600d)
 - release: SecurityInsight v2.2.390 -- asset-tagging EnabledByConfigFlag: + asset-tagging.config.json + 3 OnboardingStatus auto-exclude rules (9ae0e77b)
@@ -33,13 +34,41 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.367 - config snapshot grouped section now shows Layer 1 (Connect-Platform) + Layer 1b (platform-defaults) which were silently dropped due to stale layer-order label list (bd6ec921)
 - release: SecurityInsight v2.2.366 - SMTP resolution rewritten for internal-automation convention: promote platform-defaults SMTPUser to SMTPFrom + force-pull actual login+password from KV (SMTPuser/SMTPpassword) (da09c0e6)
 - release: SecurityInsight v2.2.365 - dcr-si-run-health auto-create fixed (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if authenticated mail is enabled but creds are missing (ff5bef13)
-- release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.393 — Asset-tagging: fix `asset-tagging.config.json` discovery + back-compat for pre-v2.2.392 locked YAML filename
+
+Two related fixes to the asset-tagging engine — both surfaced by a real customer test where all three `AutoExcludeRules.*` flags were ON in `config/asset-tagging.config.json`, yet the engine logged every rule as "EnabledByConfigFlag is false (or missing)".
+
+### Fix 1 — config-file lookup path
+
+The v2.2.390 implementation read `asset-tagging.config.json` from `$SettingsPath`, which resolves to `asset-profiling-enrichment/endpoint/` (the YAML directory). The documented and intended location is `config/asset-tagging.config.json` (sibling of `SecurityInsight.custom.ps1`), so the file silently failed to load and every gated rule skipped.
+
+Engine now probes, in order:
+
+1. `<SI root>/config/asset-tagging.config.json` (canonical)
+2. `$SettingsPath/asset-tagging.config.json` (back-compat for anyone who already placed the file next to the YAML)
+
+When neither path resolves, the engine emits an explicit "No asset-tagging.config.json found -- gated rules will skip. Looked in: ..." line so the missing file is visible in the launcher log instead of disappearing.
+
+### Fix 2 — locked YAML filename back-compat
+
+v2.2.392 renamed `AssetTagging.AutoExclude.locked.yaml` -> `AssetTagging.locked.yaml` to match the launcher default. Customers who pulled v2.2.390 / v2.2.391 still have the pre-rename file on disk after a `sync-automateit` update if the old file wasn't removed. Engine now falls back to the pre-rename filename when the configured locked file isn't present, with a clear warning so the operator knows back-compat kicked in.
+
+### Files changed
+
+- `engine/asset-tagging/AssetTagging.ps1` — multi-path probe for `asset-tagging.config.json` + locked-YAML back-compat fallback.
+
+### How to apply
+
+- Pull, run the asset-tagging launcher again. With the config sitting at `config/asset-tagging.config.json` and all three `AutoExcludeRules.*` flags ON, the engine should now log `Loaded asset-tagging config from ...` followed by `Rule '...' enabled via config flag '...'` instead of the previous skip lines.
 
 ---
 

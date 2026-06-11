@@ -40,7 +40,7 @@ AssetTagging:
         DeviceInfo
         | where OnboardingStatus == "Can be onboarded"
         | summarize arg_max(Timestamp, *) by DeviceId
-        | project DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        | project SenseDeviceId = DeviceId, DeviceName, MachineGroup, OnboardingStatus
         | extend
             AssetTagType  = "Asset--Excluded--SI",
             AssetTag      = "Auto-CanBeOnboarded",
@@ -60,7 +60,7 @@ AssetTagging:
         DeviceInfo
         | where OnboardingStatus == "Insufficient info"
         | summarize arg_max(Timestamp, *) by DeviceId
-        | project DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        | project SenseDeviceId = DeviceId, DeviceName, MachineGroup, OnboardingStatus
         | extend
             AssetTagType  = "Asset--Excluded--SI",
             AssetTag      = "Auto-InsufficientInfo",
@@ -80,7 +80,7 @@ AssetTagging:
         DeviceInfo
         | where OnboardingStatus == "Unsupported"
         | summarize arg_max(Timestamp, *) by DeviceId
-        | project DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        | project SenseDeviceId = DeviceId, DeviceName, MachineGroup, OnboardingStatus
         | extend
             AssetTagType  = "Asset--Excluded--SI",
             AssetTag      = "Auto-Unsupported",

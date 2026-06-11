@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.388
+## v2.2.389
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.389 -- propagate excludeAssets: reference into all 549 profiling sample headers + _TEMPLATE Use Case 3 (d4fc91b1)
 - release: SecurityInsight v2.2.388 -- per-detection asset exclusion (excludeAssets:) for profiling rules (dee3494d)
 - release: SecurityInsight v2.2.387 - Connect-PlatformBootstrap Auto-mode now falls back from MI to Certificate on cross-tenant failure (IMDS reachable + Tenant-A MI vs Tenant-B target sub) (15bcb393)
 - release: SecurityInsight v2.2.386 - Summary-template Total row now matches per-domain rows when 24h cache wins (56f62a00)
@@ -33,13 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.362 - AutoBucket bytesPerRow now per-report reset + MAX-tracked; target bumped 70% -> 90% of nginx 1MB cap (self-correcting loop handles over-aggressive cases) (e931cd52)
 - release: SecurityInsight v2.2.361 - AutoBucket escalation sizes buckets to ~70% of nginx 1MB cap via MEASURED bytes-per-row; eliminates 8-10x over-escalation (500K: 1000 buckets -> ~120 buckets) (935a8cca)
 - release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
-- release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.389 — Mass-propagate `excludeAssets:` reference into all 549 profiling sample headers + master `_TEMPLATE` Use Case 3
+
+Follow-up to v2.2.388. The engine + RULE-REFERENCE + README sections already documented the new field, but the per-rule sample files (which operators copy from when building their `.custom.yaml`) didn't reference it. Two changes:
+
+1. **Master template** (`asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml`): added a full `USE CASE 3: excludeAssets` worked example with the SCOM-on-legacy-finance-box scenario, including a comparison block (excludeAssets vs `mode: disable` vs MDE `--Excluded--SI` tag).
+
+2. **Every `.custom.sample.yaml`** under `asset-profiling-enrichment/` (549 files): injected an `excludeAssets:` line into the QUICK SYNTAX REFERENCE block in each header, between the existing `cmdbId:` line and the closing `===` separator, cross-referencing the master template's Use Case 3 for the full worked example.
+
+Result: an operator who copies any rule's `.custom.sample.yaml` to `.custom.yaml` immediately sees the new field in the header reference without needing to read the engine source. No behaviour change vs v2.2.388 — pure docs / sample-file propagation.
 
 ---
 

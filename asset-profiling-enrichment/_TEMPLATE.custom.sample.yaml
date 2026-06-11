@@ -273,6 +273,46 @@ detections:
       Purpose: 'Domain Controller (production)'
       Category: 'Server Roles'
 
+
+  # ==========================================================================
+  # USE CASE 3: excludeAssets -- opt named devices out of THIS detection
+  #
+  # "Detect a SCOM server by software-installed signal, but a legacy
+  # finance box has SCOM bits installed for compatibility and shouldn't be
+  # classified as Tier 0 management infra."
+  #
+  # `excludeAssets:` is a per-detection list of asset names (or PowerShell
+  # `-like` wildcards). When the asset's Name (with DeviceName / FQDN /
+  # ComputerName / HostName fallbacks) matches any entry, this detection
+  # is SKIPPED for that asset -- rule eval continues with the next
+  # detection. The rule still fires normally for every other asset.
+  #
+  # Alias: `excludeNames:` (both load identically).
+  #
+  # When to use this vs `mode: disable` vs an MDE-tag global exclusion:
+  #   - excludeAssets:    surgical -- this detection only, named asset(s) only
+  #   - mode: disable     drops the WHOLE rule (every detection, every asset)
+  #   - MDE --Excluded-SI tag (in RiskAnalysisGlobalExclusions.custom.json)
+  #                       drops the asset from RA reports entirely (not just
+  #                       profiling)
+  # ==========================================================================
+  - id: SystemCenter-WithLegacyExclusion
+
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft/system_center'
+
+    excludeAssets:
+      - 'oldlegacybox01'                       # exact name match (CI)
+      - 'finance-svr-*'                        # wildcard match (CI)
+
+    set:
+      Tier: 0
+      Purpose: 'System Center role (legacy boxes excluded)'
+      Category: 'Application Service'
+
       # cmdbId: foreign key into asset-profiling-providers/servicenow-cmdb/CMDB.csv
       # When set, the engine looks up this id at Reconcile and AUTO-STAMPS:
       #   cmdbName · cmdbCriticality · cmdbDataSensitivity

@@ -83,6 +83,14 @@
 #   Tags:        [string,...] (free-form, aggregated across rule matches)
 #   cmdbId:      string (foreign key into CMDB.csv -- auto-stamps cmdbName +
 #                       cmdbCriticality + cmdbDataSensitivity from the row)
+#
+# `excludeAssets:` (per-detection, optional, alias: excludeNames):
+#   List of asset names / PowerShell -like wildcards. When the asset's Name
+#   matches any entry (CI), THIS detection is SKIPPED for the asset (rule
+#   eval continues with the next detection). Use when a legacy device matches
+#   a signal you can't remove (compat-blocking software, etc.) but should be
+#   out-of-scope for this specific detection only. See
+#   _TEMPLATE.custom.sample.yaml Use Case 3 for a full worked example.
 # ============================================================================
 id:        EntraConnectADConnectServer
 appliesTo: endpoint

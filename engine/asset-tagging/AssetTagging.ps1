@@ -1419,6 +1419,42 @@ Write-Info ("AssetTagging rules loaded: Locked={0}, Custom={1}, Effective={2}" -
 
 Write-Step "starting asset tag enforcement"
 
+# 2026-06-11: load optional asset-tagging.config.json (sibling of
+# SecurityInsight.custom.ps1). Used to gate per-rule execution via the
+# YAML field 'EnabledByConfigFlag:' (dotted path under root, e.g.
+# 'AutoExcludeRules.ExcludeCanBeOnboarded'). When the file is missing
+# we treat every flag as false -- meaning gated rules silently skip.
+$assetTaggingConfig = $null
+try {
+  $taggingConfigPath = Join-Path $SettingsPath 'asset-tagging.config.json'
+  if (Test-Path -LiteralPath $taggingConfigPath) {
+    $assetTaggingConfig = Get-Content -Raw -LiteralPath $taggingConfigPath | ConvertFrom-Json
+    Write-Info "Loaded asset-tagging config from $taggingConfigPath"
+  }
+} catch {
+  Write-Warning ("Failed to load asset-tagging.config.json -- treating every EnabledByConfigFlag as false: {0}" -f $_.Exception.Message)
+  $assetTaggingConfig = $null
+}
+
+# Tiny helper: resolve a dotted-path expression like
+# 'AutoExcludeRules.ExcludeCanBeOnboarded' against the loaded JSON and
+# return a boolean. Missing path / null config / non-boolean leaf all
+# resolve to $false (fail closed -- a typo never accidentally enables
+# auto-tagging).
+function Test-TaggingConfigFlag {
+  param([string]$DottedPath)
+  if (-not $assetTaggingConfig) { return $false }
+  if ([string]::IsNullOrWhiteSpace($DottedPath)) { return $false }
+  $node = $assetTaggingConfig
+  foreach ($seg in $DottedPath.Split('.')) {
+    if ($null -eq $node) { return $false }
+    $node = $node.$seg
+  }
+  if ($node -is [bool]) { return [bool]$node }
+  if ($node -is [string]) { return ($node -eq 'true' -or $node -eq '1') }
+  return $false
+}
+
 foreach ($rule in @($Yaml.AssetTagging)) {
 
   $ruleMode    = Get-RuleMode $rule.Mode
@@ -1427,6 +1463,17 @@ foreach ($rule in @($Yaml.AssetTagging)) {
   if ($Scope -notcontains $ruleMode) {
     Write-Info ("Skipping rule '{0}' (Mode={1}) due to Scope filter" -f $rule.AssetTagName, $ruleMode)
     continue
+  }
+
+  # EnabledByConfigFlag gate: a rule with this field only runs when the
+  # boolean at the named JSON path is true. Rules without the field always
+  # run (back-compat -- this is purely additive).
+  if ($rule.EnabledByConfigFlag) {
+    if (-not (Test-TaggingConfigFlag -DottedPath $rule.EnabledByConfigFlag)) {
+      Write-Info ("Skipping rule '{0}' -- EnabledByConfigFlag '{1}' is false (or missing) in asset-tagging.config.json" -f $rule.AssetTagName, $rule.EnabledByConfigFlag)
+      continue
+    }
+    Write-Info ("Rule '{0}' enabled via config flag '{1}'" -f $rule.AssetTagName, $rule.EnabledByConfigFlag)
   }
 
   if (-not $rule.Query) { continue }

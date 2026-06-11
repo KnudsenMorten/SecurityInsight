@@ -1,0 +1,18 @@
+{
+  "_doc": "Asset-tagging configuration for SecurityInsight. Copy this file to 'asset-tagging.config.json' in the same directory (gitignored) and flip the booleans you want. The tagging engine reads the JSON at startup and gates every rule whose YAML has a matching 'EnabledByConfigFlag:' field; rules without that field always fire regardless of this file.",
+
+  "_path": "config/asset-tagging.config.json (place next to SecurityInsight.custom.ps1)",
+
+  "AutoExcludeRules": {
+    "_doc": "Auto-exclusion rules: each flag, when true, makes the tagging engine emit an MDE machine tag of '<bucket>--Excluded--SI' on every device whose Defender XDR OnboardingStatus matches the bucket. The existing Risk Analysis + asset-profiling exclusion machinery (RiskAnalysisGlobalExclusions.custom.json's ExcludedAssetTags: ['--Excluded--SI']) then drops those devices from every RA report and from every profiling rule automatically. Flip these on selectively -- excluding 'CanBeOnboarded' devices means you accept they're invisible to MDE / SI until you onboard them, which is normally fine for short-lived test machines but NOT for production endpoints in flight.",
+
+    "ExcludeCanBeOnboarded":   false,
+    "_ExcludeCanBeOnboardedDoc": "When true, tag every device with Defender XDR DeviceInfo.OnboardingStatus = 'Can be onboarded' (Defender sees the device but Sense agent isn't installed yet). Use when you want to suppress noise from devices in the middle of an onboarding rollout.",
+
+    "ExcludeInsufficientInfo": false,
+    "_ExcludeInsufficientInfoDoc": "When true, tag every device with OnboardingStatus = 'Insufficient info' (Defender has signal traces but not enough to identify the device class). Use when transient appliances / IoT scanners keep flagging.",
+
+    "ExcludeUnsupported":      false,
+    "_ExcludeUnsupportedDoc":   "When true, tag every device with OnboardingStatus = 'Unsupported' (legacy / appliance OS that Defender can't onboard at all). Use when retired EOL devices are still detectable in EG but you've accepted that risk."
+  }
+}

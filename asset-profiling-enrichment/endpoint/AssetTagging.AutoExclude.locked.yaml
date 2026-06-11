@@ -1,0 +1,84 @@
+# ============================================================================
+# Auto-Exclude tagging rules driven by config/asset-tagging.config.json
+#
+# Three rules, one per Defender XDR OnboardingStatus bucket. Each rule is
+# GATED by a boolean in the JSON config (path under 'AutoExcludeRules'):
+#
+#   EnabledByConfigFlag: AutoExcludeRules.ExcludeCanBeOnboarded
+#   EnabledByConfigFlag: AutoExcludeRules.ExcludeInsufficientInfo
+#   EnabledByConfigFlag: AutoExcludeRules.ExcludeUnsupported
+#
+# When a flag is false (default), the engine skips that rule entirely --
+# no tag is written, no Defender Graph call is made, no MDE API call.
+# When a flag is true, the rule runs as a normal tagging rule: queries
+# DeviceInfo for matching OnboardingStatus and stamps each device with
+# an MDE machine tag of the shape '<bucket>--Excluded--SI'.
+#
+# Downstream effect (with the existing RiskAnalysisGlobalExclusions.custom.json):
+#   - Risk Analysis reports filter via 'ExcludedAssetTags: ["--Excluded--SI"]'
+#     -- the tagged devices drop out of every RA report on the next run.
+#   - Profiling rules read the same AssetTags column -- the tagged devices
+#     skip tier assignment.
+#
+# Result: ONE flag flip in the JSON config quietly removes a whole
+# OnboardingStatus bucket from SI's risk picture. No KQL editing needed.
+# ============================================================================
+
+AssetTagging:
+
+  - AssetTagName: Auto-CanBeOnboarded--Excluded--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    EnabledByConfigFlag: AutoExcludeRules.ExcludeCanBeOnboarded
+    Description: |
+      Tags every DeviceInfo row whose OnboardingStatus = 'Can be onboarded'
+      (Defender sees the device but the Sense agent hasn't enrolled it yet).
+      Once tagged, the device drops out of RA + profiling on the next run.
+    Query:
+      - |
+        DeviceInfo
+        | where OnboardingStatus == "Can be onboarded"
+        | summarize arg_max(Timestamp, *) by DeviceId
+        | project DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        | extend
+            AssetTagType  = "Asset--Excluded--SI",
+            AssetTag      = "Auto-CanBeOnboarded",
+            AssetTagName  = strcat("Auto-CanBeOnboarded", "--Excluded--SI")
+
+  - AssetTagName: Auto-InsufficientInfo--Excluded--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    EnabledByConfigFlag: AutoExcludeRules.ExcludeInsufficientInfo
+    Description: |
+      Tags every DeviceInfo row whose OnboardingStatus = 'Insufficient info'
+      (Defender has telemetry traces but not enough signal to classify the
+      device). Typical sources: transient appliances, scanners, ephemeral VMs.
+    Query:
+      - |
+        DeviceInfo
+        | where OnboardingStatus == "Insufficient info"
+        | summarize arg_max(Timestamp, *) by DeviceId
+        | project DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        | extend
+            AssetTagType  = "Asset--Excluded--SI",
+            AssetTag      = "Auto-InsufficientInfo",
+            AssetTagName  = strcat("Auto-InsufficientInfo", "--Excluded--SI")
+
+  - AssetTagName: Auto-Unsupported--Excluded--SI
+    Mode: Prod
+    QueryEngine: DefenderGraph
+    EnabledByConfigFlag: AutoExcludeRules.ExcludeUnsupported
+    Description: |
+      Tags every DeviceInfo row whose OnboardingStatus = 'Unsupported'
+      (legacy / appliance OS that Defender can't onboard). Use when retired
+      or EOL devices keep appearing in EG with no path to remediation.
+    Query:
+      - |
+        DeviceInfo
+        | where OnboardingStatus == "Unsupported"
+        | summarize arg_max(Timestamp, *) by DeviceId
+        | project DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        | extend
+            AssetTagType  = "Asset--Excluded--SI",
+            AssetTag      = "Auto-Unsupported",
+            AssetTagName  = strcat("Auto-Unsupported", "--Excluded--SI")

@@ -52,3 +52,11 @@ SOLUTIONS/SecurityInsight/LOGS/
 *.suo
 .DS_Store
 Thumbs.db
+
+# Safety-net backups produced by the 2026-06-11 .custom.yaml description-block
+# repair pass. Keep them for diff but never commit.
+*.corrupted
+
+# Per-tenant asset-tagging knobs (AutoExcludeRules.*). Never commit -- belongs only
+# in the operator's working copy. Sample stays tracked for schema reference.
+config/asset-tagging.config.json

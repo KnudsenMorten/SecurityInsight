@@ -74,8 +74,9 @@ function Connect-PlatformModern {
     [OutputType([pscustomobject])]
     param(
         [Parameter()] [string]$ConfigPath,
-        [Parameter()] [string]$ModernAppIdSecretName  = 'Modern-AppId',
-        [Parameter()] [string]$ModernSecretSecretName = 'Modern-Secret',
+        [Parameter()] [string]$ModernAppIdSecretName     = 'Modern-AppId',
+        [Parameter()] [string]$ModernSecretSecretName    = 'Modern-Secret',
+        [Parameter()] [string]$ModernThumbprintSecretName = 'Modern-Thumbprint',
         [Parameter()] [switch]$SkipMgGraph
     )
 
@@ -111,56 +112,125 @@ function Connect-PlatformModern {
         throw "Connect-PlatformModern: no active Az context. Call Connect-PlatformBootstrap first (or use Connect-Platform orchestrator)."
     }
 
-    # ---- 3. Pull Modern AppId + Secret from KV ---------------------------
-    Write-Verbose ("Connect-PlatformModern: pulling '{0}' + '{1}' from KV {2}" -f $ModernAppIdSecretName, $ModernSecretSecretName, $kvName)
+    # ---- 3. Pull Modern AppId (required) + try Modern-Thumbprint + Modern-Secret
+    # Auth path is chosen below: CERT preferred when both the thumbprint
+    # KV secret AND a matching local cert are available; secret fallback
+    # only if cert path is unusable. Tenants that have run New-Platform-
+    # ModernCert.ps1 -> cert path. Tenants still on the original v2.3
+    # provisioning -> secret path until they migrate.
+    Write-Verbose ("Connect-PlatformModern: pulling Modern identity from KV {0}" -f $kvName)
 
     try {
-        $modernAppIdSecret  = Get-AzKeyVaultSecret -VaultName $kvName -Name $ModernAppIdSecretName  -ErrorAction Stop -WarningAction SilentlyContinue
-        $modernSecretSecret = Get-AzKeyVaultSecret -VaultName $kvName -Name $ModernSecretSecretName -ErrorAction Stop -WarningAction SilentlyContinue
+        $modernAppIdSecret = Get-AzKeyVaultSecret -VaultName $kvName -Name $ModernAppIdSecretName -ErrorAction Stop -WarningAction SilentlyContinue
     } catch {
-        throw "Connect-PlatformModern: cannot read Modern-* secrets from KV $kvName -- $($_.Exception.Message). Verify Bootstrap SPN has 'Key Vault Secrets User' role + that Modern-AppId + Modern-Secret exist."
+        throw "Connect-PlatformModern: cannot read Modern-AppId from KV $kvName -- $($_.Exception.Message). Verify Bootstrap SPN has 'Key Vault Secrets User' role + that Modern-AppId exists."
+    }
+    if (-not $modernAppIdSecret) { throw "Connect-PlatformModern: KV secret '$ModernAppIdSecretName' not found in $kvName." }
+    $modernAppId = $modernAppIdSecret.SecretValue | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password }
+    if ([string]::IsNullOrWhiteSpace($modernAppId)) { throw "Connect-PlatformModern: Modern-AppId KV secret value is empty." }
+
+    # Try cert thumbprint (optional)
+    $modernThumb = $null
+    try {
+        $modernThumbSecret = Get-AzKeyVaultSecret -VaultName $kvName -Name $ModernThumbprintSecretName -ErrorAction Stop -WarningAction SilentlyContinue
+        if ($modernThumbSecret) {
+            $modernThumb = $modernThumbSecret.SecretValue | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password }
+        }
+    } catch {
+        Write-Verbose ("Connect-PlatformModern: KV secret '{0}' not present -- considering secret fallback. {1}" -f $ModernThumbprintSecretName, $_.Exception.Message)
     }
 
-    if (-not $modernAppIdSecret)  { throw "Connect-PlatformModern: KV secret '$ModernAppIdSecretName' not found in $kvName." }
-    if (-not $modernSecretSecret) { throw "Connect-PlatformModern: KV secret '$ModernSecretSecretName' not found in $kvName." }
+    # Verify cert is installed locally + valid (cert path is only usable when
+    # both conditions hold)
+    $modernCertUsable = $false
+    if ($modernThumb) {
+        foreach ($store in @("Cert:\LocalMachine\My\$modernThumb", "Cert:\CurrentUser\My\$modernThumb")) {
+            $c = Get-Item -LiteralPath $store -ErrorAction SilentlyContinue
+            if ($c -and $c.NotAfter -gt (Get-Date)) {
+                $modernCertUsable = $true
+                break
+            }
+        }
+        if (-not $modernCertUsable) {
+            Write-Warning ("Connect-PlatformModern: KV has Modern-Thumbprint = {0} but no matching cert in Cert:\LocalMachine\My or CurrentUser\My (or expired). Falling back to secret-based auth on this host." -f $modernThumb)
+        }
+    }
 
-    $modernAppId  = $modernAppIdSecret.SecretValue  | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password }
-    $modernSecret = $modernSecretSecret.SecretValue | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password }
-
-    if ([string]::IsNullOrWhiteSpace($modernAppId))  { throw "Connect-PlatformModern: Modern-AppId KV secret value is empty." }
-    if ([string]::IsNullOrWhiteSpace($modernSecret)) { throw "Connect-PlatformModern: Modern-Secret KV secret value is empty." }
-
-    Write-Verbose ("Connect-PlatformModern: Modern AppId = {0}, secret length = {1}" -f $modernAppId, $modernSecret.Length)
-
-    # ---- 4. Reconnect Az as Modern (secret-based) ------------------------
-    # Use [System.Net.NetworkCredential] to build the SecureString directly --
-    # avoids ConvertTo-SecureString, which lives in Microsoft.PowerShell.Security
-    # and fails to load in constrained runspaces (SYSTEM scheduled tasks, certain
-    # hosts) when its type data is already half-registered.
-    $secureSecret = [System.Net.NetworkCredential]::new('', $modernSecret).SecurePassword
-    $modernCred   = [pscredential]::new($modernAppId, $secureSecret)
-
-    $null = Connect-AzAccount `
-                -ServicePrincipal `
-                -Tenant     $tenantId `
-                -Credential $modernCred `
-                -Subscription $subId `
-                -ErrorAction Stop `
-                -WarningAction SilentlyContinue
-    Write-Verbose "Connect-PlatformModern: Az reconnected as Modern SPN"
-
-    # ---- 5. Connect Mg as Modern (secret-based) --------------------------
-    if (-not $SkipMgGraph) {
-        Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+    # Pull secret only if cert path won't be used (avoids surfacing the
+    # secret value when cert auth is taking over)
+    $modernSecret = $null
+    if (-not $modernCertUsable) {
         try {
-            Connect-MgGraph `
-                -TenantId             $tenantId `
-                -ClientSecretCredential $modernCred `
-                -NoWelcome `
-                -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
-            Write-Verbose "Connect-PlatformModern: Mg connected as Modern SPN"
+            $modernSecretSecret = Get-AzKeyVaultSecret -VaultName $kvName -Name $ModernSecretSecretName -ErrorAction Stop -WarningAction SilentlyContinue
         } catch {
-            Write-Warning ("Connect-PlatformModern: Connect-MgGraph failed: {0}. Continuing -- engines that need Graph will fail at use time." -f $_.Exception.Message)
+            throw "Connect-PlatformModern: cert path unusable AND cannot read Modern-Secret from KV $kvName -- $($_.Exception.Message). Verify either (a) Modern-Thumbprint KV secret + local cert exists, or (b) Modern-Secret KV secret exists."
+        }
+        if (-not $modernSecretSecret) { throw "Connect-PlatformModern: cert path unusable AND KV secret '$ModernSecretSecretName' not found in $kvName." }
+        $modernSecret = $modernSecretSecret.SecretValue | ForEach-Object { [System.Net.NetworkCredential]::new('', $_).Password }
+        if ([string]::IsNullOrWhiteSpace($modernSecret)) { throw "Connect-PlatformModern: cert path unusable AND Modern-Secret KV secret value is empty." }
+    }
+
+    # ---- 4. Reconnect Az + Mg as Modern (cert preferred, secret fallback)
+    if ($modernCertUsable) {
+        Write-Verbose ("Connect-PlatformModern: AUTH=CERT (Modern AppId {0}, thumbprint {1})" -f $modernAppId, $modernThumb)
+
+        $null = Connect-AzAccount `
+                    -ServicePrincipal `
+                    -ApplicationId         $modernAppId `
+                    -CertificateThumbprint $modernThumb `
+                    -TenantId              $tenantId `
+                    -Subscription          $subId `
+                    -ErrorAction Stop `
+                    -WarningAction SilentlyContinue
+        Write-Verbose "Connect-PlatformModern: Az reconnected as Modern SPN via cert"
+
+        if (-not $SkipMgGraph) {
+            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+            try {
+                Connect-MgGraph `
+                    -TenantId              $tenantId `
+                    -ClientId              $modernAppId `
+                    -CertificateThumbprint $modernThumb `
+                    -NoWelcome `
+                    -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+                Write-Verbose "Connect-PlatformModern: Mg connected as Modern SPN via cert"
+            } catch {
+                Write-Warning ("Connect-PlatformModern: Connect-MgGraph (cert) failed: {0}. Continuing -- engines that need Graph will fail at use time." -f $_.Exception.Message)
+            }
+        }
+    }
+    else {
+        Write-Verbose ("Connect-PlatformModern: AUTH=SECRET (Modern AppId {0}, secret length {1})" -f $modernAppId, $modernSecret.Length)
+
+        # Use [System.Net.NetworkCredential] to build the SecureString
+        # directly -- avoids ConvertTo-SecureString, which lives in
+        # Microsoft.PowerShell.Security and fails to load in constrained
+        # runspaces (SYSTEM scheduled tasks, certain hosts) when its type
+        # data is already half-registered.
+        $secureSecret = [System.Net.NetworkCredential]::new('', $modernSecret).SecurePassword
+        $modernCred   = [pscredential]::new($modernAppId, $secureSecret)
+
+        $null = Connect-AzAccount `
+                    -ServicePrincipal `
+                    -Tenant     $tenantId `
+                    -Credential $modernCred `
+                    -Subscription $subId `
+                    -ErrorAction Stop `
+                    -WarningAction SilentlyContinue
+        Write-Verbose "Connect-PlatformModern: Az reconnected as Modern SPN via secret"
+
+        if (-not $SkipMgGraph) {
+            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+            try {
+                Connect-MgGraph `
+                    -TenantId             $tenantId `
+                    -ClientSecretCredential $modernCred `
+                    -NoWelcome `
+                    -ErrorAction Stop -WarningAction SilentlyContinue | Out-Null
+                Write-Verbose "Connect-PlatformModern: Mg connected as Modern SPN via secret"
+            } catch {
+                Write-Warning ("Connect-PlatformModern: Connect-MgGraph (secret) failed: {0}. Continuing -- engines that need Graph will fail at use time." -f $_.Exception.Message)
+            }
         }
     }
 
@@ -176,11 +246,16 @@ function Connect-PlatformModern {
     $global:Context                                       = $ctx
     $global:AzureTenantId                                 = $tenantId
     $global:HighPriv_Modern_ApplicationID_Azure           = $modernAppId
-    $global:HighPriv_Modern_Secret_Azure                  = $modernSecret
-    $global:HighPriv_Modern_CertificateThumbprint_Azure   = $null  # v2.3 = secret only
+    $global:HighPriv_Modern_Secret_Azure                  = $modernSecret  # $null when cert auth wins -- no leak when secret wasn't needed
+    $global:HighPriv_Modern_AuthMethod                    = if ($modernCertUsable) { 'Cert' } else { 'Secret' }
     $global:KV_HighPriv_KeyVaultName                      = $kvName
     $global:KV_HighPriv_SubscriptionId                    = $subId
     $global:AutomationFramework                           = $true
+
+    # ---- 7b. Cert thumbprint for cert-app-only consumers (e.g. EXO) ------
+    # Set when the cert path was actually used for auth above. EXO etc read
+    # this global to know whether cert-app-only is possible.
+    $global:HighPriv_Modern_CertificateThumbprint_Azure = if ($modernCertUsable) { $modernThumb } else { $null }
 
     # SI-specific aliases (some engines read SI_SPN_* directly)
     $global:SI_SPN_TenantId                               = $tenantId

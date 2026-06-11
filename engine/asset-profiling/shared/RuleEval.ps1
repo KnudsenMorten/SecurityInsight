@@ -950,7 +950,31 @@ function Invoke-SIRuleEval {
     if ($Rule.Mode -eq 'disable') { return $null }
     if (-not $Rule.Detections -or @($Rule.Detections).Count -eq 0) { return $null }
 
+    # Asset name used for per-detection ExcludeAssets matching. Pulled
+    # once outside the detection loop because the asset is constant for
+    # this call. Fallbacks (DeviceName -> FQDN -> ComputerName) cover
+    # the schema differences across MDE / EG / Entra / ARM inputs.
+    $assetName = $null
+    foreach ($f in 'Name','DeviceName','FQDN','ComputerName','HostName') {
+        $v = Get-SIAssetField -Asset $Asset -Name $f
+        if (-not [string]::IsNullOrWhiteSpace([string]$v)) { $assetName = [string]$v; break }
+    }
+
     foreach ($det in $Rule.Detections) {
+        # Per-detection ExcludeAssets: device names / wildcards that
+        # should be skipped by THIS detection even if the detect block
+        # would match. Use when you can't remove the signal (legacy
+        # software installed for compatibility reasons, etc.) but want
+        # the asset out-of-scope for THIS specific detection. CI -like
+        # match supports * and ? wildcards. Exact strings work too.
+        if ($det.ExcludeAssets -and @($det.ExcludeAssets).Count -gt 0 -and $assetName) {
+            $skip = $false
+            foreach ($pat in $det.ExcludeAssets) {
+                if ($assetName -like $pat) { $skip = $true; break }
+            }
+            if ($skip) { continue }
+        }
+
         $hit = Invoke-SIDetect -Asset $Asset -Detect $det.Detect -RuleId $Rule.Id
         if ($hit) {
             return [pscustomobject]@{

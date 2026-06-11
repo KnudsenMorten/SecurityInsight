@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.396
+## v2.2.397
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.397 -- asset-tagging: 4 independent Auto-* rules (3 OnboardingStatus + 1 DeviceNamePattern); no more AND between filters; new ExcludeByDeviceNamePattern config flag; regex-broaden OnboardingStatus match (89d3d2f3)
 - release: SecurityInsight v2.2.396 -- Auto-* rules rewritten on ExposureGraphNodes (modern) + AssetTags delta filter via array_index_of so 1h cron only processes new un-tagged devices (e3d28540)
 - release: SecurityInsight v2.2.395 -- asset-tagging Auto-* rules now project SenseDeviceId (was DeviceId, engine extractor never matched) + per-device 'Tagging device X with tag Y' verbose log (db21918b)
 - release: SecurityInsight v2.2.394 -- asset-tagging Defender hunting via REST (drop Start-MgSecurityHuntingQuery) -- fixes Microsoft.Graph.Authentication assembly-version conflict on PS 5.1 (b25b6a8c)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.371 - Azure profile row builder pre-filtered schema + hashtable-union risk record (no Add-Member loop) + fingerprint cache silent 404/409 + SHA256 fallback for non-ASCII AssetIds (Danish chars no longer fail PUT) (bbbfab92)
 - release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
 - release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
-- release: SecurityInsight v2.2.368 - removed version numbers from operator-visible layer labels + step messages (Connect-Platform v2.3 -> Connect-Platform, etc.) (be9c7f31)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.397 — Asset-tagging Auto-* rules: split OnboardingStatus and DeviceNamePattern into INDEPENDENT rules (no more AND) + regex-broaden OnboardingStatus match
+
+### Why
+
+v2.2.396 still ANDed the OnboardingStatus filter (in KQL) with the DeviceNamePatterns filter (in the engine row-filter). A 1-hour cron then only tagged devices in the intersection -- e.g. `desktop-* AND OnboardingStatus=canBeOnboarded`. The customer's intent is **OR**: a device should get an Auto-* tag if it matches ANY rule's criteria. Treating the two dimensions as a single rule meant the WHOLE OnboardingStatus bucket couldn't be excluded just by flipping a flag, and `desktop-*` boxes that were already `onboarded` were never picked up.
+
+A secondary problem: v2.2.396 used a literal string match (`tolower(...) == "canbeonboarded"`) against `rawData.onboardingStatus` and the first prod run returned 0 results, suggesting the actual EG value uses a different shape (e.g. with spaces or camelCase variants the literal didn't catch).
+
+### Fix 1 -- four fully independent rules
+
+`AssetTagging.locked.yaml` now ships **four** independent rules. Each is its own Defender hunting query + its own MDE bulk-tag pass; rules are NOT ANDed and a device matching multiple rules just collects multiple Auto-* tags:
+
+1. **Auto-CanBeOnboarded--Excluded--SI** -- OnboardingStatus only, gated by `AutoExcludeRules.ExcludeCanBeOnboarded`.
+2. **Auto-InsufficientInfo--Excluded--SI** -- OnboardingStatus only, gated by `AutoExcludeRules.ExcludeInsufficientInfo`.
+3. **Auto-Unsupported--Excluded--SI** -- OnboardingStatus only, gated by `AutoExcludeRules.ExcludeUnsupported`.
+4. **Auto-NamePattern--Excluded--SI** -- DeviceNamePatterns only, gated by `AutoExcludeRules.ExcludeByDeviceNamePattern` (new flag). The engine row-filter consumes `DeviceNamePatterns.{StartsWith, Contains, MatchesRegex}`. **Independent of OnboardingStatus** -- e.g. `desktop-*` boxes get tagged whether they're already onboarded or not.
+
+`ApplyDeviceNamePatterns: true` was removed from rules 1-3; only rule 4 carries it.
+
+### Fix 2 -- regex-broaden OnboardingStatus match
+
+Rules 1-3 now use `where tostring(rawData.onboardingStatus) matches regex @"(?i)^can.*onboard"` / `@"(?i)^insuff"` / `=~ "unsupported"` instead of a literal lowercased string. This shrugs off whatever exact shape EG uses (`canBeOnboarded`, `Can be onboarded`, `canbeonboarded`, etc.) and gracefully handles future format drift.
+
+### Fix 3 -- sample config updated
+
+`config/asset-tagging.config.sample.json` now documents the new `ExcludeByDeviceNamePattern` flag and clarifies that `DeviceNamePatterns` is consumed exclusively by the new rule 4 -- not by rules 1-3.
+
+### Files changed
+
+- `asset-profiling-enrichment/endpoint/AssetTagging.locked.yaml` -- now contains 4 rules instead of 3; rules 1-3 stripped of `ApplyDeviceNamePatterns: true`; OnboardingStatus filter switched to `matches regex`; new rule 4 added.
+- `config/asset-tagging.config.sample.json` -- new `ExcludeByDeviceNamePattern` flag + reworded `_doc` strings.
+
+### How to apply
+
+- Pull. To enable name-pattern-based exclusion (e.g. all `desktop-*` boxes), add `"ExcludeByDeviceNamePattern": true` to `AutoExcludeRules` in your live `config/asset-tagging.config.json`. Existing flags continue to gate rules 1-3 the same as before -- but those rules now tag the WHOLE bucket (no name scoping), so review your live config before re-running the launcher.
 
 ---
 

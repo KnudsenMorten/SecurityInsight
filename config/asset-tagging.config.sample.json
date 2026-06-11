@@ -1,26 +1,29 @@
 {
-  "_doc": "Asset-tagging configuration for SecurityInsight. Copy this file to 'asset-tagging.config.json' in the same directory (gitignored) and customize. The tagging engine reads the JSON at startup. Two kinds of customisation live here: (1) per-rule on/off gates via 'AutoExcludeRules.*'; (2) device-name filter patterns that any rule can opt-in to via the YAML field 'ApplyDeviceNamePatterns: true' instead of hard-coding the filter inside KQL.",
+  "_doc": "Asset-tagging configuration for SecurityInsight. Copy this file to 'asset-tagging.config.json' in the same directory (gitignored) and customize. The tagging engine reads the JSON at startup. Two kinds of customisation live here: (1) per-rule on/off gates via 'AutoExcludeRules.*'; (2) device-name filter patterns consumed ONLY by the 'Auto-NamePattern--Excluded--SI' rule (not ANDed with the 3 OnboardingStatus rules).",
 
   "_path": "config/asset-tagging.config.json (place next to SecurityInsight.custom.ps1)",
 
   "AutoExcludeRules": {
-    "_doc": "Auto-exclusion rules: each flag, when true, makes the tagging engine emit an MDE machine tag of '<bucket>--Excluded--SI' on every device whose Defender XDR OnboardingStatus matches the bucket. The existing Risk Analysis + asset-profiling exclusion machinery (RiskAnalysisGlobalExclusions.custom.json's ExcludedAssetTags: ['--Excluded--SI']) then drops those devices from every RA report and from every profiling rule automatically.",
+    "_doc": "Four independent rules. Each flag, when true, makes the tagging engine run that rule and emit an MDE machine tag of '<bucket>--Excluded--SI' on every device matching the rule's criteria. Rules are NOT ANDed -- a device that matches multiple rules gets multiple tags (which is fine; downstream RiskAnalysisGlobalExclusions.custom.json's ExcludedAssetTags: ['--Excluded--SI'] keys off the SUFFIX, not the prefix). Engine runs each rule as its own Defender Graph query + its own bulk MDE tag pass.",
 
     "ExcludeCanBeOnboarded":   false,
-    "_ExcludeCanBeOnboardedDoc": "When true, tag every device with DeviceInfo.OnboardingStatus = 'Can be onboarded' (Defender sees the device but Sense agent isn't installed yet). Use during onboarding rollouts to silence in-flight devices.",
+    "_ExcludeCanBeOnboardedDoc": "When true, tag every ExposureGraphNodes device whose rawData.onboardingStatus is 'canBeOnboarded' (Defender sees the device but Sense agent isn't installed yet). No name scoping -- the WHOLE bucket gets the Auto-CanBeOnboarded--Excluded--SI tag.",
 
     "ExcludeInsufficientInfo": false,
-    "_ExcludeInsufficientInfoDoc": "When true, tag every device with OnboardingStatus = 'Insufficient info' (Defender has signal traces but not enough to identify the device class).",
+    "_ExcludeInsufficientInfoDoc": "When true, tag every ExposureGraphNodes device whose rawData.onboardingStatus is 'insufficientInfo'. No name scoping.",
 
     "ExcludeUnsupported":      false,
-    "_ExcludeUnsupportedDoc":   "When true, tag every device with OnboardingStatus = 'Unsupported' (legacy / appliance OS Defender can't onboard at all)."
+    "_ExcludeUnsupportedDoc":   "When true, tag every ExposureGraphNodes device whose rawData.onboardingStatus is 'unsupported' (legacy / appliance OS Defender can't onboard at all). No name scoping.",
+
+    "ExcludeByDeviceNamePattern": false,
+    "_ExcludeByDeviceNamePatternDoc": "When true, run the Auto-NamePattern--Excluded--SI rule. The rule pulls every ExposureGraphNodes device and the engine post-filters rows against DeviceNamePatterns.{StartsWith, Contains, MatchesRegex} below. INDEPENDENT of OnboardingStatus -- e.g. 'desktop-*' boxes get tagged regardless of whether they're already onboarded. Leave false (or remove the entry) to disable name-pattern-based exclusion entirely."
   },
 
   "DeviceNamePatterns": {
-    "_doc": "Generic device-name filter set. Any tagging rule that opts in via the YAML field 'ApplyDeviceNamePatterns: true' has the engine filter its post-KQL row set against these patterns BEFORE writing tags. When ALL three arrays are empty, opt-in rules effectively get 'match every device' (no filter). When any one is populated, a device matches if its DeviceName satisfies ANY entry across ANY array (OR semantics). Lives here so a customer never has to edit KQL to change which boxes the auto-exclude rules apply to.",
+    "_doc": "Patterns consumed exclusively by the Auto-NamePattern--Excluded--SI rule (gated by AutoExcludeRules.ExcludeByDeviceNamePattern). When ALL three arrays are empty, the rule effectively matches every device (intended -- lets you ship the flag with patterns added later). When any one is populated, a device matches if its DeviceName satisfies ANY entry across ANY array (OR semantics). The 3 OnboardingStatus rules above DO NOT read these patterns.",
 
     "StartsWith":   [],
-    "_StartsWithDoc": "Case-insensitive prefix match. Example: ['test-', 'lab-', 'qa-'] tags only devices whose name starts with one of these prefixes.",
+    "_StartsWithDoc": "Case-insensitive prefix match. Example: ['test-', 'lab-', 'qa-', 'desktop-'].",
 
     "Contains":     [],
     "_ContainsDoc":  "Case-insensitive substring match. Example: ['-poc-', '-sandbox-'].",

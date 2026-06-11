@@ -11,8 +11,16 @@
 # When a flag is false (default), the engine skips that rule entirely --
 # no tag is written, no Defender Graph call is made, no MDE API call.
 # When a flag is true, the rule runs as a normal tagging rule: queries
-# DeviceInfo for matching OnboardingStatus and stamps each device with
-# an MDE machine tag of the shape '<bucket>--Excluded--SI'.
+# ExposureGraphNodes for device nodes matching the OnboardingStatus bucket
+# and stamps each device with an MDE machine tag of '<bucket>--Excluded--SI'.
+#
+# KQL roots in ExposureGraphNodes -- same modern pattern as the existing
+# legacy custom tagging rules. SenseDeviceId is extracted from EntityIds
+# via mv-apply. The current AssetTags list (deviceManualTags +
+# deviceDynamicTags from rawData) is checked against the target
+# AssetTagName via 'array_index_of(...) == -1' so a 1-hour cron only
+# touches the DELTA -- already-tagged devices are filtered out at the
+# KQL layer and never hit the MDE bulk endpoint.
 #
 # Downstream effect (with the existing RiskAnalysisGlobalExclusions.custom.json):
 #   - Risk Analysis reports filter via 'ExcludedAssetTags: ["--Excluded--SI"]'
@@ -32,19 +40,37 @@ AssetTagging:
     ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeCanBeOnboarded
     Description: |
-      Tags every DeviceInfo row whose OnboardingStatus = 'Can be onboarded'
-      (Defender sees the device but the Sense agent hasn't enrolled it yet).
-      Once tagged, the device drops out of RA + profiling on the next run.
+      Tags every ExposureGraphNodes device whose rawData.onboardingStatus
+      = 'canBeOnboarded' (Defender sees the device but the Sense agent
+      hasn't enrolled it yet). Already-tagged devices are filtered upstream
+      via array_index_of so a 1-hour cron only processes the delta.
     Query:
       - |
-        DeviceInfo
-        | where OnboardingStatus == "Can be onboarded"
-        | summarize arg_max(Timestamp, *) by DeviceId
-        | project SenseDeviceId = DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        ExposureGraphNodes
+        | where NodeLabel has "device"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tolower(tostring(rawData.onboardingStatus)) == "canbeonboarded"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
         | extend
-            AssetTagType  = "Asset--Excluded--SI",
-            AssetTag      = "Auto-CanBeOnboarded",
-            AssetTagName  = strcat("Auto-CanBeOnboarded", "--Excluded--SI")
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags))
+        | extend AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e=entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId")
+          )
+        | extend DeviceName = NodeName
+        | extend OnboardingStatus = tostring(rawData.onboardingStatus)
+        | extend
+            AssetTagType = "Asset--Excluded--SI",
+            AssetTag     = "Auto-CanBeOnboarded",
+            AssetTagName = strcat("Auto-CanBeOnboarded", "--Excluded--SI")
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+        | project NodeId, NodeName, DeviceName, OnboardingStatus, SenseDeviceId, DeviceInventoryId, AssetTags, AssetTagType, AssetTag, AssetTagName
 
   - AssetTagName: Auto-InsufficientInfo--Excluded--SI
     Mode: Prod
@@ -52,19 +78,37 @@ AssetTagging:
     ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeInsufficientInfo
     Description: |
-      Tags every DeviceInfo row whose OnboardingStatus = 'Insufficient info'
-      (Defender has telemetry traces but not enough signal to classify the
-      device). Typical sources: transient appliances, scanners, ephemeral VMs.
+      Tags every ExposureGraphNodes device whose rawData.onboardingStatus
+      = 'insufficientInfo' (Defender has telemetry traces but not enough
+      signal to classify the device). Already-tagged devices are filtered
+      upstream via array_index_of so a 1-hour cron only processes the delta.
     Query:
       - |
-        DeviceInfo
-        | where OnboardingStatus == "Insufficient info"
-        | summarize arg_max(Timestamp, *) by DeviceId
-        | project SenseDeviceId = DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        ExposureGraphNodes
+        | where NodeLabel has "device"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tolower(tostring(rawData.onboardingStatus)) == "insufficientinfo"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
         | extend
-            AssetTagType  = "Asset--Excluded--SI",
-            AssetTag      = "Auto-InsufficientInfo",
-            AssetTagName  = strcat("Auto-InsufficientInfo", "--Excluded--SI")
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags))
+        | extend AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e=entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId")
+          )
+        | extend DeviceName = NodeName
+        | extend OnboardingStatus = tostring(rawData.onboardingStatus)
+        | extend
+            AssetTagType = "Asset--Excluded--SI",
+            AssetTag     = "Auto-InsufficientInfo",
+            AssetTagName = strcat("Auto-InsufficientInfo", "--Excluded--SI")
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+        | project NodeId, NodeName, DeviceName, OnboardingStatus, SenseDeviceId, DeviceInventoryId, AssetTags, AssetTagType, AssetTag, AssetTagName
 
   - AssetTagName: Auto-Unsupported--Excluded--SI
     Mode: Prod
@@ -72,16 +116,35 @@ AssetTagging:
     ApplyDeviceNamePatterns: true
     EnabledByConfigFlag: AutoExcludeRules.ExcludeUnsupported
     Description: |
-      Tags every DeviceInfo row whose OnboardingStatus = 'Unsupported'
-      (legacy / appliance OS that Defender can't onboard). Use when retired
-      or EOL devices keep appearing in EG with no path to remediation.
+      Tags every ExposureGraphNodes device whose rawData.onboardingStatus
+      = 'unsupported' (legacy / appliance OS that Defender can't onboard).
+      Use when retired or EOL devices keep appearing in EG with no path
+      to remediation. Already-tagged devices are filtered upstream via
+      array_index_of so a 1-hour cron only processes the delta.
     Query:
       - |
-        DeviceInfo
-        | where OnboardingStatus == "Unsupported"
-        | summarize arg_max(Timestamp, *) by DeviceId
-        | project SenseDeviceId = DeviceId, DeviceName, MachineGroup, OnboardingStatus
+        ExposureGraphNodes
+        | where NodeLabel has "device"
+        | extend rawData = todynamic(NodeProperties).rawData
+        | where tobool(rawData.isExcluded) == false
+        | where tolower(tostring(rawData.onboardingStatus)) == "unsupported"
+        | project NodeId, NodeName, NodeLabel, rawData, EntityIds
         | extend
-            AssetTagType  = "Asset--Excluded--SI",
-            AssetTag      = "Auto-Unsupported",
-            AssetTagName  = strcat("Auto-Unsupported", "--Excluded--SI")
+            deviceManualTags  = iff(isnull(rawData.deviceManualTags),  dynamic([]), todynamic(rawData.deviceManualTags)),
+            deviceDynamicTags = iff(isnull(rawData.deviceDynamicTags), dynamic([]), todynamic(rawData.deviceDynamicTags))
+        | extend AssetTags = strcat_array(array_concat(deviceManualTags, deviceDynamicTags), ";")
+        | extend entityIds_dyn = todynamic(EntityIds)
+        | mv-apply e=entityIds_dyn on (
+            summarize
+                DeviceInventoryId = anyif(tostring(e.id), tostring(e.type) == "DeviceInventoryId"),
+                SenseDeviceId     = anyif(tostring(e.id), tostring(e.type) == "SenseDeviceId")
+          )
+        | extend DeviceName = NodeName
+        | extend OnboardingStatus = tostring(rawData.onboardingStatus)
+        | extend
+            AssetTagType = "Asset--Excluded--SI",
+            AssetTag     = "Auto-Unsupported",
+            AssetTagName = strcat("Auto-Unsupported", "--Excluded--SI")
+        | extend AssetTagsArray = iff(isempty(AssetTags), dynamic([]), split(AssetTags, ";"))
+        | where array_index_of(AssetTagsArray, AssetTagName) == -1
+        | project NodeId, NodeName, DeviceName, OnboardingStatus, SenseDeviceId, DeviceInventoryId, AssetTags, AssetTagType, AssetTag, AssetTagName

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.391
+## v2.2.392
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.392 -- rename AssetTagging.AutoExclude.locked.yaml -> AssetTagging.locked.yaml (engine default filename) (4b9b8da5)
 - release: SecurityInsight v2.2.391 -- ApplyDeviceNamePatterns: config-driven name filter, removes hard-coded prefixes from KQL (6ac4600d)
 - release: SecurityInsight v2.2.390 -- asset-tagging EnabledByConfigFlag: + asset-tagging.config.json + 3 OnboardingStatus auto-exclude rules (9ae0e77b)
 - chore(SI): gitignore *.corrupted safety-net backups from .custom.yaml description-block repair pass (b0d34e0a)
@@ -33,13 +34,20 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.366 - SMTP resolution rewritten for internal-automation convention: promote platform-defaults SMTPUser to SMTPFrom + force-pull actual login+password from KV (SMTPuser/SMTPpassword) (da09c0e6)
 - release: SecurityInsight v2.2.365 - dcr-si-run-health auto-create fixed (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if authenticated mail is enabled but creds are missing (ff5bef13)
 - release: SecurityInsight v2.2.364 - AutoBucket escalation budgets FULL request body (inline + surrounding KQL) not just inline; +SMTPFrom bridge from HighPriv_SMTP_From (8eb7833f)
-- release: SecurityInsight v2.2.363 - startup version banner + EARLY-ABORT futile sub-bucket pass when EG-suppressed AND 100% outer-bucket failure (saves ~2h per affected cross-domain Attack_Paths report) (bfb4c9a6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.392 — Rename `AssetTagging.AutoExclude.locked.yaml` -> `AssetTagging.locked.yaml` (engine default filename)
+
+v2.2.390 shipped the auto-exclude rules in `AssetTagging.AutoExclude.locked.yaml`, but the asset-tagging launcher (`launcher/asset-tagging/launcher.internal-vm.ps1`) defaults `$global:LockedYamlFile` to `AssetTagging.locked.yaml`. Customers running the launcher hit `No YAML found. Expected either Locked+Custom or legacy file in SettingsPath` because no file matched the expected name.
+
+Fix: renamed the file via `git mv` to match the launcher default. No content change; only the filename. Customers who set `$global:LockedYamlFile` to a custom value should leave their override in place; everyone else gets the rule baseline auto-loaded.
 
 ---
 

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.397
+## v2.2.398
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.398 -- asset-tagging Auto-* rules: source = DeviceInfo (authoritative for OnboardingStatus + full coverage) with EG left-join for AssetTags delta filter; suppress per-row "Missing SenseDeviceId" warnings (aggregate summary preserved) (7afb68a9)
 - release: SecurityInsight v2.2.397 -- asset-tagging: 4 independent Auto-* rules (3 OnboardingStatus + 1 DeviceNamePattern); no more AND between filters; new ExcludeByDeviceNamePattern config flag; regex-broaden OnboardingStatus match (89d3d2f3)
 - release: SecurityInsight v2.2.396 -- Auto-* rules rewritten on ExposureGraphNodes (modern) + AssetTags delta filter via array_index_of so 1h cron only processes new un-tagged devices (e3d28540)
 - release: SecurityInsight v2.2.395 -- asset-tagging Auto-* rules now project SenseDeviceId (was DeviceId, engine extractor never matched) + per-device 'Tagging device X with tag Y' verbose log (db21918b)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.372 - Azure profile row builder: per-field required-source pre-computation + per-row availKeys fast-null path + switch-Regex replaced with if/StartsWith. Skips ~58% of always-null field iteration (the 182-of-311 cols problem) (7539e6c8)
 - release: SecurityInsight v2.2.371 - Azure profile row builder pre-filtered schema + hashtable-union risk record (no Add-Member loop) + fingerprint cache silent 404/409 + SHA256 fallback for non-ASCII AssetIds (Danish chars no longer fail PUT) (bbbfab92)
 - release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
-- release: SecurityInsight v2.2.369 - AISummaryCache read crash on non-en-US boxes: handle GeneratedAt as [DateTime] directly when ConvertFrom-Json auto-materialized it (was crashing in da-DK culture) (d23a8bb8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.398 — Asset-tagging: switch source from ExposureGraphNodes to DeviceInfo for ALL Auto-* rules + suppress per-row "Missing SenseDeviceId" warnings
+
+### Symptom 1 -- missing devices
+
+After v2.2.397, the Auto-CanBeOnboarded rule consistently returned 0 results even though the Defender Inventory blade shows dozens of devices in that bucket. Root cause: ExposureGraphNodes doesn't surface every device DeviceInfo knows about -- specifically, devices that are fully un-onboarded (or only passively-discovered switches / IoT / mobile / printers) don't always get a Node in EG. DeviceInfo is the authoritative table for OnboardingStatus and surfaces every device Defender has signal for.
+
+### Symptom 2 -- per-row warning noise
+
+Each Auto-* rule emitted a multi-line `[WARN] Skipping Defender row -- Missing SenseDeviceId` block per skipped device, producing 100+ lines of repeated noise in the launcher log on every run (the same un-onboarded devices recur turn after turn).
+
+### Fix 1 -- source = DeviceInfo for ALL four rules
+
+All four rules now source from `DeviceInfo` (via `summarize arg_max(Timestamp, *) by DeviceId`). EG is left-joined ONLY to pull `rawData.deviceManualTags ++ rawData.deviceDynamicTags` into the AssetTags string for the `array_index_of(AssetTagsArray, AssetTagName) == -1` delta filter. Devices not in EG get an empty AssetTags string and naturally pass the filter (which is fine; the engine will silently skip them if their `DeviceInfo.DeviceId` is empty, i.e. they have no MDE machine record to tag).
+
+This brings full bucket coverage to rules 1-3 and full device coverage to rule 4 (so `desktop-*` matches even when those boxes aren't in EG).
+
+### Fix 2 -- suppress per-row warnings
+
+`engine/asset-tagging/AssetTagging.ps1`'s DEFENDERGRAPH branch no longer emits per-row `Write-WarnBlock` for "Missing SenseDeviceId" or "Not found in Defender" skip cases. The aggregate `Skipped Defender rows Count=N Reason=...` summary still fires once at the end so operators see the totals.
+
+### Documented limitation -- un-onboarded devices are NOT MDE-taggable
+
+The MDE machine-tag REST API (`POST /api/machines/{id}/tags`) requires an MDE-onboarded machine ID. Devices that exist in DeviceInfo passively (switches, APs, printers, IoT, mobile, dummy names, most CanBeOnboarded / Unsupported entries) typically have empty `DeviceInfo.DeviceId` -- those rows are surfaced by the rules for visibility but the engine drops them with the aggregate skip counter. **Tagging un-onboarded devices is not technically possible via this API path**. To actually exclude such devices from RA / profiling, the next step is to add a query-side `where rawData.onboardingStatus !in~ (...)` filter inside RA queries (gated by the same config flags) instead of relying on MDE tags.
+
+### Files changed
+
+- `asset-profiling-enrichment/endpoint/AssetTagging.locked.yaml` -- all four Auto-* rules rebuilt on DeviceInfo + EG left-join.
+- `engine/asset-tagging/AssetTagging.ps1` -- per-row `Write-WarnBlock` calls removed in the DEFENDERGRAPH branch; aggregate summary preserved.
+- `config/asset-tagging.config.sample.json` -- already documents `ExcludeByDeviceNamePattern` (added v2.2.397).
+
+### How to apply
+
+- Pull. Make sure your live `config/asset-tagging.config.json` carries `"ExcludeByDeviceNamePattern": true` under `AutoExcludeRules` (otherwise rule 4 is skipped). Rerun the launcher.
 
 ---
 

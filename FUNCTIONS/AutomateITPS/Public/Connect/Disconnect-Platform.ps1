@@ -52,6 +52,7 @@ function Disconnect-Platform {
         $global:HighPriv_Modern_ApplicationID_Azure           = $null
         $global:HighPriv_Modern_Secret_Azure                  = $null
         $global:HighPriv_Modern_CertificateThumbprint_Azure   = $null
+        $global:HighPriv_Modern_AuthMethod                    = $null
         $global:SI_SPN_TenantId                               = $null
         $global:SI_SPN_AppId                                  = $null
         $global:SI_SPN_Secret                                 = $null

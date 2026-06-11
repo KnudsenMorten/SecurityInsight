@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.387
+## v2.2.388
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.388 -- per-detection asset exclusion (excludeAssets:) for profiling rules (dee3494d)
 - release: SecurityInsight v2.2.387 - Connect-PlatformBootstrap Auto-mode now falls back from MI to Certificate on cross-tenant failure (IMDS reachable + Tenant-A MI vs Tenant-B target sub) (15bcb393)
 - release: SecurityInsight v2.2.386 - Summary-template Total row now matches per-domain rows when 24h cache wins (56f62a00)
 - release: SecurityInsight v2.2.385 - KPI table Total/per-domain arithmetic fix + AI snapshot source attribution (d816a63b)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.361 - AutoBucket escalation sizes buckets to ~70% of nginx 1MB cap via MEASURED bytes-per-row; eliminates 8-10x over-escalation (500K: 1000 buckets -> ~120 buckets) (935a8cca)
 - release: SecurityInsight v2.2.360 - hybrid CL producer pre-groups snapshot ONCE per (cacheKey, BucketCount); eliminates ~1B SHA256 calls + ~58h local overhead per report at 500K scale (5333fa38)
 - release: SecurityInsight v2.2.359 - SMTP credential bridge ($global:HighPriv_SMTP_*) + KV fallback chain (SMTPpassword/SMTPuser variants) (2de4c809)
-- release: SecurityInsight v2.2.358 - LA-ingest error body surfaced (RA + profiler) + DCE/DCR RG auto-discover via Az lookup + sample templates fixed + customer-name scrub (3aa4daf8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.388 — Per-detection asset exclusion (`excludeAssets:`) for profiling rules
+
+### Why
+
+Legacy device had Microsoft System Center bits installed for compatibility reasons (couldn't be removed), and TWO profiling rules (`MicrosoftSystemCenter` + `MicrosoftSystemCenterConfigurationManager`) were firing on the device's `tvmSoftwareNames` signal, classifying the box as Tier 0. There was no graceful way to opt that one device out without either disabling the rule globally (breaks every legitimately-System-Center box) or hacking around the rule logic.
+
+### What's new
+
+New optional field on every profiling detection in `asset-profiling-enrichment/`:
+
+```yaml
+detections:
+  - id: MicrosoftSystemCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft/system_center'
+    excludeAssets:                  # NEW
+      - 'oldlegacybox01'             # exact name (CI)
+      - 'finance-svr-*'              # PowerShell -like wildcards
+    set: { Tier: 0, Purpose: 'System Center role', Category: 'Application Service' }
+```
+
+Lives on the detection (alongside `detect:` and `set:`; alias `excludeNames:`). Case-insensitive match against the asset's `Name` field (with `DeviceName` / `FQDN` / `ComputerName` / `HostName` fallbacks). PowerShell `-like` wildcards (`*`, `?`). When matched, the detection is **skipped** for that asset — rule evaluation continues with the next detection. The rule fires normally for every other asset.
+
+### How to use it
+
+Drop a `<RuleId>.custom.yaml` next to the locked file with the same `id:` field, copy the affected detection(s) over from the locked file, add `excludeAssets:` to each. The custom file is gitignored, survives release upgrades, and is `git diff`-able as a per-tenant audit trail. Worked example + comparison vs. `mode: disable` and MDE-tag-based global exclusion in `README.md` § 5.5b and `docs/RULE-REFERENCE.md`.
+
+### Files changed
+
+- `engine/asset-profiling/shared/Get-SIRuleSet.ps1` — read `excludeAssets` / `excludeNames` from YAML.
+- `engine/asset-profiling/shared/RuleEval.ps1` — resolve asset name once outside the detection loop; skip a detection when its `ExcludeAssets` matches.
+- `docs/RULE-REFERENCE.md` — table row + worked example.
+- `README.md` — TOC entry 5.5b + full section with comparison table.
 
 ---
 

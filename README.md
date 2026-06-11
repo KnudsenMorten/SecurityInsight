@@ -122,6 +122,7 @@
    - 5.3 [Exclude a configuration recommendation per report](#53-exclude-configuration-recommendation)
    - 5.4 [Exclude a CVE per report](#54-exclude-cve)
    - 5.5 [Exclude an asset finding per report](#55-exclude-asset-tag)
+   - 5.5b [Exclude a specific asset from a profiling detection rule](#55b-exclude-asset-from-profiling-rule)
    - 5.6 [Scalar overrides per report (e.g. CVE minimum age)](#56-scalar-overrides)
    - 5.7 [Weighted risk-factor rules (per-engine field-driven uplifts)](#57-weighted-risk-factors)
    - 5.8 [Detailed report severity scope (defaults + how to widen)](#58-detailed-report-severity-scope)
@@ -2089,6 +2090,72 @@ in the same file — engine reads each property independently.
 > can `git diff` it to track *who excluded what + why*. Use the `_comment`
 > field as your changelog. When a vendor patches a CVE or your policy
 > changes, just delete the entry + re-run — no engine recompile.
+
+---
+
+<a id="55b-exclude-asset-from-profiling-rule"></a>
+### 5.5b Exclude a specific asset from a profiling detection rule
+
+When a legacy device matches a **profiling** detection (e.g. it has
+`microsoft/system_center` installed for compatibility reasons, but isn't
+actually a System Center server) and the resulting tier is wrong, drop a
+`<RuleId>.custom.yaml` next to the locked file with the same `id:` and
+add **`excludeAssets:`** to each affected detection.
+
+Field semantics (full reference in `docs/RULE-REFERENCE.md`):
+
+- Lives on the **detection** (sibling of `detect:` and `set:`).
+- Accepts a list of asset names (case-insensitive) or PowerShell `-like`
+  wildcards (`*`, `?`).
+- When the asset's `Name` (with `DeviceName` / `FQDN` / `ComputerName` /
+  `HostName` fallbacks) matches any entry, the detection is **skipped**
+  for that asset — rule evaluation continues with the next detection.
+- Use this when you can't remove the signal (compat-blocking software,
+  legacy management agent, etc.) but want the asset out-of-scope FOR
+  THIS DETECTION only. The rule continues to fire normally for every
+  other asset.
+
+Worked example — the System Center two-rule case:
+
+```yaml
+# File: asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/MicrosoftSystemCenter.custom.yaml
+id:        MicrosoftSystemCenter
+appliesTo: endpoint
+mode:      locked
+
+detections:
+  - id: MicrosoftSystemCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft/system_center'
+    excludeAssets:
+      - 'oldlegacybox01'           # exact name (CI)
+      - 'finance-svr-*'            # wildcard (CI)
+    set:
+      Tier:     0
+      Purpose:  'System Center role'
+      Category: 'Application Service'
+```
+
+Repeat the `excludeAssets:` block on every rule that fires for the same
+legacy device — typically `MicrosoftSystemCenter.custom.yaml` AND
+`MicrosoftSystemCenterConfigurationManager.custom.yaml` (or whatever
+two rules are misfiring). Each file is gitignored, survives release
+upgrades, and is `git diff`-able as a per-tenant audit trail.
+
+> **Compared to `mode: disable`**: the disable flag drops the rule
+> fleet-wide. `excludeAssets:` is surgical — every other asset still
+> gets the tier stamp. Pick disable when the rule itself is wrong for
+> your tenant, `excludeAssets:` when only specific assets need to opt
+> out.
+
+> **Compared to MDE tag-based global exclusion** (`--Excluded--SI` in
+> `RiskAnalysisGlobalExclusions.custom.json`): tags drop the asset from
+> RA reports entirely. `excludeAssets:` only affects the named
+> detection during profiling — the asset still appears in RA reports
+> just without the wrong tier.
 
 ---
 

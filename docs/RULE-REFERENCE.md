@@ -31,6 +31,36 @@ Every rule file under `asset-profiling-enrichment/` follows this shape. The anno
 | `id` | yes | Detection identity. Globally unique within the rule. Surfaces as `DetectionId` in `SIRules[]`. |
 | `detect` | yes | The match condition (see Detect kinds below). |
 | `set` | yes | What to stamp on the row when `detect` is true. |
+| `excludeAssets` | no | List of asset names / `-like` wildcards. When the asset's `Name` matches any entry (CI), this detection is SKIPPED for that asset even if `detect` would otherwise fire -- rule evaluation continues with the next detection. Use when a legacy device matches a `tvmSoftwareNames` signal you can't remove (compat-blocking software installed), but you want that specific device out-of-scope for THIS detection only. Alias `excludeNames`. |
+
+#### Worked example -- exclude one legacy box from the System Center detection
+
+```yaml
+# File: asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/MicrosoftSystemCenter.custom.yaml
+# Path is gitignored under .custom.*; copy from .locked.yaml then add excludeAssets.
+id:        MicrosoftSystemCenter
+appliesTo: endpoint
+mode:      locked
+purpose:   'System Center role detection (with legacy-box exclusion)'
+category:  'Application Service'
+
+detections:
+  - id: MicrosoftSystemCenter
+    detect:
+      any:
+        - kind: hasSoftwareInstalled
+          tvmSoftwareNames:
+            - 'microsoft/system_center'
+    excludeAssets:
+      - 'oldlegacybox01'            # exact name match (CI)
+      - 'finance-svr-*'             # wildcard match (CI)
+    set:
+      Tier:     0
+      Purpose:  'System Center role (excluded boxes get default tier)'
+      Category: 'Application Service'
+```
+
+Combine the same `excludeAssets:` block on every relevant rule when you have multiple detections firing on the same legacy device.
 
 ### `detect` -- combine semantics
 

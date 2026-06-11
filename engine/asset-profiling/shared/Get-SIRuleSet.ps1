@@ -213,10 +213,36 @@ function Get-SIRuleSet {
             if ($obj.detections) {
                 foreach ($d in $obj.detections) {
                     $detId = if ($d.id) { [string]$d.id } else { $id }
+
+                    # Per-detection asset exclusion list. Read from
+                    # `excludeAssets:` on the detection (alias
+                    # `excludeNames:`). Accepted shapes:
+                    #   excludeAssets: ['my-old-box', '*-legacy-*']
+                    #   excludeAssets:
+                    #     - my-old-box
+                    #     - '*-legacy-*'
+                    # Comparison happens against the asset's Name field
+                    # (case-insensitive) in Invoke-SIRuleEval. Wildcards
+                    # supported via PowerShell -like (*, ?). Use this
+                    # when you can't remove the matching software /
+                    # signal from the asset itself but want the asset
+                    # out-of-scope FOR THIS DETECTION only -- the rule
+                    # continues to fire for every other asset.
+                    $exclude = @()
+                    $rawEx = if ($d.excludeAssets) { $d.excludeAssets } elseif ($d.excludeNames) { $d.excludeNames } else { $null }
+                    if ($rawEx) {
+                        if ($rawEx -is [System.Collections.IEnumerable] -and -not ($rawEx -is [string])) {
+                            $exclude = @($rawEx | ForEach-Object { [string]$_ } | Where-Object { $_ })
+                        } else {
+                            $exclude = @(([string]$rawEx) -split '[,;]\s*' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                        }
+                    }
+
                     [void]$detections.Add([pscustomobject]@{
-                        Id     = $detId
-                        Detect = $d.detect      # leave nested @{ any|all = [...]} as-is for RuleEval to consume
-                        Set    = $d.set
+                        Id            = $detId
+                        Detect        = $d.detect      # leave nested @{ any|all = [...]} as-is for RuleEval to consume
+                        Set           = $d.set
+                        ExcludeAssets = $exclude        # @() when not configured -- empty means "exclusion disabled"
                     })
                 }
             }

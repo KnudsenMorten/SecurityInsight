@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.393
+## v2.2.394
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release: SecurityInsight v2.2.394 -- asset-tagging Defender hunting via REST (drop Start-MgSecurityHuntingQuery) -- fixes Microsoft.Graph.Authentication assembly-version conflict on PS 5.1 (b25b6a8c)
 - release: SecurityInsight v2.2.393 -- asset-tagging fix: probe config/asset-tagging.config.json (not $SettingsPath) + back-compat for pre-v2.2.392 AssetTagging.AutoExclude.locked.yaml (983d0c0c)
 - release: SecurityInsight v2.2.392 -- rename AssetTagging.AutoExclude.locked.yaml -> AssetTagging.locked.yaml (engine default filename) (4b9b8da5)
 - release: SecurityInsight v2.2.391 -- ApplyDeviceNamePatterns: config-driven name filter, removes hard-coded prefixes from KQL (6ac4600d)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.368 - removed version numbers from operator-visible layer labels + step messages (Connect-Platform v2.3 -> Connect-Platform, etc.) (be9c7f31)
 - release: SecurityInsight v2.2.367 - config snapshot grouped section now shows Layer 1 (Connect-Platform) + Layer 1b (platform-defaults) which were silently dropped due to stale layer-order label list (bd6ec921)
 - release: SecurityInsight v2.2.366 - SMTP resolution rewritten for internal-automation convention: promote platform-defaults SMTPUser to SMTPFrom + force-pull actual login+password from KV (SMTPuser/SMTPpassword) (da09c0e6)
-- release: SecurityInsight v2.2.365 - dcr-si-run-health auto-create fixed (CollectionTime cast to [datetime]) + startup SMTP pre-flight throws early if authenticated mail is enabled but creds are missing (ff5bef13)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.394 — Asset-tagging: drop `Start-MgSecurityHuntingQuery`, go REST -- fixes PS 5.1 "Microsoft.Graph.Authentication assembly already loaded" failure
+
+### Symptom
+
+```
+[ERROR] Engine failed: The 'Start-MgSecurityHuntingQuery' command was found in the module
+'Microsoft.Graph.Security', but the module could not be loaded due to the following error:
+[Could not load file or assembly 'Microsoft.Graph.Authentication, Version=2.32.0.0, ...'.
+Assembly with same name is already loaded]
+```
+
+### Root cause
+
+PS 5.1 cannot side-load two different versions of `Microsoft.Graph.Authentication` into the same AppDomain. When something earlier in the session has already imported (or referenced) one version of `Microsoft.Graph.Authentication` -- a different SI engine in the same launcher chain, `Connect-MgGraph`, an `Az.Accounts` cmdlet that depends on it, etc. -- the asset-tagging engine's later `Import-Module Microsoft.Graph.Security` fails because Security ships with its own pinned Authentication version that doesn't match the one already in memory.
+
+The profiling engine sidestepped this years ago by calling the Graph hunting REST endpoint directly (`Invoke-SIHuntingQuery` in `engine/asset-profiling/shared/HuntingQuery.ps1`). The asset-tagging engine still went through the SDK cmdlet.
+
+### Fix
+
+`Invoke-DefenderGraphQuery` in `engine/asset-tagging/AssetTagging.ps1` now:
+
+1. Pulls a Graph token via `Get-SIGraphToken -Resource Graph` (same helper the profiling engine uses).
+2. POSTs to `https://graph.microsoft.com/v1.0/security/runHuntingQuery` with `Invoke-RestMethod`.
+3. Returns a flat array of `PSCustomObject` rows (REST shape) -- no more `.Results.AdditionalProperties` SDK indirection.
+
+The caller in the MAIN LOOP (`if ($queryEngine -eq 'DEFENDERGRAPH')`) was simplified to match -- `$rows = @(Invoke-DefenderGraphQuery -Query $query)` instead of the old two-step SDK unwrap. Row schema is identical (same KQL columns), so all downstream tag-write logic continues unchanged.
+
+`Microsoft.Graph.Security` is no longer touched by the asset-tagging engine on any code path, so the assembly-version conflict can't surface here regardless of what else loaded what version of `Microsoft.Graph.Authentication` earlier in the session.
+
+### Files changed
+
+- `engine/asset-tagging/AssetTagging.ps1` -- `Invoke-DefenderGraphQuery` rewritten as REST + MAIN LOOP DEFENDERGRAPH branch simplified.
+
+### How to apply
+
+- Pull, rerun the asset-tagging launcher. The previous run already proved the new config-load path works (`v2.2.393`); this release just makes the hunting submitter survive the module-version conflict so the three Auto-* rules actually execute.
 
 ---
 

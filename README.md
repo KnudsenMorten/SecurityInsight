@@ -438,15 +438,9 @@ Every Risk Analysis run produces all of these from a single in-memory dataset (n
 
 Before you set up, here's the data SecurityInsight reads (Inputs), what it joins with (Enrichment), and where it ships the results (Outputs). Everything is opt-in — start with the minimum, layer on the rest.
 
-> 📚 **Deep-dive references** (auto-generated from source-of-truth files; permanent docs maintained alongside the engine):
-> - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — overall solution architecture: stage pipeline, asset-profile flow, RA execution model
-> - [`docs/PROVIDER_CONTRACT.md`](./docs/PROVIDER_CONTRACT.md) — provider plug-in contract; how to write your own
-> - [`docs/asset-profiling-schema.md`](./docs/asset-profiling-schema.md) — every Profile-table column with type, source, source-path, written-by-stage, read-by-stages
-> - [`docs/risk-analysis-detection.md`](./docs/risk-analysis-detection.md) — every Risk Analysis report with purpose, source tables, severity / tier scope, output columns, KQL
-> - [`docs/QUERIES-REFERENCE.md`](./docs/QUERIES-REFERENCE.md) — YAML schema reference for `RiskAnalysis_Queries_Locked.yaml` (every field the engine reads, with line refs to `Invoke-RiskAnalysis.ps1`); use when authoring `_Custom.yaml` overrides
-> - [`docs/RISKSCORE-REFERENCE.md`](./docs/RISKSCORE-REFERENCE.md) — JSON schema reference for `riskscore_weighted.schema.custom.json` (per-report weight overrides)
-> - [`docs/Operations.md`](./docs/Operations.md) — day-2 operations: monitoring, run-health KQL, cadence tuning, troubleshooting
-> - [`docs/CMDB-customer-drop.md`](./docs/CMDB-customer-drop.md) — ServiceNow CMDB CSV format walk-through with column-by-column reference
+> 📚 **Documentation set** (the canonical docs maintained alongside the engine):
+> - [`docs/DESIGN.md`](./docs/DESIGN.md) — the single design doc: architecture & engine pipeline, the provider plug-in contract, the asset-profiling data model & per-engine schemas, the privilege-tier catalog, the enrichment/detection-rule model, the risk-score model, the Risk Analysis query/report catalog, the report-enrichment vocabulary, the MDE/ExposureGraph field-gap analysis, CMDB reconciliation, Power BI, container/KEDA deployment, the preview/release model, day-2 operations & run-health KQL, troubleshooting, and the publish layout. *(Several sections are generated from source-of-truth files — `*.schema.locked.json`, `RiskAnalysis_Queries_Locked.yaml`, `privilege-tier-catalog.locked.json` — which remain the contract; regenerate via the `tools/Build-*` scripts.)*
+> - [`docs/FEATURES.md`](./docs/FEATURES.md) — the delivered-feature catalog, per area, in plain language
 
 ```mermaid
 flowchart LR
@@ -528,7 +522,7 @@ flowchart LR
 | **📁 UNC share upload** | Same as blob, to `\\server\share\path`. Caller's Windows identity needs share write. | `$global:RiskAnalysis_ExportDestination` set to UNC path | ✅ Available |
 | **📊 Power BI dataset refresh** | Triggers a refresh of the Power BI dataset deployed via `Deploy-SIPowerBI.ps1` after each run. | `$global:SendToPowerBI = $true` | ✅ Available |
 | **📓 Azure Monitor Workbook** | Pre-built Workbook JSON for visual exploration. One-time import, queries `SI_*_CL` tables. | Import `data/workbooks/SecurityInsight.json` | ✅ Available |
-| **🔔 Run-health KQL alert** | Alert when a Start row has no matching End row in 1 hour (= crashed run). | KQL on `SI_RunHealth_CL` (sample query in `docs/Operations.md`) | ✅ Available |
+| **🔔 Run-health KQL alert** | Alert when a Start row has no matching End row in 1 hour (= crashed run). | KQL on `SI_RunHealth_CL` (sample query in `docs/DESIGN.md` → Operations & runbook) | ✅ Available |
 
 <a id="34-setup-file-checklist"></a>
 ### 3.4 Setup file checklist — which sample files to copy
@@ -946,7 +940,7 @@ Copy `config/setup-unattended.sample.json` to `config/setup-unattended.json` (gi
 | `Container` | `EnvName` | Container Apps Environment name | `cae-securityinsight` | same |
 | `Container` | `UseKEDA` | Queue-depth auto-scaling | `true` | `true` |
 | `Container` | `KedaMaxReplicas` | Hard cap on worker replicas | `30` | `30` |
-| `Smtp` | `Server` | SMTP relay hostname (e.g. `AZWE-S-RLAY-P01.casa.dk`, `smtp.office365.com`, `smtp-relay.brevo.com`) | **n/a — Internal reads SMTP from `PlatformConfiguration/config/platform-defaults.ps1`** | required for emails |
+| `Smtp` | `Server` | SMTP relay hostname (e.g. `smtp-relay.contoso.com`, `smtp.office365.com`, `smtp-relay.brevo.com`) | **n/a — Internal reads SMTP from `PlatformConfiguration/config/platform-defaults.ps1`** | required for emails |
 | `Smtp` | `Port` | 25=plain/STARTTLS, 465=SMTPS, 587=submission-with-STARTTLS | n/a | `587` |
 | `Smtp` | `User` / `Password` | SMTP auth creds. Omit for unauthenticated relays | n/a | `null` |
 | `Smtp` | `From` | Default From address (e.g. `svc-automation@example.com`) | n/a | required |
@@ -2102,7 +2096,7 @@ actually a System Center server) and the resulting tier is wrong, drop a
 `<RuleId>.custom.yaml` next to the locked file with the same `id:` and
 add **`excludeAssets:`** to each affected detection.
 
-Field semantics (full reference in `docs/RULE-REFERENCE.md`):
+Field semantics (full reference in `docs/DESIGN.md` → Enrichment / detection rule model):
 
 - Lives on the **detection** (sibling of `detect:` and `set:`).
 - Accepts a list of asset names (case-insensitive) or PowerShell `-like`
@@ -2563,7 +2557,7 @@ You want to keep the engine's `ADDomainController` detection logic but stamp **y
 
 The engine deduplicates by `id` and the `.custom.yaml` always wins (see `Get-SIRuleSet.ps1:265-284`). Locked is suppressed entirely. On the next run every matched DC gets `Tier=0` + `Tags=['cab:domain-controllers']` + `cmdbId='SVC-AD-PROD'` (and Reconcile auto-stamps `cmdbName` / `cmdbCriticality` / `cmdbDataSensitivity` from your CMDB CSV when `$global:SI_EnableCmdbProvider=$true`).
 
-The full annotated grammar with every `detect:` kind + the inline POLICY callout is in [`asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml`](asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml). Detect-kind reference + override semantics are in [`docs/RULE-REFERENCE.md`](docs/RULE-REFERENCE.md).
+The full annotated grammar with every `detect:` kind + the inline POLICY callout is in [`asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml`](asset-profiling-enrichment/_TEMPLATE.custom.sample.yaml). Detect-kind reference + override semantics are in [`docs/DESIGN.md`](docs/DESIGN.md) → Enrichment / detection rule model.
 
 ---
 

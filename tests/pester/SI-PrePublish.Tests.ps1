@@ -260,15 +260,20 @@ Describe 'DocConsistency' {
         Test-Path (Join-Path $script:V22Root $_) | Should -BeTrue
     }
 
-    It 'docs/risk-analysis-detection.md exists' {
-        Test-Path (Join-Path $script:V22Root 'docs\risk-analysis-detection.md') | Should -BeTrue
+    # NOTE: the per-topic doc `docs/risk-analysis-detection.md` (and the other 17
+    # topic docs + ROADMAP) were consolidated into the single `docs/DESIGN.md`
+    # under the shared 5-doc model. The RA report catalog now lives in DESIGN.md's
+    # "Risk Analysis report catalog (model & inventory)" section, and the catalog
+    # count is verified against the YAML by the 'README claims same total report
+    # count as YAML' test above (README is synthesized from FEATURES + DESIGN).
+    It 'docs/DESIGN.md exists' {
+        Test-Path (Join-Path $script:V22Root 'docs\DESIGN.md') | Should -BeTrue
     }
 
-    It 'docs catalog count matches YAML' {
-        $cat = Get-Content -Raw -LiteralPath (Join-Path $script:V22Root 'docs\risk-analysis-detection.md')
-        if ($cat -match '\*\*(\d+)\s+reports\*\*') {
-            [int]$Matches[1] | Should -Be $script:RaReports.Count
-        }
+    It 'docs/DESIGN.md documents the Risk Analysis report catalog' {
+        $design = Get-Content -Raw -LiteralPath (Join-Path $script:V22Root 'docs\DESIGN.md')
+        $design | Should -Match 'Risk Analysis report catalog' -Because 'the consolidated RA detection catalog must remain documented in DESIGN.md'
+        $design | Should -Match 'RiskAnalysis_Queries_Locked\.yaml' -Because 'DESIGN.md must point at the YAML authority file the catalog is generated from'
     }
 }
 

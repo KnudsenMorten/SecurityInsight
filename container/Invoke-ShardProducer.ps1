@@ -42,21 +42,28 @@ $engine     = Get-RequiredEnv 'SI_ENGINE'
 $shardCount = [int](Get-OptionalEnv 'SI_SHARD_COUNT' 1)
 if ($shardCount -lt 1) { $shardCount = 1 }
 
-$global:SI_StorageAccount = Get-RequiredEnv 'SI_STORAGE_ACCOUNT'
-$global:SI_UAMI_ClientId   = Get-OptionalEnv 'SI_UAMI_CLIENTID' $null
+$global:SI_StorageAccount      = Get-RequiredEnv 'SI_STORAGE_ACCOUNT'
+$global:SI_WorkspaceResourceId = Get-RequiredEnv 'SI_WORKSPACE_RESOURCEID'
+$global:SI_UAMI_ClientId       = Get-OptionalEnv 'SI_UAMI_CLIENTID' $null
 
 # Connect-AzAccount -- queues access needs context regardless of OAuth/Key.
 $subId = ($global:SI_WorkspaceResourceId -split '/')[2]
 if ($global:SI_UAMI_ClientId) {
-    Connect-AzAccount -Identity -AccountId $global:SI_UAMI_ClientId | Out-Null
+    Connect-AzAccount -Identity -AccountId $global:SI_UAMI_ClientId -Subscription $subId | Out-Null
 } else {
-    $secure = ConvertTo-SecureString (Get-RequiredEnv 'SI_GRAPH_SECRET') -AsPlainText -Force
-    $cred   = New-Object System.Management.Automation.PSCredential((Get-RequiredEnv 'SI_GRAPH_APPID'), $secure)
-    Connect-AzAccount -ServicePrincipal -Tenant (Get-RequiredEnv 'SI_GRAPH_TENANTID') -Credential $cred | Out-Null
+    # v2.3 single-SPN model. SI_SPN_* are the primary env names;
+    # SI_GRAPH_* fall back for legacy callers still pinned to preview-25 bootstrap.
+    $appId    = Get-OptionalEnv 'SI_SPN_APPID'    (Get-OptionalEnv 'SI_GRAPH_APPID')
+    $secret   = Get-OptionalEnv 'SI_SPN_SECRET'   (Get-OptionalEnv 'SI_GRAPH_SECRET')
+    $tenantId = Get-OptionalEnv 'SI_SPN_TENANTID' (Get-OptionalEnv 'SI_GRAPH_TENANTID')
+    if (-not $appId -or -not $secret -or -not $tenantId) { throw "Producer requires SI_SPN_APPID + SI_SPN_SECRET + SI_SPN_TENANTID (or SI_GRAPH_* legacy aliases)" }
+    $secureStr = ConvertTo-SecureString $secret -AsPlainText -Force
+    $cred      = New-Object System.Management.Automation.PSCredential($appId, $secureStr)
+    Connect-AzAccount -ServicePrincipal -Tenant $tenantId -Credential $cred -Subscription $subId | Out-Null
 }
 
-. /app/v2.2/engine/asset-profiling/storage/StorageContext.ps1
-. /app/v2.2/engine/asset-profiling/storage/WorkerQueue.ps1
+. /app/engine/asset-profiling/storage/StorageContext.ps1
+. /app/engine/asset-profiling/storage/WorkerQueue.ps1
 
 # Storage context: prefer OAuth via UAMI; fall back to shared key.
 if ($global:SI_UAMI_ClientId) {

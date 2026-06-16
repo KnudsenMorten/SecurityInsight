@@ -12,17 +12,18 @@ function Get-PlatformSecretLocal {
 
     $path = Get-LocalSecretFile
     if (-not (Test-Path -LiteralPath $path)) {
-        # v2.2.291 -- downgrade to Write-Verbose. Same rationale as the KV
-        # provider: optional missing secrets on a fresh install shouldn't
-        # spam the launcher output. Run with -Verbose to surface these.
-        Write-Verbose ("Get-PlatformSecretLocal: store not found at {0} (returning `$null). Populate with Set-PlatformLocalSecret if you need this secret." -f $path)
-        return $null
+        # Throw on a missing entry (restored 2026-06-14). A caller asked for this
+        # secret by name, so absence is an error it must see. OPTIONAL secrets are
+        # handled by the caller: pass -IgnoreMissing (Initialize-PlatformIdentity)
+        # or wrap in try/catch with -ErrorAction Stop and Write-Verbose the skip --
+        # that keeps fresh-install runs quiet WITHOUT silently returning $null
+        # (which masks config errors and breaks the -IgnoreMissing contract).
+        throw ("Get-PlatformSecretLocal: secret '{0}' not found (no local secret store at {1}). Populate it with Set-PlatformLocalSecret, or treat it as optional via -IgnoreMissing / try-catch." -f $Name, $path)
     }
 
     $store = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
     if (-not ($store.PSObject.Properties.Name -contains $Name)) {
-        Write-Verbose ("Get-PlatformSecretLocal: secret '{0}' not found in {1} (returning `$null)." -f $Name, $path)
-        return $null
+        throw ("Get-PlatformSecretLocal: secret '{0}' not found in {1}. Populate it with Set-PlatformLocalSecret, or treat it as optional via -IgnoreMissing / try-catch." -f $Name, $path)
     }
 
     $cipherBytes = [Convert]::FromBase64String($store.$Name)

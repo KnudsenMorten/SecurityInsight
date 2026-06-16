@@ -12,8 +12,8 @@ function Get-PlatformSecretKeyVault {
     if (-not (Get-Module -ListAvailable -Name Az.KeyVault)) {
         throw "Get-PlatformSecretKeyVault: module Az.KeyVault not available. Install-Module Az.KeyVault -Scope CurrentUser"
     }
-    Import-Module Az.Accounts -ErrorAction Stop
-    Import-Module Az.KeyVault -ErrorAction Stop
+    # No explicit Import-Module -- Get-AzContext / Get-AzKeyVaultSecret
+    # auto-load Az.Accounts / Az.KeyVault on first call.
 
     $existing = Get-AzContext -ErrorAction SilentlyContinue
     if (-not $existing) {
@@ -26,14 +26,14 @@ function Get-PlatformSecretKeyVault {
 
     $secret = Get-AzKeyVaultSecret -VaultName $Context.Tenant.KeyVaultName -Name $Name -ErrorAction Stop -WarningAction SilentlyContinue
     if (-not $secret) {
-        # v2.2.285 -- soft-fail when the secret simply doesn't exist. v2.2.291 --
-        # downgrade Write-Warning to Write-Verbose so normal runs don't print
-        # noise about every optional secret that isn't seeded yet (SI-StorageKey
-        # on OAuth-default tenants, Shodan/OpenAI keys when those features are
-        # off, etc.). Operators who actually need to see missing-secret events
-        # can run with -Verbose or set $VerbosePreference = 'Continue'.
-        Write-Verbose ("Get-PlatformSecretKeyVault: secret '{0}' not found in vault '{1}' (returning `$null)." -f $Name, $Context.Tenant.KeyVaultName)
-        return $null
+        # Throw on a missing secret (restored 2026-06-14). The caller requested
+        # it by name, so absence is an error it must see. OPTIONAL secrets
+        # (SI-StorageKey on OAuth-default tenants, Shodan/OpenAI/SMTP keys when
+        # those features are off) are handled at the call site: wrap in try/catch
+        # with -ErrorAction Stop and Write-Verbose the skip -- that keeps normal
+        # runs quiet WITHOUT silently returning $null (which masks config errors
+        # and breaks the -IgnoreMissing contract that callers rely on).
+        throw ("Get-PlatformSecretKeyVault: secret '{0}' not found in vault '{1}'. Seed it, or treat it as optional via -IgnoreMissing / try-catch (-ErrorAction Stop)." -f $Name, $Context.Tenant.KeyVaultName)
     }
 
     if ($AsPlainText) {
@@ -53,7 +53,8 @@ function Get-AutomateITAzureToken {
     if (-not (Get-Module -ListAvailable -Name Az.Accounts)) {
         throw "Get-AutomateITAzureToken: module Az.Accounts not available. Install-Module Az.Accounts -Scope CurrentUser"
     }
-    Import-Module Az.Accounts -ErrorAction Stop
+    # No explicit Import-Module Az.Accounts -- Get-AzContext / Connect-AzAccount
+    # / Get-AzAccessToken auto-load it on first call.
 
     if ($Context.Host.Kind -ne 'Dev') {
         $existing = Get-AzContext -ErrorAction SilentlyContinue

@@ -36,6 +36,49 @@
 
 $ErrorActionPreference = 'Stop'
 
+# ----------- SI_ROLE dispatcher ---------------------------------------
+# Container App Job '--command' / '--args' overrides are unreliable in az CLI
+# (argparse nargs='+' chokes on leading-dash PowerShell flags). Instead, every
+# job in the v2.2 fleet uses the default ENTRYPOINT (this script) and dispatches
+# on $env:SI_ROLE. SI_ROLE defaults to 'worker' so legacy single-job-per-engine
+# (non-KEDA) deployments keep working unchanged.
+$siRole = [Environment]::GetEnvironmentVariable('SI_ROLE')
+if ($siRole) {
+    switch ($siRole.ToLowerInvariant()) {
+        'producer' {
+            $producerScript = '/app/container/Invoke-ShardProducer.ps1'
+            Write-Host "[SI_ROLE=producer] dispatching to $producerScript" -ForegroundColor Cyan
+            & pwsh -NoProfile -File $producerScript
+            exit $LASTEXITCODE
+        }
+        'ra' {
+            $raScript = '/app/container/Start-RiskAnalysisInContainer.ps1'
+            Write-Host "[SI_ROLE=ra] dispatching to $raScript" -ForegroundColor Cyan
+            & pwsh -NoProfile -File $raScript
+            exit $LASTEXITCODE
+        }
+        'worker' {
+            # Engine-aware dispatch within the worker role. Most engines
+            # (endpoint/identity/azure/publicip) go through Invoke-SIEngineRun.
+            # privilege-tier-classifier has its own orchestrator (different
+            # input/output shape -- no per-asset profiling pipeline).
+            $engineEnv = [Environment]::GetEnvironmentVariable('SI_ENGINE')
+            if ($engineEnv -eq 'privilege-tier-classifier') {
+                $classifierScript = '/app/engine/privilege-tier-classifier/Invoke-PrivilegeTierClassifier.ps1'
+                Write-Host "[SI_ROLE=worker SI_ENGINE=privilege-tier-classifier] dispatching to $classifierScript" -ForegroundColor Cyan
+                . '/app/config/SecurityInsight.custom.ps1'   # hydrate engine globals (same VM-launcher parity)
+                $global:SI_CustomConfigPath = '/app/config/SecurityInsight.custom.ps1'
+                # In-process call (NOT `& pwsh -File`) -- child pwsh would lose
+                # all the $global:* state we just hydrated from custom.ps1.
+                & $classifierScript
+                exit $LASTEXITCODE
+            }
+            # else: fall through to legacy worker path below (Invoke-SIEngineRun)
+        }
+        default  { throw "Unknown SI_ROLE '$siRole' -- expected one of: worker | producer | ra" }
+    }
+}
+
 function Get-RequiredEnv {
     param([Parameter(Mandatory)][string]$Name)
     $v = [Environment]::GetEnvironmentVariable($Name)
@@ -140,8 +183,8 @@ $queueName         = $null
 
 if ($useQueue) {
     Write-Host '[trigger] KEDA event mode -- pulling shard descriptor from queue.'
-    . /app/v2.2/engine/asset-profiling/storage/StorageContext.ps1
-    . /app/v2.2/engine/asset-profiling/storage/WorkerQueue.ps1
+    . /app/engine/asset-profiling/storage/StorageContext.ps1
+    . /app/engine/asset-profiling/storage/WorkerQueue.ps1
     if ($global:SI_UAMI_ClientId) {
         $kctx = New-SIStorageContext -AccountName $global:SI_StorageAccount -UseOAuth
     } else {
@@ -185,7 +228,26 @@ if ($ctRaw) {
     }
 }
 
-$orchestrator = '/app/v2.2/engine/asset-profiling/Invoke-SIEngineRun.ps1'
+# v2.3 -- dot-source customer custom.ps1 BEFORE invoking the engine.
+# The engine reads ~30 $global:SI_* settings (RA report templates, sink lists,
+# AssetLimit, AI flags, KV pulls, etc) that the VM launcher gets via custom.ps1.
+# Without this dot-source, the container worker had a different global state
+# than the VM launcher and the engine threw on missing -Path values mid-pipeline.
+# COPY . /app/ in the Dockerfile means the customer's config/SecurityInsight.custom.ps1
+# is at /app/config/SecurityInsight.custom.ps1 already.
+$customCfg = '/app/config/SecurityInsight.custom.ps1'
+if (Test-Path -LiteralPath $customCfg) {
+    Write-Host ('[config] dot-sourcing {0} (VM-launcher parity)' -f $customCfg) -ForegroundColor Cyan
+    . $customCfg
+    # Also pin SI_CustomConfigPath so Invoke-SIEngineRun.ps1's auto-derive
+    # (3x Split-Path from $PSScriptRoot) doesn't fall off /app/'s root in
+    # the flattened container layout (no v2.2/ prefix).
+    $global:SI_CustomConfigPath = $customCfg
+} else {
+    Write-Warning ('[config] {0} NOT FOUND -- engine will run with env-only globals (may throw on missing Path)' -f $customCfg)
+}
+
+$orchestrator = '/app/engine/asset-profiling/Invoke-SIEngineRun.ps1'
 $orchArgs = @{
     Engine             = $engine
     StorageAccountName = $global:SI_StorageAccount
@@ -211,6 +273,8 @@ try {
     $orchExit = $LASTEXITCODE
 } catch {
     Write-Warning ('orchestrator threw: {0}' -f $_.Exception.Message)
+    if ($_.InvocationInfo) { Write-Warning ('  at: {0}' -f $_.InvocationInfo.PositionMessage.Trim()) }
+    if ($_.ScriptStackTrace) { Write-Warning ('  stack:'); $_.ScriptStackTrace -split "`n" | ForEach-Object { Write-Warning ('    {0}' -f $_) } }
     $orchExit = 1
 }
 

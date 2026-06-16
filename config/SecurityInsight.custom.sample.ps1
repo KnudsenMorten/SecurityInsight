@@ -144,6 +144,10 @@ $global:SI_ActiveStaleDays          = 30
 # ============================================================================
 # 10. KV PULLS  (late-binding -- runs after $global:Context is set)
 # ============================================================================
-if (-not $global:SI_StorageKey)    { $global:SI_StorageKey    = Get-PlatformSecret -Context $global:Context -Name 'SI-StorageKey'    -AsPlainText }
-if (-not $global:SI_Shodan_ApiKey) { $global:SI_Shodan_ApiKey = Get-PlatformSecret -Context $global:Context -Name 'SI-Shodan-ApiKey' -AsPlainText }
-if (-not $global:OpenAI_apiKey)    { $global:OpenAI_apiKey    = Get-PlatformSecret -Context $global:Context -Name 'OpenAI-ApiKey'    -AsPlainText }
+# Optional KV pulls: Get-PlatformSecret THROWS when a secret isn't seeded, so each
+# pull is wrapped in try/catch (-ErrorAction Stop) and the miss is logged to verbose
+# only -- an absent optional key (OAuth-default storage, Shodan/OpenAI off) must not
+# break the launcher. (Matches the generated custom.ps1 pattern.)
+if (-not $global:SI_StorageKey)    { try { $global:SI_StorageKey    = Get-PlatformSecret -Context $global:Context -Name 'SI-StorageKey'    -AsPlainText -ErrorAction Stop } catch { Write-Verbose ("SI custom: SI-StorageKey not in KV -- skipping ($($_.Exception.Message))") } }
+if (-not $global:SI_Shodan_ApiKey) { try { $global:SI_Shodan_ApiKey = Get-PlatformSecret -Context $global:Context -Name 'SI-Shodan-ApiKey' -AsPlainText -ErrorAction Stop } catch { Write-Verbose ("SI custom: SI-Shodan-ApiKey not in KV -- skipping ($($_.Exception.Message))") } }
+if (-not $global:OpenAI_apiKey)    { try { $global:OpenAI_apiKey    = Get-PlatformSecret -Context $global:Context -Name 'OpenAI-ApiKey'    -AsPlainText -ErrorAction Stop } catch { Write-Verbose ("SI custom: OpenAI-ApiKey not in KV -- skipping ($($_.Exception.Message))") } }

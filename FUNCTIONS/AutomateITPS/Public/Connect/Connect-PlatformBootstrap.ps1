@@ -179,8 +179,8 @@ function Connect-PlatformBootstrap {
         }
     }
 
-    Import-Module Az.Accounts -ErrorAction Stop -WarningAction SilentlyContinue
-    Import-Module Az.KeyVault -ErrorAction Stop -WarningAction SilentlyContinue
+    # No explicit Import-Module Az.Accounts / Az.KeyVault -- Connect-AzAccount
+    # and Get-AzKeyVaultSecret auto-load on first call.
 
     # ---- 4. Connect per resolved method ----------------------------------
     # Certificate auth is hoisted into a script block so the MI branch can invoke

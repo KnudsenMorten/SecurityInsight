@@ -41,9 +41,9 @@ function Disconnect-Platform {
         [Parameter()] [switch]$KeepGlobals
     )
 
-    Import-Module Az.Accounts                 -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-    Import-Module Microsoft.Graph.Authentication -ErrorAction SilentlyContinue -WarningAction SilentlyContinue
-
+    # No explicit Import-Module -- Disconnect-AzAccount / Disconnect-MgGraph
+    # auto-load their host modules on first call. If the modules weren't
+    # loaded already, the disconnect is a no-op anyway.
     try { $null = Disconnect-AzAccount -ErrorAction SilentlyContinue -WarningAction SilentlyContinue } catch {}
     try { $null = Disconnect-MgGraph    -ErrorAction SilentlyContinue -WarningAction SilentlyContinue } catch {}
 

@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.399
+## v2.2.400
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(si): v2.2.400 — privilege-tier-classifier degrades on missing OpenAI config (no hard halt) (#96) (08cd8d20)
+- fix(si/ptc): missing OpenAI config no longer halts the classifier (error + Tier 99 fallback) (#95) (45ebb85e)
 - release(si): v2.2.399 — Layer-3 tolerates missing optional secret + RELEASENOTES sanitize (#94) (9377dddf)
 - recover: restore 9 files reverted by the 2026-06-14 worktree race (#91) (70c1109d)
 - fix(si): Layer-3 custom.ps1 tolerates a missing OPTIONAL secret (no hard halt) (#90) (31fbedc8)
@@ -32,14 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.382 - silence PS>TerminatingError noise when SI_RunHealth DCR is bound to a different DCE (4d1fa039)
 - release: SecurityInsight v2.2.381 - Top-50 risky assets ranks by Criticality Tier first (Tier 0 at top), then Weighted Risk Score within tier + display flips Weighted before Total (3541bb57)
 - release: SecurityInsight v2.2.380 - smarter AutoBucket escalation (A+B+C): budget 95%->75% + JSON-escape x1.15 on bytesPerRow (A), growth floor 4x->2x (B), adversarial ceiling capping next rows-per-bucket at 0.7x prior 413 failure value per report (C). Fewer probe-and-rehash cycles, less wasted O(N) hash overhead. (bc774c5c)
-- release: SecurityInsight v2.2.379 - stop shipping SMTPPort + SMTP_UseSSL defaults in LauncherConfig.defaults.ps1; customer relays vary too widely (on-prem :25 unauthenticated vs M365 :587 TLS vs Brevo :465) for a safe shipped default (dc0b508f)
-- release: SecurityInsight v2.2.378 - fingerprint cache opt-in (default OFF) + 3 fixes: UTF-16 truncation ceiling (60000->30000 chars), OData-code-aware self-heal (only retry on InvalidInput, not PropertyValueTooLarge), raw-HttpWebRequest PUT helper kills PS>TerminatingError(Invoke-RestMethod) transcript noise (5c3197f1)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.400 — Privilege-tier-classifier: missing OpenAI config no longer halts the run
+
+### Symptom
+
+The privilege-tier-classifier crashed with a hard error when the OpenAI configuration was incomplete (typically `$global:OpenAI_apiKey` empty):
+
+`[<category>] $global:OpenAI_ApiKey is empty. Set it in SecurityInsight.custom.ps1 (Layer 3) ...`
+
+### Fix
+
+A missing OpenAI key only matters when AI is actually used, so it must **not** halt the engine. The AI tiering call now logs a clear **ERROR** and returns the **same per-chunk fallback as a retry-exhaustion** (Tier 99 / "manual review"), so the run completes — it simply doesn't deliver an AI-assigned tier for those items.
+
+This pairs with the v2.2.399 Layer-3 resilience: when a customer `custom.ps1` aborts at an un-guarded **optional** secret pull *above* the OpenAI line (leaving the key unset), the classifier now degrades gracefully instead of crashing. Best practice remains to remove any unused optional-secret pull (e.g. a storage key on OAuth/MI tenants) and wrap the rest in `try/catch`.
 
 ---
 

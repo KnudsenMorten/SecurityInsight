@@ -619,17 +619,27 @@ $itemsJson
 
     $uri = "$($global:OpenAI_Endpoint)/openai/deployments/$($global:OpenAI_Deployment)/chat/completions?api-version=$($global:OpenAI_ApiVersion)"
 
-    # Fail fast if any of the three required OpenAI settings is missing. Previously
-    # a typo/empty in one of these silently produced a request that Azure OpenAI
-    # answered with an error body, which the response-parsing code then NRE'd on
-    # every retry with the cryptic 'Object reference not set to an instance of an
-    # object.' (v2.1.176 fix).
-    foreach ($pair in @(
-        @{ Name = 'OpenAI_ApiKey';     Value = $global:OpenAI_ApiKey },
-        @{ Name = 'OpenAI_Endpoint';   Value = $global:OpenAI_Endpoint },
-        @{ Name = 'OpenAI_Deployment'; Value = $global:OpenAI_Deployment })) {
-        if ([string]::IsNullOrWhiteSpace([string]$pair.Value)) {
-            throw ("[$label] `$global:$($pair.Name) is empty. Set it in SecurityInsight.custom.ps1 (Layer 3) or the engine's LauncherConfig.custom.ps1 (Layer 5). See README section 3.8 -- Step 4.")
+    # Required OpenAI settings. A missing/empty value only matters when AI is actually
+    # used -- so it must NOT halt the whole engine. Instead surface a clear ERROR and
+    # return the SAME per-chunk fallback as a retry-exhaustion (Tier 99 / manual review):
+    # the classifier still completes, the AI summary just isn't delivered for these
+    # items. (Empty config previously THREW here and crashed the entire run; that also
+    # masked the real cause when an upstream optional-secret pull left the key unset.)
+    $missingAI = @(
+        @(
+            @{ Name = 'OpenAI_ApiKey';     Value = $global:OpenAI_ApiKey },
+            @{ Name = 'OpenAI_Endpoint';   Value = $global:OpenAI_Endpoint },
+            @{ Name = 'OpenAI_Deployment'; Value = $global:OpenAI_Deployment }
+        ) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.Value) } | ForEach-Object { $_.Name }
+    )
+    if ($missingAI.Count -gt 0) {
+        Write-Log ("[$label] AI tiering skipped -- missing OpenAI config: $($missingAI -join ', '). Set it in SecurityInsight.custom.ps1 (Layer 3) / the engine's LauncherConfig.custom.ps1 (Layer 5), or disable AI. These items are returned as Tier 99 (manual review); the run continues.") "ERROR"
+        return $Chunk | ForEach-Object {
+            [PSCustomObject]@{
+                Name   = $_.Name
+                Tier   = 99
+                Reason = "AI not configured (missing: $($missingAI -join ', ')). Manual review required."
+            }
         }
     }
 

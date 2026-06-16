@@ -19,13 +19,13 @@
                                                   (engine appends backup-then-overwrite logic)
 
     Optional env vars (all have engine defaults):
-      SI_RA_REPORT_TEMPLATE                    -- default 'RiskAnalysis_Summary_Bucket'
+      SI_RA_REPORT_TEMPLATE                    -- default 'RiskAnalysis_Summary'
                                                   (or 'RiskAnalysis_Detailed_Bucket')
       SI_RA_MODE                               -- 'Summary' | 'Detailed' (sets the matching bool)
       SI_RA_BUILD_SUMMARY_BY_AI                -- '0'/'1' (default 0)
       SI_RA_SEND_TO_LOG_ANALYTICS              -- '0'/'1' (default 0; routes Summary -> SI_RiskAnalysis_Summary_CL,
                                                   Detailed -> SI_RiskAnalysis_Detailed_CL via DCR)
-      SI_RA_SETTINGS_PATH                      -- default '/app/v2.2/engine/risk-analysis' (the v2.2 catalog)
+      SI_RA_SETTINGS_PATH                      -- default '/app/engine/risk-analysis' (the v2.2 catalog)
       OPENAI_APIKEY / ENDPOINT / DEPLOYMENT / APIVERSION
                                                -- only required when SI_RA_BUILD_SUMMARY_BY_AI=1
 
@@ -73,10 +73,10 @@ $global:SI_RiskAnalysis_TableName_Detailed     = Get-OptionalEnv 'SI_RA_TABLE_DE
 $global:SendToLogAnalytics                     = (Get-OptionalEnv 'SI_RA_SEND_TO_LOG_ANALYTICS' '0') -in '1','true','True','yes'
 
 # Catalog location -- v2.2/engine/risk-analysis/ inside the image.
-$global:SettingsPath = Get-OptionalEnv 'SI_RA_SETTINGS_PATH' '/app/v2.2/engine/risk-analysis'
+$global:SettingsPath = Get-OptionalEnv 'SI_RA_SETTINGS_PATH' '/app/risk-analysis-detection'
 
 # Report template + mode.
-$global:ReportTemplate = Get-OptionalEnv 'SI_RA_REPORT_TEMPLATE' 'RiskAnalysis_Summary_Bucket'
+$global:ReportTemplate = Get-OptionalEnv 'SI_RA_REPORT_TEMPLATE' 'RiskAnalysis_Summary'
 $mode = Get-OptionalEnv 'SI_RA_MODE' 'Summary'
 switch ($mode) {
     'Summary'  { $global:Summary = $true; $global:Detailed = $false }
@@ -140,6 +140,19 @@ Write-Host ('  SendToLA          = {0}' -f $global:SendToLogAnalytics)
 Write-Host ('  BuildSummaryByAI  = {0}' -f $global:BuildSummaryByAI)
 Write-Host '======================================================================'
 
+# v2.3 -- dot-source customer custom.ps1 + pin SI_CustomConfigPath so the
+# engine's auto-derive (3x Split-Path from $PSScriptRoot) doesn't fall off
+# /app/'s root in the flattened container layout (no v2.2/ prefix).
+# Same fix that Start-SIInContainer.ps1 applies for the profiler engines.
+$customCfg = '/app/config/SecurityInsight.custom.ps1'
+if (Test-Path -LiteralPath $customCfg) {
+    Write-Host ('[config] dot-sourcing {0} (VM-launcher parity)' -f $customCfg) -ForegroundColor Cyan
+    . $customCfg
+    $global:SI_CustomConfigPath = $customCfg
+} else {
+    Write-Warning ('[config] {0} NOT FOUND -- engine may throw on missing -Path' -f $customCfg)
+}
+
 # Connect-AzAccount -- the engine's "community auth" branch does this too,
 # but doing it up-front means a credential failure aborts before we touch
 # any catalog files.
@@ -150,7 +163,7 @@ Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $cre
 
 # Engine lives outside v2.2/ -- the Dockerfile build context now includes
 # SCRIPTS/ so /app/SCRIPTS/SecurityInsight_RiskAnalysis.ps1 is present.
-$engineScript = '/app/SCRIPTS/SecurityInsight_RiskAnalysis.ps1'
+$engineScript = '/app/engine/risk-analysis/Invoke-RiskAnalysis.ps1'
 if (-not (Test-Path -LiteralPath $engineScript)) {
     throw "RA engine not found at $engineScript -- check Dockerfile COPY paths."
 }

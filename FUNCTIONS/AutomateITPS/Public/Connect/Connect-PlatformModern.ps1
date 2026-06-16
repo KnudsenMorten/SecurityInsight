@@ -104,9 +104,9 @@ function Connect-PlatformModern {
     $kvName    = [string]$cfg.KeyVaultName
 
     # ---- 2. Verify we have an Az context (Bootstrap should have set one) -
-    Import-Module Az.Accounts -ErrorAction Stop -WarningAction SilentlyContinue
-    Import-Module Az.KeyVault -ErrorAction Stop -WarningAction SilentlyContinue
-
+    # No explicit Import-Module Az.Accounts / Az.KeyVault -- Get-AzContext /
+    # Get-AzKeyVaultSecret auto-load on first call. Bootstrap step already
+    # loaded them in nearly every code path anyway.
     $current = Get-AzContext -ErrorAction SilentlyContinue
     if (-not $current) {
         throw "Connect-PlatformModern: no active Az context. Call Connect-PlatformBootstrap first (or use Connect-Platform orchestrator)."
@@ -185,7 +185,9 @@ function Connect-PlatformModern {
         Write-Verbose "Connect-PlatformModern: Az reconnected as Modern SPN via cert"
 
         if (-not $SkipMgGraph) {
-            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+            # No explicit Import-Module Microsoft.Graph.Authentication --
+            # Connect-MgGraph auto-loads it on first call. The previous
+            # explicit import was redundant (and slow on cold sessions).
             try {
                 Connect-MgGraph `
                     -TenantId              $tenantId `
@@ -220,7 +222,9 @@ function Connect-PlatformModern {
         Write-Verbose "Connect-PlatformModern: Az reconnected as Modern SPN via secret"
 
         if (-not $SkipMgGraph) {
-            Import-Module Microsoft.Graph.Authentication -ErrorAction Stop -WarningAction SilentlyContinue
+            # No explicit Import-Module Microsoft.Graph.Authentication --
+            # Connect-MgGraph auto-loads it on first call. The previous
+            # explicit import was redundant (and slow on cold sessions).
             try {
                 Connect-MgGraph `
                     -TenantId             $tenantId `

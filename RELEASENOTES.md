@@ -1,9 +1,17 @@
 # Release notes for SecurityInsight
 
-## v2.2.398
+## v2.2.399
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(si): v2.2.399 — Layer-3 tolerates missing optional secret + RELEASENOTES sanitize (#94) (9377dddf)
+- recover: restore 9 files reverted by the 2026-06-14 worktree race (#91) (70c1109d)
+- fix(si): Layer-3 custom.ps1 tolerates a missing OPTIONAL secret (no hard halt) (#90) (31fbedc8)
+- docs(si): scrub real customer domain casa.dk from public README + RELEASENOTES (1e6723cb)
+- fix(SI): align pre-publish gate with consolidated 5-doc model (1fee3f13)
+- chore(docs): drop auto-generated ROADMAP for PIM4EntraPS + SecurityInsight — REQUIREMENTS.md is the single backlog doc (25102999)
+- fix(platform): restore throw-on-missing in Get-PlatformSecret — greens root suite (c1f349b7)
+- docs(SI): adopt shared 6-doc model — consolidate 18 topic docs into DESIGN, add REQUIREMENTS/FEATURES/TESTS/ROADMAP + CLAUDE (ff62008a)
 - release: SecurityInsight v2.2.398 -- asset-tagging Auto-* rules: source = DeviceInfo (authoritative for OnboardingStatus + full coverage) with EG left-join for AssetTags delta filter; suppress per-row "Missing SenseDeviceId" warnings (aggregate summary preserved) (7afb68a9)
 - release: SecurityInsight v2.2.397 -- asset-tagging: 4 independent Auto-* rules (3 OnboardingStatus + 1 DeviceNamePattern); no more AND between filters; new ExcludeByDeviceNamePattern config flag; regex-broaden OnboardingStatus match (89d3d2f3)
 - release: SecurityInsight v2.2.396 -- Auto-* rules rewritten on ExposureGraphNodes (modern) + AssetTags delta filter via array_index_of so 1h cron only processes new un-tagged devices (e3d28540)
@@ -26,20 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.380 - smarter AutoBucket escalation (A+B+C): budget 95%->75% + JSON-escape x1.15 on bytesPerRow (A), growth floor 4x->2x (B), adversarial ceiling capping next rows-per-bucket at 0.7x prior 413 failure value per report (C). Fewer probe-and-rehash cycles, less wasted O(N) hash overhead. (bc774c5c)
 - release: SecurityInsight v2.2.379 - stop shipping SMTPPort + SMTP_UseSSL defaults in LauncherConfig.defaults.ps1; customer relays vary too widely (on-prem :25 unauthenticated vs M365 :587 TLS vs Brevo :465) for a safe shipped default (dc0b508f)
 - release: SecurityInsight v2.2.378 - fingerprint cache opt-in (default OFF) + 3 fixes: UTF-16 truncation ceiling (60000->30000 chars), OData-code-aware self-heal (only retry on InvalidInput, not PropertyValueTooLarge), raw-HttpWebRequest PUT helper kills PS>TerminatingError(Invoke-RestMethod) transcript noise (5c3197f1)
-- release: SecurityInsight v2.2.377 - docs: README §5.8 covers v2.2.376 Detailed-scope trim (shipped defaults table + widen-scope guidance) (0c561c62)
-- release: SecurityInsight v2.2.376 - trim Detailed scope on Device_Missing_CVEs (drop Low) + Device_Recommendations + Azure_Recommendations (drop Low+Medium) to bound Excel/risk-scoring runtime on large tenants (77db3b3d)
-- release: SecurityInsight v2.2.375 - fix 'join' operator: Failed to resolve column 'EntryPointAadDeviceId' in Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure (2eba7f90)
-- release: SecurityInsight v2.2.374 - same row-builder optimization stack from Azure (v2.2.371/372) applied to Endpoint + Identity + PublicIp: pre-filter emit fields + per-row availKeys fast-null + Add-Member elimination (8afcd07e)
-- release: SecurityInsight v2.2.373 - Properties ConvertTo-Json depth 15 -> 8 (~30-50 ms/row saved) + InvariantCulture DateTime parses across asset-profiling row-builders + Get-SIRiskFactors (prevents non-en-US crash + minor speedup) (708954ac)
-- release: SecurityInsight v2.2.372 - Azure profile row builder: per-field required-source pre-computation + per-row availKeys fast-null path + switch-Regex replaced with if/StartsWith. Skips ~58% of always-null field iteration (the 182-of-311 cols problem) (7539e6c8)
-- release: SecurityInsight v2.2.371 - Azure profile row builder pre-filtered schema + hashtable-union risk record (no Add-Member loop) + fingerprint cache silent 404/409 + SHA256 fallback for non-ASCII AssetIds (Danish chars no longer fail PUT) (bbbfab92)
-- release: SecurityInsight v2.2.370 - AutoBucket measurements persist run-wide instead of resetting per-report; reports sharing a let-binding inherit prior bytes-per-row + body-overhead so escalation jumps straight to optimal instead of 4x-growth ladder (56e1002a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.399 — Layer-3 customer config: a missing OPTIONAL secret no longer halts the launcher
+
+### Symptom
+
+On some tenants the launcher aborted at config load with:
+
+`[ERROR] Failed to load layered config: Get-PlatformSecretKeyVault: secret '<name>' not found in vault '...'.`
+
+This happened when a customer's Layer-3 `SecurityInsight.custom.ps1` (often carried across upgrades) pulls an **optional** secret directly — e.g. a storage key on an **OAuth/MI-by-default** tenant where that secret is intentionally not seeded — without a try/catch. A recent platform change restored throw-on-missing for `Get-PlatformSecret`, so the un-guarded optional pull began aborting the entire layered-config load.
+
+### Fix
+
+The launcher's Layer-3 load now tolerates a **missing optional secret**: a "secret not found" error from a `Get-PlatformSecret*` pull is logged as a warning and the config load **continues** with whatever else loaded; any other error still fails hard. SecurityInsight is OAuth/MI-by-default and never requires a storage key, so a not-seeded optional secret can no longer take the engine down.
+
+Best practice remains to wrap optional KV pulls in the customer file in `try/catch` (the shipped `SecurityInsight.custom.sample.ps1` already does) — or drop a now-unused storage-key pull entirely on OAuth/MI tenants.
+
+### Also
+
+Restored fuller versions of the container module-sync helpers and the shared `Ensure-Module` bootstrap that had regressed to an earlier revision.
 
 ---
 
@@ -776,7 +798,7 @@ Tenants that DO run incremental and benefit from the cache opt in with one line 
 ### Impact
 
 - **Default behavior change**: fresh installs and tenants that haven't set the global will see zero fingerprint cache writes. The Collect stage summary `cadence-skipped` count will read 0 on every run (no cache means no shortcuts). Risk-analysis + Excel output unaffected.
-- **Pingala-style tenants**: zero noise. The 4 engines that previously each generated 50+ TerminatingError lines per run are silent on the fingerprint path.
+- **High-volume tenants**: zero noise. The 4 engines that previously each generated 50+ TerminatingError lines per run are silent on the fingerprint path.
 - **Opt-in tenants**: same behavior as before MINUS the three bug fixes -- so smaller verdicts (30K char cap), fewer useless retries, no transcript noise even on 400. The opt-in path is strictly better than the pre-v2.2.378 always-on path.
 
 ### Operator note
@@ -3612,7 +3634,7 @@ CVEByDevice (1 row/device)
   | summarize ... by Device, Target  ← v2.2.290 single end-summarize
 ```
 
-Defender's KQL engine **materializes every intermediate join row before reaching the summarize**. For a device like `ns-pf5ych7g.casa.dk` (3 creds × ~50 identities × ~1000 targets), that's ~150,000 rows in the intermediate set per device. With ~30 devices in a Device-keyed bucket (post-v2.2.293), bucket-level intermediate = ~150K × 30 ÷ device-cred-asymmetry ≈ 1-2M rows. AH's 900s ceiling can't process this for the bomb tenant.
+Defender's KQL engine **materializes every intermediate join row before reaching the summarize**. For a device like `ns-pf5ych7g.contoso.com` (3 creds × ~50 identities × ~1000 targets), that's ~150,000 rows in the intermediate set per device. With ~30 devices in a Device-keyed bucket (post-v2.2.293), bucket-level intermediate = ~150K × 30 ÷ device-cred-asymmetry ≈ 1-2M rows. AH's 900s ceiling can't process this for the bomb tenant.
 
 ### Fix: insert summarize BETWEEN each join
 
@@ -3772,9 +3794,9 @@ Operator: "i hate the warning about platformsecurity missing in keyvault, remove
 v2.2.285/286 changed `Get-PlatformSecretKeyVault` and `Get-PlatformSecretLocal` from `throw` to `Write-Warning + return $null` to keep Layer 3 launcher-config loads non-fatal. But the warning fired on every optional secret that wasn't seeded yet (SI-StorageKey on OAuth-default tenants, Shodan/OpenAI keys when those features are off, Smtp-User/Smtp-Password before mail is wired up), polluting normal launcher output:
 
 ```
-WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-User' not found in vault 'kv-ns-automateit-p' (returning $null).
-WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-Password' not found in vault 'kv-ns-automateit-p' (returning $null).
-WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-ns-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-User' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'Smtp-Password' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
 ```
 
 ### Fix
@@ -4000,11 +4022,11 @@ After v2.2.286, the framework principle is: **a missing optional secret never ha
 
 ## v2.2.285 — `Get-PlatformSecretKeyVault` soft-fails on missing secret (no more Layer 3 halt)
 
-Operator follow-up after v2.2.284: shared-defaults defaults `$global:SI_UseStorageOAuth = $true` correctly, but Layer 3 still halts because the Ping customer's `SecurityInsight.custom.ps1` (carried over from an older install) directly calls `Get-PlatformSecret -Name 'SI-StorageKey'` without a try/catch:
+Operator follow-up after v2.2.284: shared-defaults defaults `$global:SI_UseStorageOAuth = $true` correctly, but Layer 3 still halts because a customer's `SecurityInsight.custom.ps1` (carried over from an older install) directly calls `Get-PlatformSecret -Name 'SI-StorageKey'` without a try/catch:
 
 ```
 [STEP]  Layer 3/5: SecurityInsight.custom.ps1 (solution-wide customer overrides)
-[ERROR] Failed to load layered config: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-ping-automateit-p'.
+[ERROR] Failed to load layered config: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-<tenant>-automateit-p'.
 ```
 
 ### Root cause
@@ -4031,7 +4053,7 @@ When the secret simply doesn't exist in KV (very common for optional secrets lik
 Pull v2.2.285, re-run the failing launcher. Layer 3 now logs:
 
 ```
-WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-ping-automateit-p' (returning $null).
+WARNING: Get-PlatformSecretKeyVault: secret 'SI-StorageKey' not found in vault 'kv-<tenant>-automateit-p' (returning $null).
 [OK]    loaded
 ```
 
@@ -7272,7 +7294,7 @@ Total reports: 136 → **126**.
 **Onboarding playbook** for fresh provisioning (Path A) and v1→v2.3 migration (Path B):
 `SOLUTIONS\PlatformConfiguration\INTERNAL\Onboarding-V2.3-Playbook.md`
 
-Live-tested end-to-end on `kv-2linkit-automateit-p` (Setup-SecurityInsight-Unattended green; 5/7 launchers GREEN, 2 CHAIN-OK with engine-specific deps).
+Live-tested end-to-end on `kv-<tenant>-automateit-p` (Setup-SecurityInsight-Unattended green; 5/7 launchers GREEN, 2 CHAIN-OK with engine-specific deps).
 
 **No breaking changes for v2.2 customers** — sync v2.2.174, existing chains keep working unchanged. Migrate to v2.3 platform layer when ready via `Initialize-PlatformVm` or `Convert-V1ToPlatform`.
 

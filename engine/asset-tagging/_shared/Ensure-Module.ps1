@@ -126,13 +126,26 @@ function Ensure-Module {
     # fallback if Get-Module -ListAvailable misses something (e.g. a corrupted
     # module manifest, a meta-module with no exported commands, a PSModulePath
     # that doesn't include the scope where the customer installed the module).
+    # On Linux (container) ProgramFiles + USERPROFILE are empty -- skip those
+    # entries instead of feeding an empty -Path to Join-Path (NRE).
+    $moduleRoots = @()
     $pf = [Environment]::GetFolderPath('ProgramFiles')
-    $moduleRoots = @(
-        (Join-Path $pf 'WindowsPowerShell\Modules'),   # PS 5.1 AllUsers
-        (Join-Path $pf 'PowerShell\Modules'),           # PS 7+ AllUsers
-        (Join-Path $env:USERPROFILE 'Documents\WindowsPowerShell\Modules'),
-        (Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules')
-    )
+    if ($pf) {
+        $moduleRoots += (Join-Path $pf 'WindowsPowerShell\Modules')   # PS 5.1 AllUsers
+        $moduleRoots += (Join-Path $pf 'PowerShell\Modules')           # PS 7+ AllUsers
+    }
+    if ($env:USERPROFILE) {
+        $moduleRoots += (Join-Path $env:USERPROFILE 'Documents\WindowsPowerShell\Modules')
+        $moduleRoots += (Join-Path $env:USERPROFILE 'Documents\PowerShell\Modules')
+    }
+    # Linux/container: PowerShell uses /usr/local/share/powershell/Modules + /root/.local/share/powershell/Modules
+    if (-not $pf) {
+        $moduleRoots += '/usr/local/share/powershell/Modules'                   # AllUsers
+        $moduleRoots += '/opt/microsoft/powershell/7/Modules'                   # PSHOME on Linux
+        if ($env:HOME) {
+            $moduleRoots += (Join-Path $env:HOME '.local/share/powershell/Modules')   # CurrentUser
+        }
+    }
 
     foreach ($mod in $Name) {
         if ([string]::IsNullOrWhiteSpace($mod)) { continue }
@@ -216,8 +229,15 @@ function Ensure-Module {
                 # Operator: "i dont support currentuser".
 
                 # ---- step 1: detect where the currently-installed copy lives ----
-                $_inAllUsers   = $existing.Path -like (Join-Path $pf 'WindowsPowerShell\Modules\*') -or
-                                 $existing.Path -like (Join-Path $pf 'PowerShell\Modules\*')
+                # On Linux (container) $pf is empty -- AllUsers maps to /usr/local/share/powershell/Modules
+                # or /opt/microsoft/powershell/7/Modules. Match those instead.
+                if ($pf) {
+                    $_inAllUsers = $existing.Path -like (Join-Path $pf 'WindowsPowerShell\Modules\*') -or
+                                   $existing.Path -like (Join-Path $pf 'PowerShell\Modules\*')
+                } else {
+                    $_inAllUsers = $existing.Path -like '/usr/local/share/powershell/Modules/*' -or
+                                   $existing.Path -like '/opt/microsoft/powershell/7/Modules/*'
+                }
                 $_isUserScope  = -not $_inAllUsers
 
                 # ---- step 2: ALWAYS emit version snapshot for diagnosis ----
@@ -276,7 +296,11 @@ sync can corrupt module files mid-run). Fix:
                             Install-Module -Name $mod -Scope AllUsers -Force -AllowClobber -ErrorAction Stop
                             _SayOk ("{0} upgraded to v{1} in AllUsers" -f $mod, $remoteV)
                             # Re-probe disk so $existing reflects the AllUsers install.
-                            $_newPsd = Join-Path $pf ("WindowsPowerShell\Modules\$mod\$remoteV\$mod.psd1")
+                            $_newPsd = if ($pf) {
+                                Join-Path $pf ("WindowsPowerShell\Modules\$mod\$remoteV\$mod.psd1")
+                            } else {
+                                "/usr/local/share/powershell/Modules/$mod/$remoteV/$mod.psd1"
+                            }
                             if (Test-Path -LiteralPath $_newPsd) {
                                 $existing = [pscustomobject]@{ Name = $mod; Version = $remoteV; Path = $_newPsd }
                             } else {
@@ -302,7 +326,11 @@ sync can corrupt module files mid-run). Fix:
                 # pinning here is the only way to guarantee we don't re-auto-load
                 # the user-scope copy on next cmdlet call.
                 $diskV = try { [version]$existing.Version } catch { [version]'0.0.0' }
-                $_allUsersPsd = Join-Path $pf ("WindowsPowerShell\Modules\$mod\$diskV\$mod.psd1")
+                $_allUsersPsd = if ($pf) {
+                    Join-Path $pf ("WindowsPowerShell\Modules\$mod\$diskV\$mod.psd1")
+                } else {
+                    "/usr/local/share/powershell/Modules/$mod/$diskV/$mod.psd1"
+                }
                 $_importTarget = if (Test-Path -LiteralPath $_allUsersPsd) { $_allUsersPsd } else { $existing.Path }
                 try {
                     Remove-Module -Name $mod -Force -ErrorAction SilentlyContinue
@@ -321,8 +349,13 @@ sync can corrupt module files mid-run). Fix:
                     throw $errMsg
                 }
                 $_postPath = [string]$_postLoad.Path
-                $_postInAllUsers = $_postPath -like (Join-Path $pf 'WindowsPowerShell\Modules\*') -or
-                                   $_postPath -like (Join-Path $pf 'PowerShell\Modules\*')
+                if ($pf) {
+                    $_postInAllUsers = $_postPath -like (Join-Path $pf 'WindowsPowerShell\Modules\*') -or
+                                       $_postPath -like (Join-Path $pf 'PowerShell\Modules\*')
+                } else {
+                    $_postInAllUsers = $_postPath -like '/usr/local/share/powershell/Modules/*' -or
+                                       $_postPath -like '/opt/microsoft/powershell/7/Modules/*'
+                }
                 if (-not $_postInAllUsers) {
                     $errMsg = @"
 '$mod' loaded after force-reload but NOT from AllUsers:
@@ -450,10 +483,18 @@ Options:
 #   ImportExcel           -- XLSX export used by the report engines.
 #   powershell-yaml       -- YAML parse for *_Locked.yaml / *_Custom.yaml.
 $script:SecurityInsight_RequiredModules = @(
-    'Az'
+    # Replaced umbrella 'Az' (200 MB) with the precise sub-modules the engines
+    # actually import. Same for Microsoft.Graph (600+ sub-modules) -- only
+    # Microsoft.Graph.Authentication is imported (Connect-MgGraph).
+    # Microsoft.Graph.Beta is referenced in docs but no engine actually imports it.
+    'Az.Accounts'
+    'Az.Resources'
+    'Az.Storage'
+    'Az.Monitor'
     'Az.ResourceGraph'
-    'Microsoft.Graph'
-    'Microsoft.Graph.Beta'
+    'Az.OperationalInsights'
+    'Microsoft.Graph.Authentication'
+    'Microsoft.Graph.Beta.Security'
     'AzLogDcrIngestPS'
     'MicrosoftGraphPS'
     'ImportExcel'

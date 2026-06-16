@@ -525,7 +525,29 @@ function Initialize-LauncherConfig {
     _CfgStep "Layer 3/5: $Solution.custom.ps1 (solution-wide customer overrides)"
     if (Test-Path -LiteralPath $solutionCustomPath) {
         _CfgUnblock $solutionCustomPath
-        . $solutionCustomPath
+        # Layer 3 is the CUSTOMER's file and is often a legacy copy carried across
+        # upgrades. A common legacy pattern is an UNGUARDED optional KV pull, e.g.
+        #   $global:SI_StorageKey = Get-PlatformSecret -Name 'SI-StorageKey' ...
+        # SI is OAuth/MI-by-default ($global:SI_UseStorageOAuth = $true) and never
+        # needs SI_StorageKey, but Get-PlatformSecret was changed back to THROW when
+        # the secret isn't seeded (platform commit 2026-06-14). A missing *optional*
+        # secret must not take down the whole engine (operator rule: "no missing
+        # value should halt"). Catch only that specific case -- a missing-secret
+        # error from a Get-PlatformSecret* pull -- warn, and continue with whatever
+        # loaded; rethrow anything else so genuine custom.ps1 errors still surface as
+        # a hard "Failed to load layered config".
+        try {
+            . $solutionCustomPath
+        } catch {
+            $msg = "$($_.Exception.Message)"
+            $isOptionalSecretMiss = ($msg -match 'Get-PlatformSecret') -and ($msg -match 'not found')
+            if ($isOptionalSecretMiss) {
+                Write-Warning ("Layer 3 ($solutionCustomPath): an optional secret pull threw and was skipped -- $msg " +
+                    "SI uses OAuth/MI storage by default (SI_StorageKey is NOT required); wrap optional KV pulls in the customer custom.ps1 in try/catch to silence this.")
+            } else {
+                throw
+            }
+        }
         # Track the loaded path so the engine prestage can write back
         # auto-resolved values (e.g. SI_StorageKey from Get-AzStorageAccountKey)
         # to persist across runs.

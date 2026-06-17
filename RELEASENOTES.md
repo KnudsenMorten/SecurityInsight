@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.401
+## v2.2.402
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(publish-safety): catch truncated id prefixes + finish SI doc scrub (v2.2.402) (423da01f)
 - docs(si publish-safety): scrub real example identifiers from public docs (v2.2.401) (8f2321f4)
 - docs(si): migrate SI Analyzer requirements into the canonical 4-doc model (#127) (aea13ff5)
 - feat(si-analyzer): POC web app -- analyst worklist + AI verdicts + mgmt risk trend (#124) (66861af3)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.388 -- per-detection asset exclusion (excludeAssets:) for profiling rules (dee3494d)
 - release: SecurityInsight v2.2.387 - Connect-PlatformBootstrap Auto-mode now falls back from MI to Certificate on cross-tenant failure (IMDS reachable + Tenant-A MI vs Tenant-B target sub) (15bcb393)
 - release: SecurityInsight v2.2.386 - Summary-template Total row now matches per-domain rows when 24h cache wins (56f62a00)
-- release: SecurityInsight v2.2.385 - KPI table Total/per-domain arithmetic fix + AI snapshot source attribution (d816a63b)
 
 ---
 
@@ -43,7 +43,7 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 
 ---
 
-## v2.2.401 — Publish-safety: scrub example identifiers from the public docs
+## v2.2.402 — Publish-safety: scrub example identifiers from the public docs
 
 Housekeeping release. Replaced a handful of real example identifiers that had
 accumulated in older release-note entries (a company name, a tenant id, a
@@ -5247,7 +5247,7 @@ Two related changes — one feature, one bug-fix — both targeting the same fai
 [INFO] DCR   : dcr-si-endpoint  (rg=rg-securityinsighttest)
 [INFO] rows  : 47
 WARNING: DCR collision guard: 4 DCRs named 'dcr-si-endpoint' visible but NONE in sub
-         '54468121-…' / RG 'rg-securityinsighttest' -- ingest will likely 404 with 'westeurope'.
+         '<subscription-id>-…' / RG 'rg-securityinsighttest' -- ingest will likely 404 with 'westeurope'.
 [ERR]  === LA INGEST FAILED ===
 [ERR]  Exception : Log Ingestion API request failed. HTTP Status: 400 Response:
 ```
@@ -7795,8 +7795,8 @@ Example output for an operator missing Mg + `az login` (Az PS already connected)
 
   Run these in THIS shell, then re-launch the wizard:
 
-    Connect-MgGraph -TenantId f0fa27a0-... -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome
-    az login --tenant f0fa27a0-...
+    Connect-MgGraph -TenantId <tenant-id> -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All','Directory.ReadWrite.All' -NoWelcome
+    az login --tenant <tenant-id>
     .\Start-SetupWizard.ps1
 ```
 
@@ -9785,7 +9785,7 @@ The v2.2.60 log format had alignment problems — padded role names inside quote
 
 ```
 [STEP] Infrastructure check (workspace + DCE/DCR RGs + RBAC + DCE + storage -- idempotent)
- [INFO]   sub          : 54468121-...
+ [INFO]   sub          : <subscription-id>
  [INFO]   workspace    : log-platform-management-securityinsight  (rg=rg-securityinsight)
  [INFO]   DCE          : dce-securityinsight  (rg=rg-securityinsight)
  [INFO]   DCR RG       : rg-securityinsight

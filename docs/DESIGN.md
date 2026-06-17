@@ -76,7 +76,8 @@ live in [TESTS.md](TESTS.md) — this doc only points at them.
 14. [Preview channel & release model](#preview-channel--release-model)
 15. [Operations & runbook](#operations--runbook)
 16. [Troubleshooting](#troubleshooting)
-17. [Publish layout — what ships vs stays internal](#publish-layout--what-ships-vs-stays-internal)
+17. [SI Analyzer (POC)](#si-analyzer-poc)
+18. [Publish layout — what ships vs stays internal](#publish-layout--what-ships-vs-stays-internal)
 
 ---
 
@@ -3252,6 +3253,84 @@ These run-summary log lines double as troubleshooting entry points:
 - **Cadence skip ratio < 50% in steady state** → fingerprint cache writes failing; check `Set-SIFingerprintRecord` warnings.
 - **`EG-enriched: 0` while EG nodes > 0** → ExposureGraph join-key extraction broke; check `Get-SIExposureGraphIdentities` in `IdentityRoleFetcher.ps1`.
 - **MDE-discovered devices with empty `Hostname`/`OsPlatform`/`MachineGroup`** → MDE pass-through branch ordering regressed; Stage Collect must hit the `elseif ($a.MDE_DeviceId)` branch before the Entra-device fallback.
+---
+
+## SI Analyzer (POC)
+
+> **Status: proof-of-concept, not live-verified.** This section describes how the SI Analyzer POC is
+> *built*; it is not a delivered feature and is absent from FEATURES.md. The remaining scope and the
+> `◻`/`🟡` backlog live in [REQUIREMENTS.md](REQUIREMENTS.md) "SI Analyzer". The live-workspace +
+> AI-on run against a real RA snapshot is the release gate before any of it becomes "delivered".
+
+The SI Analyzer is a thin GUI layer on top of the Risk-Analysis (RA) data. It gives **analysts** a
+plain-language worklist that explains the top risk rows (the KQL facts plus an AI verdict) and gives
+**management** a "are we getting safer?" view (risk score over time, what's new/closed, an AI exec
+summary). It adds no new data plane and no new AI infrastructure — it reuses what SecurityInsight
+already has, read-only.
+
+### Shape
+
+A self-contained, PIM-Manager-style local web app: a PowerShell host script serves a single-page
+HTML app and a small JSON API on localhost.
+
+```
+analyzer/
+  Open-SiAnalyzer.ps1        host: serves the SPA + JSON API on a random localhost port;
+                             -UseDemoData (offline), -NoServer (render-to-file), -SelfTest (cores)
+  si-analyzer.html           single-page app (worklist + management surfaces)
+  lib/
+    SiAnalyzer-Data.ps1      data plane — runs read-only KQL via the SI auth session
+    SiAnalyzer-Kql.ps1       prestaged-analysis + builder KQL; the read-only guardrail
+    SiAnalyzer-Diff.ps1      snapshot diff (new/closed/regressed) + score timeline
+    SiAnalyzer-Ai.ps1        grounded, AI-optional verdict / exec-summary assembly
+  seed/
+    demo-snapshot.json       demo/seed data for the offline fallback
+```
+
+### Data plane — reuse, read-only
+
+The Analyzer reads the RA outputs already in the customer's Log Analytics workspace via
+`Invoke-AzOperationalInsightsQuery` over the **existing SI auth session** (`Connect-AzAccount`) — the
+same token path the engines use. It does not introduce a new connector. It is **snapshot-correct**:
+analyst views key on `where CollectionTime == max(CollectionTime)` so they always read one coherent
+latest snapshot; the management timeline/diff intentionally span multiple `CollectionTime` snapshots.
+
+When no workspace is reachable (or `-UseDemoData`), it falls back to the seeded `demo-snapshot.json`
+so the GUI and the cores can be exercised entirely offline.
+
+### Read-only KQL guardrail
+
+Every query the Analyzer runs — prestaged, builder-generated, or AI-composed from an ad-hoc prompt —
+is first vetted by a read-only guardrail (`Test-SiKqlReadOnly`). It rejects mutating/control commands
+(`.set` / `.create` / `.append` / `.ingest` / `.drop` / `.purge`), `externaldata`, cross-cluster /
+cross-database access (`cluster()` / `database()`), any table outside an allow-list, and ungrounded or
+empty queries; it also reports the tables a query touched. This keeps the engine's read-only invariant
+intact even for AI-generated KQL (the one deliberate write exception — governance/exemption sync — is
+backlog, see REQUIREMENTS.md and is not part of the analysis path).
+
+### AI — grounded and AI-optional
+
+AI reuses SI's existing Azure OpenAI configuration (`$global:OpenAI_*`, sourced from
+`custom.ps1` / Key Vault — the same config the privilege-tier-classifier and RA summaries use). It is
+**grounded**: the model is always handed the actual KQL result rows as context and asked to explain
+*those rows*, so a verdict or summary traces back to real findings rather than inventing data. It is
+**fail-soft**: if no OpenAI config is present the Analyzer detects this, logs that AI is unavailable,
+and degrades to KQL facts plus a templated summary — it never hard-fails.
+
+### Surfaces
+
+- **Analyst surface** — a top-100 worklist (highest `RiskScoreTotal` in the latest snapshot), each row
+  expandable to the *why* (RiskFactors / CVSS / tier / exposure, by KQL), the blast radius
+  (ExposureGraph reach to T0/T1), and a plain-language AI verdict; a library of one-click prestaged
+  analyses (each a vetted read-only KQL + an explanation template); and an ad-hoc prompt mode where
+  free text is composed into guardrail-checked read-only KQL, run, and explained.
+- **Management surface** — a risk-score timeline across snapshots, a new/closed/open breakdown from the
+  snapshot diff, and an AI-written executive summary — all driven by the diff + timeline cores in
+  `SiAnalyzer-Diff.ps1`, which work without AI (AI only adds the narrative).
+
+Test coverage for the POC (core unit tests, headless render check, live server smoke, offline
+self-test) is documented in [TESTS.md](TESTS.md) §9.
+
 ---
 
 ## Publish layout — what ships vs stays internal

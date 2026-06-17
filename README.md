@@ -1084,7 +1084,7 @@ The engines are stateless PowerShell scripts — point Windows Task Scheduler at
 | Flavour | File | Use when |
 |---------|------|----------|
 | `launcher.internal-vm.ps1` | the canonical VM launcher used by the schedules above | Internal / production use on a Windows VM with the SPN credential locally |
-| `launcher.community-vm.ps1` | community-friendly minimal-dependency launcher | Public demos / customers without the internal `2LINKIT-Functions.psm1` helpers |
+| `launcher.community-vm.ps1` | community-friendly minimal-dependency launcher | Public demos / customers without the internal `Contoso-Functions.psm1` helpers |
 | `launcher.community-azure.ps1` *(planned)* | Azure Function / Logic App host | Cloud-only deployments without a VM |
 
 **Creating the scheduled tasks.** Run as `NT AUTHORITY\SYSTEM` (or a dedicated service account that's a member of the local *Administrators* group on the VM) so the modules installed `-Scope AllUsers` are visible. Concrete `schtasks` example for the 9:00 PM Identity profiler (`/ST` takes 24-hour `HH:MM`, so 9 PM is `21:00`):
@@ -1758,7 +1758,7 @@ $global:OpenAI_MaxTokensPerRequest = 16384
 | Flavour | When to use | Where FUNCTIONS lib lives |
 |---|---|---|
 | `launcher.community-vm.ps1` | Public / community customers, your laptop, demo VMs | Inlined under solution folder: `SecurityInsight/FUNCTIONS/AutomateITPS*` |
-| `launcher.internal-vm.ps1` | 2linkit-style internal customers with monorepo layout | One level UP: `<repo-root>/FUNCTIONS/AutomateITPS*` (sibling of `SecurityInsight/`) |
+| `launcher.internal-vm.ps1` | Contoso-style internal customers with monorepo layout | One level UP: `<repo-root>/FUNCTIONS/AutomateITPS*` (sibling of `SecurityInsight/`) |
 
 Both flavours live in every engine folder (`launcher/<engine>/`). Same engine code, different launcher wiring — the `Resolve-RepoRoot` helper walks up looking for `FUNCTIONS\AutomateITPS\AutomateITPS.psd1` (monorepo / internal) or lowercase `scripts/+launchers/` (community published) sentinels and picks the right path automatically.
 

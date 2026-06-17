@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>SecurityInsight Analyzer</title>
+<style>
+  :root { --bg:#0f1419; --panel:#1a212b; --panel2:#222b38; --ink:#e6edf3; --muted:#8b98a8;
+          --accent:#4ea1ff; --crit:#ff5d5d; --high:#ff9f43; --med:#ffd24a; --ok:#43d18a; --line:#2c3744; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:18px; margin:0; }
+  .tabs { display:flex; gap:8px; }
+  .tab { padding:8px 16px; border:1px solid var(--line); border-radius:8px; background:var(--panel); cursor:pointer; color:var(--ink); font-size:14px; }
+  .tab.active { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:600; }
+  .pill { margin-left:auto; font-size:12px; color:var(--muted); }
+  .warn { background:#3a2a13; border:1px solid var(--high); color:var(--high); padding:8px 12px; border-radius:8px; margin:12px 20px; font-size:13px; display:none; }
+  .warn.show { display:block; }
+  main { padding:16px 20px; }
+  .grid { display:grid; gap:14px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .panel h2 { margin:0 0 10px; font-size:15px; }
+  .muted { color:var(--muted); font-size:13px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--panel); }
+  tr.row { cursor:pointer; }
+  tr.row:hover { background:var(--panel2); }
+  .score { font-weight:700; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:600; }
+  .b-crit { background:rgba(255,93,93,.15); color:var(--crit); }
+  .b-high { background:rgba(255,159,67,.15); color:var(--high); }
+  .b-med  { background:rgba(255,210,74,.15); color:var(--med); }
+  .b-low  { background:rgba(67,209,138,.15); color:var(--ok); }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0; }
+  .chip { padding:6px 12px; border:1px solid var(--line); border-radius:999px; background:var(--panel2); cursor:pointer; font-size:12px; color:var(--ink); }
+  .chip:hover { border-color:var(--accent); }
+  button.act { padding:9px 16px; border:none; border-radius:8px; background:var(--accent); color:#04121f; font-weight:600; cursor:pointer; font-size:14px; }
+  button.act:disabled { opacity:.5; cursor:default; }
+  textarea, input[type=text] { width:100%; background:var(--bg); color:var(--ink); border:1px solid var(--line); border-radius:8px; padding:10px; font-size:14px; font-family:inherit; }
+  .verdict { white-space:pre-wrap; background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:12px; font-size:13.5px; line-height:1.5; margin-top:10px; }
+  .toggle { color:var(--accent); cursor:pointer; font-size:12px; user-select:none; }
+  pre.kql { white-space:pre-wrap; background:#0a0e13; border:1px solid var(--line); border-radius:8px; padding:12px; font-size:12px; color:#9fd0ff; overflow:auto; display:none; }
+  pre.kql.show { display:block; }
+  .stat { display:flex; gap:18px; flex-wrap:wrap; }
+  .stat .cell { background:var(--panel2); border:1px solid var(--line); border-radius:10px; padding:12px 16px; min-width:130px; }
+  .stat .cell .n { font-size:26px; font-weight:700; }
+  .stat .cell .l { font-size:12px; color:var(--muted); }
+  .up { color:var(--crit); } .down { color:var(--ok); }
+  canvas { width:100%; max-width:100%; background:var(--bg); border-radius:8px; border:1px solid var(--line); }
+  .detail { background:var(--panel2); }
+  .hidden { display:none; }
+  .ailbl { font-size:11px; color:var(--muted); margin-top:6px; }
+  @media (max-width:600px){ header{gap:10px;} main{padding:12px;} .stat .cell{min-width:100px;} }
+</style>
+</head>
+<body>
+<header>
+  <h1>SecurityInsight Analyzer</h1>
+  <div class="tabs">
+    <div class="tab active" id="tab-analyst" onclick="showView('analyst')">Analyst</div>
+    <div class="tab" id="tab-mgmt" onclick="showView('mgmt')">Management</div>
+  </div>
+  <span class="pill" id="statuspill">connecting...</span>
+</header>
+
+<div class="warn" id="warnbar"></div>
+
+<main>
+  <!-- ANALYST VIEW -->
+  <section id="view-analyst" class="grid">
+    <div class="panel">
+      <h2>One-click analyses</h2>
+      <div class="muted">Pick a prestaged analysis, or ask your own question below.</div>
+      <div class="chips" id="prestaged"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Ask a question</h2>
+      <div class="muted">Plain English. The Analyzer composes a read-only query, runs it, and explains the result.</div>
+      <div class="chips" id="suggest"></div>
+      <textarea id="adhoc" rows="2" placeholder="e.g. Which Tier-0 servers are internet-facing with a critical vulnerability?"></textarea>
+      <div style="margin-top:10px; display:flex; gap:10px; align-items:center;">
+        <button class="act" id="askbtn" onclick="runAdhoc()">Analyze</button>
+        <span class="toggle" onclick="toggleKql('adhoc-kql')">show / edit query</span>
+      </div>
+      <pre class="kql" id="adhoc-kql" contenteditable="true"></pre>
+      <div id="adhoc-result"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Top risk worklist <span class="muted" id="wl-count"></span></h2>
+      <div class="muted">Highest risk first, latest snapshot. Click a row for the AI verdict.</div>
+      <span class="toggle" onclick="toggleKql('wl-kql')">show query</span>
+      <pre class="kql" id="wl-kql"></pre>
+      <div style="max-height:520px; overflow:auto; margin-top:8px;">
+        <table id="worklist">
+          <thead><tr><th>Asset</th><th>Domain</th><th>Tier</th><th>Severity</th><th>Score</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- MANAGEMENT VIEW -->
+  <section id="view-mgmt" class="grid hidden">
+    <div class="panel">
+      <h2>Are we getting safer?</h2>
+      <div class="stat" id="mgmt-stats"></div>
+    </div>
+    <div class="panel">
+      <h2>Risk score over time</h2>
+      <div class="muted" id="trend-caption"></div>
+      <canvas id="chart" width="900" height="260"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Executive summary &amp; recommendations</h2>
+      <div class="ailbl" id="mgmt-ailbl"></div>
+      <div class="verdict" id="mgmt-summary">Loading...</div>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+var TOKEN = "__SI_TOKEN__";
+var BASE = "__SI_BASEURL__";
+
+function api(path, body){
+  var opts = { method: body ? "POST" : "GET", headers: { "Authorization": "Bearer " + TOKEN } };
+  if (body) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  return fetch(BASE + path, opts).then(function(r){ return r.json().then(function(j){ return { ok:r.ok, status:r.status, data:j }; }); });
+}
+
+function el(id){ return document.getElementById(id); }
+function esc(s){ if(s===null||s===undefined) return ""; return String(s).replace(/[&<>]/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;"}[c]; }); }
+
+function tierBadge(level){
+  var l = (level||"").toLowerCase();
+  var cls = "b-low";
+  if (l.indexOf("tier 0")>=0 || l.indexOf("critical")>=0) cls="b-crit";
+  else if (l.indexOf("tier 1")>=0 || l.indexOf("high")>=0) cls="b-high";
+  else if (l.indexOf("tier 2")>=0 || l.indexOf("medium")>=0) cls="b-med";
+  return '<span class="badge '+cls+'">'+esc(level||"n/a")+'</span>';
+}
+function sevBadge(sev){
+  var s=(sev||"").toLowerCase(), cls="b-low";
+  if(s==="critical")cls="b-crit"; else if(s==="high")cls="b-high"; else if(s==="medium")cls="b-med";
+  return '<span class="badge '+cls+'">'+esc(sev||"n/a")+'</span>';
+}
+
+function showView(v){
+  el("view-analyst").classList.toggle("hidden", v!=="analyst");
+  el("view-mgmt").classList.toggle("hidden", v!=="mgmt");
+  el("tab-analyst").classList.toggle("active", v==="analyst");
+  el("tab-mgmt").classList.toggle("active", v==="mgmt");
+  if (v==="mgmt" && !window._mgmtLoaded) loadManagement();
+}
+function toggleKql(id){ el(id).classList.toggle("show"); }
+function showWarn(msg){ var w=el("warnbar"); if(msg){ w.textContent=msg; w.classList.add("show"); } else { w.classList.remove("show"); } }
+
+var SUGGESTS = [
+  "Which Tier-0 servers are internet-facing with a critical vulnerability?",
+  "Show stale privileged accounts that haven't logged on recently.",
+  "Which assets regressed (got riskier) since the last snapshot?",
+  "List unmanaged or onboarding-gap assets that are in scope."
+];
+
+function loadStatus(){
+  return api("/api/status").then(function(r){
+    var s=r.data;
+    el("statuspill").textContent = (s.demoMode?"demo data":(s.workspaceConfigured?"live workspace":"demo fallback"))
+       + " | AI " + (s.aiAvailable?"on":"off (templated)");
+  });
+}
+
+function loadPrestaged(){
+  return api("/api/prestaged").then(function(r){
+    var c=el("prestaged"); c.innerHTML="";
+    (r.data.analyses||[]).forEach(function(a){
+      var d=document.createElement("div"); d.className="chip"; d.textContent=a.Title; d.title=a.Plain;
+      d.onclick=function(){ runPrestaged(a.Id, a.Title); };
+      c.appendChild(d);
+    });
+    var sc=el("suggest"); sc.innerHTML="";
+    SUGGESTS.forEach(function(q){ var d=document.createElement("div"); d.className="chip"; d.textContent=q; d.onclick=function(){ el("adhoc").value=q; }; sc.appendChild(d); });
+  });
+}
+
+function loadWorklist(){
+  return api("/api/worklist").then(function(r){
+    var d=r.data;
+    showWarn(d.warning);
+    el("wl-kql").textContent = d.kql||"";
+    el("wl-count").textContent = "("+(d.count||0)+" of "+(d.snapshotCount||0)+" in snapshot)";
+    var tb=el("worklist").querySelector("tbody"); tb.innerHTML="";
+    (d.worklist||[]).forEach(function(row,i){
+      var tr=document.createElement("tr"); tr.className="row";
+      tr.innerHTML='<td>'+esc(row.ConfigurationName)+'</td><td>'+esc(row.SecurityDomain)+'</td><td>'+tierBadge(row.CriticalityTierLevel)+'</td><td>'+sevBadge(row.SecuritySeverity)+'</td><td class="score">'+esc(row.RiskScoreTotal)+'</td>';
+      tr.onclick=function(){ expandRow(tr, row); };
+      tb.appendChild(tr);
+    });
+  });
+}
+
+function expandRow(tr, row){
+  if (tr.nextSibling && tr.nextSibling.className==="detail-row"){ tr.parentNode.removeChild(tr.nextSibling); return; }
+  var dr=document.createElement("tr"); dr.className="detail-row";
+  var td=document.createElement("td"); td.colSpan=5; td.className="detail";
+  td.innerHTML='<div class="muted">why it matters: '+esc(row.RiskFactor_Consequence)+'<br>likelihood: '+esc(row.RiskFactor_Probability)+'</div><div class="verdict">Asking the Analyzer...</div>';
+  dr.appendChild(td); tr.parentNode.insertBefore(dr, tr.nextSibling);
+  api("/api/verdict", { rows:[row] }).then(function(r){
+    td.querySelector(".verdict").textContent = r.data.verdict || "(no verdict)";
+    var lbl=document.createElement("div"); lbl.className="ailbl"; lbl.textContent = r.data.aiUsed?"AI verdict":"templated verdict (AI off)"; td.appendChild(lbl);
+  });
+}
+
+function runPrestaged(id, title){
+  showView("analyst");
+  var box=el("adhoc-result");
+  box.innerHTML='<div class="verdict">Running "'+esc(title)+'"...</div>';
+  api("/api/prestaged/run", { id:id }).then(function(r){
+    if(!r.ok){ box.innerHTML='<div class="verdict">Error: '+esc(JSON.stringify(r.data))+'</div>'; return; }
+    renderAnalysis(box, r.data.title, r.data.verdict, r.data.rows, r.data.kql, r.data.aiUsed);
+  });
+}
+
+function runAdhoc(){
+  var q=el("adhoc").value;
+  var edited=el("adhoc-kql").textContent;
+  var box=el("adhoc-result");
+  el("askbtn").disabled=true;
+  box.innerHTML='<div class="verdict">Analyzing...</div>';
+  var payload = { question:q };
+  if (edited && edited.trim()) payload.kql = edited.trim();
+  api("/api/adhoc", payload).then(function(r){
+    el("askbtn").disabled=false;
+    if(!r.ok){ box.innerHTML='<div class="verdict">Rejected: '+esc(JSON.stringify(r.data.reasons||r.data.error))+'</div>'; if(r.data.kql){ el("adhoc-kql").textContent=r.data.kql; el("adhoc-kql").classList.add("show"); } return; }
+    el("adhoc-kql").textContent = r.data.kql;
+    renderAnalysis(box, "Result", r.data.explanation, r.data.rows, r.data.kql, r.data.aiUsed);
+  });
+}
+
+function renderAnalysis(box, title, verdict, rows, kql, aiUsed){
+  var html='<h2 style="font-size:14px;margin:14px 0 4px;">'+esc(title)+'</h2>';
+  html+='<div class="verdict">'+esc(verdict)+'</div><div class="ailbl">'+(aiUsed?"AI explanation":"templated explanation (AI off)")+'</div>';
+  if(rows && rows.length){
+    html+='<div style="max-height:300px;overflow:auto;margin-top:10px;"><table><thead><tr><th>Asset</th><th>Tier</th><th>Score</th></tr></thead><tbody>';
+    rows.slice(0,50).forEach(function(rw){ html+='<tr><td>'+esc(rw.ConfigurationName)+'</td><td>'+tierBadge(rw.CriticalityTierLevel)+'</td><td>'+esc(rw.RiskScoreTotal)+'</td></tr>'; });
+    html+='</tbody></table></div>';
+  }
+  box.innerHTML=html;
+}
+
+function loadManagement(){
+  window._mgmtLoaded=true;
+  el("mgmt-summary").textContent="Loading...";
+  api("/api/management").then(function(r){
+    var d=r.data; showWarn(d.warning);
+    var df=d.diff||{};
+    var deltaCls=(df.scoreDelta<0)?"down":"up";
+    var deltaSign=(df.scoreDelta<0)?"down":"up";
+    el("mgmt-stats").innerHTML=
+      cell(df.currentTotal,"Total risk score")+
+      cell('<span class="'+deltaCls+'">'+(df.scoreDelta>=0?"+":"")+df.scoreDelta+'</span>',"Change since last")+
+      cell(df.newCount,"New findings")+
+      cell(df.closedCount,"Closed / fixed")+
+      cell(df.openCount,"Still open")+
+      cell(df.regressedCount,"Got worse");
+    drawChart(d.timeline||[]);
+    el("mgmt-ailbl").textContent = d.aiUsed?"AI executive summary":"templated summary (AI off)";
+    el("mgmt-summary").textContent = d.summary || "(no summary)";
+  });
+}
+function cell(n,l){ return '<div class="cell"><div class="n">'+n+'</div><div class="l">'+esc(l)+'</div></div>'; }
+
+function drawChart(points){
+  var cap=el("trend-caption");
+  if(points.length>=2){
+    var last=points[points.length-1];
+    if(last.PercentFromPrev!==null && last.PercentFromPrev!==undefined){
+      var dir=last.PercentFromPrev<0?"down":"up";
+      cap.textContent="Overall risk is "+dir+" "+Math.abs(last.PercentFromPrev)+"% versus the previous snapshot.";
+    }
+  } else { cap.textContent="Not enough snapshots yet for a trend."; }
+  var c=el("chart"); var ctx=c.getContext("2d");
+  ctx.clearRect(0,0,c.width,c.height);
+  if(!points.length) return;
+  var pad=40, w=c.width-pad*2, h=c.height-pad*2;
+  var max=0; points.forEach(function(p){ if(p.TotalScore>max) max=p.TotalScore; });
+  if(max<=0) max=1;
+  ctx.strokeStyle="#2c3744"; ctx.beginPath(); ctx.moveTo(pad,pad); ctx.lineTo(pad,pad+h); ctx.lineTo(pad+w,pad+h); ctx.stroke();
+  ctx.strokeStyle="#4ea1ff"; ctx.lineWidth=2; ctx.beginPath();
+  points.forEach(function(p,i){
+    var x=pad+(points.length===1?w/2:(w*i/(points.length-1)));
+    var y=pad+h-(h*p.TotalScore/max);
+    if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+  ctx.fillStyle="#4ea1ff";
+  points.forEach(function(p,i){
+    var x=pad+(points.length===1?w/2:(w*i/(points.length-1)));
+    var y=pad+h-(h*p.TotalScore/max);
+    ctx.beginPath(); ctx.arc(x,y,3,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#8b98a8"; ctx.font="10px sans-serif";
+    ctx.fillText(String(Math.round(p.TotalScore)), x-8, y-8);
+    ctx.fillStyle="#4ea1ff";
+  });
+}
+
+function heartbeat(){ api("/api/heartbeat"); }
+
+// Boot. Guard the network boot so the SPA still parses/renders headlessly.
+if (typeof fetch === "function" && BASE) {
+  loadStatus().then(loadPrestaged).then(loadWorklist).catch(function(e){ showWarn("Load error: "+e); });
+  setInterval(heartbeat, 20000);
+  heartbeat();
+}
+</script>
+</body>
+</html>

@@ -1,9 +1,14 @@
 # Release notes for SecurityInsight
 
-## v2.2.400
+## v2.2.401
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(si publish-safety): scrub real example identifiers from public docs (v2.2.401) (8f2321f4)
+- docs(si): migrate SI Analyzer requirements into the canonical 4-doc model (#127) (aea13ff5)
+- feat(si-analyzer): POC web app -- analyst worklist + AI verdicts + mgmt risk trend (#124) (66861af3)
+- docs(si analyzer): add drift-driver catalog + maturity assessment to requirements (10967f2e)
+- docs(si): detailed SI Analyzer requirements — GUI over RA data (KQL+AI), prestaged+ad-hoc prompts, mgmt reporting (3037ae9c)
 - release(si): v2.2.400 — privilege-tier-classifier degrades on missing OpenAI config (no hard halt) (#96) (08cd8d20)
 - fix(si/ptc): missing OpenAI config no longer halts the classifier (error + Tier 99 fallback) (#95) (45ebb85e)
 - release(si): v2.2.399 — Layer-3 tolerates missing optional secret + RELEASENOTES sanitize (#94) (9377dddf)
@@ -29,17 +34,24 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release: SecurityInsight v2.2.387 - Connect-PlatformBootstrap Auto-mode now falls back from MI to Certificate on cross-tenant failure (IMDS reachable + Tenant-A MI vs Tenant-B target sub) (15bcb393)
 - release: SecurityInsight v2.2.386 - Summary-template Total row now matches per-domain rows when 24h cache wins (56f62a00)
 - release: SecurityInsight v2.2.385 - KPI table Total/per-domain arithmetic fix + AI snapshot source attribution (d816a63b)
-- release: SecurityInsight v2.2.384 - SMTP KV-pull gate fix (v2.2.359 bridge was dead code on most launchers) (36cc2955)
-- release: SecurityInsight v2.2.383 - AutoBucketCache challenger (stale-hash eviction + median anomaly + 7d confirmation TTL) + PTC 24h rebuild skip (8988966e)
-- release: SecurityInsight v2.2.382 - silence PS>TerminatingError noise when SI_RunHealth DCR is bound to a different DCE (4d1fa039)
-- release: SecurityInsight v2.2.381 - Top-50 risky assets ranks by Criticality Tier first (Tier 0 at top), then Weighted Risk Score within tier + display flips Weighted before Total (3541bb57)
-- release: SecurityInsight v2.2.380 - smarter AutoBucket escalation (A+B+C): budget 95%->75% + JSON-escape x1.15 on bytesPerRow (A), growth floor 4x->2x (B), adversarial ceiling capping next rows-per-bucket at 0.7x prior 413 failure value per report (C). Fewer probe-and-rehash cycles, less wasted O(N) hash overhead. (bc774c5c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.401 — Publish-safety: scrub example identifiers from the public docs
+
+Housekeeping release. Replaced a handful of real example identifiers that had
+accumulated in older release-note entries (a company name, a tenant id, a
+subscription id, a Key Vault name, a tenant domain) with generic placeholders
+(`Contoso`, `<tenant-id>`, `<subscription-id>`, `<key-vault>`,
+`<tenant>.onmicrosoft.com`). No functional change. Going forward an automated
+sanitization gate in the publish pipeline blocks any publish whose public docs
+contain a real customer / tenant / secret value, so this can't recur.
 
 ---
 
@@ -1156,7 +1168,7 @@ No engine behavior change -- purely a snapshot-formatting fix.
 `launcher/_lib/SecurityInsight.shared-defaults.ps1` — full rewrite of the SMTP block. Three phases:
 
 1. **Internal automation pattern** (fires when `$global:Context` exists AND `$global:Mail_SendAnonymous = $false`):
-   - Promote platform-defaults' `$global:SMTPUser` (semantically the from-address in legacy 2linkit convention) into `$global:SMTPFrom`
+   - Promote platform-defaults' `$global:SMTPUser` (semantically the from-address in legacy Contoso convention) into `$global:SMTPFrom`
    - Clear `$global:SMTPUser` and pull the actual relay LOGIN from KV secret `SMTPuser` (or `SMTP-User`)
    - Pull `$global:SMTPPassword` from KV secret `SMTPpassword` (or `SMTP-Password`)
 
@@ -1555,7 +1567,7 @@ No new config knobs required. No reports skipped or rows lost beyond what the ca
 
 The old `config/SecurityInsight.custom.sample.ps1` was a kitchen-sink 400+ line reference where ~95% was commented-out documentation. Customers couldn't tell what was actually in use vs what was example.
 
-- **`config/SecurityInsight.custom.sample.ps1`** -- NEW clean Internal-flavour template (~60 lines of active settings). For 2linkit-managed / Connect-Platform-equipped tenants: auth via HighPriv_*, SMTP from platform-defaults.ps1, KV pulls via Get-PlatformSecret.
+- **`config/SecurityInsight.custom.sample.ps1`** -- NEW clean Internal-flavour template (~60 lines of active settings). For Contoso-managed / Connect-Platform-equipped tenants: auth via HighPriv_*, SMTP from platform-defaults.ps1, KV pulls via Get-PlatformSecret.
 - **`config/SecurityInsight.custom.community.sample.ps1`** -- NEW parallel Community-flavour template (~80 lines). For standalone deployments: explicit SI_SPN_*, inline SMTP server/port/from, inline OpenAI + Shodan keys (with optional KV-pull stubs).
 - **`config/SecurityInsight.custom.reference.ps1`** -- the old kitchen-sink file kept under this name as a full-reference grimoire. Documents every supported global (cadence overrides, EG label maps, Shodan tuning, AI prompt overrides, schema-discovery knobs, etc.) for advanced customers / discoverability.
 
@@ -3250,7 +3262,7 @@ v2.2.306 shipped both reports with `AssetName/AssetId/AssetType` populated from 
 
 ### Effect
 
-A row representing "vulnerable workstation `dons-ekn-dt-01` can reach storage account `st2linkitsi`" now reports `AssetName=dons-ekn-dt-01`, `AssetId=<aad-device-guid>`, `AssetType=Device`. The Azure target is still in `TargetAzureAsset / TargetAzureAssetId / TargetType` for the impact narrative. CriticalityTier reflects the workstation's tier (Tier 0 admin device = high alarm; Tier 3 user laptop = lower priority).
+A row representing "vulnerable workstation `dons-ekn-dt-01` can reach storage account `stContososi`" now reports `AssetName=dons-ekn-dt-01`, `AssetId=<aad-device-guid>`, `AssetType=Device`. The Azure target is still in `TargetAzureAsset / TargetAzureAssetId / TargetType` for the impact narrative. CriticalityTier reflects the workstation's tier (Tier 0 admin device = high alarm; Tier 3 user laptop = lower priority).
 
 ---
 
@@ -4760,7 +4772,7 @@ No more 8-line warning block. No more REMEDIATION dump. Applies to all 4 asset-p
 
 ### 2. KeepLatest modules pinned to AllUsers; CurrentUser/OneDrive copies are rejected
 
-Customer's run was loading `AzLogDcrIngestPS v1.6.2` from `C:\Users\mok\OneDrive - 2linkIT\Documents\WindowsPowerShell\Modules\AzLogDcrIngestPS\1.6.2\`. My probe missed the OneDrive-redirected path, the slow `Get-Module -ListAvailable` fallback found it, and `Install-Module -Scope AllUsers` failed silently because the prompt wasn't elevated. Net: the engine kept running on v1.6.2 forever.
+Customer's run was loading `AzLogDcrIngestPS v1.6.2` from `C:\Users\mok\OneDrive - Contoso\Documents\WindowsPowerShell\Modules\AzLogDcrIngestPS\1.6.2\`. My probe missed the OneDrive-redirected path, the slow `Get-Module -ListAvailable` fallback found it, and `Install-Module -Scope AllUsers` failed silently because the prompt wasn't elevated. Net: the engine kept running on v1.6.2 forever.
 
 Operator: "i don't support currentuser." Agreed.
 
@@ -5599,7 +5611,7 @@ All three are gated on `$global:SI_SPN_TenantId` being set (provides the `{tid}`
 | **MDE Identity — Cloud-only** (Entra only) | `EntraAccountObjectId` only | `https://security.microsoft.com/user?aad={EntraAccountObjectId}&tab=overview&tid={tid}` |
 | **Azure resource** | `AzureResourceId` | `https://portal.azure.com/#@{tdom}/resource{AzureResourceId}/overview` |
 
-For Azure, `{tdom}` prefers `$global:SI_TenantDomain` (e.g. `myfamilynetwork.onmicrosoft.com`) and falls back to the tenant ID GUID when the domain isn't set.
+For Azure, `{tdom}` prefers `$global:SI_TenantDomain` (e.g. `<tenant>.onmicrosoft.com`) and falls back to the tenant ID GUID when the domain isn't set.
 
 ### Placement
 
@@ -5607,10 +5619,10 @@ Inserted as **step 4** of the `MoreDetails` post-process in `Invoke-RiskAnalysis
 
 ### Per-row example for the Identity profiler
 
-Synced user on the customer's tenant `f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e` would get a `MoreDetails` cell containing (among the other harvested URLs):
+Synced user on the customer's tenant `<tenant-id>` would get a `MoreDetails` cell containing (among the other harvested URLs):
 
 ```
-https://security.microsoft.com/user?aad=ba20b9a9-9aa8-484b-9bc1-4a55a04129e5&sid=s-1-5-21-...&tab=overview&tid=f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e
+https://security.microsoft.com/user?aad=ba20b9a9-9aa8-484b-9bc1-4a55a04129e5&sid=s-1-5-21-...&tab=overview&tid=<tenant-id>
 ```
 
 Click → straight to that user's Defender XDR overview, no portal navigation.
@@ -7391,7 +7403,7 @@ New strategy: instead of copying / re-shaping the v1 file content, generate a sm
 
 ```powershell
 $global:AutomationFramework = $true
-Import-Module ...\2LINKIT-Functions.psm1
+Import-Module ...\Contoso-Functions.psm1
 Import-Module ...\Automation-ConnectDetails.psm1   ; ConnectDetails        # ← THE missing call
 Import-Module ...\Automation-DefaultVariables.psm1 ; Default_Variables
 & ...\Connect_Azure.ps1
@@ -7508,7 +7520,7 @@ Fixes the case where `Sync-AutomateIT.ps1` ran elevated and created the folders 
 
 ## v2.2.159 — `Setup-SecurityInsight-Unattended.ps1`: `-SkipPlatformDefaults`
 
-New switch lets the operator pre-load v1 platform globals (via their own `connect.ps1` that imports `2LINKIT-Functions.psm1` + `Automation-ConnectDetails.psm1` + `Automation-DefaultVariables.psm1` + dot-sources `Connect_Azure.ps1`) and tell Setup-Unattended to skip its own dot-source of `platform-defaults.ps1`. Sanity-checks `$global:HighPriv_Modern_CertificateThumbprint_Azure` to ensure the operator actually ran the connect script before passing the switch.
+New switch lets the operator pre-load v1 platform globals (via their own `connect.ps1` that imports `Contoso-Functions.psm1` + `Automation-ConnectDetails.psm1` + `Automation-DefaultVariables.psm1` + dot-sources `Connect_Azure.ps1`) and tell Setup-Unattended to skip its own dot-source of `platform-defaults.ps1`. Sanity-checks `$global:HighPriv_Modern_CertificateThumbprint_Azure` to ensure the operator actually ran the connect script before passing the switch.
 
 ```powershell
 . .\connect.ps1                                  # operator's manual v1 connect
@@ -7777,7 +7789,7 @@ Example output for an operator missing Mg + `az login` (Az PS already connected)
 ```
 [BLOCKED] /api/apply needs Az PowerShell + Microsoft Graph + Azure CLI contexts.
 
-    Az PowerShell  : mok@2linkIT.net (sub: Partner Subscription MCPP (PAYG))
+    Az PowerShell  : mok@Contoso.net (sub: Partner Subscription MCPP (PAYG))
     Microsoft Graph: NOT CONNECTED
     Azure CLI      : 2.76.0 installed but NOT LOGGED IN
 
@@ -8924,7 +8936,7 @@ Replaced both with the two real totals, summed per asset across that asset's fin
 New per-asset line in the AI rollup:
 
 ```
-1. dc1.2linkit.local | Tier 0 | Total Risk Score 950 | Weighted Risk Score 1,065 | Findings 17 | Domains: Endpoint
+1. dc1.Contoso.local | Tier 0 | Total Risk Score 950 | Weighted Risk Score 1,065 | Findings 17 | Domains: Endpoint
 ```
 
 Sort key updated to `WeightedRiskScore` (descending), then `TotalRiskScore`, then `Findings`.
@@ -9346,7 +9358,7 @@ Four small fixes that flush warning noise from RA runs.
 
 ```
 WARNING: Initialize-PlatformLegacyIdentity: 'Legacy.ProvisionVMLocalAdmin' failed:
-Get-PlatformSecretKeyVault: secret 'Azure-VM-LocalAdmin-UserName' not found in vault 'kv-2linkit-automation-p'.
+Get-PlatformSecretKeyVault: secret 'Azure-VM-LocalAdmin-UserName' not found in vault '<key-vault>'.
 ```
 
 Most v2 cloud-only deployments don't carry the legacy on-prem creds (Azure-VM-LocalAdmin-*, Legacy-*-Internal/DMZ-Prod). Demoted to `Write-Verbose`, so `-Verbose` still surfaces the per-key skip when diagnosing.
@@ -9779,7 +9791,7 @@ The v2.2.60 log format had alignment problems — padded role names inside quote
  [INFO]   DCR RG       : rg-securityinsight
  [INFO]   Location     : westeurope
 
- [OK]   Az context             : 54468121-98ba-48ba-ba59-ba10a9711ed3
+ [OK]   Az context             : <subscription-id>
  [OK]   Workspace RG           : rg-securityinsight  [exists]
  [OK]   LA workspace           : log-platform-management-securityinsight  [exists]
  [OK]   DCE RG                 : rg-securityinsight  [exists]
@@ -9789,7 +9801,7 @@ The v2.2.60 log format had alignment problems — padded role names inside quote
  [OK]   RBAC RG rg-securityinsight : Monitoring Metrics Publisher  [already granted]
  [OK]   DCE                    : dce-securityinsight  (westeurope)  [exists]
  [OK]   Storage RG             : rg-securityinsight  [exists]
- [OK]   Storage account        : st2linkitsi  [exists]
+ [OK]   Storage account        : stContososi  [exists]
  [OK]   RBAC storage           : Storage Blob Data Contributor  [already granted]
  [OK]   RBAC storage           : Storage Table Data Contributor  [already granted]
  [OK]   RBAC storage           : Storage Queue Data Contributor  [already granted]
@@ -10631,7 +10643,7 @@ Added `-Flavour internal|community` switch (default `community`, so existing dem
 # Default (community demo VMs)
 .\tools\Run-AllEngines.ps1
 
-# Internal env (FVF, 2linkit, etc. -- requires Initialize-PlatformAutomationFramework upstream)
+# Internal env (FVF, Contoso, etc. -- requires Initialize-PlatformAutomationFramework upstream)
 .\tools\Run-AllEngines.ps1 -Flavour internal
 
 # Internal + standalone PTC
@@ -11121,7 +11133,7 @@ Cumulative patch covering issues surfaced during the v2.2.0 stable cut. No engin
 ### Publish-pipeline fixes (operator-facing, no customer-visible change unless re-pulling)
 
 - **`*.internal-vm.*` files stripped from public stable + preview builds.** The 6 maintainer-only `launcher.internal-vm.ps1` files (azure / endpoint / identity / privilege-tier-classifier / publicip / risk-analysis) assume the AutomateIT monorepo path conventions. Public customers use `launcher.community-vm.ps1`.
-- **`demo/` folder excluded** from public publish. `demo/community/*` carries 2linkit-internal customer values; `demo/Install-DemoConfig.ps1` is a maintainer's demo-VM refresh helper. Stays in the upstream monorepo, never published.
+- **`demo/` folder excluded** from public publish. `demo/community/*` carries Contoso-internal customer values; `demo/Install-DemoConfig.ps1` is a maintainer's demo-VM refresh helper. Stays in the upstream monorepo, never published.
 - **README chain skipped on flat layout** when `SecurityInsight/README.md` was already copied verbatim during the layout-mirror step. The fallback chain (`DOCS/README.public.md` → public-marker extraction → auto-stub) was running unconditionally and crashing on `Join-Path $docsSrc 'README.public.md'` when `$docsSrc` was nulled.
 - **Stage step trimmed under GitHub Actions' 21K expression limit** (was 24,785 chars after the v2.2 flat-layout rewrite; stripped 62 comment lines to land at 20,536). Tag-triggered runs were silently rejected by GitHub before this. Follow-up TODO: extract the Stage step to a separate `_publish-stage.ps1` so the limit is moot.
 - **Duplicate `dependencies if-block` removed** from `publish.yml` (merge artifact from v2.2.0 stable cut — both branches added similar logic).
@@ -11220,7 +11232,7 @@ The schema is now stable across all 136 reports — downstream Power BI / Workbo
 
 These ship in the source monorepo but are excluded from the public `KnudsenMorten/SecurityInsight` stable mirror:
 
-- `internal/Migrate-FromV1.ps1` — migrates customers from the old v1 automation framework (`c:\scripts\functions\Automation-*.psm1`) over to a fresh SI v2.2 install. Contains 2linkit-specific KV secret-name conventions, so kept private.
+- `internal/Migrate-FromV1.ps1` — migrates customers from the old v1 automation framework (`c:\scripts\functions\Automation-*.psm1`) over to a fresh SI v2.2 install. Contains Contoso-specific KV secret-name conventions, so kept private.
 - `internal/side-by-side-install-from-v1.md` — companion install guide.
 
 ### Publish workflow change (operator-facing)

@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ======================================================================
+       Sia.Preview - renders the exec dashboard with the demo seed to a single
+       self-contained HTML file the operator can open locally BEFORE any deploy.
+       It uses the SAME ExecHtmlRenderer the live /exec page uses, so the preview
+       is a faithful representation of the hosted visuals (AI-off / templated
+       summary path, since it runs with no OpenAI config).
+       ====================================================================== -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Sia.Preview</RootNamespace>
+    <!-- This is a build-time generator only ever invoked as `dotnet Sia.Preview.dll`,
+         so skip the native apphost stub. Avoids an unnecessary platform exe (and the
+         real-time-AV file lock it can hit on some hosts). -->
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sia.Core\Sia.Core.csproj" />
+    <ProjectReference Include="..\..\src\Sia.Web\Sia.Web.csproj" />
+  </ItemGroup>
+
+</Project>

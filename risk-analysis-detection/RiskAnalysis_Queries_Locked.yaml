@@ -1938,6 +1938,9 @@ Reports:
 
 
     - ReportName: Attack_Paths_Summary_Github_to_Azure_Resources
+      crossDomainBucketCoalesce:
+      - ClColumn: Target_AzureResourceId_Guid
+        EgNativeKey: NodeId
       ReportPurpose: Credential-driven attack paths from GitHub to Azure targets, prioritized by FINAL TARGET business impact.
         EG provides the path detection + lateral-movement scoring + tier; SI_Azure_Profile_CL contributes target asset metadata only
         (cmdbName, cmdbCriticality, cmdbDataSensitivity) joined on the FINAL TARGET via AzureResourceId_Guid (= EG NodeId hex).
@@ -3247,7 +3250,7 @@ Reports:
                 FinalTargetLabel      = TargetNodeLabel
         ) on $left.IntermediateIdentityId == $right.Hop2_SourceIdentityId
 
-        // Optional avoid ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“GitHub sourceÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â == ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“target assetÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â scenarios (usually not needed but safe)
+        // Optional avoid ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œGitHub sourceÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â == ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œtarget assetÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â scenarios (usually not needed but safe)
         | where FirstGitHubSource != FinalTargetId
 
         // Step 6  De-duplicate to stable grain
@@ -3483,6 +3486,9 @@ Reports:
         | order by RiskScore_Weight_Factor desc, AttackPathPriorityScore desc, TierEscalation desc, CriticalityTier asc, AssetName asc, ConfigurationId asc
 
     - ReportName: Attack_Paths_Summary_Public_IP_to_VM_with_CVE_Exploitation
+      crossDomainBucketCoalesce:
+      - ClColumn: Target_AzureResourceId_Guid
+        EgNativeKey: NodeId
       ReportPurpose: Internet-exposed vulnerable assets prioritized by FINAL TARGET business impact.
         EG provides the path detection (PublicIP -> ExposedResource <- CVE) + scoring + tier;
         SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
@@ -4957,6 +4963,9 @@ Reports:
             CVENodeProperties
 
     - ReportName: Attack_Paths_Summary_Identity_Group_Membership_to_Privileged_Resources
+      crossDomainBucketCoalesce:
+      - ClColumn: Target_AzureResourceId_Guid
+        EgNativeKey: NodeId
       ReportPurpose: Group-membership privilege paths to Azure resources prioritized by FINAL TARGET business impact.
         EG provides path detection (Identity -> Group -> Target) + scoring + tier;
         SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
@@ -6304,6 +6313,9 @@ Reports:
         | order by RiskScore_Weight_Factor desc, AttackPathPriorityScore desc, TierEscalation desc, CriticalityTier asc, FinalTarget asc
 
     - ReportName: Attack_Paths_Summary_Data_Sensitivity_to_Exposed_Credentials
+      crossDomainBucketCoalesce:
+      - ClColumn: Target_AzureResourceId_Guid
+        EgNativeKey: NodeId
       ReportPurpose: Credential-driven attack paths to sensitive data locations prioritized by FINAL TARGET business impact.
         EG provides path detection (ExposedCredential -> Identity -> DataLocation <- DataSensitivityScan) + scoring + tier;
         SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
@@ -7663,6 +7675,9 @@ Reports:
 
 
     - ReportName: Attack_Paths_Summary_Credential_Based_Lateral_Movement
+      crossDomainBucketCoalesce:
+      - ClColumn: Target_AzureResourceId_Guid
+        EgNativeKey: NodeId
       ReportPurpose: Credential-driven lateral-movement paths to Azure and Endpoint targets prioritized by FINAL TARGET business impact.
         EG provides path detection (SourceAsset -> Credential -> Identity -> AzureTarget) + scoring + tier;
         SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
@@ -8353,6 +8368,15 @@ Reports:
             AssetCount desc
 
     - ReportName: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+      crossDomainBucketCoalesce:
+      # Source-device CL key drives the EG-side partition: the bucket filter sits on
+      # the VulnerableDevices source-node scan (the hot path before make-graph), and
+      # its AadDeviceId equals _SourceCmdb.Source_AadDeviceId for matched rows.
+      - ClColumn: Source_AadDeviceId
+        EgNativeKey: AadDeviceId
+      # Target Azure CL key is enriched downstream (post graph-match); declare it so
+      # the engine does not fall back to EG-filter suppression for this report.
+      - ClColumn: Target_AzureResourceId_Guid
       ReportPurpose: Vulnerable-device-to-Azure-target attack paths prioritized by FINAL TARGET business impact.
         EG provides path detection (VulnerableDevice -> Credential -> Identity -> AzureTarget) + scoring + tier;
         SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)
@@ -8463,11 +8487,18 @@ Reports:
         let VulnerableDevices = ExposureGraphNodes
         | where set_has_element(Categories, "device")
         | where NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+        // v2.2.404 -- surface AadDeviceId on the source-device node so the EG-side
+        // bucket filter can partition on the SAME value the CL side (_SourceCmdb)
+        // keys on (Source_AadDeviceId). crossDomainBucketCoalesce.EgNativeKey =
+        // AadDeviceId promotes this column to the front of the bucket-key coalesce,
+        // so EG + CL partitions are identical -> EG work is genuinely bounded
+        // (partition on the join key, not a cap) AND every join match survives.
+        | extend AadDeviceId = tostring(coalesce(NodeProperties.rawData.aadDeviceId, NodeProperties.raw.aadDeviceId, NodeProperties.aadDeviceId))
         // Source-side bucket filter -- partitions 1M-device tenants BEFORE make-graph.
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
-        | project NodeId, NodeName, NodeLabel, Categories, NodeProperties;
+        | project NodeId, NodeName, NodeLabel, Categories, NodeProperties, AadDeviceId;
         let Identities = ExposureGraphNodes
         | where set_has_element(Categories, "identity")
         | project NodeId, NodeName, NodeLabel, Categories;

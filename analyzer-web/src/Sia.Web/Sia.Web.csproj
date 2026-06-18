@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!-- ======================================================================
+       Sia.Web - the hosted, executive-grade SecurityInsight Analyzer (SIA).
+       ASP.NET Core, reusing the proven CEH stack patterns. Surfaces:
+         * the EXEC management view (default landing) - board-ready, plain-language,
+           chart-led, mobile + print friendly, NO KQL/jargon;
+         * the ANALYST view (prompt box + guarded KQL + drill-down);
+         * the MCP server endpoint (read-only, guardrailed tools).
+       Data plane: Azure Monitor Query SDK with Managed Identity (Log Analytics
+       Reader), READ-ONLY. AI: Azure OpenAI SDK, grounded, fail-soft. Auth: Entra /
+       Easy Auth in the hosted internal env.
+       ====================================================================== -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Sia.Web</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Read-only Log Analytics data plane via the app's Managed Identity. -->
+    <PackageReference Include="Azure.Monitor.Query" Version="1.5.0" />
+    <PackageReference Include="Azure.Identity" Version="1.12.0" />
+    <!-- Grounded AI narrative. Azure OpenAI via the modern OpenAI SDK surface. -->
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Sia.Core\Sia.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ship the demo/seed snapshot into the publish output so the offline
+         fallback + a no-config first boot can render. Sourced from the shared
+         PowerShell POC seed so the two stay in sync. -->
+    <None Include="..\..\..\analyzer\seed\demo-snapshot.json">
+      <Link>App_Data\demo-snapshot.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

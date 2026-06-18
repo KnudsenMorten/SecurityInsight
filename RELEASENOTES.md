@@ -1,45 +1,121 @@
 # Release notes for SecurityInsight
 
-## v2.2.402
+## v2.2.404
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(publish-safety): catch truncated id prefixes + finish SI doc scrub (v2.2.402) (423da01f)
-- docs(si publish-safety): scrub real example identifiers from public docs (v2.2.401) (8f2321f4)
-- docs(si): migrate SI Analyzer requirements into the canonical 4-doc model (#127) (aea13ff5)
-- feat(si-analyzer): POC web app -- analyst worklist + AI verdicts + mgmt risk trend (#124) (66861af3)
-- docs(si analyzer): add drift-driver catalog + maturity assessment to requirements (10967f2e)
-- docs(si): detailed SI Analyzer requirements — GUI over RA data (KQL+AI), prestaged+ad-hoc prompts, mgmt reporting (3037ae9c)
-- release(si): v2.2.400 — privilege-tier-classifier degrades on missing OpenAI config (no hard halt) (#96) (08cd8d20)
-- fix(si/ptc): missing OpenAI config no longer halts the classifier (error + Tier 99 fallback) (#95) (45ebb85e)
-- release(si): v2.2.399 — Layer-3 tolerates missing optional secret + RELEASENOTES sanitize (#94) (9377dddf)
-- recover: restore 9 files reverted by the 2026-06-14 worktree race (#91) (70c1109d)
-- fix(si): Layer-3 custom.ps1 tolerates a missing OPTIONAL secret (no hard halt) (#90) (31fbedc8)
-- docs(si): scrub real customer domain casa.dk from public README + RELEASENOTES (1e6723cb)
-- fix(SI): align pre-publish gate with consolidated 5-doc model (1fee3f13)
-- chore(docs): drop auto-generated ROADMAP for PIM4EntraPS + SecurityInsight — REQUIREMENTS.md is the single backlog doc (25102999)
-- fix(platform): restore throw-on-missing in Get-PlatformSecret — greens root suite (c1f349b7)
-- docs(SI): adopt shared 6-doc model — consolidate 18 topic docs into DESIGN, add REQUIREMENTS/FEATURES/TESTS/ROADMAP + CLAUDE (ff62008a)
-- release: SecurityInsight v2.2.398 -- asset-tagging Auto-* rules: source = DeviceInfo (authoritative for OnboardingStatus + full coverage) with EG left-join for AssetTags delta filter; suppress per-row "Missing SenseDeviceId" warnings (aggregate summary preserved) (7afb68a9)
-- release: SecurityInsight v2.2.397 -- asset-tagging: 4 independent Auto-* rules (3 OnboardingStatus + 1 DeviceNamePattern); no more AND between filters; new ExcludeByDeviceNamePattern config flag; regex-broaden OnboardingStatus match (89d3d2f3)
-- release: SecurityInsight v2.2.396 -- Auto-* rules rewritten on ExposureGraphNodes (modern) + AssetTags delta filter via array_index_of so 1h cron only processes new un-tagged devices (e3d28540)
-- release: SecurityInsight v2.2.395 -- asset-tagging Auto-* rules now project SenseDeviceId (was DeviceId, engine extractor never matched) + per-device 'Tagging device X with tag Y' verbose log (db21918b)
-- release: SecurityInsight v2.2.394 -- asset-tagging Defender hunting via REST (drop Start-MgSecurityHuntingQuery) -- fixes Microsoft.Graph.Authentication assembly-version conflict on PS 5.1 (b25b6a8c)
-- release: SecurityInsight v2.2.393 -- asset-tagging fix: probe config/asset-tagging.config.json (not $SettingsPath) + back-compat for pre-v2.2.392 AssetTagging.AutoExclude.locked.yaml (983d0c0c)
-- release: SecurityInsight v2.2.392 -- rename AssetTagging.AutoExclude.locked.yaml -> AssetTagging.locked.yaml (engine default filename) (4b9b8da5)
-- release: SecurityInsight v2.2.391 -- ApplyDeviceNamePatterns: config-driven name filter, removes hard-coded prefixes from KQL (6ac4600d)
-- release: SecurityInsight v2.2.390 -- asset-tagging EnabledByConfigFlag: + asset-tagging.config.json + 3 OnboardingStatus auto-exclude rules (9ae0e77b)
-- chore(SI): gitignore *.corrupted safety-net backups from .custom.yaml description-block repair pass (b0d34e0a)
-- release: SecurityInsight v2.2.389 -- propagate excludeAssets: reference into all 549 profiling sample headers + _TEMPLATE Use Case 3 (d4fc91b1)
-- release: SecurityInsight v2.2.388 -- per-detection asset exclusion (excludeAssets:) for profiling rules (dee3494d)
-- release: SecurityInsight v2.2.387 - Connect-PlatformBootstrap Auto-mode now falls back from MI to Certificate on cross-tenant failure (IMDS reachable + Tenant-A MI vs Tenant-B target sub) (15bcb393)
-- release: SecurityInsight v2.2.386 - Summary-template Total row now matches per-domain rows when 24h cache wins (56f62a00)
+- fix(si ra): re-key cross-domain Attack_Paths Summary buckets onto EG-native columns (bound 900s) (310dcc23)
+- feat(sia): maturity scorecard + roadmap exec surface (grounded, honest) (cd574061)
+- feat(sia): add missing-processes / org-coaching exec layer (grounded maturity gaps) (2629b335)
+- Merge pull request #189 from KnudsenMorten/fix/si-ra-cmdbname-and-logging (f95f296b)
+- Merge pull request #188 from KnudsenMorten/feat/sia-round8 (63d86205)
+- fix(si-ra): cast dynamic cmdb group keys (SEM0001) + quiet superseded multi-path logging (d9747a1c)
+- fix(si): identity EG bucketing uses KQL hash(), not the non-existent hash_djb2 (de7816dd)
+- feat(sia): exec glossary — plain-language "what these terms mean" layer (4adc9ae0)
+- Merge pull request #178 from KnudsenMorten/feat/sia-round7 (f1c45f09)
+- feat(sia): prioritised remediation plan ("next N actions" ranked by risk-reduction) (0906a44b)
+- chore(sia): enforce dll-only builds (UseAppHost=false) across analyzer-web (789b7f95)
+- Merge pull request #174 from KnudsenMorten/feat/sia-round6 (6b6869aa)
+- feat(sia): trends & top movers exec panel + top_movers MCP tool (c9859dc8)
+- fix(sia): Dockerfile copies demo seed to absolute /analyzer/seed (reproducible image build) (82e847c3)
+- feat(sia): scheduled exec-summary email send-hook (grounded, fail-soft) (ce97b1f2)
+- feat(sia): one-sentence exec headline + board-deck export (c2fea72c)
+- feat(sia): exec 'so what' business-impact framing + clean-by-default drill-down (93afba47)
+- feat(SIA): add period-over-period + risk-by-area exec enhancements (0bdc052d)
+- feat(SIA): framework lens + aging/time-open exec panels (e791b623)
+- chore(si): remove dead analyzer-web gitignore negation (post-rename) + resolve ENGINE-IDENTITY (6c3cf709)
+- feat(SIA): target real SI RA-Summary schema on the live data path + finalize hosted deploy (dbf6374e)
+- fix(sia)!: rename Config/Data dirs -> Configuration/DataAccess; REVERT gitignore negation (154e9e29)
+- fix(sia): stop .gitignore swallowing analyzer-web Config/ + Data/ .NET source (4b526f21)
+- Merge pull request #151 from KnudsenMorten/feat/si-analyzer-web (11f977b0)
+- feat(SI Analyzer): build hosted executive-grade SIA web app (ASP.NET Core) (8b0cdb31)
+- docs(si sia): exec visuals + Claude ideas + prompt + MCP server spec (45397382)
+- docs(si sia): mgmt reporting + AI integration are core deliverables (CIO audience) (207af1a9)
+- docs(si sia): capture audience (non-tech execs/CIO) + Azure hosting requirement (2bbc6480)
+- docs(si): define acronym SIA (SecurityInsight Analyzer) + internal env as default base (9693e153)
+- docs(toc): fix broken README anchor links + add Fix-MarkdownToc gate (6696b067)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.404 — Risk Analysis: cross-domain Attack-Path summaries no longer time out at scale
+
+### Symptom
+
+On large tenants the six cross-domain **Attack-Path Summary** reports could fail to complete,
+logging `bucket N: 900s deterministic timeout` repeatedly and shipping with few or no rows. The
+reports walk the Exposure Graph to find an attack path, then attach CMDB metadata
+(`cmdbName` / `cmdbCriticality` / …) to the final target from the asset-profile snapshot.
+
+### Cause
+
+These reports split a large query into hash "buckets" so each piece fits Advanced Hunting's
+response limits. The split was hashing on the CMDB enrichment key — a column that only exists
+*after* the Exposure-Graph work is done — so every bucket re-scanned the **entire** Exposure
+Graph. On a big estate that full scan exceeds the 900-second query deadline, so each bucket timed
+out no matter how many buckets the engine tried.
+
+### Fix
+
+Each of the six reports now declares which Exposure-Graph-native column its CMDB key corresponds
+to, and the engine re-keys the split onto that native column. The Exposure-Graph scan is now
+genuinely partitioned (each bucket sees roughly 1/N of the graph), so the heavy side is bounded
+and stays inside the deadline. The CMDB enrichment is matched back per bucket on the same value,
+so the results are **identical** to an un-split run — same findings, same rows, same counts; only
+the query path changed. This is a partition fix, not a cap or a sample: no rows are dropped and no
+limit is imposed.
+
+The fix is opt-in per report; reports that don't declare the mapping keep their previous
+(correct, slower) behaviour.
+
+---
+
+## v2.2.403 — Risk Analysis: fix "summarize by cmdbName" BadRequest + quieter multi-path logging
+
+### Symptom A — Risk Analysis report fails with a BadRequest
+
+Reports that group by CMDB columns (the public-IP open-port / vulnerability reports and the
+cross-domain attack-path summaries) could fail with a Log Analytics semantic error:
+
+`Summarize group key 'cmdbName' is of a 'dynamic' type. Please use an explicit cast
+(for example, 'summarize ... by tostring(cmdbName)')`.
+
+The CMDB columns are populated defensively and can arrive as a `dynamic` value rather than
+text; Log Analytics will not group by a `dynamic` column.
+
+### Fix A
+
+Immediately before a query is submitted, the engine now casts any CMDB column used as a
+grouping key (`cmdbName`, `cmdbId`, `cmdbCriticality`, `cmdbDataSensitivity`) to text. The cast
+is applied at the single point every query passes through, so it covers all execution paths; it
+never touches numeric columns (risk scores and tiers stay numeric), is safe to apply more than
+once, and leaves any column that is already cast or already a literal alone.
+
+### Symptom B — a successful report looked like it had failed
+
+When the engine tries more than one route to the data (for example the data-lake route first,
+then a fallback route) and a later route succeeds, the failed earlier attempt was still being
+logged as a warning — so operators reading the log saw warnings on runs that actually completed
+fine.
+
+### Fix B
+
+Superseded attempts are no longer logged as warnings. If any route succeeds, the log shows at
+most a single informational line noting that a fallback was used; a warning is emitted only when
+**every** route fails, as one consolidated message. Full diagnostic detail is preserved in the
+verbose/diagnostic log and the per-query error dumps.
+
+### Tests
+
+New offline suite `tests/pester/SI-RiskAnalysis-QueryBuild.Tests.ps1` (13 tests, PS 5.1) pins
+both behaviours: dynamic grouping keys are always cast (and numeric columns never are), and the
+fallback logger stays silent on a superseded attempt while still emitting one warning when all
+routes fail.
 
 ---
 

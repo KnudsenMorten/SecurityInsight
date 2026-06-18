@@ -1778,7 +1778,33 @@ Every entry maps to ONE Excel sheet / LA write. All fields required unless flagg
 | `SecuritySeverityScope` | `[string,...]` | scoring filter | Allowed severity labels. Rows outside this set are dropped. |
 | `OutputPropertyOrder` | `[string,...]` | strict-mode column projection (1844) | Canonical 21-col order from `risk-analysis.schema.locked.json` plus report-specific extras (CMDB, EG, …). Engine emits exactly these columns in exactly this order; extras appended after the 21 canonical columns. |
 | `SortBy` | `[string,...]` | Excel sort | Optional. Sort key(s) — prefer `RiskScoreTotal_Weighted`. |
-| `ReportQuery` | `[string]` (one-element list, multi-line KQL) | submitted via `Invoke-GraphHuntingQuery` (~4760) | The KQL itself. Engine auto-routes pure-LA queries to Log Analytics; mixed XDR queries to advanced hunting. |
+| `ReportQuery` | `[string]` (one-element list, multi-line KQL) | submitted via `Invoke-GraphHuntingQuery` | The KQL itself. Engine auto-routes pure-LA queries to Log Analytics; mixed XDR queries to advanced hunting. |
+
+#### Submission-path normalization (applies to every routing branch)
+
+`Invoke-GraphHuntingQuery` is the single chokepoint all report queries pass through before
+the Sentinel-lake / advanced-hunting / Log-Analytics-direct branches. Two behaviours are
+enforced there:
+
+- **Dynamic group-key cast (SEM0001 guard).** Log Analytics refuses to `summarize … by` a
+  column of `dynamic` type. The CMDB columns (`cmdbName`, `cmdbId`, `cmdbCriticality`,
+  `cmdbDataSensitivity`) are projected with `column_ifexists(…)` and arrive as `dynamic`
+  whenever the source column is absent (and the PublicIP open-port / vuln reports surface
+  `cmdbName` straight off `SI_VulnerabilityPIP_CL`). Before submission, `Add-DynamicGroupKeyCasts`
+  wraps any such column appearing as a **bare group key** in `tostring(…)`. It is list-driven
+  (never touches numeric columns such as `RiskScore*` / `*Tier`, so ordering and scoring stay
+  numeric), idempotent, and skips alias-form keys (`cmdbX = ""`) and already-cast keys. This
+  mirrors the build-time `tostring(cmdbName)` cast in `Build-RiskAnalysis.ps1`, so the runtime
+  summarize path cannot regress relative to the built template. It covers the PublicIP reports
+  and the cross-domain Attack-Path Summary reports, all of which group by `cmdb*`.
+- **Deferred multi-path fallback logging.** When the engine tries several routes to the same
+  data (Sentinel data lake → EG-hybrid → advanced hunting → LA-direct) and a later route
+  **succeeds**, the earlier failed attempts are no longer logged as `[WARN]`/`[ERR]` — they
+  were superseded by the success. Each failed attempt is stashed silently (full detail kept at
+  `[DIAG]` + in the `ra-laerr-*.txt` dumps); a successful path then emits at most one `[INFO]`
+  (`auth/data via <path> (after N superseded fallback attempts)`), and only a **total** failure
+  flushes a single consolidated `[WARN]`. This stops operators from reading a successful report
+  run as failed.
 
 ### Allowed `SecurityDomain` values + their `byCategory` keys
 
@@ -1830,6 +1856,28 @@ The engine recognises these markers and substitutes them at run time. None are v
 | `__WEIGHTED_FACTORS_BEGIN__` … `__WEIGHTED_FACTORS_END__` | KQL `case()` chain mapping cmdb columns to `RiskFactor_Weight` integer (basis-100) | `riskscore_weighted.schema.custom.json` (see Risk-score model) | Always present in modern reports; substituted from the weighted-factor JSON. |
 
 `AutoBucketCount` controls: `$global:AutoBucketCount` (default `$true`), `$global:AutoBucketMax` (default `64`), `$global:AutoBucketCache` (default `$true`), `$global:ResetCache` (forces re-probe).
+
+### Cross-domain query shape — EG-native bucket re-key
+
+The cross-domain **Attack-Path Summary** reports walk ExposureGraph (nodes + edges) to detect a path, then enrich the final target (and, for the vulnerable-device report, the source device) with CMDB metadata from a `SI_*_Profile_CL` snapshot inlined as a KQL `datatable`. The CL enrichment is a **leftouter join on an identity key** (e.g. `… on $left.FinalTargetId == $right.Target_AzureResourceId_Guid`), where the CL projection's join column **equals the EG NodeId hex** for matched rows — CL contributes only `cmdbName` / `cmdbCriticality` / `cmdbDataSensitivity` / `cmdbId`; EG owns path detection, tier and scoring.
+
+Bucketing splits a too-large query into N hash partitions. For the partition to actually **bound the ExposureGraph work** (the expensive side), the `__BUCKET_FILTER__` block must hash on a column that exists *on the EG scan*, before the joins — an **EG-native** column such as `NodeId`. If, instead, the engine partitions on the CL-side enrichment key (a `cmdb*` / `Target_*` column that only exists *after* the joins), the EG scan runs in full for every bucket and the report hits the **900s advanced-hunting HttpClient ceiling** at large-tenant scale.
+
+Each cross-domain Summary report therefore declares a per-report **`crossDomainBucketCoalesce`** block that maps its CL bucket-key column to the EG-native column it equals:
+
+```yaml
+- ReportName: Attack_Paths_Summary_Github_to_Azure_Resources
+  crossDomainBucketCoalesce:
+  - ClColumn: Target_AzureResourceId_Guid   # CL-side enrichment join key
+    EgNativeKey: NodeId                       # the EG column it equals (NodeId hex)
+```
+
+Given this declaration the engine:
+
+1. Keeps the **EG-side `__BUCKET_FILTER__` active** (it no longer suppresses it as "cross-domain lossy"), and leads the EG `__bucket_key` coalesce with the declared `EgNativeKey` — so the ExposureGraph scan is genuinely partitioned to ~1/N of nodes per bucket (a real partition that **bounds** EG work, not a row cap or sample).
+2. Buckets the inlined CL snapshot on the matching `ClColumn`, whose value is the same EG NodeId hex, using the **same SHA256-modulo math** — so the EG subset and CL subset of each bucket align, and the per-bucket leftouter joins keep **every** match (lossless). Across all N buckets the union is identical to the un-bucketed result; only the query path changed.
+
+The CL enrichment columns (`cmdbName`, …) are still projected by the report exactly as before — the re-key changes only *which column the partition hashes on*, never the output. The vulnerable-device report declares two entries: `Source_AadDeviceId → AadDeviceId` (the source-device node, where the bucket filter sits, surfaces `AadDeviceId` so it can hash the same value the CL source row carries) and `Target_AzureResourceId_Guid` (target enrichment, applied downstream). Reports **without** a `crossDomainBucketCoalesce` block keep the prior conservative behaviour (EG bucket filter suppressed when a CL let carries a non-EG key) — correct, just slower; the declaration is the opt-in that makes the EG side bounded.
 
 ### Three-layer risk computation (where these YAML values feed)
 
@@ -3262,7 +3310,8 @@ These run-summary log lines double as troubleshooting entry points:
 > `◻`/`🟡` backlog live in [REQUIREMENTS.md](REQUIREMENTS.md) "SI Analyzer". The live-workspace +
 > AI-on run against a real RA snapshot is the release gate before any of it becomes "delivered".
 
-The SI Analyzer is a thin GUI layer on top of the Risk-Analysis (RA) data. It gives **analysts** a
+The **SecurityInsight Analyzer (SIA)** is a thin GUI layer on top of the Risk-Analysis (RA) data
+(referred to as "SIA" or "the SI Analyzer" throughout). It gives **analysts** a
 plain-language worklist that explains the top risk rows (the KQL facts plus an AI verdict) and gives
 **management** a "are we getting safer?" view (risk score over time, what's new/closed, an AI exec
 summary). It adds no new data plane and no new AI infrastructure — it reuses what SecurityInsight
@@ -3330,6 +3379,196 @@ and degrades to KQL facts plus a templated summary — it never hard-fails.
 
 Test coverage for the POC (core unit tests, headless render check, live server smoke, offline
 self-test) is documented in [TESTS.md](TESTS.md) §9.
+
+### Hosted, executive-grade Analyzer (ASP.NET Core) — integration design
+
+> **Status: built, not live-verified.** The hosted app lives at `analyzer-web/`. It does not
+> replace the PowerShell POC at `analyzer/` (kept as the prototype + the cores' reference). The
+> hosted run against the real internal workspace, AI-on, behind Entra sign-in, is the release gate
+> (TESTS.md §9.7) before any of this moves to FEATURES.md.
+
+**Why ASP.NET Core (validated).** The audience is non-technical executives, so hosting is required
+(an exec opens a URL and signs in with Entra — not a localhost PowerShell launcher). The proven
+CEH stack is exactly that shape (ASP.NET Core + Entra/Easy Auth + Managed Identity + EF/config +
+Dockerfile + a `deploy-app.ps1`/slot pattern), so SIA **reuses CEH's patterns** rather than
+inventing a host. The PowerShell POC's *logic* is portable and worth keeping; its *host* (a
+localhost `HttpListener` with a per-session token + heartbeat self-terminate) is a desktop
+convenience, not a delivery vehicle. So the POC cores are **ported** to C# (not wrapped) and the
+host is replaced. No decisive reason against ASP.NET surfaced.
+
+**Project shape** (`analyzer-web/`):
+```
+src/Sia.Core/      host-agnostic ported logic (pure, fully unit-testable):
+                     Kql/KqlGuardrail.cs      <- Test-SiKqlReadOnly  (read-only guardrail)
+                     Kql/KqlBuilders.cs       <- snapshot-correct builders
+                     Kql/PrestagedLibrary.cs  <- Get-SiPrestagedAnalyses (+ a "why did our score change?" analysis)
+                     Analysis/SnapshotDiff.cs <- Get-SiSnapshotDiff + Get-SiScoreTimeline
+                     Ai/GroundedPrompt.cs     <- grounded prompt assembly + templated fail-soft fallback
+                     Exec/ExecDashboard.cs    <- the board-ready exec rollup (headline/donuts/quick-wins/coverage/forecast)
+                     Exec/ExecHeadline.cs     <- the one-sentence "if you read one thing" verdict (band + direction + actions-to-next-band)
+                     Exec/FrameworkLens.cs    <- control-area rollup (NIST CSF / CIS Controls / ISO 27001)
+                     Exec/AgingAnalysis.cs    <- time-open / accountability rollup from the snapshot history
+                     Exec/RiskConcentration.cs <- risk-by-area breakdown (share + direction + top contributor)
+                     Exec/TopMovers.cs        <- trends & top movers (biggest improvements/increases by area/severity/tier)
+                     Exec/BusinessImpact.cs   <- "so what" business-impact framing (data exposure / downtime / compliance / reputation)
+                     Exec/Drilldown.cs        <- clean-by-default, drill-down on demand (grounded evidence behind any number)
+                     Exec/RemediationPlan.cs  <- prioritised "next N actions" ranked by risk-removed-per-effort (cumulative score + band crossing)
+                     Exec/Glossary.cs         <- plain-language "what these terms mean" layer (grounded examples, honest on absent terms)
+                     Exec/OrgCoaching.cs      <- missing-processes / org coaching: maturity gaps inferred from finding PATTERNS (process recommendations, not tickets)
+                     Exec/MaturityScorecard.cs <- maturity scorecard + roadmap: rule-based 0-100 rating per leadership dimension (Tiering / Privileged Access / Identity Hygiene / Exposure Management / Visibility & Coverage / Operating Discipline) + a prioritised "mature here next" roadmap
+                     Analysis/PeriodComparison.cs <- period-over-period baseline ("since last board meeting")
+                     Exec/ExecEmail.cs        <- the grounded exec-summary EMAIL message (HTML + plain-text) renderer
+                     Exec/EmailCadence.cs     <- pure cadence scheduling maths (daily/weekly/monthly, is-due/next-fire)
+                     Config/WorkspaceResolver.cs <- internal-env-is-default-base resolution
+src/Sia.Web/       ASP.NET Core app: exec + board-deck + analyst Razor pages, JSON API, /mcp endpoint,
+                     Rendering/ExecHtmlRenderer.cs  <- the interactive exec dashboard (charts, drill-downs)
+                     Rendering/BoardDeckRenderer.cs <- the clean one-page print/PDF board-deck export handout
+                     Services/ExecEmailService.cs   <- composes the grounded exec view -> email -> sender (fail-soft)
+                     Services/ExecEmailSender.cs    <- IExecEmailSender + SMTP transport (config-driven, fail-soft)
+                     Services/ScheduledExecEmailHostedService.cs <- in-host scheduler (BackgroundService) on the cadence
+                     the read-only Log-Analytics data plane (MI) + demo fallback, the Azure OpenAI service
+tools/Sia.Preview/ renders the exec dashboard + the board-deck handout to static preview HTML (committed at analyzer-web/preview/)
+tests/Sia.Tests/   xunit offline suite (TESTS.md §9.7)
+deploy/            Dockerfile + Deploy-SiaAnalyzer.ps1 + README-DEPLOY.md
+```
+
+**Data plane** — Azure Monitor Query SDK (`LogsQueryClient`) against the internal SI workspace,
+authenticated with the app's **Managed Identity** granted **Log Analytics Reader**, **READ-ONLY**.
+The SDK only queries; every KQL it runs is first vetted by the ported guardrail, so the SI v2.2
+read-only invariant holds end-to-end. This is the hosted equivalent of the POC's
+`Invoke-AzOperationalInsightsQuery` path, switched from an interactive `Connect-AzAccount` session
+to MI. The **internal env is the default base** (`WorkspaceResolver`): a configured workspace is
+used live; demo data is the explicit fallback only.
+
+**Auth** — **Entra / Easy Auth** is enforced by the platform in front of the container (Container
+Apps built-in auth or App Service Easy Auth). The app trusts the authenticated principal the
+platform injects; no anonymous access to security findings.
+
+**AI** — Azure OpenAI via the Azure OpenAI SDK, **grounded strictly in the returned KQL rows**
+(the prompt embeds the actual rows + a no-invention contract), **AI-on by default** in the hosted
+internal env (endpoint + deployment configured; MI or key auth), and **fail-soft** (degrades to the
+grounded templated summary if OpenAI is unreachable — never hard-fails). Projections/forecasts and
+benchmarks are clearly labelled; the AI never supplies a number — every figure on the exec surface
+is computed from the rows.
+
+**Surfaces** — the **executive management view is the default landing surface** (`/` → `/exec`):
+plain-language, chart-led; it leads with a **one-sentence headline verdict** (the "if you read one
+thing" line at the very top - the posture band + its direction + how many of the actual
+highest-scoring findings would have to be remediated to cross into the next-better band, e.g.
+"Your security posture is Elevated and improving; 2 actions would move you to Moderate"; the count is
+derived by walking the real rows highest-first, never guessed, and states a verdict + an action count
+only - no invented cost/probability/date; AI narrates on top, fail-soft). Below it: a headline
+risk-score dial + direction, a trend line with a **labelled
+forecast** point, severity/area donuts, top risks + recent wins, a quick-wins/ROI table with
+projected score drops, a **framework lens** that rolls the posture into the control areas execs
+already report on (NIST CSF / CIS Controls / ISO 27001 — each finding mapped once, the area scores
+partition the headline number), an **aging / time-open** accountability panel (how long the top
+risks have been open, derived from the snapshot history, with average/longest-open + carried-over vs
+new counts), a **risk-by-area concentration** panel (where risk concentrates - identity vs endpoint
+vs cloud vs internet-facing - with each area's share of the total, period direction and biggest
+contributor, as a "where to invest" steer), a **trends & top movers** panel (which areas improved the
+most and which got worse the most since the baseline snapshot - the board "what moved?" question - with
+a by-area / by-severity / by-tier breakdown; each number is the change in summed risk score for that
+group, grounded in the data; honest "only one snapshot so far" when there is nothing to compare against),
+a **period-over-period "since last board meeting"** panel
+(a configurable look-back - previous / month / quarter / half-year / year - that picks a REAL baseline
+snapshot and reports new/resolved/worse/improved since it, with a `?period=` selector), a **"so what"
+business-impact panel** (each top risk re-stated as a board-level consequence - data exposure /
+downtime / compliance / reputation - with the grounded driver behind it, plus a per-category rollup;
+the consequence KIND only, never an invented cost or likelihood), a **clean-by-default drill-down**
+(a collapsed "show me the detail behind the score" reveal of the actual findings that SUM to the
+headline number - no black-box claims; per-slice drill-downs - overall / area / severity / tier - are
+served on demand from `/api/drilldown`), a **prioritised remediation plan** ("your next moves" - the
+next actions ranked by risk-removed-per-effort: each action groups all of one asset's findings into a
+single fix with its projected score drop (the exact amount the headline falls if the asset is fully
+remediated), an effort estimate (Low/Medium/High, derived from the asset's own grounded drivers + tier,
+explicitly an estimate - never hours/cost), a plain recommendation, and the running cumulative score +
+band after doing it; a summary line states where the shown plan lands and how many actions reach the
+next-better band; served on demand from `/api/remediation`), a **plain-language glossary** (a clean,
+collapsed-by-default "what do these terms mean?" reveal that decodes every security term on the page -
+risk score, severity, criticality tier, crown jewel, exposure, vulnerability/CVE, stale privileged
+account, onboarding gap, remediation, snapshot - in one non-technical sentence each, with a GROUNDED
+example pulled from a real row where the concept is present and an honest "not seen in your current
+data" note where it is absent; present-now terms first, no fabricated examples; served on demand from
+`/api/glossary` and kept off the one-page board deck), a **"processes worth strengthening" org-coaching
+panel** (the leadership-level maturity / process gaps the finding PATTERNS imply - privileged-access
+reviews, internet-exposure reviews, patch & lifecycle cadence, asset onboarding/visibility, asset
+ownership, crown-jewel protection - each surfaced ONLY when real rows cross a small evidence threshold
+so a one-off finding never becomes a "missing process"; the affected-asset count + the example asset
+names come straight from the rows and the recommendation is framed as a recurring process/behaviour,
+never a per-asset ticket; honest "the findings look like one-offs" when no systemic gap stands out;
+served on demand from `/api/coaching` and carried as a compact block on the board deck), a **maturity
+scorecard + roadmap** (a "where do we need to mature?" panel that rolls the recurring drift drivers up
+into a leader-facing capability rating across six fixed dimensions - Tiering, Privileged Access,
+Identity Hygiene, Exposure Management, Visibility & Coverage, Operating Discipline - each a rule-based
+0-100 maturity score that is the SHARE of in-scope assets WITHOUT a weakness signal in that discipline,
+with a plain band (Initial/Developing/Defined/Managed), the weak-asset count over the in-scope
+denominator, and grounded example asset names; a dimension with no in-scope asset is honestly shown as
+"not enough data" rather than given a fabricated score, and a prioritised "mature here next" roadmap
+lists only the below-bar dimensions with real evidence - most room-to-improve first - or honestly says
+nothing stands out; pure grounded aggregation, no AI, no invented numbers; served on demand from
+`/api/maturity` and kept off the one-page board deck to keep it focused), a coverage &
+confidence banner, period-over-period KPIs), **mobile-friendly +
+accessible + print/PDF-friendly**, with **no KQL/jargon**. The **analyst surface** (`/analyst`) is
+secondary: the prompt box (exec/analyst tone), the prestaged analyses, a guarded raw-KQL box, and
+drill-down. Charts use a **self-contained Chart.js** (bundled under `wwwroot/lib`, no CDN).
+
+**MCP server** — `POST /mcp` is a minimal read-only JSON-RPC 2.0 MCP endpoint exposing tools that
+mirror the prestaged analyses + a **guarded query** + snapshot-diff / score-timeline /
+**exec-headline** (the one-sentence verdict + band + direction + actions-to-next-band) / exec-summary /
+**period-comparison** (since a chosen reporting period) / **risk-by-area** (concentration breakdown) /
+**top_movers** (biggest improvements/increases by area/severity/tier since the baseline; honest when only
+one snapshot exists) /
+**business_impact** (the "so what" consequences + category rollup) / **drilldown** (the grounded
+evidence behind a number - overall / domain / severity / tier) / **remediation_plan** (the prioritised
+"next N actions" ranked by risk-removed-per-effort - projected drop + effort + cumulative score + band
+crossing) / **glossary** (the plain-language "what these terms mean" decoder - each term defined for a
+non-technical reader with a grounded example where present and an honest "not in your current data" note
+where absent) / **org_coaching** (the missing-processes / maturity gaps the finding patterns imply -
+each a leadership theme + a process-style recommendation + the affected-asset count + grounded example
+assets; honest empty result when no systemic gap stands out) / **maturity_scorecard** (the rule-based
+0-100 maturity rating + band per leadership dimension - Tiering / Privileged Access / Identity Hygiene /
+Exposure Management / Visibility & Coverage / Operating Discipline - with the weak-asset count, the
+in-scope denominator, grounded example assets and the "mature here next" move; dimensions with no
+in-scope asset reported as "not enough data"; plus the prioritised roadmap, empty when nothing stands
+out) / **send_exec_summary_email** (trigger
+the grounded exec-summary email to the configured recipients now; fail-soft, read-only data plane).
+Every query tool routes through the **same guardrail**; there are **no write tools** (the email tool
+only reads the exec view + sends the digest); it is behind the same Easy Auth as the UI.
+
+**Hosting / export** — preferred host is **Azure Container Apps** (private ingress + MI) in the
+internal env; App Service *for Containers* also works. The exec dashboard is **print/PDF-friendly**
+(a "Print / Save as PDF" action), and a dedicated **board-deck export** (`/board`, linked from the
+exec view; `?period=` honoured) renders a **clean single-page handout** from the same grounded exec
+view — the headline verdict, score+band, direction/period KPIs, top risks, recent wins, where risk
+concentrates, the business-consequence KINDS, the recommended next actions and the "processes worth
+strengthening" org-coaching gaps — in a light, print-first,
+page-break-safe, self-contained theme (no charts/JS, inline CSS, no CDN) so "Print / Save as PDF"
+yields a tidy one-pager. `GET /api/board` returns the same handout as HTML so an emailer can
+attach/inline it.
+
+**Scheduled exec-summary email** — a send-hook that delivers the grounded exec summary on a cadence
+"so the CIO gets it without opening the tool". `ExecEmailService` builds the SAME grounded exec view
+the dashboard + board deck use (AI-narrated when AI is on, templated when off), `ExecEmailRenderer`
+(Core) turns it into an email message — subject + inline-CSS, table-based HTML body (mail-client-safe)
++ a plain-text twin — leading with the one-sentence verdict, the score/band badge, the period KPIs,
+the top risks, the recommended actions, and (only when configured) a **link to the full board deck**.
+Every figure is the same grounded number; consequence KIND only, no invented cost/likelihood. Cadence
+is pure, testable maths (`EmailCadenceScheduler`: daily/weekly/monthly + send-hour, is-due/next-fire);
+the in-host `ScheduledExecEmailHostedService` (a `BackgroundService`) anchors its baseline at startup
+(no spam-on-deploy) and fires at the next genuine boundary. Everything is **fail-soft**: with no
+recipients or no SMTP transport it renders but never sends or crashes. A manual **"send now"** trigger
+(`POST /api/email/send`), an HTML **preview** (`GET /api/email/preview`), and the
+`send_exec_summary_email` MCP tool all funnel through the same service. The SMTP transport is
+config-driven (`Sia:Email` section — recipients, cadence, send-hour, period, base URL, org label,
+SMTP host/port/ssl/user/password/from); the host/from are operator-completed (Key-Vault-backed app
+settings in the hosted env), and the transport is swappable for a Graph sender without touching the
+orchestration. Deploy = `deploy/Deploy-SiaAnalyzer.ps1` (`az acr build` + `az containerapp update`);
+the MI grant + Easy Auth commands are in `deploy/README-DEPLOY.md`.
+
+**Dimension / guardrail contract** (unchanged from the POC, now shared by every surface incl. MCP):
+read-only over the canonical SI table allow-list only; no control commands / external / cross-cluster;
+snapshot-correct (`max(CollectionTime)`); grounded AI; AI-optional/fail-soft.
 
 ---
 

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ======================================================================
+       Sia.Tests - offline unit tests for the SI Analyzer. Covers the ported
+       guardrail (rejects writes), grounding (grounding contract present, no
+       ungrounded claims), diff/timeline math, default-workspace=internal
+       resolution, the MCP tools (read-only + guarded), and exec-view-is-default
+       routing. No live workspace / AI / secrets - the hosted run is the gate.
+       ====================================================================== -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.8" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Sia.Core\Sia.Core.csproj" />
+    <ProjectReference Include="..\..\src\Sia.Web\Sia.Web.csproj" />
+  </ItemGroup>
+
+</Project>

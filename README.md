@@ -86,9 +86,9 @@
 <a id="toc"></a>
 ## 📑 Table of Contents
 
-1. [Introduction](#introduction) — outputs, use-cases, agents, sample output
+1. [Introduction](#-1-introduction) — outputs, use-cases, agents, sample output
 2. [Understanding the Framework](#understanding-the-framework) — the risk model concept (start here if new)
-   - 2.1 [Why a graph, not a list](#why-a-graph-not-a-list)
+   - 2.1 [Why a graph, not a list](#21-why-a-graph-not-a-list)
    - 2.2 [Risk Score model](#risk-score-model)
    - 2.3 [Risk Factors](#risk-factors)
    - 2.4 [Risk Index (customizable scoring)](#risk-index-customizable-scoring)
@@ -106,7 +106,7 @@
      - 4.4.1 [Schedule on a VM (Task Scheduler)](#441-schedule-the-engines-on-a-vm-windows-task-scheduler)
      - 4.4.2 [Schedule on Container Apps Job + KEDA](#442-schedule-the-engines-on-azure-container-apps-job-keda-auto-scaling)
      - 4.4.3 [VM vs Container — recommendation](#443-vm-vs-container-apps-job--recommendation)
-   - 4.5 [Try out a preview release](#try-out-a-preview-release)
+   - 4.5 [Try out a preview release](#-45-try-out-a-preview-release)
    - 4.6 [Pre-requisite configuration](#pre-requisite-configuration)
      - 4.6.1 [Config-file model — `.defaults.ps1` vs `.custom.ps1`](#config-file-model)
      - 4.6.2 [Defender XDR licensing & onboarding requirements](#defender-xdr-licensing)
@@ -127,22 +127,22 @@
    - 5.7 [Weighted risk-factor rules (per-engine field-driven uplifts)](#57-weighted-risk-factors)
    - 5.8 [Detailed report severity scope (defaults + how to widen)](#58-detailed-report-severity-scope)
 6. [Severity & Criticality Definitions](#severity--criticality-definitions)
-   - 6.1 [Severity definitions](#severity-definitions)
+   - 6.1 [Severity definitions](#61-severity-definitions)
    - 6.2 [Criticality definitions](#criticality-definitions)
    - 6.3 [Asset classification: Identity](#asset-classification-identity)
    - 6.4 [Asset classification: Endpoint](#asset-classification-endpoint)
    - 6.5 [Asset classification: Azure](#asset-classification-azure)
 7. [The YAML Concept (Locked + Custom)](#the-yaml-concept-locked--custom)
-   - 7.1 [Two files per topic](#two-files-per-topic)
-   - 7.2 [Merge flow](#merge-flow)
-   - 7.3 [Three things you do in Custom](#three-things-you-do-in-custom)
-   - 7.4 [Concrete example](#concrete-example)
-   - 7.5 [How-to — override a Locked rule (and what NEVER goes in Locked)](#how-to--override-a-locked-rule-and-what-never-goes-in-locked)
-   - 7.6 [What a release upgrade does to your YAML](#what-a-release-upgrade-does-to-your-yaml)
-   - 7.7 [`AssetTagName` naming convention](#assettagname-naming-convention)
+   - 7.1 [Two files per topic](#71-two-files-per-topic)
+   - 7.2 [Merge flow](#72-merge-flow)
+   - 7.3 [Three things you do in Custom](#73-three-things-you-do-in-custom)
+   - 7.4 [Concrete example](#74-concrete-example)
+   - 7.5 [How-to — override a Locked rule (and what NEVER goes in Locked)](#75-how-to--override-a-locked-rule-and-what-never-goes-in-locked)
+   - 7.6 [What a release upgrade does to your YAML](#76-what-a-release-upgrade-does-to-your-yaml)
+   - 7.7 [`AssetTagName` naming convention](#77-assettagname-naming-convention--stem--tiern--si--stem-based-merge)
 8. [Appendix](#appendix) — reference + technical detail
    - 8.1 [Permissions catalog](#permissions-catalog)
-   - 8.2 [Bucketing — beating the 30k row ceiling](#bucketing--beating-the-30k-row-ceiling)
+   - 8.2 [Bucketing — beating the 30k row ceiling](#82-bucketing--beating-the-30k-row-ceiling)
    - 8.3 [Output destinations](#output-destinations)
    - 8.4 [Per-template mail recipient override (YAML)](#per-template-mail-recipient-override-yaml)
    - 8.5 [Cross-subscription workspace support](#cross-subscription-workspace-support)
@@ -3464,7 +3464,7 @@ Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` 
 | 📧 **`$global:SMTPFrom` (verified sender)** | Separate the SMTP login username from the `From` header. Brevo / SendGrid / Postmark / M365 all reject mail whose `From` isn't a verified sender — the relay login is NOT a valid `From`. Engine resolves `$SMTPFrom` → `$MailFrom` → `$SMTPUser` (legacy fallback) and throws if all three are empty. Configurator, sample, defaults, and README updated in lock-step. | v2.1.108 |
 | 🩹 **Setup-SecurityInsight (Github phase) bootstrap: `iwr -OutFile`, not `irm \| Out-File`** | `Invoke-RestMethod` on PS 5.1 returns a string that includes the UTF-8 BOM as a content character, then `Out-File`'s default Unicode encoding writes a UTF-16 BOM + that stray FEFF — the parser then trips on `[CmdletBinding()]` with "Unexpected attribute". Switch to `Invoke-WebRequest -OutFile` (raw bytes). | v2.1.108 |
 | 📦 **One canonical PowerShell module set auto-installed on first run** | `Ensure-SecurityInsightModules` in `_shared/Ensure-Module.ps1` installs `Az`, `Az.ResourceGraph`, `Microsoft.Graph`, `Microsoft.Graph.Beta`, `AzLogDcrIngestPS`, `MicrosoftGraphPS`, `ImportExcel`, `powershell-yaml` — the superset any SI engine could need. Default `-Scope AllUsers` with fail-fast elevation check so installs land machine-wide and are visible to the daily scheduled task SYSTEM account. Directory-first module probe keeps warm-VM checks under 1 second even with 70+ Az.* submodules installed. | v2.1.113 / v2.1.114 / v2.1.122 / v2.1.125 |
-| 🗓️ **Daily auto-refresh scheduled task** | New `SCRIPTS/Register-SecurityInsightDailyUpdate.ps1` helper registers a Windows Scheduled Task that runs Step 0 every day at 03:00 as SYSTEM. New Locked YAML + engine code + launcher templates + workbook JSON land automatically while `LauncherConfig.custom.ps1` + `*_Custom.yaml` stay untouched. One-time admin setup, idempotent, `-Unregister` for clean removal. See [§ 3.3.1](#automate-daily-update). | v2.1.116 |
+| 🗓️ **Daily auto-refresh scheduled task** | New `SCRIPTS/Register-SecurityInsightDailyUpdate.ps1` helper registers a Windows Scheduled Task that runs Step 0 every day at 03:00 as SYSTEM. New Locked YAML + engine code + launcher templates + workbook JSON land automatically while `LauncherConfig.custom.ps1` + `*_Custom.yaml` stay untouched. One-time admin setup, idempotent, `-Unregister` for clean removal. See [Update to latest version](#update-to-latest-version). | v2.1.116 |
 | 🧰 **DCE/DCR cache filter: sub + RG** | `Ensure-SecurityInsightAzDceDcrCache` filters `$global:AzDcrDetails` / `$global:AzDceDetails` by both `-SubscriptionId` and `-DcrResourceGroup` / `-DceResourceGroup`. Stops the module's name-only lookup picking a neighbour DCR in a different RG (manifested as the cryptic `"Data collection rule with immutable Id 'westeurope' not found"` 404 on customer VMs with duplicate-named DCRs across RGs). | v2.1.129 |
 | 🩹 **RA `$laDceRg` priority fix** | Engine now reads `$global:SI_DceResourceGroup` (canonical SI customer global) BEFORE the legacy Layer-0 `$global:DceResourceGroup` default. Previously the customer's RG override was masked and the DCE collision guard tripped on every Summary ingest with `[WARN] DCE collision guard: 'dce-...' NOT in sub '...' / RG 'rg-dce-securityinsight'`. | v2.2.71 |
 | 📁 **Asset-Tagging engine folder rename** | `engine/asset-tagging-endpoint-exclusions/` → `engine/asset-tagging/` (the engine tags any asset type, not just endpoint exclusions — old name was a misnomer). Launcher dot-source path updated, schedulers should point at the launcher rather than the engine directly. | v2.2.72 |

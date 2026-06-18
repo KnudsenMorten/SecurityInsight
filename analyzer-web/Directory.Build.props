@@ -1,0 +1,11 @@
+<Project>
+  <!-- dll-only across EVERY project under analyzer-web (Core / Web / Tests / tools / any
+       scratch project). Defender ASR on the build/run machine blocks freshly-built native
+       .exe ("Block executable files ... unless they meet a prevalence, age, or trusted
+       list criteria"), so we never emit an apphost .exe — everything runs via `dotnet
+       <dll>`. The container ENTRYPOINT is already `dotnet Sia.Web.dll`; this guarantees
+       no tool/preview/test build can produce a blocked .exe. See memory feedback_no_native_exe. -->
+  <PropertyGroup>
+    <UseAppHost>false</UseAppHost>
+  </PropertyGroup>
+</Project>

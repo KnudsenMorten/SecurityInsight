@@ -1,0 +1,8 @@
+@page
+@using Sia.Web.Rendering
+@model Sia.Web.Pages.BoardModel
+@{
+    Layout = null;
+    var html = BoardDeckRenderer.Render(Model.View);
+}
+@Html.Raw(html)

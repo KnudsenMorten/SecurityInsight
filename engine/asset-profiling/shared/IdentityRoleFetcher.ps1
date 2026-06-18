@@ -942,7 +942,12 @@ function Get-SIExposureGraphIdentities {
             # Bucketed: ceil(rowCount / threshold) buckets, hash-distributed.
             $bucketCount = [int][Math]::Ceiling($rowCount / [double]$bucketThreshold)
             for ($b = 0; $b -lt $bucketCount; $b++) {
-                $kql = ("ExposureGraphNodes | where NodeLabel == '{0}' | extend _bucket = hash_djb2(NodeId) % {1} | where _bucket == {2} | {3}" -f $label, $bucketCount, $b, $proj)
+                # KQL hash(NodeId, N) returns a stable value in [0, N-1] (it does the
+                # modulo itself) -- partitions every node into exactly one bucket so the
+                # N bucket queries union to the full set. (Was hash_djb2(...) % N, which
+                # is NOT a KQL function -> "Unknown function: 'hash_djb2'" BadRequest on
+                # every bucket, breaking EG identity + RA group correlation. 2026-06-18.)
+                $kql = ("ExposureGraphNodes | where NodeLabel == '{0}' | extend _bucket = hash(NodeId, {1}) | where _bucket == {2} | {3}" -f $label, $bucketCount, $b, $proj)
                 try {
                     $chunk = @(Invoke-SIHuntingQuery -Query $kql -QueryEngine DefenderGraph)
                     foreach ($r in $chunk) { [void]$rows.Add($r) }

@@ -1,0 +1,105 @@
+@page
+@model Sia.Web.Pages.AnalystModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SecurityInsight Analyzer - Analyst</title>
+<style>
+:root{--bg:#0f1623;--card:#172132;--ink:#e8eef7;--muted:#9fb0c7;--line:#243349;--accent:#4ea1ff;--crit:#ff5d5d;--high:#ff9d3c}
+*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Roboto,system-ui,Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line)}
+.brand{font-weight:700;display:flex;align-items:center;gap:10px}.logo{background:var(--accent);color:#06101f;border-radius:8px;padding:4px 8px;font-weight:800;font-size:14px}
+.nav a{color:var(--muted);text-decoration:none;margin-left:16px;font-weight:600}.nav a.active{color:var(--ink)}
+.wrap{max-width:1080px;margin:0 auto;padding:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:18px}
+.card h2{font-size:16px;margin:0 0 12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.chip{background:#1d2a3d;border:1px solid var(--line);color:var(--ink);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:13px}
+.chip:hover{border-color:var(--accent)}
+textarea,input[type=text]{width:100%;background:#0d1521;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px;font-family:inherit;font-size:14px}
+textarea{min-height:64px;resize:vertical}
+.row{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.btn{background:var(--accent);color:#06101f;border:0;border-radius:10px;padding:9px 16px;font-weight:700;cursor:pointer}
+.btn.sec{background:#26405c;color:var(--ink)}
+.muted{color:var(--muted);font-size:13px}
+.kql{font-family:Consolas,monospace;font-size:13px;background:#0d1521;border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;display:none;margin-top:10px}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}th{color:var(--muted)}
+.narr{margin-top:12px;padding:12px;border-left:3px solid var(--accent);background:#13202f;border-radius:6px;white-space:pre-wrap}
+.warn{color:var(--high)}
+@@media (max-width:760px){.wrap{padding:12px}}
+</style>
+</head>
+<body>
+<header class="topbar"><div class="brand"><span class="logo">SI</span> SecurityInsight Analyzer</div>
+<nav class="nav"><a href="/exec">Executive</a> <a href="/analyst" class="active">Analyst</a></nav></header>
+<main class="wrap">
+  <p class="muted">Source: @(Model.IsLive ? "live workspace (read-only)" : "demo data") &middot; AI: @(Model.AiAvailable ? "on" : "unavailable (templated fallback)")</p>
+
+  <section class="card">
+    <h2>Ask a question</h2>
+    <div class="chips" id="chips">
+      <span class="chip" data-q="Which Tier 0 assets are internet-facing with a critical vulnerability?">Crown jewels exposed to the internet</span>
+      <span class="chip" data-q="Which privileged identities are stale or unused?">Stale privileged accounts</span>
+      <span class="chip" data-q="What high-risk findings are new since the last snapshot?">What is new this run</span>
+      <span class="chip" data-q="Why did our risk score change since last time?">Why did our score change</span>
+    </div>
+    <textarea id="q" placeholder="e.g. Which servers can a contractor account reach?"></textarea>
+    <div class="row">
+      <select id="aud" class="btn sec"><option value="analyst">Analyst tone</option><option value="management">Executive tone</option></select>
+      <button class="btn" onclick="ask()">Ask (AI composes guarded KQL)</button>
+      <label class="muted"><input type="checkbox" id="showq" onchange="toggleQ()"> show query</label>
+    </div>
+    <div id="askout"></div>
+  </section>
+
+  <section class="card">
+    <h2>One-click analyses</h2>
+    <div class="chips">
+      @foreach (var a in Model.Prestaged)
+      {
+        <span class="chip" title="@a.Plain" onclick="runPrestaged('@a.Id')">@a.Title</span>
+      }
+    </div>
+    <div id="preout"></div>
+  </section>
+
+  <section class="card">
+    <h2>Run read-only KQL</h2>
+    <p class="muted">Read-only only. Writes, control commands and off-allow-list tables are rejected by the guardrail.</p>
+    <textarea id="kql" class="kql" style="display:block" placeholder="SI_Endpoint_Profile_CL | where CriticalityTier <= 1 | take 20"></textarea>
+    <div class="row"><button class="btn" onclick="runKql()">Run</button></div>
+    <div id="kqlout"></div>
+  </section>
+</main>
+<script>
+function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function toggleQ(){document.querySelectorAll('.qbox').forEach(function(e){e.style.display=document.getElementById('showq').checked?'block':'none';});}
+document.querySelectorAll('#chips .chip').forEach(function(c){c.onclick=function(){document.getElementById('q').value=c.dataset.q;};});
+function renderResult(target,data){
+  var el=document.getElementById(target);var h='';
+  if(data.narrative){h+='<div class="narr">'+esc(data.narrative)+(data.narrativeFromAi===false?'\n\n(generated - AI unavailable)':'')+'</div>';}
+  if(data.kql){h+='<div class="kql qbox" style="display:'+(document.getElementById('showq')&&document.getElementById('showq').checked?'block':'none')+'">'+esc(data.kql)+'</div>';}
+  var r=data.result;
+  if(r&&r.columns){h+='<table><thead><tr>'+r.columns.map(function(c){return '<th>'+esc(c)+'</th>';}).join('')+'</tr></thead><tbody>';
+    h+=r.rows.slice(0,100).map(function(row){return '<tr>'+row.map(function(v){return '<td>'+esc(v)+'</td>';}).join('')+'</tr>';}).join('');
+    h+='</tbody></table>';if(r.rows.length>100){h+='<p class="muted">Showing first 100 of '+r.rows.length+' rows.</p>';}}
+  el.innerHTML=h;
+}
+async function post(url,body){var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return r.json();}
+async function ask(){var q=document.getElementById('q').value.trim();if(!q)return;
+  document.getElementById('askout').innerHTML='<p class="muted">Working...</p>';
+  var d=await post('/api/adhoc',{question:q,audience:document.getElementById('aud').value});renderResult('askout',d);}
+async function runPrestaged(id){document.getElementById('preout').innerHTML='<p class="muted">Working...</p>';
+  var d=await post('/api/prestaged/run',{id:id,audience:document.getElementById('aud').value});renderResult('preout',d);}
+async function runKql(){var k=document.getElementById('kql').value.trim();if(!k)return;
+  document.getElementById('kqlout').innerHTML='<p class="muted">Working...</p>';
+  var d=await post('/api/query',{kql:k,audience:document.getElementById('aud').value});renderResult('kqlout',d);}
+</script>
+</body>
+</html>

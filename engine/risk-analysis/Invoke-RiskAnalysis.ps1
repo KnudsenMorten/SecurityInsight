@@ -332,6 +332,49 @@ function Write-Warn   ($msg){ Write-Host (" [WARN] {0}" -f $msg) -ForegroundColo
 function Write-Diag   ($msg){ if ($global:SI_Verbose -or $VerbosePreference -eq 'Continue') { Write-Host (" [DIAG] {0}" -f $msg) -ForegroundColor White } }
 function Write-Err2   ($msg){ Write-Host (" [ERR]  {0}" -f $msg) -ForegroundColor Red }
 function Write-Done   ($msg){ Write-Host (" [DONE] {0}" -f $msg) -ForegroundColor Green }
+
+# ---------------------------------------------------------------------------
+# Deferred / superseded multi-path logging (operator ask): when the engine
+# tries several routes to the same data (Sentinel lake -> hybrid -> AH ->
+# LA-direct) and a LATER route succeeds, the FAILED earlier attempts must NOT
+# be logged as WARN/ERROR -- they were superseded by the success. We collect
+# each failed attempt SILENTLY here (full detail preserved) and:
+#   * on success via any later path  -> emit at most ONE [INFO] noting N
+#     superseded fallback attempts (only if there were any).
+#   * if EVERY path fails            -> flush a SINGLE [WARN] with all the
+#     collected per-attempt detail (the dumped ra-laerr files still hold the
+#     full HTTP bodies for the truly-failed final path).
+# Scope is per logical query: Reset-SupersededAttempts is called at the top of
+# Invoke-GraphHuntingQuery.
+# ---------------------------------------------------------------------------
+if (-not (Get-Variable -Name _SupersededAttempts -Scope Script -ErrorAction SilentlyContinue)) {
+    $script:_SupersededAttempts = New-Object System.Collections.Generic.List[string]
+}
+function Reset-SupersededAttempts {
+    $script:_SupersededAttempts = New-Object System.Collections.Generic.List[string]
+}
+function Add-SupersededAttempt {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Message)
+    [void]$script:_SupersededAttempts.Add(('{0}: {1}' -f $Path, $Message))
+}
+function Resolve-SupersededOnSuccess {
+    # Call right before returning rows from a successful path. Emits ONE INFO if
+    # earlier paths were tried + failed; never WARN (a later path won).
+    param([Parameter(Mandatory)][string]$WinningPath)
+    $n = $script:_SupersededAttempts.Count
+    if ($n -gt 0) {
+        Write-Info ("auth/data via {0} (after {1} superseded fallback attempt(s); earlier-path detail at [DIAG])." -f $WinningPath, $n)
+        Reset-SupersededAttempts
+    }
+}
+function Flush-SupersededAttempts {
+    # Call when EVERY path has failed for this query. Emits a SINGLE consolidated
+    # WARN with all per-attempt detail, then clears the buffer.
+    if ($script:_SupersededAttempts.Count -gt 0) {
+        Write-Warn2 ("all data paths failed for this query; attempts: {0}" -f ($script:_SupersededAttempts -join ' || '))
+        Reset-SupersededAttempts
+    }
+}
 function Write-Phase  {
     param([Parameter(Mandatory)][string]$Title, [string]$Subtitle = '')
     # flush-left (no 1-char indent). Subtitles are usually multi-line
@@ -886,6 +929,25 @@ function Get-SICLBucketKey {
     # whose _IdentityCmdb let projects `_si_PrimaryEntityId = tostring(PrimaryEntityId)`
     # as the join key. Without it, all 15K rows hashed to bucket 0 and escalation
     # ran 2->4->8->...->131072 to no avail.
+    # v2.2.404 -- when the active report declares crossDomainBucketCoalesce, hash the
+    # CL row on the DECLARED column first. Its value equals the EG NodeId hex, so the
+    # CL partition matches the EG-side partition (New-BucketFilterKql leads with the
+    # same EgNativeKey) -> aligned, lossless, bounded. Falls through to the standard
+    # ordered list when the declared column is absent on this row.
+    $cdcCols = New-Object System.Collections.Generic.List[string]
+    foreach ($_cdc in @($script:_CrossDomainBucketCoalesce)) {
+        $_c = if ($_cdc -is [System.Collections.IDictionary]) { [string]$_cdc['ClColumn'] }
+              elseif ($_cdc.PSObject.Properties['ClColumn'])   { [string]$_cdc.ClColumn }
+              else { [string]$_cdc }
+        if (-not [string]::IsNullOrWhiteSpace($_c) -and -not $cdcCols.Contains($_c)) { [void]$cdcCols.Add($_c) }
+    }
+    foreach ($col in $cdcCols) {
+        $p = $Row.PSObject.Properties[$col]
+        if ($p) {
+            $v = [string]$p.Value
+            if (-not [string]::IsNullOrWhiteSpace($v)) { return $v }
+        }
+    }
     foreach ($col in 'EpJoinKey','_si_PrimaryEntityId','DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId','EntraObjectId','UserId','AzureResourceId_Guid','PrimaryEntityId','AssetId','Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId') {
         $p = $Row.PSObject.Properties[$col]
         if ($p) {
@@ -1061,6 +1123,19 @@ function Resolve-ProfileCLLetBlocks {
             # reports keep using the EG bucket filter (faster: per-bucket EG scan,
             # not full EG scan per bucket).
             $egStdCols = @{'DeviceKey'=$true; 'NodeId'=$true; 'DeviceNodeId'=$true; 'AadDeviceId'=$true; 'DeviceId'=$true; 'MachineId'=$true; 'Id'=$true; 'SourceNodeId'=$true; 'TargetNodeId'=$true; 'EpJoinKey'=$true}
+            # v2.2.404 -- treat report-declared crossDomainBucketCoalesce CL columns as
+            # EG-aligned (designed-alignment, same as EpJoinKey). The CL bucket-key value
+            # for these columns IS the EG NodeId hex, so SHA256-partitioning the EG side
+            # (on NodeId) and the CL side (on the declared column) yields identical
+            # buckets -> the EG-side bucket filter can stay ACTIVE and bound EG work
+            # without losing any join match. Adding the column here keeps it OUT of the
+            # cross-domain suppression trigger below.
+            foreach ($_cdc in @($script:_CrossDomainBucketCoalesce)) {
+                $_col = if ($_cdc -is [System.Collections.IDictionary]) { [string]$_cdc['ClColumn'] }
+                        elseif ($_cdc.PSObject.Properties['ClColumn'])   { [string]$_cdc.ClColumn }
+                        else { [string]$_cdc }
+                if (-not [string]::IsNullOrWhiteSpace($_col)) { $egStdCols[$_col] = $true }
+            }
             $crossDomainCols = @('Target_AzureResourceId_Guid','Source_AadDeviceId','Source_AssetId','Target_AssetId_From_CL','FinalTargetId','FinalSourceId','_si_PrimaryEntityId')
             $firstRow = if (@($allRows).Count -gt 0) { @($allRows)[0] } else { $null }
             if ($firstRow) {
@@ -1156,7 +1231,7 @@ function Resolve-ProfileAugmentPlan {
            | extend <newCol> = <var-projected-col>, <newCol2> = <var-projected-col2>, ...
 
        When the post-extend alias columns are NOT referenced by a downstream
-       `summarize ... by ...` clause (typical for Detailed reports — and Attack_Paths
+       `summarize ... by ...` clause (typical for Detailed reports â€” and Attack_Paths
        Detailed in particular), the join can be removed from the query entirely:
        the rows still have the alias columns, but populated post-hoc by Invoke-
        CmdbAugment from a single LA fetch + in-memory hashtable.
@@ -1715,6 +1790,71 @@ function Save-RARenderedQuery {
     }
 }
 
+# Known group-key columns that are sourced from a Profile_CL (or *PIP_CL) table and can
+# arrive as KQL `dynamic` rather than `string`. LA refuses to `summarize ... by` a dynamic
+# column (SEM0001 -- "Summarize group key 'X' is of a 'dynamic' type ... use tostring(X)").
+# The CL-derived cmdb* fields are the offenders: they're projected with column_ifexists in
+# the YAML/Build path (which yields dynamic when the column is absent) and the PublicIP RA
+# queries surface cmdbName straight off SI_VulnerabilityPIP_CL. Keep this list to columns
+# that are genuinely string-or-dynamic; NEVER add numeric columns (RiskScore*, *Tier, *Count)
+# -- casting those to string would change ordering/scoring semantics.
+$script:_DynamicGroupKeyCols = @(
+    'cmdbName','cmdbId','cmdbCriticality','cmdbDataSensitivity'
+)
+
+function Add-DynamicGroupKeyCasts {
+    <# Root-cause guard for SEM0001 ("Summarize group key 'cmdbName' is of a 'dynamic'
+       type"). Scans every `| summarize ... by <keys>` clause in $Query and wraps any
+       known-dynamic CL column (cmdb* -- see $script:_DynamicGroupKeyCols, plus any other
+       column literally named `cmdb*`) that appears as a BARE group key in `tostring(...)`.
+
+       Targeted, list-driven, idempotent:
+         * Only the `by` portion of each summarize is rewritten (the aggregation list and
+           downstream operators are untouched), so numeric aggregates stay numeric.
+         * A key already wrapped (`tostring(cmdbName)`, `tolower(cmdbName)`, etc.) is left
+           as-is -- the regex only matches a bare identifier not preceded by `(` or `.`.
+         * An alias-assignment group key (`cmdbDataSensitivity = ""`) is left as-is -- the
+           RHS is a literal string already; we only cast the standalone-identifier form.
+
+       Mirrors Build-RiskAnalysis.ps1's _InjectCmdbDefensiveExtends / line ~142 cmdbName
+       cast so the runtime summarize path can't regress relative to the built template.
+       Covers the 6 cross-domain Attack_Paths Summary reports + the PublicIP open-port /
+       vuln reports, all of which `summarize ... by ... cmdbName, cmdbCriticality, ...`. #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Query)
+
+    if ([string]::IsNullOrEmpty($Query)) { return $Query }
+    if ($Query -notmatch '(?ims)\bsummarize\b') { return $Query }
+
+    # Build the column list: the curated dynamic set, case-insensitively de-duped.
+    $cols = @($script:_DynamicGroupKeyCols)
+    if (-not $cols -or $cols.Count -eq 0) { return $Query }
+
+    # Locate each `summarize ... by <byClause>` and rewrite ONLY the by-clause. A by-clause
+    # runs from the `by` keyword to the next top-level pipe (`| project`, `| order`, etc.)
+    # or end-of-query. KQL has no nested `summarize ... by` inside a by-clause, so a
+    # non-greedy run-to-next-pipe capture is safe.
+    $summByRx = New-Object System.Text.RegularExpressions.Regex(
+        '(?is)(\bsummarize\b.*?\bby\b)(?<by>.*?)(?=(?:\r?\n\s*\|)|\z)',
+        [System.Text.RegularExpressions.RegexOptions]::Singleline)
+
+    $evaluator = {
+        param($m)
+        $head = $m.Groups[1].Value
+        $byClause = $m.Groups['by'].Value
+        $newBy = $byClause
+        foreach ($c in $cols) {
+            # Bare identifier as a group key: not already inside tostring()/tolower()/etc
+            # (negative look-behind for `(` or `.` or word char), and not the LHS of an
+            # alias assignment (`cmdbName =` -- negative look-ahead for `=` that isn't `==`).
+            $colRx = '(?<![\w.(])' + [regex]::Escape($c) + '\b(?!\s*=(?!=))(?!\s*\()'
+            $newBy = [regex]::Replace($newBy, $colRx, ('tostring({0})' -f $c))
+        }
+        return $head + $newBy
+    }
+    return $summByRx.Replace($Query, $evaluator)
+}
+
 function Invoke-GraphHuntingQuery {
     [CmdletBinding()]
     param(
@@ -1729,6 +1869,18 @@ function Invoke-GraphHuntingQuery {
     # means no augment needed (LA-direct, EG-only, or hybrid-fallback path).
     $augmentPlans      = @()
     $augmentWsForCL    = $null
+
+    # Per-query reset of the deferred/superseded multi-path log buffer (BUG B). Earlier
+    # failed routes (lake) get stashed silently; a later success emits one INFO, a total
+    # failure emits one WARN. Without this reset the buffer would leak across queries.
+    Reset-SupersededAttempts
+
+    # SEM0001 guard (root-cause): cast known-dynamic CL group keys (cmdb*) in every
+    # `summarize ... by` clause to tostring() BEFORE any submission path runs. This is the
+    # single chokepoint all report queries flow through (lake / AH / LA-direct all branch
+    # off below), so casting here once covers them all -- including the engine-built
+    # PublicIP open-port/vuln summarize and the 6 cross-domain Attack_Paths Summary reports.
+    $Query = Add-DynamicGroupKeyCasts -Query $Query
 
     # CL-table routing: any query that references SI_*_CL chooses between two paths --
     #   PURE-LA  (no Defender XDR tables) -> submit the whole query directly to Log Analytics.
@@ -1771,20 +1923,22 @@ function Invoke-GraphHuntingQuery {
                     return [pscustomobject]@{ _SIDirectRows = @($lakeRows) }
                 } catch {
                     $lakeMsg = $_.Exception.Message
-                    # All known "lake just won't work for this run" patterns:
-                    # - InvalidDatabaseInQuery / not available / 403 / 401  : RBAC not granted
-                    # - TenantNotFound / 404 / "Tenant not registered"      : Sentinel data lake feature not enabled on this workspace
-                    # All of these are PERMANENT within a single run, so flip the
-                    # short-circuit flag and stop probing every subsequent query.
+                    # Multi-path fallback policy (operator ask): when one path (lake) fails
+                    # but a later path (hybrid / AH / LA-direct) SUCCEEDS for the same query,
+                    # do NOT emit a WARN for the superseded attempt -- it confuses operators
+                    # reading the log into thinking the report failed. Stash the failure
+                    # SILENTLY here (full detail preserved) and let Resolve-HuntingFallback*
+                    # decide: a single INFO if a later path succeeds, a single WARN only if
+                    # EVERY path fails. See Add-SupersededAttempt / Flush-SupersededAttempts.
+                    # All known "lake just won't work for this run" patterns are PERMANENT
+                    # within a run, so flip the short-circuit flag either way.
+                    Add-SupersededAttempt -Path 'lake' -Message ($lakeMsg -split "`n" | Select-Object -First 1)
                     if ($lakeMsg -match 'InvalidDatabaseInQuery|not available for current user|Forbidden|403|Unauthorized|401|TenantNotFound|Tenant not registered|404|Not Found') {
                         Write-Diag ("[lake] unavailable for this run ({0}). Using hybrid fallback for ALL subsequent queries." -f ($lakeMsg -split "`n" | Select-Object -First 1))
-                        $script:_SentinelLakeUnavailable = $true
                     } else {
-                        # Unknown failure mode -- still log loudly + still flip the flag
-                        # so we don't spam the same error on every query.
-                        Write-Warn2 ("[lake] failed: {0}. Falling back to hybrid for this query and disabling lake for the rest of the run." -f ($lakeMsg -split "`n" | Select-Object -First 1))
-                        $script:_SentinelLakeUnavailable = $true
+                        Write-Diag ("[lake] attempt failed ({0}); trying hybrid fallback (warning deferred until/unless all paths fail)." -f ($lakeMsg -split "`n" | Select-Object -First 1))
                     }
+                    $script:_SentinelLakeUnavailable = $true
                 }
             }
             # Suppress per-query "lake skipped" chatter once we know it's unavailable.
@@ -1894,7 +2048,7 @@ function Invoke-GraphHuntingQuery {
             # the whole query 400s. Restrict to legal table-reference positions:
             # - start-of-line / start-of-statement (after newline+optional whitespace)
             # - after `|` (pipe operator: `... | DeviceInfo` would be illegal but
-            #   `... | join (DeviceInfo | ...) on X` IS — the table follows `(` though)
+            #   `... | join (DeviceInfo | ...) on X` IS â€” the table follows `(` though)
             # - after `(` (start of parenthesized subquery: `union(DeviceInfo, ...)` `join (DeviceInfo)`)
             # - after `,` (table-arg lists: `union DeviceInfo, DeviceLogonEvents`)
             # - after `=` (let assignment: `let X = DeviceInfo | ...`)
@@ -2076,6 +2230,7 @@ function Invoke-GraphHuntingQuery {
                 foreach ($p in $r.PSObject.Properties) { $h[$p.Name] = $p.Value }
                 [void]$cleanRows.Add([pscustomobject]$h)
             }
+            Resolve-SupersededOnSuccess -WinningPath 'LA-direct'
             return [pscustomobject]@{ _SIDirectRows = $cleanRows.ToArray() }
         }
     }
@@ -2096,6 +2251,12 @@ function Invoke-GraphHuntingQuery {
         Write-Diag ("[route] AH submission entered for query containing SI_*_CL -- either EG-hybrid path resolved CL, or LA-direct branch was bypassed.")
     }
 
+    # BUG B -- wrap the AH retry loop so that if EVERY path (lake -> EG-hybrid -> AH)
+    # ultimately fails, the deferred superseded-attempt buffer is flushed as a SINGLE
+    # consolidated WARN. Successful returns inside the loop already called
+    # Resolve-SupersededOnSuccess (which clears the buffer), so this catch only fires
+    # on real total failure. Re-throw preserves the original per-report error handling.
+    try {
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         Ensure-GraphAuth -MaxAgeMinutes $ReconnectMaxAgeMinutes
 
@@ -2131,9 +2292,11 @@ function Invoke-GraphHuntingQuery {
                     }
                 }
                 $augmented = Invoke-ProfileAugment -Rows $cleanRows.ToArray() -Plans $augmentPlans -WorkspaceResourceId $augmentWsForCL
+                Resolve-SupersededOnSuccess -WinningPath 'advanced-hunting'
                 return [pscustomobject]@{ _SIDirectRows = @($augmented) }
             }
 
+            Resolve-SupersededOnSuccess -WinningPath 'advanced-hunting'
             return $ahResp
         } catch {
             $msg = $_.Exception.Message
@@ -2283,6 +2446,12 @@ if ($looksAuth) {
             throw
         }
     }
+    } catch {
+        # All paths failed for this query -- emit the one consolidated WARN (BUG B)
+        # then re-throw so the per-report handler behaves exactly as before.
+        Flush-SupersededAttempts
+        throw
+    }
 }
 
 function Export-AISummaryWorksheet {
@@ -2293,7 +2462,7 @@ function Export-AISummaryWorksheet {
     [Parameter(Mandatory)][string]$SummaryText
   )
 
-  # Normalize line endings and split into rows so it’s readable in Excel
+  # Normalize line endings and split into rows so itâ€™s readable in Excel
   $text = ($SummaryText -replace "`r`n", "`n" -replace "`r", "`n").Trim()
   if ([string]::IsNullOrWhiteSpace($text)) { $text = "No AI summary output was produced." }
 
@@ -2381,17 +2550,39 @@ function New-BucketFilterKql {
   # already handles bucket-timeout via sub-bucketing (v2.2.277) so the worst
   # case stays bounded. Multi-tenant runs validated v2.2.328 distribution as
   # uniform once the CL-side bucket key matched EG's.
+  #
+  # v2.2.404 -- cross-domain EG-aligned re-key. When the active report declares
+  # crossDomainBucketCoalesce with an EgNativeKey (e.g. NodeId), the EG-side bucket
+  # filter MUST hash on that SAME EG-native column so its partition is identical to
+  # the CL side (whose bucket key value equals the EG NodeId hex). The default
+  # coalesce above leads with DeviceKey (= AssetName for these Attack_Paths reports),
+  # which would hash a DIFFERENT value than the CL key -> misaligned buckets ->
+  # lossy joins. Promoting the declared EG-native key(s) to the FRONT of the
+  # coalesce makes the EG partition bound EG work on the join key itself (genuine
+  # partition, not a cap) AND keep every per-bucket join match (lossless).
+  $egNativeKeys = New-Object System.Collections.Generic.List[string]
+  foreach ($_cdc in @($script:_CrossDomainBucketCoalesce)) {
+      $_k = if ($_cdc -is [System.Collections.IDictionary]) { [string]$_cdc['EgNativeKey'] }
+            elseif ($_cdc.PSObject.Properties['EgNativeKey']) { [string]$_cdc.EgNativeKey }
+            else { '' }
+      if (-not [string]::IsNullOrWhiteSpace($_k) -and -not $egNativeKeys.Contains($_k)) {
+          [void]$egNativeKeys.Add($_k)
+      }
+  }
+  $defaultKeyCols = @('DeviceKey','NodeId','DeviceNodeId','AadDeviceId','DeviceId','MachineId','Id','SourceNodeId','TargetNodeId')
+  if ($egNativeKeys.Count -gt 0) {
+      # EG-native declared keys first, then the standard fallbacks (de-duped).
+      $ordered = New-Object System.Collections.Generic.List[string]
+      foreach ($k in $egNativeKeys) { if (-not $ordered.Contains($k)) { [void]$ordered.Add($k) } }
+      foreach ($k in $defaultKeyCols) { if (-not $ordered.Contains($k)) { [void]$ordered.Add($k) } }
+      $keyCols = $ordered.ToArray()
+  } else {
+      $keyCols = $defaultKeyCols
+  }
+  $coalesceLines = ($keyCols | ForEach-Object { "    tostring(column_ifexists('$_',''))" }) -join ",`n"
 @"
 | extend __bucket_key = coalesce(
-    tostring(column_ifexists('DeviceKey','')),
-    tostring(column_ifexists('NodeId','')),
-    tostring(column_ifexists('DeviceNodeId','')),
-    tostring(column_ifexists('AadDeviceId','')),
-    tostring(column_ifexists('DeviceId','')),
-    tostring(column_ifexists('MachineId','')),
-    tostring(column_ifexists('Id','')),
-    tostring(column_ifexists('SourceNodeId','')),
-    tostring(column_ifexists('TargetNodeId',''))
+$coalesceLines
 )
 | where isnotempty(__bucket_key)
 | extend __bucket = tolong(strcat("0x", substring(hash_sha256(__bucket_key), 0, 8))) % $BucketCount
@@ -6816,6 +7007,17 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     # if left set across reports, the next single-let report would incorrectly
     # leave EG unfiltered (wasted compute, correct results but slow).
     $script:_SkipEGBucketForCrossDomain = $false
+    # v2.2.404 -- per-report crossDomainBucketCoalesce. Reset at the top of every
+    # report so a coalesce declaration from a prior report never leaks. Populated
+    # below from the report Entry; consumed by Resolve-ProfileCLLetBlocks /
+    # New-BucketFilterKql to keep the EG-side bucket filter ACTIVE (bounded EG
+    # work) for the 6 cross-domain Attack_Paths Summary reports whose CL bucket
+    # key is DESIGNED-ALIGNED to an EG-native NodeId column (the CL value literally
+    # equals the EG NodeId hex). Without it those reports fall back to the
+    # conservative EG-filter-suppressed path (lossless but full-EG-scan per bucket
+    # -> 900s HttpClient ceiling on large tenants). See the resolution block
+    # in Resolve-ProfileCLLetBlocks (cross-domain detection).
+    $script:_CrossDomainBucketCoalesce = @()
 
     $inc = Resolve-ReportInclude -Item $includeItem
     $ReportNameFromTemplate = $inc.Name
@@ -6849,6 +7051,26 @@ foreach ($includeItem in $global:Exposure_Template_ReportsIncluded) {
     $SortBy                         = $Entry.SortBy
 
     $Query                          = $Entry.ReportQuery
+
+    # v2.2.404 -- read the per-report crossDomainBucketCoalesce declaration. Shape:
+    #   crossDomainBucketCoalesce:
+    #     - ClColumn: Target_AzureResourceId_Guid   # the CL-side projection-aliased bucket key
+    #       EgNativeKey: NodeId                       # the EG-native column it equals (NodeId hex)
+    # Each entry asserts the CL bucket-key value IS the EG NodeId for matched rows,
+    # so the SHA256 partition is identical on both sides -> EG bucket filter can
+    # stay active (bounded) AND per-bucket CL/EG subsets align (lossless). Missing
+    # / empty = legacy behaviour (EG filter suppressed for cross-domain CL keys).
+    if ($Entry.PSObject.Properties['crossDomainBucketCoalesce'] -and $Entry.crossDomainBucketCoalesce) {
+        $script:_CrossDomainBucketCoalesce = @($Entry.crossDomainBucketCoalesce)
+        $_cdcCols = @($script:_CrossDomainBucketCoalesce | ForEach-Object {
+            if ($_ -is [System.Collections.IDictionary]) { [string]$_['ClColumn'] }
+            elseif ($_.PSObject.Properties['ClColumn'])   { [string]$_.ClColumn }
+            else { [string]$_ }
+        }) | Where-Object { $_ }
+        if ($_cdcCols.Count -gt 0) {
+            Write-Info ("[crossdomain] report '{0}' declares EG-aligned CL bucket key(s): {1} -- EG-side bucket filter stays ACTIVE (bounded EG work)." -f $ReportName, ($_cdcCols -join ', '))
+        }
+    }
 
     # Bucketing resolution: bucketing parameters are now hardcoded constants.
     # Per-Report ReportTemplate.UseBucketFilter / BucketCount may still narrow
@@ -7748,7 +7970,7 @@ if ($ResultAll.Count -eq 0) {
     # queries) can group by TraceID to track a finding over time.
     # -------------------------------------------------------------------------
     $__sha = [System.Security.Cryptography.SHA256]::Create()
-    # Detect Detailed reports by presence of an AssetName column — Detailed reports project
+    # Detect Detailed reports by presence of an AssetName column â€” Detailed reports project
     # one row per asset, Summary reports aggregate above the asset level. Used below to
     # decide whether TraceName includes the AssetName segment.
     $isDetailedShape = $false
@@ -9175,7 +9397,7 @@ Scope:
 - Full evidence and the complete set of findings per asset is in the attached Excel report (Details sheet).
 - A separate Summary sheet in the Excel contains the same AI text as this email.
 
-Risk scoring is transparent: Consequence × Probability = RiskScore, based on raw Kusto query outputs and a customizable risk index.
+Risk scoring is transparent: Consequence Ã— Probability = RiskScore, based on raw Kusto query outputs and a customizable risk index.
 "@
 
         # v2.2.224 -- output the EXACT counts the engine produced so the AI
@@ -9524,7 +9746,7 @@ try {
         }
     }
 
-    # v2.2.385 -- helper: derive SecurityDomain from report name when the per-row
+    # v2.2.404 -- helper: derive SecurityDomain from report name when the per-row
     # field is empty. Most YAML reports don't declare a top-level SecurityDomain
     # (it's optional), so the per-row field ends up blank on the majority of
     # rows and the KPI table's Total cells stop matching the per-domain row
@@ -9559,7 +9781,7 @@ try {
         $dom = ''
         if ($r.PSObject.Properties['SecurityDomain']) { $dom = [string]$r.SecurityDomain }
         if ($dom -eq 'PublicIp') { $dom = 'PublicIP' }
-        # v2.2.385 -- fallback derivation from report name when per-row field is empty.
+        # v2.2.404 -- fallback derivation from report name when per-row field is empty.
         # Without this, rows from YAML reports that don't declare a top-level
         # SecurityDomain end up uncounted in the per-domain rows of the KPI
         # table, while the Total row counts them. Customer-reported bug:
@@ -9959,7 +10181,7 @@ if ([bool]$global:Report_SendMail -eq $true) {
     }
 
     # ----- AI summary block (if enabled) -----
-    # v2.2.385 -- compute snapshot-source attribution. The KPI banner, Top-50
+    # v2.2.404 -- compute snapshot-source attribution. The KPI banner, Top-50
     # risky assets list, and AI narrative are all snapshots from the first
     # template (Summary or Detailed) to complete in the current 24h window.
     # The second template's email silently reuses the cached snapshot without

@@ -60,3 +60,4 @@ Thumbs.db
 # Per-tenant asset-tagging knobs (AutoExcludeRules.*). Never commit -- belongs only
 # in the operator's working copy. Sample stays tracked for schema reference.
 config/asset-tagging.config.json
+

@@ -1,0 +1,8 @@
+@page
+@using Sia.Web.Rendering
+@model Sia.Web.Pages.ExecModel
+@{
+    Layout = null;
+    var html = ExecHtmlRenderer.RenderBody(Model.View, "/lib/chart.umd.js", standalone: false);
+}
+@Html.Raw(html)

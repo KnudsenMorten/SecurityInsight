@@ -111,11 +111,23 @@ function Test-SISchemaCompliance {
         $yamls = @(Get-ChildItem -Path $enrichRoot -Filter '*.yaml' -Recurse -File -ErrorAction SilentlyContinue |
                    Where-Object { $_.FullName -notmatch '[\\/](OUTPUT|logs|staging)[\\/]' })
         foreach ($f in $yamls) {
-            # Allow-list, identical to Get-SIRuleSet (#30).
+            # Allow-list. The first two are Get-SIRuleSet's own (#30) -- what the
+            # ENGINE loads. The third is deliberately WIDER than the loader:
+            #
+            #   *.custom.sample.yaml is never loaded, and was therefore never
+            #   checked by anything (#38). But every sample ships to the public
+            #   mirror and to paying customers as the file they are instructed to
+            #   copy ("Copy this file to a sibling without the `.sample` suffix"),
+            #   so a broken sample propagates BY INSTRUCTION. One shipped example
+            #   set a field no schema defines and no code reads, and set neither
+            #   Tier nor any cmdb* field -- copying it produced a rule that matched
+            #   assets and did nothing. A lint that skips the files customers copy
+            #   is the mirror image of #29, which skipped the files customers edit.
             $isCustom = $f.Name -like '*.custom.yaml'
             $isLocked = $f.Name -like '*.locked.yaml'
-            if (-not $isCustom -and -not $isLocked) { continue }
-            if ($CustomOnly -and -not $isCustom)    { continue }
+            $isSample = $f.Name -like '*.custom.sample.yaml'
+            if (-not $isCustom -and -not $isLocked -and -not $isSample) { continue }
+            if ($CustomOnly -and -not $isCustom)                        { continue }
 
             $scanned++
             [void]$scannedNames.Add($f.Name)
@@ -134,13 +146,25 @@ function Test-SISchemaCompliance {
             if ($obj -is [System.Collections.IDictionary] -and $obj.Contains('AssetTagging')) { continue }
 
             # Check 2: id == basename, with the loader's .custom/.locked strip.
+            # `.custom.sample` MUST be stripped before `.custom`, or every one of
+            # the 551 samples false-flags as an id mismatch (its BaseName still
+            # ends '.custom.sample') and the check drowns in noise the moment
+            # samples are included at all.
             $id = [string]$obj.id
             $effectiveBaseName = $f.BaseName
-            if ($effectiveBaseName -like '*.custom')      { $effectiveBaseName = $effectiveBaseName.Substring(0, $effectiveBaseName.Length - 7) }
-            elseif ($effectiveBaseName -like '*.locked')  { $effectiveBaseName = $effectiveBaseName.Substring(0, $effectiveBaseName.Length - 7) }
+            if ($effectiveBaseName -like '*.custom.sample') { $effectiveBaseName = $effectiveBaseName.Substring(0, $effectiveBaseName.Length - 14) }
+            elseif ($effectiveBaseName -like '*.custom')    { $effectiveBaseName = $effectiveBaseName.Substring(0, $effectiveBaseName.Length - 7) }
+            elseif ($effectiveBaseName -like '*.locked')    { $effectiveBaseName = $effectiveBaseName.Substring(0, $effectiveBaseName.Length - 7) }
+            # `_TEMPLATE*` is the annotated grammar reference, not a rule for any
+            # particular id -- its `id:` is a deliberate placeholder
+            # ('ExampleRuleName'), so the filename can never match it. The engine
+            # never loads it (it is a .sample), so exempting the NAME check costs
+            # nothing; every other check below still applies to it, which is the
+            # point -- the template is the most-copied file in the tree.
+            $isTemplate = $f.BaseName -like '_TEMPLATE*'
             if ([string]::IsNullOrWhiteSpace($id)) {
                 Add-Violation 'missing-id'  $f.FullName 'no top-level id field'
-            } elseif ($id -ne $effectiveBaseName) {
+            } elseif ($id -ne $effectiveBaseName -and -not $isTemplate) {
                 Add-Violation 'id-mismatch' $f.FullName ("id='{0}' != filename basename='{1}'" -f $id, $effectiveBaseName)
             }
 

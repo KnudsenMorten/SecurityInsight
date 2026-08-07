@@ -76,7 +76,24 @@ function Get-SIRuleSet {
         # reporting below) can be exercised against a scratch folder instead of the real
         # enrichment tree. Production callers never pass it.
         [Parameter()]
-        [string]$SolutionRootOverride
+        [string]$SolutionRootOverride,
+
+        # AUDIT #34 phase 1 -- OPERATOR DATA OVERLAY.
+        # An external directory holding the operator's own *.custom.yaml rules, laid out with
+        # the same <engine>/ + shared/ subfolders as asset-profiling-enrichment/. When set, its
+        # rules load ALONGSIDE the shipped tree and WIN on a colliding id.
+        #
+        # Why: today a customer's rules live INSIDE the directory the sync overwrites, and they
+        # survive only because they happen to be absent from the update zip -- not because
+        # anything protects them. One tracked file with a colliding name would overwrite a
+        # customer's rule, and a .gitignore slip publishes their data to the public mirror.
+        # An overlay puts operator data outside the code tree, so the shipped tree is pure code
+        # and a fresh clone behaves identically to a real install.
+        #
+        # Defaults to $global:SI_EnrichmentDataRoot so config sets it once. UNSET = every
+        # existing installation behaves exactly as before; this is opt-in by construction.
+        [Parameter()]
+        [string]$EnrichmentDataRoot
     )
 
     if (-not (Get-Module -Name 'powershell-yaml')) {
@@ -110,7 +127,29 @@ function Get-SIRuleSet {
     foreach ($folder in $folders) {
         foreach ($sub in @($Engine, 'shared')) {
             $p = Join-Path $siRoot (Join-Path $folder $sub)
-            if (Test-Path $p) { $scanRoots += [pscustomobject]@{ Folder = $folder; Path = $p; Sub = $sub } }
+            if (Test-Path $p) { $scanRoots += [pscustomobject]@{ Folder = $folder; Path = $p; Sub = $sub; Base = $siRoot; Source = 'tree' } }
+        }
+    }
+
+    # AUDIT #34 phase 1 -- the operator data overlay, appended AFTER the shipped tree so a
+    # colliding id resolves overlay-wins in the dedup below. Same <engine>/ + shared/ layout,
+    # so an operator moves files across without renaming anything.
+    $overlayRoot = if (-not [string]::IsNullOrWhiteSpace($EnrichmentDataRoot)) { $EnrichmentDataRoot }
+                   elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SI_EnrichmentDataRoot)) { [string]$global:SI_EnrichmentDataRoot }
+                   else { $null }
+    $overlayActive = $false
+    if (-not [string]::IsNullOrWhiteSpace($overlayRoot)) {
+        if (-not (Test-Path -LiteralPath $overlayRoot)) {
+            # Configured but absent is NOT a silent fall-back to the in-tree rules. That would be
+            # #29's shape a third time: the run would look clean while every operator rule the
+            # overlay was supposed to supply is missing.
+            Write-Warning ("Get-SIRuleSet: SI_EnrichmentDataRoot is set to '{0}' but that path does not exist. NO overlay rules were loaded for engine '{1}' -- only the shipped tree is in force. Fix the path or clear the setting." -f $overlayRoot, $Engine)
+        } else {
+            $overlayActive = $true
+            foreach ($sub in @($Engine, 'shared')) {
+                $p = Join-Path $overlayRoot $sub
+                if (Test-Path $p) { $scanRoots += [pscustomobject]@{ Folder = 'overlay'; Path = $p; Sub = $sub; Base = $overlayRoot; Source = 'overlay' } }
+            }
         }
     }
 
@@ -118,6 +157,8 @@ function Get-SIRuleSet {
         $folder      = $root.Folder
         $engineRoot  = $root.Path
         $isShared    = ($root.Sub -eq 'shared')
+        $ruleBase    = $root.Base       # #34 -- File is relative to the root the file came from
+        $ruleSource  = $root.Source     # 'tree' | 'overlay'
 
         # Both shapes are legal:
         #   1) <engineRoot>/<MethodName>.yaml                     (single file)
@@ -234,8 +275,9 @@ function Get-SIRuleSet {
                     Category    = $null
                     Description = $null
                     Detections  = @()
-                    File        = $f.FullName.Substring($siRoot.Length).TrimStart('\','/')
+                    File        = $f.FullName.Substring($ruleBase.Length).TrimStart('\','/')
                     Folder      = $folder
+                    Source      = $ruleSource
                     SchemaShape = 'AssetProfileBy'
                 })
                 $loaded++
@@ -304,8 +346,9 @@ function Get-SIRuleSet {
                 Category        = if ($obj.category)    { [string]$obj.category }    else { $null }
                 Description     = if ($obj.description) { [string]$obj.description } else { $null }
                 Detections      = $detections.ToArray()
-                File            = $f.FullName.Substring($siRoot.Length).TrimStart('\','/')
+                File            = $f.FullName.Substring($ruleBase.Length).TrimStart('\','/')
                 Folder          = $folder
+                Source          = $ruleSource
                 SchemaShape     = 'AssetProfileBy'
             })
             $loaded++
@@ -322,18 +365,29 @@ function Get-SIRuleSet {
     # file header. NOTE: only handles dedup of identical id pairs today;
     # mode: append/merge/overwrite/disable are NOT yet implemented (custom
     # currently always overrides locked, which is the most common intent).
+    # AUDIT #34 -- precedence is now RANKED rather than "custom replaces whatever came before",
+    # because a third source exists. Highest rank wins; equal rank keeps the first seen:
+    #   2 = overlay *.custom.yaml   (operator data root -- the most specific statement)
+    #   1 = in-tree *.custom.yaml   (today's customer override, same as before)
+    #   0 = *.locked.yaml           (shipped)
+    # With no overlay configured this collapses to exactly the previous behaviour: every rule is
+    # rank 0 or 1 and custom still beats locked.
     if ($results.Count -gt 1) {
         $deduped = New-Object System.Collections.ArrayList
         $byId    = @{}
+        $rankOf  = {
+            param($r)
+            if ($r.File -notlike '*.custom.yaml') { return 0 }
+            if ($r.Source -eq 'overlay') { return 2 }
+            return 1
+        }
         foreach ($r in $results) {
-            $isCustom = ($r.File -like '*.custom.yaml')
             if (-not $byId.ContainsKey($r.Id)) {
                 $byId[$r.Id] = $r
-            } elseif ($isCustom) {
-                # Custom wins -- replace the previously-seen entry.
+            } elseif ((& $rankOf $r) -gt (& $rankOf $byId[$r.Id])) {
                 $byId[$r.Id] = $r
             }
-            # else: locked seen after another locked, or locked-after-custom -- ignore.
+            # else: same or lower rank than what we already hold -- ignore.
         }
         foreach ($r in $byId.Values) { [void]$deduped.Add($r) }
         $dropped = $results.Count - $deduped.Count
@@ -344,6 +398,21 @@ function Get-SIRuleSet {
     }
 
     Write-Verbose ("Get-SIRuleSet: engine={0} loaded={1} skipped={2} folders={3}" -f $Engine, $loaded, $skipped, ($folders -join ','))
+
+    # AUDIT #34 -- CUTOVER VISIBILITY. When an overlay is configured, operator rules still sitting in
+    # the shipped tree are read (never ignored -- silently dropping them would be #29 a third time)
+    # but they are the OLD location, and on a colliding id the overlay now outranks them. Say so once
+    # per run, naming the files, so a half-finished migration cannot look like a finished one.
+    if ($overlayActive) {
+        $overlayRules = @($results | Where-Object { $_.Source -eq 'overlay' })
+        $strayCustom  = @($results | Where-Object { $_.Source -eq 'tree' -and $_.File -like '*.custom.yaml' })
+        Write-SIInfo ("Get-SIRuleSet: operator data overlay ACTIVE at '{0}' -- {1} of {2} rule(s) for engine '{3}' come from the overlay." -f `
+            $overlayRoot, $overlayRules.Count, @($results).Count, $Engine)
+        if ($strayCustom.Count -gt 0) {
+            Write-Warning ("Get-SIRuleSet: {0} operator rule(s) for engine '{1}' are still in the SHIPPED TREE while an overlay is configured -- {2}. They ARE loaded, but they live in the directory the updater writes to and the overlay outranks them on a colliding id. Move them under '{3}\<engine>\' to complete the migration." -f `
+                $strayCustom.Count, $Engine, (($strayCustom | ForEach-Object { $_.File }) -join ', '), $overlayRoot)
+        }
+    }
 
     # AUDIT #29 -- a rule file that will not PARSE must be visible on a normal run.
     #

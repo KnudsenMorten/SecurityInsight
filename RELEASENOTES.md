@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.410
+## v2.2.411
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI): #34 phase 1 -- operator rules can live outside the tree the updater writes to (5ade1916)
+- docs(SI): #36 was fixed in the data weeks before the doc said so, and two decisions land (af958784)
 - fix(SI): #39 -- the documented launch line ingested Detailed rows into the Summary table (f5e987e0)
 - docs: PUB-2 is APPLIED, not pending -- the handoff went stale an hour after it was written (857fd25b)
 - docs(SI): handoff -- the whole NEXT-SESSION list is spent, and what remains is four decisions (ad522c91)
@@ -32,14 +34,55 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI): #29 -- an unloadable rule file is now reported, not silently skipped (59a18aeb)
 - docs(SI): #29 -- every custom tagging/profiling rule is inert, and has been since June (d8602230)
 - docs(SI): #27 PROVEN LIVE -- and the suspicion it was built to test is refuted (9339c492)
-- docs(SI): RELEASENOTES v2.2.405 -- the four operator-visible fixes (91fae3f9)
-- fix(SI): #24 PROVEN LIVE -- and the guard's own log message was wrong (d86d5738)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.411 — Your own rules can now live outside the folder we update
+
+**Nothing changes unless you opt in.** With no configuration, rule loading behaves exactly as it did
+before — that is asserted by our tests, not assumed.
+
+### The problem
+
+Your own detection rules (`*.custom.yaml`) sit in the same directories as the rules we ship:
+
+```
+asset-profiling-enrichment/endpoint/
+    ADDomainController.locked.yaml          <- ours, replaced on update
+    ADDomainController.custom.sample.yaml   <- ours, replaced on update
+    ADDomainController.custom.yaml          <- YOURS
+```
+
+Your files survive an update because they are not in the update package — not because anything
+protects them. That is a thin guarantee: a shipped file that ever took the same name as one of yours
+would replace it.
+
+### What you can do now
+
+Point the engines at a rule directory of your own, anywhere outside the product folder:
+
+```powershell
+$global:SI_EnrichmentDataRoot = 'D:\SecurityInsight-Data\rules'
+```
+
+Lay it out exactly like the shipped tree — `<engine>\` and `shared\` subfolders — and drop your
+`*.custom.yaml` files in. Nothing else changes; file names and rule ids stay the same.
+
+- **Your rules win.** On a rule id defined in both places, yours takes precedence over both the
+  shipped rule and any older copy still in the product folder.
+- **Nothing is silently dropped.** Rules still sitting in the old location are **still loaded**, and
+  the run warns and names them so a half-finished move can't look like a finished one.
+- **A wrong path is loud.** If the directory you configure doesn't exist, the run says so clearly
+  instead of quietly carrying on without your rules. The shipped rules still run — a bad path never
+  kills a security run.
+
+Moving is optional and can be done a few files at a time; both locations work throughout.
 
 ---
 

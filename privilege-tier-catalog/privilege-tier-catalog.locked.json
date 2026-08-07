@@ -2,7 +2,7 @@
     "Metadata":  {
                      "GeneratedAt":  "2026-05-03 00:08:22",
                      "GeneratedBy":  "SecurityInsight-PrivilegeTierClassifier.ps1 v2.0",
-                     "TenantId":  "f0fa27a0-8e7c-4f63-9a77-ec94786b7c9e",
+                     "TenantId":  "<redacted -- audit #21>",
                      "TieringModel":  "Attacker-centric (0=immediate compromise, 3=low blast radius)",
                      "AICallsUsed":  4
                  },

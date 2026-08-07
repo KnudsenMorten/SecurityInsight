@@ -1,45 +1,126 @@
 # Release notes for SecurityInsight
 
-## v2.2.404
+## v2.2.405
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(si ra): re-key cross-domain Attack_Paths Summary buckets onto EG-native columns (bound 900s) (310dcc23)
-- feat(sia): maturity scorecard + roadmap exec surface (grounded, honest) (cd574061)
-- feat(sia): add missing-processes / org-coaching exec layer (grounded maturity gaps) (2629b335)
-- Merge pull request #189 from KnudsenMorten/fix/si-ra-cmdbname-and-logging (f95f296b)
-- Merge pull request #188 from KnudsenMorten/feat/sia-round8 (63d86205)
-- fix(si-ra): cast dynamic cmdb group keys (SEM0001) + quiet superseded multi-path logging (d9747a1c)
-- fix(si): identity EG bucketing uses KQL hash(), not the non-existent hash_djb2 (de7816dd)
-- feat(sia): exec glossary — plain-language "what these terms mean" layer (4adc9ae0)
-- Merge pull request #178 from KnudsenMorten/feat/sia-round7 (f1c45f09)
-- feat(sia): prioritised remediation plan ("next N actions" ranked by risk-reduction) (0906a44b)
-- chore(sia): enforce dll-only builds (UseAppHost=false) across analyzer-web (789b7f95)
-- Merge pull request #174 from KnudsenMorten/feat/sia-round6 (6b6869aa)
-- feat(sia): trends & top movers exec panel + top_movers MCP tool (c9859dc8)
-- fix(sia): Dockerfile copies demo seed to absolute /analyzer/seed (reproducible image build) (82e847c3)
-- feat(sia): scheduled exec-summary email send-hook (grounded, fail-soft) (ce97b1f2)
-- feat(sia): one-sentence exec headline + board-deck export (c2fea72c)
-- feat(sia): exec 'so what' business-impact framing + clean-by-default drill-down (93afba47)
-- feat(SIA): add period-over-period + risk-by-area exec enhancements (0bdc052d)
-- feat(SIA): framework lens + aging/time-open exec panels (e791b623)
-- chore(si): remove dead analyzer-web gitignore negation (post-rename) + resolve ENGINE-IDENTITY (6c3cf709)
-- feat(SIA): target real SI RA-Summary schema on the live data path + finalize hosted deploy (dbf6374e)
-- fix(sia)!: rename Config/Data dirs -> Configuration/DataAccess; REVERT gitignore negation (154e9e29)
-- fix(sia): stop .gitignore swallowing analyzer-web Config/ + Data/ .NET source (4b526f21)
-- Merge pull request #151 from KnudsenMorten/feat/si-analyzer-web (11f977b0)
-- feat(SI Analyzer): build hosted executive-grade SIA web app (ASP.NET Core) (8b0cdb31)
-- docs(si sia): exec visuals + Claude ideas + prompt + MCP server spec (45397382)
-- docs(si sia): mgmt reporting + AI integration are core deliverables (CIO audience) (207af1a9)
-- docs(si sia): capture audience (non-tech execs/CIO) + Azure hosting requirement (2bbc6480)
-- docs(si): define acronym SIA (SecurityInsight Analyzer) + internal env as default base (9693e153)
-- docs(toc): fix broken README anchor links + add Fix-MarkdownToc gate (6696b067)
+- docs(SI): fix the one unresolved TOC anchor blocking publish (a77e5c16)
+- release(SI): VERSION 2.2.405 -- all six tag criteria met, verified on real runs (add02cca)
+- docs(SI): write down the tag/no-tag criteria before judging (c9d9addd)
+- fix(SI): #25 third shape -- count and list were on different SCOPES (1efc5536)
+- fix(SI): #27 -- drop the coverage warning; low AadDeviceId coverage is normal (8033a764)
+- fix(SI): #29 -- an unloadable rule file is now reported, not silently skipped (59a18aeb)
+- docs(SI): #29 -- every custom tagging/profiling rule is inert, and has been since June (d8602230)
+- docs(SI): #27 PROVEN LIVE -- and the suspicion it was built to test is refuted (9339c492)
+- docs(SI): RELEASENOTES v2.2.405 -- the four operator-visible fixes (91fae3f9)
+- fix(SI): #24 PROVEN LIVE -- and the guard's own log message was wrong (d86d5738)
+- fix(SI): #25 -- ImpactedAssetCount is derived from the list it sits beside (100f0352)
+- chore(SI): #28 -- retire _source/ + Build-RiskAnalysis.ps1 (operator decision) (db1f7ffc)
+- fix(SI): #26 part 2 + #28 -- _source/ is dead scaffolding; fix the catalog itself (5904f0f6)
+- fix(SI): #27 -- correlation coverage is reported on every run (f0466381)
+- fix(SI): #26 -- export columns are the union of all rows, at all THREE sites (cb2c9235)
+- fix(SI): #24 futility guard -- the AutoBucket probe now knows when to stop (63a2fc1b)
+- docs(SI): handoff -- #24 regression found in live test, plus a session-start guide (b7516559)
+- docs(SI): document how the RA column pipeline and cross-source correlation ACTUALLY work (861d4e4f)
+- docs(SI): findings #25-#27 -- all three operator suspicions confirmed in code (87aacba9)
+- fix(SI): audit #21 CLOSED -- company name accepted, payload gate now fully blocking (5041bc06)
+- docs(SI): 0 rows from publicip is BY DESIGN, not a fault (03751917)
+- docs(SI): record the 2026-08-06 commits in the audit ledger index (9564cc21)
+- fix(SI): audit #21 -- remove real org identifiers from the public payload (88e6a801)
+- refactor(SI): audit #16 tranche 3 -- RA engine now 10,559 -> 5,848 lines (-45%) (5e19495a)
+- docs(SI): #17 verified on a live profiling run (and the run that verified nothing) (1f8db44f)
+- fix(SI): audit #17 -- put the pre-ingest AlwaysOn halt under test (9531613b)
+- fix(SI): audit #23 -- delete the duplicated 166-line prologue in the PTC engine (d8e5d74a)
+- fix(SI): audit #24 -- the AutoBucket probe now escalates on a 900s ceiling timeout (b50b3f5c)
+- docs(SI): #16 live gate PASSED on a complete RA run; #24 proven by the same run (f712ebf5)
+- docs(SI): correct my own #24 claim -- -ResetCache does NOT fix the slow reports (a35e1cb8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.405 — Risk Analysis: columns that quietly went missing, counts that didn't match, and a report that stalled for hours
+
+Four fixes to what actually lands in your Excel / JSON / Log Analytics output. Three of them were
+found by an operator reading a report rather than by a test, so each now has a regression test.
+
+### Columns could silently vanish from a report
+
+**Symptom.** A column you expect — most visibly the remediation guidance (`RecommendedAction`,
+`RemediationOptions`, `Recommendation`) — was absent from the workbook, the JSON sibling **and** the
+Log Analytics ingest. Not empty: absent. It affected some reports and not others.
+
+**Cause.** The engine decided a report's column list from the **first row only**. Advanced Hunting
+builds rows from a property bag that omits null-valued columns, so a column that merely happened to
+be empty on row 1 was never discovered, and every other row's value was then dropped. A column named
+in a report's `OutputPropertyOrder` was protected; the remediation columns were named nowhere, so
+they depended entirely on first-row luck.
+
+The same mistake was made a second time, in the place that decides what you actually open: all
+reports land in one `Details` sheet whose column list came from **whichever report ran first**, so a
+column unique to a later report was dropped from the workbook even once the row-level problem was
+fixed.
+
+**Fix.** Column discovery is now the **union across every row**, and the workbook's shape is the
+union **across every report**. The three remediation columns are now declared explicitly as well, so
+they no longer depend on discovery at all. A new log line names any column recovered this way, so a
+run says out loud what earlier versions discarded in silence.
+
+### `ImpactedAssetCount` did not describe `ImpactedAssetsList`
+
+**Symptom.** A summary row could show an impacted-asset count that disagreed with the list of
+impacted assets printed next to it.
+
+**Cause.** The two were computed over **different columns** — the count over a device or
+configuration identifier, the list over asset names — and in the query path the count also used an
+approximate aggregate. Neither number was wrong on its own; they measured different things, which is
+exactly why nothing looked broken.
+
+**Fix.** The count is now derived from the set that is displayed, in both places that produce it:
+the report queries, and the engine's own roll-up, which supplies these columns for the majority of
+Summary reports. Where a report has no asset list to derive from, its count is left as it was rather
+than invented.
+
+### A slow report could stall a run for hours
+
+**Symptom.** On large tenants one Attack-Path Summary report could consume hours and still fail,
+inflating total run time.
+
+**Cause.** When a query exceeds Advanced Hunting's query-time ceiling the engine splits it into more
+buckets and retries. For one class of report splitting cannot reduce the work — the cost sits on the
+Exposure-Graph side, which the split does not bound — so the engine kept doubling the bucket count
+against a query no bucket count could satisfy.
+
+**Fix.** The engine now recognises when splitting is not reducing a query's cost, stops escalating
+immediately and falls back to the configured bucket count. Measured on the worst-affected report:
+**one attempt instead of sixteen**. A bounded safety cap also limits any report that fails to
+converge for some other reason. Reports that genuinely benefit from more buckets are unaffected and
+still learn their optimal count.
+
+### Cross-source correlation coverage is now visible
+
+**Symptom.** No way to tell whether asset correlation across Defender / Exposure Graph / Entra was
+working. It could be failing across most of the estate and the run still looked clean.
+
+**Cause.** The merge logic is sound — it refuses to merge records carrying contradictory device IDs
+rather than guessing — but every outcome of it was logged at verbose level only.
+
+**Fix.** Every asset-profiling run now prints one coverage line: how many records carried a usable
+device ID and the percentage, how many were merged, how many merges were refused, and how many
+records had no usable ID at all. Refusals are warned about and split by cause, because the two
+causes need different upstream fixes.
+
+Note that a percentage well below 100% is normal: Azure resources such as Key Vaults and storage
+accounts have no object in Entra ID, so they have no device ID to carry. The line reports coverage
+as a fact for you to interpret against your own estate — it does not treat a low number as a fault.
+
+> **Upgrade note.** No configuration changes are required. Reports may show **more columns** than
+> before, because previously-dropped ones now appear; and impacted-asset counts may **change** where
+> they previously disagreed with the list beside them. Both are the corrections described above.
 
 ---
 

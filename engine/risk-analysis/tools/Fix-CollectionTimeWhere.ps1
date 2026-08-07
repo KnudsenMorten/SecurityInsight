@@ -28,10 +28,15 @@
     `ago(8d)` window matches T3's max staleness + 1d safety buffer.
 
     Files updated:
-      * v2.2/risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml
-      * v2.2/risk-analysis-detection/RiskAnalysis_Queries_Custom.yaml (if tracked)
-      * v2.2/engine/risk-analysis/_source/*.yaml (authoring inputs -- so future
-        Build-RiskAnalysis.ps1 consolidations stay correct)
+      * risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml
+      * risk-analysis-detection/RiskAnalysis_Queries_Custom.yaml (if tracked)
+
+    AUDIT #28 (2026-08-06): `_source/` was dropped from the default -Targets. It used to be
+    rewritten too, "so future Build-RiskAnalysis.ps1 consolidations stay correct" -- but the
+    consolidator and `_source/` were retired: they had been frozen since commit 536e1405 while
+    the catalog was hand-edited continuously, and regenerating would have replaced the shipped
+    118-report catalog with an incompatible 264-report one. The catalog IS the source of truth,
+    so it is the only thing worth rewriting. Passing -Targets '_source' now matches nothing.
 
     Reports each rewritten match (file, line, before/after snippet).
 #>
@@ -40,7 +45,7 @@
 param(
     [Parameter()][string]$RiskAnalysisDir = (Join-Path $PSScriptRoot '..'),
     [Parameter()][switch]$WhatIf,
-    [Parameter()][string[]]$Targets = @('locked','custom','_source')
+    [Parameter()][string[]]$Targets = @('locked','custom')   # '_source' retired -- audit #28
 )
 
 $ErrorActionPreference = 'Stop'

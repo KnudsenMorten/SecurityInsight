@@ -18,7 +18,7 @@
 
     Example use in config/SecurityInsight.custom.ps1:
         . "$PSScriptRoot\..\auth\Get-SIKvSecret.ps1"
-        $kv = 'kv-2linkit-automation-p'
+        $kv = '<your-key-vault-name>'
         $global:SI_Shodan_ApiKey = Get-SIKvSecret -VaultName $kv -SecretName 'SI-Shodan-ApiKey'
         $global:OpenAI_apiKey    = Get-SIKvSecret -VaultName $kv -SecretName 'OpenAI-ApiKey'
 

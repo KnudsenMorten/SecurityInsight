@@ -39,18 +39,13 @@ function Get-DiscoveryFromEntra {
     # signed in to Entra in last N days still counts as active.
     $url = 'https://graph.microsoft.com/v1.0/devices?$select=id,deviceId,displayName,operatingSystem,deviceCategory,trustType,profileType,registrationDateTime,approximateLastSignInDateTime&$top=999'
 
-    try {
-        do {
-            $resp = Invoke-RestMethod -Method Get -Uri $url `
-                -Headers @{ Authorization = ('Bearer ' + $token) }
-            foreach ($d in $resp.value) { [void]$rows.Add($d) }
-            $url = $resp.'@odata.nextLink'
-        } while ($url)
-    } catch {
-        $msg = $_.Exception.Message
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-        Write-Warning ('Entra: /devices call failed -- {0}' -f $msg)
-        return @()
+    # Audit #4: retry transient failures and KEEP the pages already collected.
+    . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared/Invoke-SIPagedRest.ps1')
+    $page = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'Entra /devices'
+    foreach ($d in $page.Rows) { [void]$rows.Add($d) }
+    if (-not $page.Complete) {
+        Write-Warning ('Entra: {0} -- continuing with {1} device(s) from {2} page(s); the run is NOT blocked.' -f `
+            $page.Error, $rows.Count, $page.Pages)
     }
 
     foreach ($d in $rows) {

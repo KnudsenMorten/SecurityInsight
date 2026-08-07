@@ -354,7 +354,6 @@ Reports:
               | extend Category          = "Vulnerabilities"
               | extend Subcategory       = "CVEs (Missing Updates)"
               | summarize
-                  ImpactedAssetCount        = dcount(DeviceKey),
                   UniqueIssues              = dcount(FindingName),
                   TotalIssuesImpactedAssets = count(),
                   ImpactedAssetsList        = make_set(AssetName),
@@ -376,6 +375,9 @@ Reports:
                 by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                    CriticalityTier, CriticalityTierLevel, SecuritySeverity,
                    cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity
+              // audit #25 -- derive the count from the set that is actually DISPLAYED, so the two
+              // cannot disagree. Was dcount() over a DIFFERENT column, and approximate besides.
+              | extend ImpactedAssetCount = array_length(ImpactedAssetsList)
               | project
                   SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                   Impact, SecuritySeverity,
@@ -1069,7 +1071,6 @@ Reports:
                   iff(RF_P_InternetExposed == 1, dynamic(["Internet-Exposed"]),   dynamic([])),
                   iff(RF_P_LegacyEoS       == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))), ";")
               | summarize
-                  ImpactedAssetCount        = dcount(DeviceKey),
                   UniqueIssues              = dcount(ConfigurationId),
                   TotalIssuesImpactedAssets = count(),
                   ImpactedAssetsList        = make_set(coalesce(DI_DeviceName, DeviceName)),
@@ -1089,6 +1090,9 @@ Reports:
                 by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                    CriticalityTier, CriticalityTierLevel, SecuritySeverity,
                    cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity
+              // audit #25 -- derive the count from the set that is actually DISPLAYED, so the two
+              // cannot disagree. Was dcount() over a DIFFERENT column, and approximate besides.
+              | extend ImpactedAssetCount = array_length(ImpactedAssetsList)
               | project
                   SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                   Impact, SecuritySeverity,
@@ -1154,6 +1158,8 @@ Reports:
       - cmdbCriticality
       - cmdbDataSensitivity
       - IssueList
+      - RecommendedAction
+      - RemediationOptions
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -1475,6 +1481,7 @@ Reports:
       - TotalIssuesImpactedAssets
       - ImpactedAssetsList
       - IssueList
+      - Recommendation
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -1658,7 +1665,6 @@ Reports:
               | extend ConfigurationName = tostring(FindingName)
               | extend ConfigurationId   = "Recommendation"
               | summarize
-                  ImpactedAssetCount        = dcount(DeviceKey),
                   UniqueIssues              = dcount(FindingName),
                   TotalIssuesImpactedAssets = count(),
                   ImpactedAssetsList        = make_set(AssetName),
@@ -1678,6 +1684,9 @@ Reports:
                 by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                    CriticalityTier, CriticalityTierLevel, SecuritySeverity,
                    cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity
+              // audit #25 -- derive the count from the set that is actually DISPLAYED, so the two
+              // cannot disagree. Was dcount() over a DIFFERENT column, and approximate besides.
+              | extend ImpactedAssetCount = array_length(ImpactedAssetsList)
               | project
                   SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                   Impact, SecuritySeverity,
@@ -8616,7 +8625,6 @@ Reports:
         // per target-criticality combo, with impacted-asset list rolled up.
         | summarize
             Impact          = max(MaxCvssScore),
-            ImpactedAssetCount        = dcount(EntryPointDeviceId),
             UniqueIssues              = dcount(TargetAzureAssetId),
             TotalIssuesImpactedAssets = count(),
             ImpactedAssetsList        = make_set(EntryPointDevice),
@@ -8629,6 +8637,9 @@ Reports:
             by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                CriticalityTier, CriticalityTierLevel,
                cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity
+        // audit #25 -- derive the count from the set that is actually DISPLAYED, so the two
+        // cannot disagree. Was dcount() over a DIFFERENT column, and approximate besides.
+        | extend ImpactedAssetCount = array_length(ImpactedAssetsList)
         | extend SecuritySeverity = case(
             Impact >= 9.0, "Very High",
             Impact >= 7.0, "High",

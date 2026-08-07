@@ -3391,6 +3391,26 @@ Tier / excluded marker is encoded in the tag name as the suffix `--tier<N>--SI` 
 <a id="video-walkthroughs"></a>
 
 <a id="8-support"></a><a id="support-chapter"></a>
+## 📊 8b. SecurityInsight Analyzer (SIA) — the hosted executive view
+
+[⤴ Back to top](#top)
+
+**SIA** is an **extension** of SecurityInsight — an executive-grade, **hosted** analyzer over the
+Risk-Analysis data the engines produce. It does not replace any engine; it reads their output. An
+ASP.NET Core web app behind Entra SSO on its own Azure infrastructure, it gives **executives** a
+plain-language *"are we getting safer?"* view (risk score over time, what changed, an AI-written exec
+summary and recommendations) and **analysts** a worklist that explains the top risk rows — the KQL
+facts plus an AI verdict. The data plane is **read-only** (Managed Identity → Log Analytics Reader),
+the AI is grounded in real findings, and it is fail-soft: no AI, no crash.
+
+> ⚠️ **SIA is built but not yet live-verified.** No hosted run behind Entra against a real workspace
+> with AI on has passed yet, so nothing is listed in `docs/FEATURES.md` as delivered. The earlier
+> PowerShell/localhost prototype is **retired** — its logic was ported into `SIAnalyzer.Core`.
+
+Source: `analyzer-web/` (`SIAnalyzer.sln`). Its architecture, deploy commands and tests are in the
+solution's single doc set — the **"SI Analyzer (SIA)"** chapter of [docs/DESIGN.md](docs/DESIGN.md)
+and §9 of `docs/TESTS.md`. There is no separate doc set under `analyzer-web/`.
+
 ## 📺 9. Video walkthroughs
 
 [⤴ Back to top](#top)

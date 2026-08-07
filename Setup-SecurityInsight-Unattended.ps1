@@ -430,14 +430,41 @@ if ($cfg.Flavour -eq 'Internal' -and $global:KV_HighPriv_KeyVaultName) {
     $kv = $global:KV_HighPriv_KeyVaultName
     _Info ("KeyVault: {0}" -f $kv)
 
-    # Shodan -- fixed key shared across all internal customers
-    try {
-        $shodanKey = 'tyScfnKkuf4hz87DaHwnhzXST3wKExfg'
-        Set-AzKeyVaultSecret -VaultName $kv -Name 'SI-Shodan-ApiKey' `
-            -SecretValue ([System.Net.NetworkCredential]::new('', $shodanKey).SecurePassword) -ErrorAction Stop | Out-Null
-        _Ok "SI-Shodan-ApiKey seeded"
-    } catch {
-        _Warn ("SI-Shodan-ApiKey seed failed: {0}" -f $_.Exception.Message)
+    # Shodan -- the fixed key shared across all internal customers.
+    #
+    # 🔴 NO SECRET LITERAL IN THIS FILE. This script SHIPS to the public mirror
+    # (operator directive 2026-08-05: "no secrets in public files" -- audit #1/#21).
+    # The key is resolved at RUN TIME from the operator's own environment; it is
+    # never stored here. Set ONE of:
+    #     $global:SI_Shodan_ApiKey   -- v1 platform globals (preferred; same shape
+    #                                   as the $global:OpenAI_apiKey branch below)
+    #     $env:SHODAN_API_KEY        -- for a one-off / CLI run
+    #
+    # If neither is set we SKIP LOUDLY and mark the phase 'partial'. We must never
+    # seed a placeholder and never report success: a silent skip here would leave
+    # Get-SIShodanKey returning $null, and the publicip engine would still emit
+    # rows with every Shodan field null -- a green run that quietly degrades the
+    # product. NOTE: skipping does NOT remove an already-seeded secret, so an
+    # existing customer whose KV was seeded by an earlier run keeps working; the
+    # exposure is to NEW onboardings only.
+    $shodanKey = $null; $shodanSrc = $null
+    if ($global:SI_Shodan_ApiKey -and -not [string]::IsNullOrWhiteSpace($global:SI_Shodan_ApiKey)) {
+        $shodanKey = [string]$global:SI_Shodan_ApiKey; $shodanSrc = '$global:SI_Shodan_ApiKey'
+    } elseif ($env:SHODAN_API_KEY -and -not [string]::IsNullOrWhiteSpace($env:SHODAN_API_KEY)) {
+        $shodanKey = [string]$env:SHODAN_API_KEY; $shodanSrc = '$env:SHODAN_API_KEY'
+    }
+    if ($shodanKey) {
+        try {
+            Set-AzKeyVaultSecret -VaultName $kv -Name 'SI-Shodan-ApiKey' `
+                -SecretValue ([System.Net.NetworkCredential]::new('', $shodanKey).SecurePassword) -ErrorAction Stop | Out-Null
+            _Ok ("SI-Shodan-ApiKey seeded ({0} chars from {1})" -f $shodanKey.Length, $shodanSrc)
+        } catch {
+            _Warn ("SI-Shodan-ApiKey seed failed: {0}" -f $_.Exception.Message)
+            $phaseStatus.kvSeedShodan = 'failed'
+        }
+    } else {
+        _Warn "SI-Shodan-ApiKey NOT seeded -- no key available. Set `$global:SI_Shodan_ApiKey in the v1 platform globals (or `$env:SHODAN_API_KEY for a one-off run), then re-run. Until then Shodan enrichment returns NULL for every field on a NEW install (an existing KV secret is untouched)."
+        $phaseStatus.kvSeedShodan = 'skipped-no-key'
     }
 
     # OpenAI -- migrate from v1's $global:OpenAI_apiKey (set by v1 Default_Variables)

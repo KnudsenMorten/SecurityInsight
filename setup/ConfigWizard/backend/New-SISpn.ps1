@@ -86,9 +86,9 @@
       AzureRbacScopes : <string[]>  RBAC scopes where the SPN was granted
 
 .EXAMPLE
-    New-SISpn -DisplayName 'sp-securityinsight-myfamily' `
-              -TenantId 'f0fa27a0-...' -SubscriptionId 'ef830ec3-...' `
-              -CredStorage KeyVault -KeyVaultName 'kv-myfamily-si'
+    New-SISpn -DisplayName 'sp-securityinsight-<org>' `
+              -TenantId '<your-tenant-guid>' -SubscriptionId '<your-subscription-guid>' `
+              -CredStorage KeyVault -KeyVaultName '<your-key-vault>'
 
 .NOTES
     Status: v2.2.105 -- secret path. Cert path + Managed Identity branch land in v2.2.106.

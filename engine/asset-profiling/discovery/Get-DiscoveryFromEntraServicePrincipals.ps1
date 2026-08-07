@@ -93,18 +93,13 @@ function Get-DiscoveryFromEntraServicePrincipals {
     # include customSecurityAttributes
     $url = 'https://graph.microsoft.com/v1.0/servicePrincipals?$select=id,displayName,appId,servicePrincipalType,signInAudience,accountEnabled,publisherName,verifiedPublisher,appOwnerOrganizationId,passwordCredentials,keyCredentials,tags,homepage,customSecurityAttributes,createdDateTime&$top=999'
 
-    try {
-        do {
-            $resp = Invoke-RestMethod -Method Get -Uri $url `
-                -Headers @{ Authorization = ('Bearer ' + $token) }
-            foreach ($sp in $resp.value) { [void]$rows.Add($sp) }
-            $url = $resp.'@odata.nextLink'
-        } while ($url)
-    } catch {
-        $msg = $_.Exception.Message
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-        Write-Warning ('EntraServicePrincipals: /servicePrincipals call failed -- {0}' -f $msg)
-        return @()
+    # Audit #4: retry transient failures and KEEP the pages already collected.
+    . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared/Invoke-SIPagedRest.ps1')
+    $page = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'EntraServicePrincipals /servicePrincipals'
+    foreach ($sp in $page.Rows) { [void]$rows.Add($sp) }
+    if (-not $page.Complete) {
+        Write-Warning ('EntraServicePrincipals: {0} -- continuing with {1} SP(s) from {2} page(s); the run is NOT blocked.' -f `
+            $page.Error, $rows.Count, $page.Pages)
     }
 
     $now = [datetime]::UtcNow

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ======================================================================
+       SIAnalyzer.Core - the ported, host-agnostic SI Analyzer logic.
+       This is the C# port of the (now retired) PowerShell POC cores:
+       the read-only KQL guardrail, the snapshot diff + score-timeline math,
+       the grounded AI prompt assembly, and the prestaged-analysis library.
+       NO ASP.NET, NO Azure SDK here - pure logic so it is fully unit-testable
+       offline ("pure string + parsing logic, no network").
+       ====================================================================== -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SIAnalyzer.Core</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,10 @@
+@page
+@using SIAnalyzer.Web.Rendering
+@using SIAnalyzer.Web.Security
+@model SIAnalyzer.Web.Pages.ExecModel
+@{
+    Layout = null;
+    var html = ExecHtmlRenderer.RenderBody(Model.View, "/lib/chart.umd.js", standalone: false,
+                                           nonce: Model.HttpContext.GetCspNonce());
+}
+@Html.Raw(html)

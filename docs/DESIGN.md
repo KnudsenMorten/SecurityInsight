@@ -23,8 +23,7 @@ live in [TESTS.md](TESTS.md) — this doc only points at them.
 > **Source-of-truth note.** Several portions of this design (the per-field schema tables, the
 > Risk Analysis report KQL, and the per-engine column docs) are generated from authority files
 > in the repo by `asset-profiling-schema/tools/Build-SchemaDoc.ps1`,
-> `engine/risk-analysis/tools/Build-QueriesDoc.ps1` and
-> `engine/risk-analysis/tools/Build-RiskAnalysis.ps1`. When code disagrees with this doc, **code
+> `engine/risk-analysis/tools/Build-QueriesDoc.ps1`. When code disagrees with this doc, **code
 > wins** — the authority files (`*.schema.locked.json`, `RiskAnalysis_Queries_Locked.yaml`,
 > `privilege-tier-catalog.locked.json`) are the contract. This document describes the model;
 > re-run the generators after structural changes.
@@ -76,7 +75,7 @@ live in [TESTS.md](TESTS.md) — this doc only points at them.
 14. [Preview channel & release model](#preview-channel--release-model)
 15. [Operations & runbook](#operations--runbook)
 16. [Troubleshooting](#troubleshooting)
-17. [SI Analyzer (POC)](#si-analyzer-poc)
+17. [SI Analyzer (SIA) — hosted .NET web app](#si-analyzer-sia--hosted-net-web-app)
 18. [Publish layout — what ships vs stays internal](#publish-layout--what-ships-vs-stays-internal)
 
 ---
@@ -116,6 +115,7 @@ v2.2/
   engine/                         all engine code (do not edit unless fixing engine)
     asset-profiling/              profile pipeline + entry point
     risk-analysis/                RA engine + tools
+      _shared/RA-*.ps1            engine code dot-sourced by Invoke-RiskAnalysis.ps1 (audit #16)
   launcher/                       customer-facing entry points (one folder per engine)
 
   legacy/                         archived, do not use (asset-tagging, RA v2.1 yamls)
@@ -448,6 +448,26 @@ Two engine families ship in v2.2:
 | asset-profiling    | `engine/asset-profiling/Invoke-SIEngineRun.ps1 -Engine <name>` | `endpoint`, `identity`, `azure`, `publicip` |
 | risk-analysis      | `engine/risk-analysis/Invoke-RiskAnalysis.ps1`           | one — produces `RiskAnalysis_*_CL`     |
 
+**The RA engine is being split out of its single file (audit #16), and the rule for doing so is
+narrow.** A moved block must be (1) a **contiguous span**, (2) dot-sourced **at the exact position it
+occupied**, and (3) free of `$PSScriptRoot` / `$PSCommandPath` / `$MyInvocation`.
+
+Rules 1 and 2 together are what preserve behaviour, and they are why the audit's own phrasing —
+"split along the existing banner-comment seams" — is not safe as stated. Those seams interleave
+executable top-level statements with declarations (16 of them in the `FUNCTIONS` region alone). Move
+a seam's *functions* to a file dot-sourced somewhere else, and that interleaved code now runs at a
+different point in the load — silently, with no parse error. Keep the span contiguous and the
+dot-source in place, and the statements still execute in the same order relative to the same
+neighbours, so an interleaved assignment can travel with the block safely (`RA-AutoBucketing.ps1`
+carries `$script:AutoBucketConfirmedKey` for exactly this reason).
+
+🔒 **Never put `$PSScriptRoot`-dependent code in `_shared/`.** The engine derives `$siRoot` as
+`Split-Path -Parent (Split-Path -Parent $PSScriptRoot)`; inside a `_shared/` file that resolves one
+directory deeper and silently yields a different root. Three functions
+(`Get-WeightedFactorsConfig`, `Invoke-SISentinelLakeQuery`, `Save-RARenderedQuery`) stay in the main
+script for exactly this reason. `tests/Get-EngineFunctionInventory.ps1` reports which functions are
+pinned, and proves a move was byte-for-byte.
+
 The asset-profiling tree (`engine/asset-profiling/`) holds:
 
 ```
@@ -467,16 +487,26 @@ Risk Analysis (`engine/risk-analysis/`) is self-contained:
 risk-analysis/
   Invoke-RiskAnalysis.ps1           v2.2-local RA engine
   _shared/                          Ensure-Module, Ensure-SecurityInsightInfra, Send-SecurityInsightExportFile
-  _source/                          authoring sources — 5 *_Locked.yaml + 5 *_Detailed_Locked.yaml + 1 sample
   tools/
-    Build-RiskAnalysis.ps1          consolidator — emits RiskAnalysis_Queries_Locked.yaml
-    Build-QueriesDoc.ps1            auto-generates DOCS/risk-analysis-detection.md
+    Build-QueriesDoc.ps1            auto-generates DOCS/risk-analysis-detection.md FROM the catalog
     Fix-CollectionTimeWhere.ps1
   _samples/                         sample Excel + email PDFs
   README.md
 ```
 
-The RA engine reads from `risk-analysis-detection/` at run time; the consolidator in `tools/` is the **build-time** path that turns the five `_source/` yamls into one `_Locked.yaml` shipped artefact.
+🔒 **`risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml` IS the source of truth. It is
+hand-maintained, not generated — edit it directly.**
+
+**Audit #28 (2026-08-06) — `_source/` and `tools/Build-RiskAnalysis.ps1` were RETIRED and deleted.**
+This section used to describe a build-time path turning five `_source/` yamls into the shipped
+`_Locked.yaml`. That path had been dead for months: `_source/` and the consolidator went untouched
+since commit `536e1405` (the v2.2.0 flatten) while the catalog was edited continuously — cross-domain
+re-keys, scope trims, per-report hotfixes. Regenerating would have produced **264 reports instead of
+118**, dropped 57 shipped reports, added 203 that never shipped, and renamed the templates to
+`*_Bucket` — so the launcher's `RiskAnalysis_Summary` would not exist and the engine would **throw on
+every run**. Recover from git if ever needed:
+`git show 536e1405:SOLUTIONS/SecurityInsight/engine/risk-analysis/_source/`.
+A swap-in is now caught by `tests/pester/SI-OutputColumnUnion.Tests.ps1` ("audit #28").
 
 ### The four phases
 
@@ -500,6 +530,29 @@ The RA engine reads from `risk-analysis-detection/` at run time; the consolidato
 | OUTPUT    | `engine/asset-profiling/stages/Invoke-Output.ps1` | Sends each row to its `outputTo` targets (LA table, JSON, Excel, …) |
 
 The orchestrator entry point is **`engine/asset-profiling/Invoke-SIEngineRun.ps1`**, called with `-Engine endpoint|identity|azure|publicip`. Risk Analysis has its own entry point.
+
+#### Cross-source correlation — recognising ONE device across MDE / Exposure Graph / Entra
+
+`Invoke-Discover.ps1` runs a **second pass** after the name-based merge, whose whole job is to
+recognise that three sources are describing the same physical device. **The merge key is
+`AadDeviceId`** — the one identifier all three expose (`MDE_AadDeviceId`, `EG_AadDeviceId`,
+`ENTRA_AadDeviceId`).
+
+The rules, and each exists for a reason:
+
+| rule | why |
+|---|---|
+| Key is **lower-cased** before comparison | the three sources disagree on GUID casing |
+| The **zero GUID is skipped** | it is a placeholder, not an identity — merging on it would collapse unrelated devices into one |
+| A record whose sources carry **CONFLICTING** ids is **NOT merged on any of them** | `MDE=X` and `EG=Y` is a data-quality problem; merging would assert "same device" on contradictory evidence |
+| Two records with **wildly different names** sharing an id are **not collapsed** | an id collision from upstream corruption must not fuse two real devices |
+
+⚠️ **The outcome of all of this is currently INVISIBLE on a normal run (audit #27).** The counters —
+how many records were collapsed (`aadMergeCount`), how many refused for conflicting ids
+(`conflictSkipCount`), how many had no usable key — are logged through `Write-SIDiag`, which prints
+**only** when `$global:SI_Verbose` or `-Verbose` is set. **Correlation can therefore be failing across
+most of the estate while the run looks completely clean.** Treat correlation coverage as a
+data-quality metric to be reported every run, not as a debug detail.
 
 ### Detection rules
 
@@ -1709,7 +1762,15 @@ Cross-engine, multi-field weighting on basis-100 integers. **The engine's primar
 }
 ```
 
-Use cases: add a third axis (e.g. cost-centre — drop a new `{field,valueMap,default}` into `fields[]`, no code change); cap runaway multiplication (`maxMultiplier: 500`); switch to conservative additive (`combine: sum-of-deltas`); disable Layer 3 (omit the engine's section — engine reads `RiskFactor_Weight = 100`, so `RiskScoreTotal_Weighted == RiskScoreTotal`). After editing, re-run `engine/risk-analysis/tools/Build-RiskAnalysis.ps1` so the consolidator regenerates the `__WEIGHTED_FACTORS__` blocks inside report KQL.
+Use cases: add a third axis (e.g. cost-centre — drop a new `{field,valueMap,default}` into `fields[]`, no code change); cap runaway multiplication (`maxMultiplier: 500`); switch to conservative additive (`combine: sum-of-deltas`); disable Layer 3 (omit the engine's section — engine reads `RiskFactor_Weight = 100`, so `RiskScoreTotal_Weighted == RiskScoreTotal`).
+
+✅ **Nothing to rebuild after editing.** This used to say "re-run `Build-RiskAnalysis.ps1` so the
+consolidator regenerates the `__WEIGHTED_FACTORS__` blocks inside report KQL". That was **wrong even
+before the tool was retired (#28)**: the catalog ships the `//__WEIGHTED_FACTORS_BEGIN__` /
+`__END__` markers (120 of them) as a no-op default, and **the ENGINE substitutes the generated KQL
+chain at run time** from the customer JSON — `Invoke-RiskAnalysis.ps1:2430`, helpers at `:1254`. The
+JSON edit takes effect on the next run, with no build step. Following the old instruction would have
+rebuilt the whole catalog destructively.
 
 ### `riskFactorDetailedMapper` / `riskFactorProbabilityMapper`
 
@@ -1728,7 +1789,7 @@ Use cases: add a third axis (e.g. cost-centre — drop a new `{field,valueMap,de
 
 So this row, raw 18, surfaces in the Excel sort at **47** — ahead of un-amplified Critical-but-non-Restricted assets.
 
-Consumers: `engine/risk-analysis/Invoke-RiskAnalysis.ps1` (lines 2231-2409 build KQL, 3043-3145 apply Layer 3); `tools/Build-RiskAnalysis.ps1` (regenerates `__WEIGHTED_FACTORS__` after the JSON changes); `risk-analysis-detection/riskscore.index.custom.csv` (the Layer-1 lookup table).
+Consumers: `engine/risk-analysis/Invoke-RiskAnalysis.ps1` (lines 2231-2409 build KQL, 3043-3145 apply Layer 3, `:2430` substitutes the `__WEIGHTED_FACTORS__` block **at run time**); `risk-analysis-detection/riskscore.index.custom.csv` (the Layer-1 lookup table). *(The retired `Build-RiskAnalysis.ps1` used to be listed here as a consumer — see #28; the substitution is entirely a run-time step, so there is no build consumer.)*
 
 ---
 
@@ -1776,7 +1837,7 @@ Every entry maps to ONE Excel sheet / LA write. All fields required unless flagg
 | `RiskScoreOutputName` | string | output naming | Excel column for the raw `RiskScoreTotal`. |
 | `CriticalityTierLevelScope` | `[string,...]` | scoring filter | Allowed tier labels. Rows outside this set are dropped. |
 | `SecuritySeverityScope` | `[string,...]` | scoring filter | Allowed severity labels. Rows outside this set are dropped. |
-| `OutputPropertyOrder` | `[string,...]` | strict-mode column projection (1844) | Canonical 21-col order from `risk-analysis.schema.locked.json` plus report-specific extras (CMDB, EG, …). Engine emits exactly these columns in exactly this order; extras appended after the 21 canonical columns. |
+| `OutputPropertyOrder` | `[string,...]` | strict-mode column projection (1844) | Canonical 21-col order from `risk-analysis.schema.locked.json` plus report-specific extras (CMDB, EG, …). Engine emits exactly these columns in exactly this order; extras appended after the 21 canonical columns. ⚠️ **A column NOT listed here is not guaranteed to be exported at all — see "How a column reaches the .xlsx" below (audit #26). Declare anything you need.** |
 | `SortBy` | `[string,...]` | Excel sort | Optional. Sort key(s) — prefer `RiskScoreTotal_Weighted`. |
 | `ReportQuery` | `[string]` (one-element list, multi-line KQL) | submitted via `Invoke-GraphHuntingQuery` | The KQL itself. Engine auto-routes pure-LA queries to Log Analytics; mixed XDR queries to advanced hunting. |
 
@@ -1794,7 +1855,8 @@ enforced there:
   wraps any such column appearing as a **bare group key** in `tostring(…)`. It is list-driven
   (never touches numeric columns such as `RiskScore*` / `*Tier`, so ordering and scoring stay
   numeric), idempotent, and skips alias-form keys (`cmdbX = ""`) and already-cast keys. This
-  mirrors the build-time `tostring(cmdbName)` cast in `Build-RiskAnalysis.ps1`, so the runtime
+  mirrors the `tostring(cmdbName)` cast baked into the catalog's KQL (originally emitted by the
+  now-retired `Build-RiskAnalysis.ps1`, #28 — the cast lives in the catalog and stays), so the runtime
   summarize path cannot regress relative to the built template. It covers the PublicIP reports
   and the cross-domain Attack-Path Summary reports, all of which group by `cmdb*`.
 - **Deferred multi-path fallback logging.** When the engine tries several routes to the same
@@ -1887,7 +1949,7 @@ Every row that survives the report's `Scope` filters goes through:
 2. **Layer 2 — additive risk-factor adjustment** (lines 3117-3119): `consAdj = consBase + RiskFactor_Consequence` (today always 0); `probAdj = probBase + RiskFactor_Probability` (count of true risk-factor bools); `RiskScoreTotal = consAdj * probAdj`.
 3. **Layer 3 — multiplicative business multiplier** (lines 3122-3144): `RiskScoreTotal_Weighted = floor(RiskScoreTotal * RiskFactor_Weight / 100.0)`, where `RiskFactor_Weight` is a basis-100 integer from the weighted-factor JSON.
 
-Excel sort uses `RiskScoreTotal_Weighted` (preferred) — `Invoke-RiskAnalysis.ps1` lines 5289-5297. Consolidator that injects `__WEIGHTED_FACTORS__` blocks into report KQL: `engine/risk-analysis/tools/Build-RiskAnalysis.ps1`.
+Excel sort uses `RiskScoreTotal_Weighted` (preferred) — `Invoke-RiskAnalysis.ps1` lines 5289-5297. The `__WEIGHTED_FACTORS__` blocks are substituted into report KQL **at run time** by the engine (`Invoke-RiskAnalysis.ps1:2430`), not by a build step.
 ---
 
 ## Risk Analysis report catalog (model & inventory)
@@ -1895,12 +1957,13 @@ Excel sort uses `RiskScoreTotal_Weighted` (preferred) — `Invoke-RiskAnalysis.p
 The full per-report catalog (every report's purpose, mode, severity/tier scope, source tables,
 output columns, bucketing flag, and full KQL) is **auto-generated** from the single authority file
 `risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml` by
-`engine/risk-analysis/tools/Build-QueriesDoc.ps1`. That YAML is itself consolidated from the
-authoring sources under `engine/risk-analysis/_source/` (five `*_Locked.yaml` Summary sources +
-five `*_Detailed_Locked.yaml` sources + one sample) by `engine/risk-analysis/tools/Build-RiskAnalysis.ps1`,
-which also injects the `__WEIGHTED_FACTORS__` and `__BUCKET_FILTER__` placeholders. This section
-documents the **model** (how the catalog is organised and how to read a report block); regenerate
-the verbatim catalog from the YAML rather than hand-maintaining it.
+`engine/risk-analysis/tools/Build-QueriesDoc.ps1`. **That YAML is the authority itself — it is
+hand-maintained, not consolidated from anything** (audit #28: `_source/` +
+`Build-RiskAnalysis.ps1` were retired and deleted 2026-08-06; regenerating would have replaced the
+118-report catalog with an incompatible 264-report one and broken every run). The
+`__WEIGHTED_FACTORS__` and `__BUCKET_FILTER__` placeholders live in the catalog and are substituted
+by the **engine at run time**, not at build time. This section documents the **model** — how the
+catalog is organised and how to read a report block.
 
 ### Catalog shape
 
@@ -2000,6 +2063,59 @@ These become first-class columns in the report row, alongside `RiskFactor_*` and
 - `RecommendedAction` is short (≤120 chars). Long remediation steps go in `MoreDetails`.
 - `MoreDetails` collects all per-row URLs (raw URL columns, portal links, MITRE links) into one cell, one URL per line (`\r\n`-separated, no label prefix). Deduped, capped at 25 URLs / 4000 chars to stay Excel-readable.
 - `MITRE_*` are semicolon-lists same as `RiskFactor_*_Detailed` — for grep/filter consistency.
+
+#### `ImpactedAssetCount` vs `ImpactedAssetsList` — currently NOT the same population (audit #25)
+
+A reader seeing a number beside a list assumes the number counts that list. **Today it does not.**
+Every Summary report computes them independently, over **different columns**:
+
+```kql
+| summarize
+    ImpactedAssetCount = dcount(DeviceKey),          // distinct DEVICE KEYS, and dcount is ESTIMATED
+    ImpactedAssetsList = make_set(AssetName)         // distinct ASSET NAMES, exact
+```
+
+They diverge **by construction**, not by rounding: two DeviceKeys sharing one AssetName, or a device
+whose AssetName is null (`make_set` drops nulls), gives count > list; inconsistent name casing gives
+list > count. Kusto's `dcount` is HyperLogLog-**estimated** on top of that, so it need not be exact
+even over one column.
+
+🔒 **Intended contract, for whoever fixes it:** the count must be **derived from the set that is
+displayed** — `ImpactedAssetCount = array_length(ImpactedAssetsList)` — so the two cannot disagree.
+✏️ **Corrected 2026-08-06 (#28): fix it in `risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml`
+directly.** This used to say the YAML is *generated* and the fix belongs in `_source/` — it is not,
+and `_source/` has been retired and deleted. Two practical notes from re-verification: the count and
+the list sit in the **same `summarize`**, so the fix is a FOLLOWING `| extend`, not an in-place swap;
+and `Endpoint_ActiveCompromise_Detected_Summary` has **no `ImpactedAssetsList` at all**
+(`dcount(PrimaryEntityId)` only), so `array_length` cannot apply there — decide that one separately.
+
+#### How a column reaches the .xlsx — and how it silently does not (audit #26)
+
+⚠️ **Emitting a column from KQL is NOT enough to get it into the output.** The export column list is
+built in `Invoke-RiskAnalysis.ps1` (~3319) and everything outside it is discarded by a single
+`Select-Object -Property $DesiredColumns`, which feeds **all three sinks at once — the .xlsx, the
+JSON sibling and the Log Analytics ingest.** The list is assembled from three sources:
+
+1. **`OutputPropertyOrder`** from the report's YAML — *declared*, therefore reliable. A declared
+   column that is missing on a row still appears, empty.
+2. **`$ComputedCols`** — engine-added columns (scores, `AssetDetectedInReportName`, …).
+3. **Everything else discovered from `$RiskScoreArray | Select-Object -First 1`** — i.e. **the FIRST
+   ROW ONLY**.
+
+🔴 **Step 3 is why columns disappear.** Advanced-Hunting rows are rebuilt from
+`$r.AdditionalProperties.Keys`, and that bag **omits null-valued columns**. So a column that happens
+to be empty on the first row is simply *absent from that object*, never enters `$DesiredColumns`, and
+is then dropped for **every** row of that report — from Excel, JSON and LA together. The loss is
+intermittent and data-dependent, which is exactly why it reads as "columns sometimes go missing"
+rather than as a broken report.
+
+**Consequence for report authors:** `MoreDetails` is declared in `OutputPropertyOrder` (120 uses) and
+is safe. `RemediationOptions`, `RecommendedAction` and `Recommendation` are **declared nowhere**, so
+they survive only when the first row happens to have a value. 🔒 **If a column matters, DECLARE IT in
+`OutputPropertyOrder` — do not rely on discovery.**
+
+**Trace columns** (`CollectionTime`, `SolutionVersion`, `TraceName`, `TraceID`) are deliberately kept
+out of every YAML `OutputPropertyOrder` and pinned last by the engine.
 
 ### B. New tokens to add to existing `RiskFactor_*_Detailed`
 
@@ -3303,272 +3419,12 @@ These run-summary log lines double as troubleshooting entry points:
 - **MDE-discovered devices with empty `Hostname`/`OsPlatform`/`MachineGroup`** → MDE pass-through branch ordering regressed; Stage Collect must hit the `elseif ($a.MDE_DeviceId)` branch before the Entra-device fallback.
 ---
 
-## SI Analyzer (POC)
-
-> **Status: proof-of-concept, not live-verified.** This section describes how the SI Analyzer POC is
-> *built*; it is not a delivered feature and is absent from FEATURES.md. The remaining scope and the
-> `◻`/`🟡` backlog live in [REQUIREMENTS.md](REQUIREMENTS.md) "SI Analyzer". The live-workspace +
-> AI-on run against a real RA snapshot is the release gate before any of it becomes "delivered".
-
-The **SecurityInsight Analyzer (SIA)** is a thin GUI layer on top of the Risk-Analysis (RA) data
-(referred to as "SIA" or "the SI Analyzer" throughout). It gives **analysts** a
-plain-language worklist that explains the top risk rows (the KQL facts plus an AI verdict) and gives
-**management** a "are we getting safer?" view (risk score over time, what's new/closed, an AI exec
-summary). It adds no new data plane and no new AI infrastructure — it reuses what SecurityInsight
-already has, read-only.
-
-### Shape
-
-A self-contained, PIM-Manager-style local web app: a PowerShell host script serves a single-page
-HTML app and a small JSON API on localhost.
-
-```
-analyzer/
-  Open-SiAnalyzer.ps1        host: serves the SPA + JSON API on a random localhost port;
-                             -UseDemoData (offline), -NoServer (render-to-file), -SelfTest (cores)
-  si-analyzer.html           single-page app (worklist + management surfaces)
-  lib/
-    SiAnalyzer-Data.ps1      data plane — runs read-only KQL via the SI auth session
-    SiAnalyzer-Kql.ps1       prestaged-analysis + builder KQL; the read-only guardrail
-    SiAnalyzer-Diff.ps1      snapshot diff (new/closed/regressed) + score timeline
-    SiAnalyzer-Ai.ps1        grounded, AI-optional verdict / exec-summary assembly
-  seed/
-    demo-snapshot.json       demo/seed data for the offline fallback
-```
-
-### Data plane — reuse, read-only
-
-The Analyzer reads the RA outputs already in the customer's Log Analytics workspace via
-`Invoke-AzOperationalInsightsQuery` over the **existing SI auth session** (`Connect-AzAccount`) — the
-same token path the engines use. It does not introduce a new connector. It is **snapshot-correct**:
-analyst views key on `where CollectionTime == max(CollectionTime)` so they always read one coherent
-latest snapshot; the management timeline/diff intentionally span multiple `CollectionTime` snapshots.
-
-When no workspace is reachable (or `-UseDemoData`), it falls back to the seeded `demo-snapshot.json`
-so the GUI and the cores can be exercised entirely offline.
-
-### Read-only KQL guardrail
-
-Every query the Analyzer runs — prestaged, builder-generated, or AI-composed from an ad-hoc prompt —
-is first vetted by a read-only guardrail (`Test-SiKqlReadOnly`). It rejects mutating/control commands
-(`.set` / `.create` / `.append` / `.ingest` / `.drop` / `.purge`), `externaldata`, cross-cluster /
-cross-database access (`cluster()` / `database()`), any table outside an allow-list, and ungrounded or
-empty queries; it also reports the tables a query touched. This keeps the engine's read-only invariant
-intact even for AI-generated KQL (the one deliberate write exception — governance/exemption sync — is
-backlog, see REQUIREMENTS.md and is not part of the analysis path).
-
-### AI — grounded and AI-optional
-
-AI reuses SI's existing Azure OpenAI configuration (`$global:OpenAI_*`, sourced from
-`custom.ps1` / Key Vault — the same config the privilege-tier-classifier and RA summaries use). It is
-**grounded**: the model is always handed the actual KQL result rows as context and asked to explain
-*those rows*, so a verdict or summary traces back to real findings rather than inventing data. It is
-**fail-soft**: if no OpenAI config is present the Analyzer detects this, logs that AI is unavailable,
-and degrades to KQL facts plus a templated summary — it never hard-fails.
-
-### Surfaces
-
-- **Analyst surface** — a top-100 worklist (highest `RiskScoreTotal` in the latest snapshot), each row
-  expandable to the *why* (RiskFactors / CVSS / tier / exposure, by KQL), the blast radius
-  (ExposureGraph reach to T0/T1), and a plain-language AI verdict; a library of one-click prestaged
-  analyses (each a vetted read-only KQL + an explanation template); and an ad-hoc prompt mode where
-  free text is composed into guardrail-checked read-only KQL, run, and explained.
-- **Management surface** — a risk-score timeline across snapshots, a new/closed/open breakdown from the
-  snapshot diff, and an AI-written executive summary — all driven by the diff + timeline cores in
-  `SiAnalyzer-Diff.ps1`, which work without AI (AI only adds the narrative).
-
-Test coverage for the POC (core unit tests, headless render check, live server smoke, offline
-self-test) is documented in [TESTS.md](TESTS.md) §9.
-
-### Hosted, executive-grade Analyzer (ASP.NET Core) — integration design
-
-> **Status: built, not live-verified.** The hosted app lives at `analyzer-web/`. It does not
-> replace the PowerShell POC at `analyzer/` (kept as the prototype + the cores' reference). The
-> hosted run against the real internal workspace, AI-on, behind Entra sign-in, is the release gate
-> (TESTS.md §9.7) before any of this moves to FEATURES.md.
-
-**Why ASP.NET Core (validated).** The audience is non-technical executives, so hosting is required
-(an exec opens a URL and signs in with Entra — not a localhost PowerShell launcher). The proven
-CEH stack is exactly that shape (ASP.NET Core + Entra/Easy Auth + Managed Identity + EF/config +
-Dockerfile + a `deploy-app.ps1`/slot pattern), so SIA **reuses CEH's patterns** rather than
-inventing a host. The PowerShell POC's *logic* is portable and worth keeping; its *host* (a
-localhost `HttpListener` with a per-session token + heartbeat self-terminate) is a desktop
-convenience, not a delivery vehicle. So the POC cores are **ported** to C# (not wrapped) and the
-host is replaced. No decisive reason against ASP.NET surfaced.
-
-**Project shape** (`analyzer-web/`):
-```
-src/Sia.Core/      host-agnostic ported logic (pure, fully unit-testable):
-                     Kql/KqlGuardrail.cs      <- Test-SiKqlReadOnly  (read-only guardrail)
-                     Kql/KqlBuilders.cs       <- snapshot-correct builders
-                     Kql/PrestagedLibrary.cs  <- Get-SiPrestagedAnalyses (+ a "why did our score change?" analysis)
-                     Analysis/SnapshotDiff.cs <- Get-SiSnapshotDiff + Get-SiScoreTimeline
-                     Ai/GroundedPrompt.cs     <- grounded prompt assembly + templated fail-soft fallback
-                     Exec/ExecDashboard.cs    <- the board-ready exec rollup (headline/donuts/quick-wins/coverage/forecast)
-                     Exec/ExecHeadline.cs     <- the one-sentence "if you read one thing" verdict (band + direction + actions-to-next-band)
-                     Exec/FrameworkLens.cs    <- control-area rollup (NIST CSF / CIS Controls / ISO 27001)
-                     Exec/AgingAnalysis.cs    <- time-open / accountability rollup from the snapshot history
-                     Exec/RiskConcentration.cs <- risk-by-area breakdown (share + direction + top contributor)
-                     Exec/TopMovers.cs        <- trends & top movers (biggest improvements/increases by area/severity/tier)
-                     Exec/BusinessImpact.cs   <- "so what" business-impact framing (data exposure / downtime / compliance / reputation)
-                     Exec/Drilldown.cs        <- clean-by-default, drill-down on demand (grounded evidence behind any number)
-                     Exec/RemediationPlan.cs  <- prioritised "next N actions" ranked by risk-removed-per-effort (cumulative score + band crossing)
-                     Exec/Glossary.cs         <- plain-language "what these terms mean" layer (grounded examples, honest on absent terms)
-                     Exec/OrgCoaching.cs      <- missing-processes / org coaching: maturity gaps inferred from finding PATTERNS (process recommendations, not tickets)
-                     Exec/MaturityScorecard.cs <- maturity scorecard + roadmap: rule-based 0-100 rating per leadership dimension (Tiering / Privileged Access / Identity Hygiene / Exposure Management / Visibility & Coverage / Operating Discipline) + a prioritised "mature here next" roadmap
-                     Analysis/PeriodComparison.cs <- period-over-period baseline ("since last board meeting")
-                     Exec/ExecEmail.cs        <- the grounded exec-summary EMAIL message (HTML + plain-text) renderer
-                     Exec/EmailCadence.cs     <- pure cadence scheduling maths (daily/weekly/monthly, is-due/next-fire)
-                     Config/WorkspaceResolver.cs <- internal-env-is-default-base resolution
-src/Sia.Web/       ASP.NET Core app: exec + board-deck + analyst Razor pages, JSON API, /mcp endpoint,
-                     Rendering/ExecHtmlRenderer.cs  <- the interactive exec dashboard (charts, drill-downs)
-                     Rendering/BoardDeckRenderer.cs <- the clean one-page print/PDF board-deck export handout
-                     Services/ExecEmailService.cs   <- composes the grounded exec view -> email -> sender (fail-soft)
-                     Services/ExecEmailSender.cs    <- IExecEmailSender + SMTP transport (config-driven, fail-soft)
-                     Services/ScheduledExecEmailHostedService.cs <- in-host scheduler (BackgroundService) on the cadence
-                     the read-only Log-Analytics data plane (MI) + demo fallback, the Azure OpenAI service
-tools/Sia.Preview/ renders the exec dashboard + the board-deck handout to static preview HTML (committed at analyzer-web/preview/)
-tests/Sia.Tests/   xunit offline suite (TESTS.md §9.7)
-deploy/            Dockerfile + Deploy-SiaAnalyzer.ps1 + README-DEPLOY.md
-```
-
-**Data plane** — Azure Monitor Query SDK (`LogsQueryClient`) against the internal SI workspace,
-authenticated with the app's **Managed Identity** granted **Log Analytics Reader**, **READ-ONLY**.
-The SDK only queries; every KQL it runs is first vetted by the ported guardrail, so the SI v2.2
-read-only invariant holds end-to-end. This is the hosted equivalent of the POC's
-`Invoke-AzOperationalInsightsQuery` path, switched from an interactive `Connect-AzAccount` session
-to MI. The **internal env is the default base** (`WorkspaceResolver`): a configured workspace is
-used live; demo data is the explicit fallback only.
-
-**Auth** — **Entra / Easy Auth** is enforced by the platform in front of the container (Container
-Apps built-in auth or App Service Easy Auth). The app trusts the authenticated principal the
-platform injects; no anonymous access to security findings.
-
-**AI** — Azure OpenAI via the Azure OpenAI SDK, **grounded strictly in the returned KQL rows**
-(the prompt embeds the actual rows + a no-invention contract), **AI-on by default** in the hosted
-internal env (endpoint + deployment configured; MI or key auth), and **fail-soft** (degrades to the
-grounded templated summary if OpenAI is unreachable — never hard-fails). Projections/forecasts and
-benchmarks are clearly labelled; the AI never supplies a number — every figure on the exec surface
-is computed from the rows.
-
-**Surfaces** — the **executive management view is the default landing surface** (`/` → `/exec`):
-plain-language, chart-led; it leads with a **one-sentence headline verdict** (the "if you read one
-thing" line at the very top - the posture band + its direction + how many of the actual
-highest-scoring findings would have to be remediated to cross into the next-better band, e.g.
-"Your security posture is Elevated and improving; 2 actions would move you to Moderate"; the count is
-derived by walking the real rows highest-first, never guessed, and states a verdict + an action count
-only - no invented cost/probability/date; AI narrates on top, fail-soft). Below it: a headline
-risk-score dial + direction, a trend line with a **labelled
-forecast** point, severity/area donuts, top risks + recent wins, a quick-wins/ROI table with
-projected score drops, a **framework lens** that rolls the posture into the control areas execs
-already report on (NIST CSF / CIS Controls / ISO 27001 — each finding mapped once, the area scores
-partition the headline number), an **aging / time-open** accountability panel (how long the top
-risks have been open, derived from the snapshot history, with average/longest-open + carried-over vs
-new counts), a **risk-by-area concentration** panel (where risk concentrates - identity vs endpoint
-vs cloud vs internet-facing - with each area's share of the total, period direction and biggest
-contributor, as a "where to invest" steer), a **trends & top movers** panel (which areas improved the
-most and which got worse the most since the baseline snapshot - the board "what moved?" question - with
-a by-area / by-severity / by-tier breakdown; each number is the change in summed risk score for that
-group, grounded in the data; honest "only one snapshot so far" when there is nothing to compare against),
-a **period-over-period "since last board meeting"** panel
-(a configurable look-back - previous / month / quarter / half-year / year - that picks a REAL baseline
-snapshot and reports new/resolved/worse/improved since it, with a `?period=` selector), a **"so what"
-business-impact panel** (each top risk re-stated as a board-level consequence - data exposure /
-downtime / compliance / reputation - with the grounded driver behind it, plus a per-category rollup;
-the consequence KIND only, never an invented cost or likelihood), a **clean-by-default drill-down**
-(a collapsed "show me the detail behind the score" reveal of the actual findings that SUM to the
-headline number - no black-box claims; per-slice drill-downs - overall / area / severity / tier - are
-served on demand from `/api/drilldown`), a **prioritised remediation plan** ("your next moves" - the
-next actions ranked by risk-removed-per-effort: each action groups all of one asset's findings into a
-single fix with its projected score drop (the exact amount the headline falls if the asset is fully
-remediated), an effort estimate (Low/Medium/High, derived from the asset's own grounded drivers + tier,
-explicitly an estimate - never hours/cost), a plain recommendation, and the running cumulative score +
-band after doing it; a summary line states where the shown plan lands and how many actions reach the
-next-better band; served on demand from `/api/remediation`), a **plain-language glossary** (a clean,
-collapsed-by-default "what do these terms mean?" reveal that decodes every security term on the page -
-risk score, severity, criticality tier, crown jewel, exposure, vulnerability/CVE, stale privileged
-account, onboarding gap, remediation, snapshot - in one non-technical sentence each, with a GROUNDED
-example pulled from a real row where the concept is present and an honest "not seen in your current
-data" note where it is absent; present-now terms first, no fabricated examples; served on demand from
-`/api/glossary` and kept off the one-page board deck), a **"processes worth strengthening" org-coaching
-panel** (the leadership-level maturity / process gaps the finding PATTERNS imply - privileged-access
-reviews, internet-exposure reviews, patch & lifecycle cadence, asset onboarding/visibility, asset
-ownership, crown-jewel protection - each surfaced ONLY when real rows cross a small evidence threshold
-so a one-off finding never becomes a "missing process"; the affected-asset count + the example asset
-names come straight from the rows and the recommendation is framed as a recurring process/behaviour,
-never a per-asset ticket; honest "the findings look like one-offs" when no systemic gap stands out;
-served on demand from `/api/coaching` and carried as a compact block on the board deck), a **maturity
-scorecard + roadmap** (a "where do we need to mature?" panel that rolls the recurring drift drivers up
-into a leader-facing capability rating across six fixed dimensions - Tiering, Privileged Access,
-Identity Hygiene, Exposure Management, Visibility & Coverage, Operating Discipline - each a rule-based
-0-100 maturity score that is the SHARE of in-scope assets WITHOUT a weakness signal in that discipline,
-with a plain band (Initial/Developing/Defined/Managed), the weak-asset count over the in-scope
-denominator, and grounded example asset names; a dimension with no in-scope asset is honestly shown as
-"not enough data" rather than given a fabricated score, and a prioritised "mature here next" roadmap
-lists only the below-bar dimensions with real evidence - most room-to-improve first - or honestly says
-nothing stands out; pure grounded aggregation, no AI, no invented numbers; served on demand from
-`/api/maturity` and kept off the one-page board deck to keep it focused), a coverage &
-confidence banner, period-over-period KPIs), **mobile-friendly +
-accessible + print/PDF-friendly**, with **no KQL/jargon**. The **analyst surface** (`/analyst`) is
-secondary: the prompt box (exec/analyst tone), the prestaged analyses, a guarded raw-KQL box, and
-drill-down. Charts use a **self-contained Chart.js** (bundled under `wwwroot/lib`, no CDN).
-
-**MCP server** — `POST /mcp` is a minimal read-only JSON-RPC 2.0 MCP endpoint exposing tools that
-mirror the prestaged analyses + a **guarded query** + snapshot-diff / score-timeline /
-**exec-headline** (the one-sentence verdict + band + direction + actions-to-next-band) / exec-summary /
-**period-comparison** (since a chosen reporting period) / **risk-by-area** (concentration breakdown) /
-**top_movers** (biggest improvements/increases by area/severity/tier since the baseline; honest when only
-one snapshot exists) /
-**business_impact** (the "so what" consequences + category rollup) / **drilldown** (the grounded
-evidence behind a number - overall / domain / severity / tier) / **remediation_plan** (the prioritised
-"next N actions" ranked by risk-removed-per-effort - projected drop + effort + cumulative score + band
-crossing) / **glossary** (the plain-language "what these terms mean" decoder - each term defined for a
-non-technical reader with a grounded example where present and an honest "not in your current data" note
-where absent) / **org_coaching** (the missing-processes / maturity gaps the finding patterns imply -
-each a leadership theme + a process-style recommendation + the affected-asset count + grounded example
-assets; honest empty result when no systemic gap stands out) / **maturity_scorecard** (the rule-based
-0-100 maturity rating + band per leadership dimension - Tiering / Privileged Access / Identity Hygiene /
-Exposure Management / Visibility & Coverage / Operating Discipline - with the weak-asset count, the
-in-scope denominator, grounded example assets and the "mature here next" move; dimensions with no
-in-scope asset reported as "not enough data"; plus the prioritised roadmap, empty when nothing stands
-out) / **send_exec_summary_email** (trigger
-the grounded exec-summary email to the configured recipients now; fail-soft, read-only data plane).
-Every query tool routes through the **same guardrail**; there are **no write tools** (the email tool
-only reads the exec view + sends the digest); it is behind the same Easy Auth as the UI.
-
-**Hosting / export** — preferred host is **Azure Container Apps** (private ingress + MI) in the
-internal env; App Service *for Containers* also works. The exec dashboard is **print/PDF-friendly**
-(a "Print / Save as PDF" action), and a dedicated **board-deck export** (`/board`, linked from the
-exec view; `?period=` honoured) renders a **clean single-page handout** from the same grounded exec
-view — the headline verdict, score+band, direction/period KPIs, top risks, recent wins, where risk
-concentrates, the business-consequence KINDS, the recommended next actions and the "processes worth
-strengthening" org-coaching gaps — in a light, print-first,
-page-break-safe, self-contained theme (no charts/JS, inline CSS, no CDN) so "Print / Save as PDF"
-yields a tidy one-pager. `GET /api/board` returns the same handout as HTML so an emailer can
-attach/inline it.
-
-**Scheduled exec-summary email** — a send-hook that delivers the grounded exec summary on a cadence
-"so the CIO gets it without opening the tool". `ExecEmailService` builds the SAME grounded exec view
-the dashboard + board deck use (AI-narrated when AI is on, templated when off), `ExecEmailRenderer`
-(Core) turns it into an email message — subject + inline-CSS, table-based HTML body (mail-client-safe)
-+ a plain-text twin — leading with the one-sentence verdict, the score/band badge, the period KPIs,
-the top risks, the recommended actions, and (only when configured) a **link to the full board deck**.
-Every figure is the same grounded number; consequence KIND only, no invented cost/likelihood. Cadence
-is pure, testable maths (`EmailCadenceScheduler`: daily/weekly/monthly + send-hour, is-due/next-fire);
-the in-host `ScheduledExecEmailHostedService` (a `BackgroundService`) anchors its baseline at startup
-(no spam-on-deploy) and fires at the next genuine boundary. Everything is **fail-soft**: with no
-recipients or no SMTP transport it renders but never sends or crashes. A manual **"send now"** trigger
-(`POST /api/email/send`), an HTML **preview** (`GET /api/email/preview`), and the
-`send_exec_summary_email` MCP tool all funnel through the same service. The SMTP transport is
-config-driven (`Sia:Email` section — recipients, cadence, send-hour, period, base URL, org label,
-SMTP host/port/ssl/user/password/from); the host/from are operator-completed (Key-Vault-backed app
-settings in the hosted env), and the transport is swappable for a Graph sender without touching the
-orchestration. Deploy = `deploy/Deploy-SiaAnalyzer.ps1` (`az acr build` + `az containerapp update`);
-the MI grant + Easy Auth commands are in `deploy/README-DEPLOY.md`.
-
-**Dimension / guardrail contract** (unchanged from the POC, now shared by every surface incl. MCP):
-read-only over the canonical SI table allow-list only; no control commands / external / cross-cluster;
-snapshot-correct (`max(CollectionTime)`); grounded AI; AI-optional/fail-soft.
+> **SIA's design lives in THIS doc**, in the chapter *"SI Analyzer (SIA) — hosted .NET web app"* at
+> the end of the file. SIA is a separate product (a central, hosted ASP.NET Core app behind Entra SSO
+> on its own Azure infra, modeled on CEH — not a SecurityInsight PowerShell engine), but it shares
+> this ONE doc set. **There is no `analyzer-web/docs/` — it was merged here and deleted 2026-08-05**
+> (operator directive: one doc set, same structure as CEH). Everything above this line covers the
+> SecurityInsight ENGINES.
 
 ---
 
@@ -3630,3 +3486,612 @@ pre-publish gate (`RepoHygiene` check) fails the build if any customer-only/secr
 *Real environment values (engine SPN appId, certificate thumbprint, tenant/subscription IDs,
 workspace/RG/Key-Vault names) live only under `internal/` — see `internal/ENGINE-IDENTITY.md`,
 which is stripped from every public publish.*
+
+## SI Analyzer (SIA) — hosted .NET web app
+
+> Merged here 2026-08-05 from the former `analyzer-web/docs/DESIGN.md`. SIA is a recently added
+> **extension** of SecurityInsight (ASP.NET Core, `analyzer-web/SIAnalyzer.sln`, added 2026-06-17) —
+> **not the main program**: the PowerShell engines documented above are, and SIA reads their
+> Risk-Analysis output. It shares this ONE doc set — there is no second DESIGN/FEATURES/TESTS
+> anywhere under `analyzer-web/`, and that folder holds code only.
+
+### 1. What SIA is
+
+The **SecurityInsight Analyzer (SIA)** is an executive-grade, **hosted** analyzer over the
+SecurityInsight Risk-Analysis (RA) data. It gives **executives** a plain-language "are we getting
+safer?" view (risk score over time, what's new/closed, an AI exec summary + recommendations) and gives
+**analysts** a worklist that explains the top risk rows (the KQL facts plus an AI verdict). It adds no
+new data plane and no new AI infrastructure — it reuses what SecurityInsight already has, read-only.
+
+SIA is a **separate solution on its own dedicated Azure infrastructure: a central, hosted .NET web app
+(ASP.NET Core), behind Entra SSO, modeled on CEH.** The earlier PowerShell/localhost POC is **retired**
+(a non-technical exec cannot run a script; the timeline/AI/exec functionality demands a real .NET app).
+Its proven logic — the read-only KQL guardrail, the snapshot diff + score timeline, the grounded AI
+prompts — was **ported to C#** and lives in `SIAnalyzer.Core`. Only `../analyzer/seed/demo-snapshot.json`
+survives, as the .NET app's demo-fallback seed.
+
+The UI **matches the PIM Manager** (same blue `#0969da` colour scheme, light layout, and a tab-strip menu
+with a blue active-underline) so SIA reads as a sibling product; the exec/board/analyst/governance surfaces
+share one chrome (`ExecHtmlRenderer.NavChrome` + `ThemeCss`). It is mobile-first (~360px) + accessible —
+see REQUIREMENTS.md Phases 5/6 for the (still-backlog-until-hosted-gate) status.
+
+### 2. Project shape (`analyzer-web/`)
+
+```
+analyzer-web/
+  SIAnalyzer.sln
+  Directory.Build.props          dll-only across every project (UseAppHost=false; Defender ASR safe)
+  src/SIAnalyzer.Core/                  host-agnostic ported logic (pure, fully unit-testable):
+    Kql/KqlGuardrail.cs            read-only guardrail (Test-SiKqlReadOnly)
+    Kql/KqlBuilders.cs             snapshot-correct query builders
+    Kql/PrestagedLibrary.cs        the prestaged analyses (+ a "why did our score change?" analysis)
+    Analysis/SnapshotDiff.cs       snapshot diff + score timeline
+    Analysis/PeriodComparison.cs   period-over-period baseline ("since last board meeting")
+    Ai/GroundedPrompt.cs           grounded prompt assembly + templated fail-soft fallback
+    Exec/ExecDashboard.cs          the board-ready exec rollup (headline/donuts/quick-wins/coverage/forecast)
+    Exec/ExecHeadline.cs           the one-sentence "if you read one thing" verdict
+    Exec/FrameworkLens.cs          control-area rollup (NIST CSF / CIS Controls / ISO 27001)
+    Exec/AgingAnalysis.cs          time-open / accountability from the snapshot history
+    Exec/RiskConcentration.cs      risk-by-area breakdown (share + direction + top contributor)
+    Exec/TopMovers.cs              trends & top movers (biggest improvements/increases by area/severity/tier)
+    Exec/BusinessImpact.cs         "so what" business-impact framing
+    Exec/Drilldown.cs              clean-by-default, drill-down-on-demand (grounded evidence behind a number)
+    Exec/RemediationPlan.cs        prioritised "next N actions" ranked by risk-removed-per-effort
+    Exec/Glossary.cs               plain-language "what these terms mean" layer (grounded examples)
+    Exec/OrgCoaching.cs            missing-processes / org coaching (maturity gaps from finding patterns)
+    Exec/MaturityScorecard.cs      maturity scorecard + roadmap (rule-based 0-100 per leadership dimension)
+    Exec/ExecEmail.cs              the grounded exec-summary EMAIL renderer (HTML + plain-text)
+    Exec/EmailCadence.cs           pure cadence scheduling maths (daily/weekly/monthly, is-due/next-fire)
+    Configuration/WorkspaceResolver.cs  internal-env-is-default-base resolution
+    Governance/                    the ONLY write path: rules (store) + register + audit + expiry + the HARD-LOCKED platform-sync capability
+    Governance/IGovernancePersistence.cs  where the register LIVES (Azure Table in the Web layer; in-memory here for demo/tests)
+    Scheduling/ISendMarkerStore.cs   the cross-replica "this window was sent" interlock (Azure Table in the Web layer)
+  src/SIAnalyzer.Web/                   ASP.NET Core app: exec + board-deck + analyst + governance Razor pages, JSON API, /mcp, /health
+    Auth/ClientPrincipal.cs          end-to-end X-MS-CLIENT-PRINCIPAL (Easy Auth) parser + the /mcp auth gate
+    Rendering/ExecHtmlRenderer.cs    the interactive exec dashboard (PIM-blue theme, shared NavChrome, charts, drill-downs)
+    Rendering/GovernanceRenderer.cs  the governance register/audit + the record/renew forms + the visible-but-dimmed (disabled-until-tested) sync controls
+    Services/TableGovernancePersistence.cs  the DURABLE register: Azure Table Storage via MI (thin mapping only; all rules stay in Core)
+    Services/GovernanceExpirySweepService.cs  hourly expiry sweep (idempotent, deliberately unleased)
+    Rendering/BoardDeckRenderer.cs   the clean one-page print/PDF board-deck export handout
+    Services/ExecEmailService.cs     composes the grounded exec view -> email -> sender (fail-soft)
+    Services/ExecEmailSender.cs      IExecEmailSender + SMTP transport (config-driven, fail-soft)
+    Services/ScheduledExecEmailHostedService.cs  in-host scheduler (BackgroundService) on the cadence; claims each window
+    Services/TableSendMarkerStore.cs  the DURABLE per-window send marker: one Azure Table row per job, ETag-claimed
+    Mcp/                             the read-only JSON-RPC MCP endpoint
+                                     + the read-only Log-Analytics data plane (MI) + demo fallback + the Azure OpenAI service
+  tools/SIAnalyzer.Preview/             renders the exec dashboard + board-deck to static preview HTML (committed at preview/)
+  tests/SIAnalyzer.Tests/               xunit offline suite (TESTS.md)
+  preview/                       committed static exec-dashboard.html + board-deck.html (open locally, no server)
+  deploy/                        Dockerfile + Deploy-SIAnalyzer.ps1 + README-DEPLOY.md (placeholder-only)
+```
+
+SIA targets **net8.0** and is **dll-only** (`UseAppHost=false` in `Directory.Build.props`) — the build
+never emits a native apphost `.exe` (Defender ASR on the build machine blocks freshly-built native exes).
+Everything runs via `dotnet <dll>`; the container ENTRYPOINT is `dotnet SIAnalyzer.Web.dll`.
+
+### 3. Data plane — read-only via Managed Identity
+
+SIA reads the RA outputs already in the customer's Log Analytics workspace via the **Azure Monitor Query
+SDK** (`LogsQueryClient`), authenticated with the hosted app's **Managed Identity** granted **Log
+Analytics Reader** — **READ-ONLY**. It introduces no new connector and no write path. The scored
+findings come from the RA output table **`SI_RiskAnalysis_Summary_CL`** (+ `…_Detailed_CL`) — the
+worklist/exec rollup — **not** the attribute-only `SI_*_Profile_CL` tables. It is **snapshot-correct**:
+analyst views key on `where CollectionTime == max(CollectionTime)` so they read one coherent latest
+snapshot; the management timeline/diff intentionally span multiple `CollectionTime` snapshots, using the
+latest-snapshot pattern (`where CollectionTime == toscalar(... | summarize max(CollectionTime))`).
+
+The **internal env is the default base**: `SIAnalyzer.Core/Configuration/WorkspaceResolver.cs` resolves the
+configured workspace from the `SIAnalyzer__WorkspaceId` app setting (the workspace **customerId GUID** the SDK
+queries) and uses it live; demo data is the **explicit fallback** only (no workspace id, or
+`SIAnalyzer__UseDemoData=true`), serving the seeded `demo-snapshot.json` so the surfaces and cores can be
+exercised entirely offline.
+
+**A read carries how complete it was.** Log Analytics answers `PartialFailure` — truncated rows PLUS an
+error — at its 500,000-row / 100 MB caps, and the rollup asks for up to 500,000 rows across the lookback
+window. Every read therefore returns a `RiskSnapshot` (rows + `DataQuality`), and a partial read is stated
+on **every surface that shows a figure**: the exec page above the score dial, the board deck above the
+score badge, the analyst page, `/api/exec`, and the scheduled email (subject prefix, HTML body and
+plain-text twin), all from one shared constant so the wording cannot drift. This is not cosmetic: the
+system resolves `max(CollectionTime)` and SUMS scores, so a truncated read means fewer findings and a
+LOWER score — it renders as an improvement unless the surface says otherwise.
+
+**One rollup, shared.** `CachedRiskDataSource` decorates the live source with a short TTL
+(`SIAnalyzer:RollupCacheSeconds`, default 300; 0 disables), because eight `AnalyzerService` entry points
+each asked for that 500k-row query independently. Three rules matter more than the caching itself: a
+**partial result is never cached** (and evicts any earlier complete one, so stale-but-complete data cannot
+mask a workspace that has begun truncating); **ad-hoc/prestaged queries bypass the cache** entirely; and
+reads are **single-flight**, since without that N cold requests would each launch the same query and the
+cache would make the worst case worse. The query also sets an explicit `ServerTimeout`.
+
+### 4. Read-only KQL guardrail
+
+Every query SIA runs — prestaged, builder-generated, AI-composed from an ad-hoc prompt, or invoked via
+MCP — is first vetted by the ported read-only guardrail (`KqlGuardrail` / `Test-SiKqlReadOnly`). It
+rejects mutating/control commands (`.set` / `.create` / `.append` / `.ingest` / `.drop` / `.purge`),
+`externaldata` / `into table`, cross-cluster / cross-database / cross-workspace access (`cluster()` /
+`database()` / `workspace()` / `app()` / `table()`), whole-workspace scans (`union *`, unscoped
+`search`, `find`), any table outside the canonical SI allow-list, and ungrounded or empty queries; it
+reports the tables a query read. This keeps the engine's read-only invariant intact even for
+AI-generated KQL. (The one deliberate write exception — governance/exemption sync — is Phase-6
+backlog and is not part of the analysis path.)
+
+**It is a whitelist of SOURCES, not a scan of mentioned names.** Comments and string literals are
+blanked first, then a tokenizer walks the query and validates every identifier that lands in a source
+position — query start, the RHS of a `let`, each `union` operand, the `join` operand, and inside
+`toscalar()` / `materialize()`. An identifier there that is neither `let`-defined nor allow-listed is
+refused, so a table does not have to *look* like an SI table to be caught; conversely column names and
+function arguments are never treated as tables, so `summarize max(CollectionTime)` passes untouched.
+The design rule behind it: **deciding what a query reads by pattern-matching identifiers anywhere in
+its text is not a whitelist** — the same "the gate only knows a hardcoded handful of names" shape that
+produced the publish-strip and resource-group findings. Fail-closed by construction, but still a
+text-level control over a language it does not fully parse: one layer, not a licence to widen the
+query identity's permissions.
+
+### 5. AI — grounded and AI-optional
+
+AI uses **Azure OpenAI** (the same configuration the SI privilege-tier-classifier and RA summaries use).
+It is **grounded**: the model is always handed the actual KQL result rows as context and asked to explain
+*those rows* (the prompt embeds the rows + a no-invention contract), so a verdict or summary traces back
+to real findings rather than inventing data. It is **AI-on by default** in the hosted internal env
+(endpoint + deployment configured; MI or key auth), and **fail-soft**: if OpenAI is unreachable the
+Analyzer degrades to the grounded templated summary, logs a warning, and never hard-fails.
+Projections/forecasts and benchmarks are clearly labelled; the AI never supplies a number — every figure
+on the exec surface is computed from the rows.
+
+**Every AI call is bounded (audit #15)** — its own deadline (`SIAnalyzer:AiTimeoutSeconds`, 45s) and
+an output cap (`SIAnalyzer:AiMaxOutputTokens`, 900). The deadline is *independent of the caller* on
+purpose: the dangerous path is not a slow page but the **scheduled exec email**, which passes the
+host's `stoppingToken` (cancelled only at shutdown) and calls the AI **after claiming the send
+window** (§ audit #9) — an unbounded hang there consumed the window and delivered nothing.
+
+Two rules keep that fix from creating new problems:
+- **Caller cancellation and our deadline are handled differently**, though both arrive as
+  `OperationCanceledException`. A cancelled caller propagates (nothing to fall back *for*); our
+  deadline degrades to the templated summary. Treating them alike would make a stopping host log
+  spurious AI failures.
+- **Truncated output is discarded, never shown.** A completion stopped at the cap is cut off
+  mid-sentence, and this prose goes in front of an executive; a cut-off KQL is worse still, since it
+  can parse while meaning something other than what was asked. Both fall back rather than render.
+
+### 6. Auth
+
+**Entra / Easy Auth** is enforced by the platform in front of the container (Container Apps built-in auth
+or App Service Easy Auth). A hosted analyzer of security findings is never anonymous. The app trusts the
+authenticated principal the platform injects in the `X-MS-CLIENT-PRINCIPAL` header.
+
+`SIAnalyzer.Web/Auth/ClientPrincipal.cs` validates that header **end-to-end**: it base64-decodes the JSON, reads
+the auth type + claims and exposes the display name — fail-soft, so a missing, empty or malformed header
+reads as *anonymous* rather than throwing. `EasyAuth.RequireAuthenticated` is the allow/deny gate; it backs
+the `/mcp` endpoint (the MCP tool surface is **gated behind the same authenticated principal as the UI** —
+never anonymous), the `/api/me` identity endpoint, and the governance write endpoints. The gate is
+controlled by `SIAnalyzer:Auth:RequireClientPrincipal` (ON in the hosted env; OFF by default so local/demo/test run
+without a platform proxy in front). When on, an anonymous call to a gated endpoint gets `401` — defense-in-
+depth on top of the platform's own Easy Auth gate. The whole exec/board/analyst read surface continues to be
+fronted by the platform sign-in.
+
+### 7. Surfaces
+
+The **executive management view is the default landing surface** (`/` → `/exec`): plain-language,
+chart-led, mobile-friendly + accessible + print/PDF-friendly, with **no KQL/jargon**. It leads with:
+
+- a **one-sentence headline verdict** ("if you read one thing" — the posture band + its direction + how
+  many of the actual highest-scoring findings would have to be remediated to cross into the next-better
+  band, e.g. "Your security posture is Elevated and improving; 2 actions would move you to Moderate"; the
+  count is derived by walking the real rows highest-first, never guessed; verdict + action count only —
+  no invented cost/probability/date; AI narrates on top, fail-soft);
+- a **headline risk-score dial** + direction;
+- a **trend line** with a clearly **labelled forecast** point;
+- **severity / area donuts**;
+- **top risks + recent wins**;
+- a **quick-wins / ROI** remediation plan ("your next moves" — actions ranked by
+  risk-removed-per-effort: each groups all of one asset's findings into a single fix with its projected
+  score drop (the exact amount the headline falls if the asset is fully remediated), an effort estimate
+  (Low/Medium/High, derived from the asset's grounded drivers + tier, explicitly an estimate — never
+  hours/cost), a plain recommendation, and the running cumulative score + band after doing it; a summary
+  line states how many actions reach the next-better band; served on demand from `/api/remediation`);
+- a **framework lens** (rolls the posture into NIST CSF / CIS Controls / ISO 27001 control areas — each
+  finding mapped once, the area scores partition the headline number);
+- an **aging / time-open** accountability panel (how long the top risks have been open, derived from the
+  snapshot history, with average/longest-open + carried-over vs new counts);
+- a **risk-by-area concentration** panel (where risk concentrates — identity vs endpoint vs cloud vs
+  internet-facing — with each area's share of the total, period direction and biggest contributor, as a
+  "where to invest" steer);
+- a **trends & top movers** panel ("what moved the most?" — which areas improved the most and which got
+  worse the most since the baseline snapshot, with a by-area / by-severity / by-tier breakdown; each
+  number is the change in summed risk score for that group; honest "only one snapshot so far" when there
+  is nothing to compare against);
+- a **period-over-period "since last board meeting"** panel (a configurable look-back — previous / month
+  / quarter / half-year / year — that picks a REAL baseline snapshot and reports
+  new/resolved/worse/improved since it, with a `?period=` selector);
+- a **"so what" business-impact panel** (each top risk re-stated as a board-level consequence — data
+  exposure / downtime / compliance / reputation — with the grounded driver behind it, plus a
+  per-category rollup; the consequence KIND only, never an invented cost or likelihood);
+- a **clean-by-default drill-down** (a collapsed "show me the detail behind the score" reveal of the
+  actual findings that SUM to the headline number — no black-box claims; per-slice drill-downs — overall
+  / area / severity / tier — served on demand from `/api/drilldown`);
+- a **plain-language glossary** (a collapsed "what do these terms mean?" reveal decoding every security
+  term on the page in one non-technical sentence each, with a GROUNDED example from a real row where the
+  concept is present and an honest "not seen in your current data" note where absent; present-now terms
+  first; served from `/api/glossary`; kept off the one-page board deck);
+- a **"processes worth strengthening" org-coaching panel** (the leadership-level maturity / process gaps
+  the finding PATTERNS imply — privileged-access reviews, internet-exposure reviews, patch & lifecycle
+  cadence, asset onboarding/visibility, asset ownership, crown-jewel protection — each surfaced ONLY when
+  real rows cross a small evidence threshold; the affected-asset count + example asset names come from
+  the rows; framed as a recurring process, never a per-asset ticket; honest "the findings look like
+  one-offs" when no systemic gap stands out; served from `/api/coaching`);
+- a **maturity scorecard + roadmap** ("where do we need to mature?" — a leader-facing capability rating
+  across six fixed dimensions: Tiering, Privileged Access, Identity Hygiene, Exposure Management,
+  Visibility & Coverage, Operating Discipline — each a rule-based 0–100 maturity score = the SHARE of
+  in-scope assets WITHOUT a weakness signal in that discipline, with a plain band
+  (Initial/Developing/Defined/Managed), the weak-asset count over the in-scope denominator, and grounded
+  example asset names; "not enough data" when a dimension has no in-scope asset; a prioritised "mature
+  here next" roadmap lists only the below-bar dimensions with real evidence, most room-to-improve first;
+  served from `/api/maturity`; kept off the board deck);
+- a **coverage & confidence banner** and **period-over-period KPIs**.
+
+Every exec panel is **pure grounded aggregation** (no AI, no invented numbers); the AI narrates on top,
+fail-soft. Charts use a **self-contained Chart.js** (bundled under `wwwroot/lib`, no CDN).
+
+The **analyst surface** (`/analyst`) is secondary: the prompt box (exec/analyst tone), a top-100
+worklist (highest `RiskScoreTotal` in the latest snapshot, each row expandable to the *why* and the
+blast radius and a plain-language AI verdict), a library of one-click prestaged analyses (each a vetted
+read-only KQL + an explanation template), an ad-hoc prompt mode (free text → guardrail-checked read-only
+KQL → run → explain), a guarded raw-KQL box, and drill-down.
+
+### 8. MCP server
+
+`POST /mcp` is a minimal **JSON-RPC 2.0** MCP endpoint exposing tools that mirror the prestaged
+analyses + a **guarded query** + snapshot-diff / score-timeline / **exec_headline** /
+**exec-summary** / **period_comparison** / **risk_by_area** / **top_movers** / **business_impact** /
+**drilldown** / **remediation_plan** / **glossary** / **org_coaching** / **maturity_scorecard**.
+Every query tool routes through the **same guardrail**; it sits behind the same Easy Auth as the UI, and
+the `/mcp` endpoint itself is gated behind an authenticated client principal (§6) when the gate is on —
+the tool surface is never anonymous.
+
+**The contract is "read-only EXCEPT exactly one declared side-effecting tool."** That one is
+**`send_exec_summary_email`**, which transmits the grounded digest to the configured executive
+recipients — an effect outside this app, and MCP is the surface an *agent* talks to. So it is:
+declared (`annotations.readOnlyHint=false` plus a `SIDE EFFECT:` prefix, while every other tool states
+`readOnlyHint=true` — "unannotated" must not read as "safe"); **off by default**
+(`SIAnalyzer:Mcp:AllowEmailSend`); and **refused when off, not merely unlisted**, because hiding a tool
+from a listing is not a control. Humans keep the capability through the UI, `POST /api/email/send` and
+the scheduler. This file previously claimed there were "no write tools" while shipping that one — the
+claim, not the tool, was the defect (audit #11).
+
+**Protocol details that bite real clients:** a JSON-RPC **notification** (no `id`) gets **no response at
+all** — HTTP 204, since serialising `null` with a 200 is not silence — which matters because every
+spec-compliant MCP client sends `notifications/initialized` immediately after `initialize`. And an
+unexpected exception is logged server-side but returned as a generic `-32603`; only deliberate
+caller-facing errors (a rejected query, a bad argument) come back verbatim.
+
+### 8a. Governance — the ONLY sanctioned write path
+
+Everything else in SIA is strictly read-only; governance is the single deliberate exception. It lives in
+`SIAnalyzer.Core/Governance/` (`GovernanceStore` — the register + an append-only audit trail + expiry/renewal;
+`GovernanceCapabilities` — the enable flags; the record model) and surfaces on the PIM-blue `/governance`
+page (+ `/api/governance` read and the `/api/governance/risk-accept` & `/api/governance/exemption` writes,
+gated behind the authenticated principal).
+
+Three capabilities, each plain-language:
+- **Risk-accept comments** — an owner marks a finding risk-accepted with a justification; the accepted state
+  is reflected (a read, always available) without deleting the finding. Recording one is a write to SIA's
+  OWN store only — it never touches MDE/Entra/ARM.
+- **Exemptions** — a scoped, expiring exemption is recorded in SIA's register and, once enabled, synced to
+  **Defender for Cloud / Azure Policy / Defender XDR** exemptions (and platform exemptions surface back).
+- **Register + audit + expiry/renewal** — a central who/why/scope/expiry register, a who/what/when audit
+  trail, an expiry sweep and a renewal workflow with a mandatory future expiry.
+
+**The no-auto-revoke guarantee.** A platform exemption SUPPRESSES/removes a finding on the platform — a
+write that takes a finding away — so the platform-sync surface is the gated part. It ships **OFF by default
+AND hard-locked**: `GovernanceCapabilities.PlatformSyncLocked` is a compile-time constant, so even with
+`SIAnalyzer:Governance:EnablePlatformSync=true` in config the effective `PlatformSyncEnabled` stays false and the
+build **cannot ship an enable-able platform write**. The `/governance` page renders the sync toggle + the
+three target buttons **visible but dimmed and `disabled`**, with a "Disabled until tested" note; the write
+path refuses every platform push while locked (the audit records `exemption-sync-skipped`). Local
+recording (risk-accept comments / exemptions without platform sync) is separately gated by
+`SIAnalyzer:Governance:LocalRegisterEnabled`, which is **ON by default** — it writes to SIA's own
+table and never to a platform, which is exactly why it can default on while the sync stays locked.
+The deploy sets it explicitly so the live value is readable in `az containerapp show`. The lock
+is lifted only by a deliberate, reviewed code change after the hosted sync test passes — never a config
+toggle.
+
+**Where the register lives.** `GovernanceStore` holds the RULES — capability gates, validation, the
+audit trail, the lifecycle — and delegates storage to `IGovernancePersistence`, so those rules are
+identical wherever the records sit. Two implementations: **Azure Table Storage** via the app's
+Managed Identity (`SIAnalyzer:Governance:TableEndpoint`; one table, three partitions —
+`riskaccept` / `exemption` / `audit`) and an in-memory one for demo, local development and the
+offline tests. Audit rows are inserted and never updated, with a reverse-ticks RowKey so ascending
+key order is newest-first; a same-tick collision retries rather than overwriting someone's trail.
+Reads go through to storage every time — deliberately no cached working set, because a cache is how
+two replicas start disagreeing about what the register says, and the register is tens-to-hundreds of
+rows. With no endpoint configured (or an unreachable one) the app falls back to in-memory, logs it,
+and the page + `/api/governance` both say **the records are not durable** — a volatile list must
+never be presented as a register of record.
+
+**Governance marks a finding; it never hides one.** A risk-accepted or exempt finding stays on the
+worklist and keeps counting toward the score, badged with its owner, reason and expiry
+(`/api/worklist` returns `{finding, governance}` per row). Dropping governed findings would make the
+exec number improve for a governance decision rather than a security one. Suppression state is
+decided by comparing the record's expiry to now, not by the lifecycle flag — the hourly expiry sweep
+updates what the register DISPLAYS, and an acceptance stops applying on time even if that sweep never
+runs.
+
+### 9. Hosting / export / board deck
+
+SIA is a **separate solution on its own dedicated Azure infrastructure** (its own resource group + ACA
+environment / App Service plan + ACR + Entra app registration) — it must NOT be co-located in PIM's
+resource group (where the container currently wrongly sits; the move to SIA's own infra is Phase 1, see
+REQUIREMENTS.md). Preferred host is **Azure Container Apps** (private ingress + MI) in the internal env;
+App Service *for Containers* also works (the same image + env vars apply).
+
+The exec dashboard is **print/PDF-friendly** (a "Print / Save as PDF" action), and a dedicated
+**board-deck export** (`/board`, linked from the exec view; `?period=` honoured) renders a **clean
+single-page handout** from the same grounded exec view — the headline verdict, score+band,
+direction/period KPIs, top risks, recent wins, where risk concentrates, the business-consequence KINDS,
+the recommended next actions and the "processes worth strengthening" org-coaching gaps — in a light,
+print-first, page-break-safe, self-contained theme (no charts/JS, inline CSS, no CDN). `GET /api/board`
+returns the same handout as HTML so an emailer can attach/inline it.
+
+### 10. Scheduled exec-summary email
+
+A send-hook delivers the grounded exec summary on a cadence "so the CIO gets it without opening the
+tool". `ExecEmailService` builds the SAME grounded exec view the dashboard + board deck use (AI-narrated
+when AI is on, templated when off); `ExecEmail` (Core) turns it into an email message — subject +
+inline-CSS, table-based HTML body (mail-client-safe) + a plain-text twin — leading with the one-sentence
+verdict, the score/band badge, the period KPIs, the top risks, the recommended actions, and (only when
+configured) a **link to the full board deck**. Every figure is the same grounded number; consequence KIND
+only, no invented cost/likelihood. Cadence is pure, testable maths (`EmailCadence`: daily/weekly/monthly
++ send-hour, is-due/next-fire); the in-host `ScheduledExecEmailHostedService` (a `BackgroundService`)
+fires at each genuine boundary. **Which windows are already done is durable and shared, not a field:**
+`ISendMarkerStore` keeps one Azure Table row per job, claimed with ETag optimistic concurrency, so
+exactly one replica wins a window — and because the baseline is read from that marker rather than
+re-anchored to "now", a restart inside an unsent window still sends instead of skipping it. A
+first-ever start claims the elapsed window WITHOUT firing, which is what keeps a fresh deploy from
+mailing the CIO immediately. With no marker table configured it falls back to a process-local marker
+and warns at startup that a double-send and a skipped window are both still possible. Everything is
+**fail-soft**: with no recipients or no SMTP transport it renders but never sends or crashes. A manual
+**"send now"** trigger (`POST /api/email/send`), an HTML **preview** (`GET /api/email/preview`), and the
+`send_exec_summary_email` MCP tool all funnel through the same service.
+
+The SMTP transport is config-driven via the `SIAnalyzer:Email` section (recipients, cadence, send-hour, period,
+base URL, org label, SMTP host/port/ssl/user/password/from); the host/from are operator-completed
+(Key-Vault-backed app settings in the hosted env), and the transport is swappable for a Graph sender
+without touching the orchestration.
+
+### 11. Health
+
+`GET /health` is a liveness endpoint, used by the deploy health-gate — both the per-revision warm-up gate
+(PROD blue/green) and the post-deploy gate on the public FQDN (§13).
+
+### 12. Run / build / test / preview (local)
+
+```powershell
+dotnet build SIAnalyzer.sln -c Release
+dotnet test  SIAnalyzer.sln -c Release
+
+# Live local preview (demo data, AI-off):
+dotnet run --project src/SIAnalyzer.Web                 # then open http://localhost:5xxx/
+
+# Regenerate the committed static preview (no server, no browser auto-open):
+dotnet run --project tools/SIAnalyzer.Preview           # writes preview/exec-dashboard.html + preview/board-deck.html
+```
+
+### 13. Deploy (hosting runtime)
+
+> The deploy command + the Managed-Identity → Log Analytics Reader grant + the Easy Auth setup live in
+> `deploy/README-DEPLOY.md` (placeholder-only, public). **The real workspace customerId / resource id /
+> subscription / RG / tenant / app-registration ids live ONLY in `../internal/ENGINE-IDENTITY.md`** —
+> copy them from there when you run the command. The agent that builds SIA does **not** deploy; the
+> **main session** (which holds Azure creds) runs the deploy.
+
+What the app needs at runtime:
+- **Data plane** — `SIAnalyzer__WorkspaceId` = the internal SI Log Analytics workspace **customerId (GUID)**,
+  queried READ-ONLY via the app's **Managed Identity** (granted **Log Analytics Reader** on the workspace
+  resource id). Leave `SIAnalyzer__WorkspaceId` empty (or set `SIAnalyzer__UseDemoData=true`) for the demo fallback.
+  `SIAnalyzer__RollupCacheSeconds` (default 300, 0 = off) is how long one rollup read is reused across the
+  eight surfaces that need it; a partial read is never cached (§3).
+- **AI (on by default)** — `SIAnalyzer__OpenAiEndpoint` + `SIAnalyzer__OpenAiDeployment` = the SI Azure OpenAI
+  deployment; the MI (or a key, `SIAnalyzer__OpenAiApiKey`) authenticates; grounded + fail-soft.
+- **Auth** — **Entra / Easy Auth** in front of the app; set `SIAnalyzer__Auth__RequireClientPrincipal=true` so the
+  app also gates `/mcp` + the governance writes behind the authenticated principal (defense-in-depth, §6).
+- **MCP surface** — `SIAnalyzer__Mcp__AllowEmailSend` (default false) is the only way an MCP client can reach
+  the one tool with an external side effect (§8). Leave it off and the agent-facing catalogue is read-only.
+- **Governance (the only write path, fail-soft)** — `SIAnalyzer__Governance__LocalRegisterEnabled` (**ON by
+  default**, and set explicitly by the deploy) allows local risk-accept/exemption recording in SIA's own
+  store; no platform is written. `SIAnalyzer__Governance__TableEndpoint` +
+  `SIAnalyzer__Governance__TableName` point at the Azure Table that makes the register durable — without
+  them it runs in-memory and the page says so (§8a). Platform exemption sync is **hard-locked off** in this
+  build and cannot be enabled by config. Set `LocalRegisterEnabled=false` for a fully read-only deploy.
+- **Scheduled exec-summary email (optional, fail-soft)** — OFF until configured, never crashes when
+  half-configured. Set via the `SIAnalyzer__Email__*` app settings (SMTP secrets are Key-Vault-backed):
+  `Enabled`, `Recipients__0/1/…`, `Cadence` (daily/weekly/monthly, default monthly), `SendAtHour` (0–23),
+  `Period` (previous/month/quarter/half/year, default quarter), `BaseUrl` (→ links to `{BaseUrl}/board`),
+  `OrgLabel`, and `SmtpHost` / `SmtpPort` (587) / `SmtpUseSsl` (true) / `SmtpUser` / `SmtpPassword` /
+  `FromAddress`. Verify without waiting for the cadence: `GET /api/email/preview` (renders, no send) and
+  `POST /api/email/send` (manual "send now"; returns `{sent, recipientCount, detail}`).
+- **Scheduler send markers** — `SIAnalyzer__Schedule__TableEndpoint` + `SIAnalyzer__Schedule__TableName`
+  (default `sischedule`) point at the table that records which cadence windows have been sent, so
+  replicas cannot double-send and a restart cannot skip a window (§8b). Same storage account as the
+  governance register; the deploy derives both endpoints from one `-StorageAccountId`. Unset ⇒ a
+  process-local marker, and the scheduler warns at startup.
+
+`deploy/Deploy-SIAnalyzer.ps1` finalizes the whole runtime in one pass with a **CEH-parity `-Env dev|prod`
+split** (modelled on CEH's `tools/deploy-app.ps1`), always targeting **SecurityInsight's own resource
+group — never another solution's**. Two hard guards run before anything is deployed:
+
+- **Resource group** — the RG is derived from `-WorkspaceResourceId` (`/resourceGroups/<rg>/`, which
+  *is* SI's resource group) and `-ResourceGroup` must equal it. This is an allow-list, not a
+  block-list of known-bad names: any other solution's resource group is rejected, not just the one
+  mistake already made. Override with `-AllowResourceGroupMismatch` only when the SI workspace
+  genuinely lives in a different RG.
+- **Ingress exposure** — the deploy **fails** when `ingress.external` is `true`. SIA serves
+  security-posture data and must be reachable only from trusted Azure private networks; an
+  internet-facing ingress stops the release. Override with `-AllowPublicIngress` for a deliberate,
+  temporary public deployment. Note `external=false` requires a VNet-integrated, internal-only
+  Container Apps **environment**, which is fixed at environment creation — so this gate detects and
+  refuses; provisioning that environment is part of the dedicated-infra cutover.
+- **Listen port** — the deploy reads `ingress.targetPort` and **refuses a mismatch with the port the
+  image binds**, before the ACR build. This is a contract between two files and nothing used to check
+  it: **Container Apps injects no port** (it routes ingress to the container's `--target-port`;
+  `WEBSITES_PORT` is an App Service setting and does not apply), and SIA reads neither variable — it
+  binds a fixed `ASPNETCORE_URLS=http://+:8080`. The deploy only ever *updates* the app, never creates
+  it, so the target-port came from whatever the resource was created with, out-of-band. A mismatch was
+  already caught by the health gate above, but only *after* a build and a revision, looking like an
+  app fault; asserting it up front names the real cause. `$ContainerListenPort` in the deploy script is
+  the single source of truth, pinned against the Dockerfile by `tests/pester/SIA-Container.Tests.ps1`.
+
+- **Plain HTTP** — the deploy **fails** when `ingress.allowInsecure` is `true` (audit #13). This is
+  where HTTPS enforcement lives, and deliberately not in the app: Container Apps terminates TLS and
+  forwards plain HTTP to the container, so `UseHttpsRedirection` inside the app would see every
+  request as insecure and redirect forever. Same escape hatch as the ingress gate.
+- **Host filtering** — `-AllowedHosts` is always written to the app (audit #13), default `*`.
+  `auto` derives `<app fqdn>;*.<parent domain>`. ⚠️ The wildcard is not optional: the prod path
+  health-gates the **per-revision** fqdn (`<app>--<suffix>.<parent>`), a different host, so pinning
+  to the app fqdn alone would 400 the health check and refuse the swap.
+
+**Container identity.** The image runs as **non-root** (`USER $APP_UID`, the user the .NET 8 base
+images ship). SIA writes nothing to the filesystem at run time and 8080 is unprivileged, so nothing
+depends on root. The ASP.NET DataProtection key ring is the one thing that wants a writable home, and
+it is ephemeral in a container either way — so cookie/antiforgery keys do not survive a restart and
+are not shared between replicas. That is unchanged by this, but it is a real constraint on anything
+that would later depend on them (see #14's CSRF work).
+
+**Response security headers + CSP (audit #13).** The pipeline order is deliberate and each step
+depends on the one before it:
+
+1. **`UseForwardedHeaders` first.** Everything that asks "is this request HTTPS?" is wrong without
+   it, because ACA hands the container plain HTTP plus `X-Forwarded-Proto`. This is what makes HSTS
+   able to fire at all — without it `UseHsts()` emits nothing, silently.
+2. **Security headers + CSP**, before the auth gate, so even a 401 carries them.
+3. **`UseHsts`**, which now sees HTTPS in the hosted environment and correctly stays silent locally.
+
+The CSP is **nonce-based**: `script-src 'self' 'nonce-<per-request>'`, plus `default-src 'self'`,
+`object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, `frame-ancestors 'none'`. The nonce is
+**128 bits of hex** — hex rather than base64 because base64's `+` and `/` HTML-encode to character
+references, which makes the attribute differ textually from the header.
+
+Two consequences worth stating because they constrain future work:
+- **No inline `on*` handlers, anywhere.** A nonce does not whitelist them, so one returning handler
+  would force `'unsafe-inline'` and make the whole policy decorative. All twelve were replaced with
+  `data-` attributes and delegated listeners (which also closed #19). `SecurityHeadersTests.cs` pins
+  this per surface.
+- **`style-src` keeps `'unsafe-inline'`** because the pages use `style=` ATTRIBUTES, which no nonce
+  can cover. Tightening it means moving every inline style into a served stylesheet.
+
+**CSRF guard (audit #14).** State-changing requests are checked before the auth gate, because
+authentication is not the control CSRF needs — and here it actively misleads: **Easy Auth sits in
+front of the container**, so a signed-in victim's browser makes the platform authenticate a forged
+cross-site POST and inject a valid `X-MS-CLIENT-PRINCIPAL`. The gate would pass it.
+
+The guard is **stateless on purpose**. Antiforgery tokens are signed with the DataProtection key
+ring, which is ephemeral in this container (no persisted keys, no shared storage), so tokens would
+break across replicas and across every restart. Instead, in order: safe methods pass; `Origin`, if
+present, must equal this request's own origin; else `Sec-Fetch-Site` must be `same-origin`/`none`;
+and with no browser signals at all the request must carry a content type an HTML form cannot produce
+(or an explicit `X-SIA-Request` header, for a non-browser caller that sends no body). MCP agents send
+JSON and are unaffected.
+
+⚠️ **This depends on the forwarded headers above.** `Origin` is compared against `Request.Scheme`;
+behind TLS-terminating ingress the browser sends `https` while an app without `UseForwardedHeaders`
+believes it is serving `http`, so removing that middleware would reject **every** same-origin POST.
+The two are one design, not two independent fixes.
+
+Real resource names live in `../internal/ENGINE-IDENTITY.md`, never in a public doc:
+- **DEV** (`-Env dev`) — direct revision deploy (`az acr build` + `az containerapp update`), then the grants
+  + auth + a post-deploy `/health` gate.
+- **PROD** (`-Env prod`) — a **blue/green REVISION swap** (Container Apps has no App-Service slots, so the
+  slot-swap is a revision swap): multiple-revision mode keeps the live revision serving while a NEW revision
+  is created with 0% traffic; that revision is **warmed and HEALTH-GATED** on its per-revision FQDN — the
+  script **refuses to shift traffic unless `/health` returns 200** (retrying the warm loop once on a
+  transient cold-start) — then shifts 100% traffic to the healthy revision, keeping the old one for instant
+  rollback. A post-deploy `/health` gate on the public FQDN follows.
+
+Both paths then ensure the system-assigned MI, grant it **Log Analytics Reader** on the workspace,
+optionally grant **Cognitive Services OpenAI User** on the AOAI account, and configure Entra Easy Auth
+(`-SkipGrant` / `-SkipAuth` to run those by hand). The script prints the URL + `/health` + the live-verify
+checklist. The live infra-create + the hosted run remain the main session's job (Phases 1 & 4).
+
+### 14. Guardrail / dimension contract (shared by every surface incl. MCP)
+
+Read-only over the canonical SI table allow-list only, enforced as a whitelist of query SOURCES (§4);
+no control commands / external / cross-cluster / cross-workspace, no whole-workspace scans;
+snapshot-correct (`max(CollectionTime)`); grounded AI; AI-optional / fail-soft.
+
+### 15. Deploy command reference (placeholder-only)
+
+> Merged here 2026-08-05 from the former `analyzer-web/deploy/README-DEPLOY.md`, which was the last
+> markdown left under `analyzer-web/` — that folder now holds **code only**.
+> 🔴 **This chapter is PUBLIC. Every `<...>` stays a placeholder** — the real workspace customerId,
+> resource ids, subscription, resource groups, tenant and app-registration ids live ONLY in
+> `../internal/ENGINE-IDENTITY.md` (stripped from every publish). Copy the values from there at run
+> time; never commit them here.
+> The agent that builds SIA does **not** deploy — the main session (which holds Azure credentials)
+> runs these.
+
+**One command does build + deploy + MI grant + Easy Auth.** `deploy/Deploy-SIAnalyzer.ps1` builds and
+deploys the image, ensures the system-assigned Managed Identity, grants it **Log Analytics Reader**
+(read-only) on the workspace, optionally grants **Cognitive Services OpenAI User** on the Azure OpenAI
+account, configures Entra Easy Auth, and runs a `/health` gate. See §13 for the DEV/PROD semantics.
+
+```powershell
+# from SOLUTIONS/SecurityInsight/analyzer-web
+# fill EVERY <...> from internal/ENGINE-IDENTITY.md
+.\deploy\Deploy-SIAnalyzer.ps1 `
+    -Env prod `
+    -ResourceGroup <sia-resource-group> `
+    -AcrName <acr-name> `
+    -AppName <container-app-name> `
+    -WorkspaceId <workspace-customerId-guid> `
+    -WorkspaceResourceId "/subscriptions/<sub>/resourceGroups/<sia-resource-group>/providers/Microsoft.OperationalInsights/workspaces/<workspace-name>" `
+    -OpenAiEndpoint https://<aoai-name>.openai.azure.com `
+    -OpenAiDeployment <deployment-name> `
+    -OpenAiAccountId "/subscriptions/<sub>/resourceGroups/<aoai-rg>/providers/Microsoft.CognitiveServices/accounts/<aoai-name>" `
+    -AuthClientId <app-registration-client-id> `
+    -AuthTenantId <tenant-id>
+```
+
+- `-WorkspaceId` is the **customerId GUID** the SDK queries; `-WorkspaceResourceId` is the **ARM
+  resource id** of the same workspace, used as the role-grant scope. **Both are required.**
+- Omit `-OpenAiAccountId` if Azure OpenAI uses a key (set `SIAnalyzer__OpenAiApiKey` as a secret env
+  var instead of MI).
+- `-SkipGrant` / `-SkipAuth` run those steps by hand — see below.
+- The script prints the URL, `/health`, and the live-verify checklist (the release gate is
+  [TESTS.md](TESTS.md) §9).
+- **PROD rollback** — traffic is a revision weight, so reverting is one command:
+  `az containerapp ingress traffic set -g <sia-resource-group> -n <container-app-name> --revision-weight <old-revision>=100`
+
+**Manual MI → Log Analytics Reader** (only if you used `-SkipGrant`):
+
+```powershell
+az containerapp identity assign -g <sia-resource-group> -n <container-app-name> --system-assigned
+$pid = az containerapp identity show -g <sia-resource-group> -n <container-app-name> --query principalId -o tsv
+az role assignment create `
+    --assignee-object-id $pid --assignee-principal-type ServicePrincipal `
+    --role "Log Analytics Reader" `
+    --scope "/subscriptions/<sub>/resourceGroups/<sia-resource-group>/providers/Microsoft.OperationalInsights/workspaces/<workspace-name>"
+# If Azure OpenAI uses MI (no key), also:
+az role assignment create --assignee-object-id $pid --assignee-principal-type ServicePrincipal `
+    --role "Cognitive Services OpenAI User" `
+    --scope "/subscriptions/<sub>/resourceGroups/<aoai-rg>/providers/Microsoft.CognitiveServices/accounts/<aoai-name>"
+```
+
+**Manual Easy Auth (Entra)** (only if you used `-SkipAuth`):
+
+```powershell
+az containerapp auth microsoft update -g <sia-resource-group> -n <container-app-name> `
+    --client-id <app-registration-client-id> `
+    --issuer https://login.microsoftonline.com/<tenant-id>/v2.0
+az containerapp auth update -g <sia-resource-group> -n <container-app-name> `
+    --unauthenticated-client-action RedirectToLoginPage --redirect-provider azureactivedirectory
+```
+
+Register an Entra app for the Analyzer and restrict sign-in to the appropriate group. A hosted
+analyzer of security findings is **never anonymous**.
+
+**Local build / test / preview:**
+
+```powershell
+dotnet build SIAnalyzer.sln -c Release
+dotnet test  SIAnalyzer.sln -c Release
+dotnet run --project src/SIAnalyzer.Web    # local preview (demo data, AI-off)
+```

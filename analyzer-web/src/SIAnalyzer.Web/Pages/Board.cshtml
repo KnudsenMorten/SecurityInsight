@@ -1,0 +1,9 @@
+@page
+@using SIAnalyzer.Web.Rendering
+@using SIAnalyzer.Web.Security
+@model SIAnalyzer.Web.Pages.BoardModel
+@{
+    Layout = null;
+    var html = BoardDeckRenderer.Render(Model.View, Model.HttpContext.GetCspNonce());
+}
+@Html.Raw(html)

@@ -70,6 +70,30 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# ----------------------------------------------------------------------
+#  -WhatIfMode IS NOT IMPLEMENTED BY THIS ENGINE -- refuse rather than lie.
+#
+#  The azure / endpoint / identity / publicip launchers all expose -WhatIfMode and set
+#  $global:WhatIfMode, but this engine never reads it. The switch had NO effect: a
+#  "dry run" still created DCE/DCR + storage infrastructure, wrote the fingerprint
+#  cache and ingested to Log Analytics. A switch that silently does the opposite of
+#  what its name promises is more dangerous than no switch at all, because it gets
+#  used precisely when someone is trying to be careful. Only the asset-tagging engine
+#  actually honours it.
+#
+#  Found 2026-08-05 while verifying the audit #16 split on a live run.
+#
+#  If real dry-run support is ever implemented here, DELETE this block -- do not
+#  soften it to a warning. Note -Mock is a different thing: it fakes the DATA source,
+#  it does not suppress the writes.
+# ----------------------------------------------------------------------
+if ($global:WhatIfMode) {
+    throw ("-WhatIfMode is NOT implemented by the asset-profiling engine, so it would not have " +
+           "prevented anything: infrastructure creation, fingerprint-cache writes and Log Analytics " +
+           "ingest all still happen. Refusing to run rather than pretend this is a dry run. Re-run " +
+           "without -WhatIfMode if you intended a real run.")
+}
+
 # v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
 # The v2.3 Setup Wizard writes $global:SI_SPN_* (unified names). Engines / shared
 # auth helpers still read the legacy $global:Spn* names. Initialize-LauncherConfig

@@ -25,16 +25,37 @@ BeforeAll {
     $enginePath = Join-Path $si 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'
     if (-not (Test-Path $enginePath)) { throw "RA engine not found at $enginePath" }
 
-    # Parse + extract only the functions we test (+ the cols initializer).
-    $tokens = $null; $errs = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile($enginePath, [ref]$tokens, [ref]$errs)
-    if ($errs -and $errs.Count) { throw "RA engine has parse errors: $($errs.Count)" }
+    # AUDIT #16: search the engine AND its dot-sourced _shared/RA-*.ps1 files.
+    #
+    # This used to parse Invoke-RiskAnalysis.ps1 alone, which was fine while the engine WAS one
+    # file. The moment functions started moving into _shared/ (2026-08-05) those tests began failing
+    # with the function simply absent - the gate caught it immediately, which is the point. Sourcing
+    # by NAME across the whole engine folder means a future tranche moves code without touching this
+    # file again.
+    $script:RaEngineFiles = @($enginePath) +
+        @(Get-ChildItem -Path (Join-Path $si 'engine\risk-analysis\_shared') -Filter 'RA-*.ps1' -File -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName)
+
+    function Get-RaFunctionAsts {
+        param([string[]]$Names)
+        $found = @()
+        foreach ($file in $script:RaEngineFiles) {
+            $tk = $null; $er = $null
+            $a = [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$tk, [ref]$er)
+            if ($er -and $er.Count) { throw "RA engine file has parse errors ($file): $($er.Count)" }
+            $found += $a.FindAll({ param($n)
+                $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Names -contains $n.Name
+            }, $true)
+        }
+        # A name that vanished is a real regression, not a silently-skipped test.
+        $missing = @($Names | Where-Object { $found.Name -notcontains $_ })
+        if ($missing.Count) { throw "RA function(s) not found in the engine or _shared/: $($missing -join ', ')" }
+        return $found
+    }
 
     $wantFns = @('Add-DynamicGroupKeyCasts','Reset-SupersededAttempts','Add-SupersededAttempt',
                  'Resolve-SupersededOnSuccess','Flush-SupersededAttempts')
-    $fnAsts = $ast.FindAll({ param($n)
-        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wantFns -contains $n.Name
-    }, $true)
+    $fnAsts = Get-RaFunctionAsts -Names $wantFns
 
     # Logging shims (the real ones live in the engine body we don't load). They
     # record what would have been written so the tests can assert log levels.
@@ -194,15 +215,24 @@ Describe 'Deferred superseded multi-path logging (no WARN when a later path wins
 Describe 'Cross-domain bucket re-key (EG-native partition, lossless CL alignment)' {
 
     BeforeAll {
+        # AUDIT #16: same reason as the outer BeforeAll - Get-SICLBucketKey and Get-SISha256Bucket
+        # now live in _shared/RA-ProfileAugment.ps1. Resolve by name across the engine folder.
         $si = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
-        $enginePath = Join-Path $si 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'
-        $tokens = $null; $errs = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile($enginePath, [ref]$tokens, [ref]$errs)
-        if ($errs -and $errs.Count) { throw "RA engine has parse errors: $($errs.Count)" }
+        $files = @((Join-Path $si 'engine\risk-analysis\Invoke-RiskAnalysis.ps1')) +
+            @(Get-ChildItem -Path (Join-Path $si 'engine\risk-analysis\_shared') -Filter 'RA-*.ps1' -File -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName)
         $wantFns = @('New-BucketFilterKql','Get-SICLBucketKey','Get-SISha256Bucket')
-        $fnAsts = $ast.FindAll({ param($n)
-            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wantFns -contains $n.Name
-        }, $true)
+        $fnAsts = @()
+        foreach ($file in $files) {
+            $tokens = $null; $errs = $null
+            $a = [System.Management.Automation.Language.Parser]::ParseFile($file, [ref]$tokens, [ref]$errs)
+            if ($errs -and $errs.Count) { throw "RA engine file has parse errors ($file): $($errs.Count)" }
+            $fnAsts += $a.FindAll({ param($n)
+                $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $wantFns -contains $n.Name
+            }, $true)
+        }
+        $missing = @($wantFns | Where-Object { $fnAsts.Name -notcontains $_ })
+        if ($missing.Count) { throw "RA function(s) not found in the engine or _shared/: $($missing -join ', ')" }
         function Write-Info  ($msg){ }
         foreach ($f in $fnAsts) { Invoke-Expression $f.Extent.Text }
     }

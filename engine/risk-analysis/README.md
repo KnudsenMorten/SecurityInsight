@@ -14,27 +14,37 @@ The `SecurityInsight_RiskAnalysis` engine reads **exactly two files** from `risk
 ## Folder layout
 
 ```
-v2.2/engine/risk-analysis/
-├── locked/                                       <- engine reads ONE file from here
-│   └── RiskAnalysis_Queries_Locked.yaml   (160 reports, auto-built)
-├── custom/                                       <- engine reads ONE file from here
-│   └── RiskAnalysis_Queries_Custom.yaml   (customer-edited)
-├── _source/                                      <- per-domain authoring source files
-│   ├── SecurityInsight_RiskAnalysis_Azure_Locked.yaml          (12 Summary)
-│   ├── SecurityInsight_RiskAnalysis_Azure_Detailed_Locked.v22.yaml   (12 Detailed, auto)
-│   ├── SecurityInsight_RiskAnalysis_CrossEngine_Locked.yaml    (10 Summary)
-│   ├── ... (one Summary + one Detailed per domain)
-│   └── SecurityInsight_RiskAnalysis_NewFindings_Locked.yaml    (30 Wave-5 Summary)
-├── _legacy/                                      <- frozen v2.1 snapshot
-│   ├── RiskAnalysis_Queries_Locked.v2_1.yaml   (104 reports, ref only)
-│   └── RiskAnalysis_Queries_Custom.v2_1.yaml
-├── tools/                                        <- build helpers
-│   ├── Build-DetailedCompanions.ps1                            <- run after editing _source/
-│   └── Build-RiskAnalysisV22Consolidated.ps1                   <- writes the locked/ file
-└── README.md
+SOLUTIONS/SecurityInsight/
+├── risk-analysis-detection/                      <- the catalog the engine READS
+│   ├── RiskAnalysis_Queries_Locked.yaml     (118 reports, 4 templates -- SOURCE OF TRUTH)
+│   ├── RiskAnalysis_Queries_Dev.yaml        (developer-only, gitignored)
+│   └── RiskAnalysis_Queries_Custom.sample.yaml   (customer override, wins last)
+└── engine/risk-analysis/
+    ├── Invoke-RiskAnalysis.ps1               <- the engine
+    ├── _shared/                              <- RA-*.ps1, dot-sourced in place (audit #16)
+    ├── tools/                                <- helpers; NONE of them rebuild the catalog
+    │   ├── Build-QueriesDoc.ps1              <- generates DOCS from the catalog
+    │   └── Fix-CollectionTimeWhere.ps1
+    ├── _samples/
+    └── README.md
 ```
 
-**Authoring loop**: edit Summary YAML in `_source/`, then run `tools\Build-RiskAnalysis.ps1` once — it (1) regenerates Detailed siblings and (2) rebuilds the single locked file with `Reports[]` + auto-generated `ReportTemplates[]` (Summary + Detailed buckets) at the bottom. Operator never touches `_source/` directly; the engine only sees `locked/` + `custom/`.
+🔒 **Authoring loop: edit `risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml` directly.**
+It is hand-maintained and is the source of truth. Nothing generates it.
+
+**Audit #28 (2026-08-06) — the old authoring loop this README described was retired, and its inputs
+and tool deleted.** It said: *"edit Summary YAML in `_source/`, then run `Build-RiskAnalysis.ps1`
+once — it regenerates Detailed siblings and rebuilds the locked file."* That had been dead for
+months: `_source/` and the consolidator went untouched since commit `536e1405` (the v2.2.0 flatten)
+while the catalog was edited continuously. Rebuilding would have produced **264 reports instead of
+118**, dropped 57 shipped reports, added 203 that never shipped, and renamed the templates to
+`*_Bucket` — leaving the launcher's `RiskAnalysis_Summary` undefined and making the engine **throw on
+every run**.
+*(This file was doubly stale: it also described `locked/`, `custom/` and `_legacy/` folders that no
+longer exist, and named `Build-DetailedCompanions.ps1` and `Build-RiskAnalysisV22Consolidated.ps1`,
+neither of which existed. Corrected against the tree above.)*
+Recover the old inputs from git if ever needed:
+`git show 536e1405:SOLUTIONS/SecurityInsight/engine/risk-analysis/_source/`
 
 **Per-report bucket metadata** (preserves the v2.1 `UseQueryBucketing=true` pattern for heavy reports). Add a `ReportTemplate:` block on any source-yaml Report to opt in:
 

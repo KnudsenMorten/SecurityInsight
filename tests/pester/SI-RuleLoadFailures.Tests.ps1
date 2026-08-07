@@ -147,7 +147,7 @@ Describe 'audit #30 -- only *.locked.yaml and *.custom.yaml may load as rules' {
         Test-Path (Join-Path $script:D 'Widget.custom.sample - Copy.yaml') | Should -BeTrue
     }
 
-    It 'no stray non-rule yaml ships in the real enrichment tree' {
+    It 'no stray non-rule yaml ships in the real enrichment tree (working tree)' {
         $si   = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
         $tree = Join-Path $si 'asset-profiling-enrichment'
         $bad  = Get-ChildItem -Path $tree -Filter '*.yaml' -Recurse -File |
@@ -155,6 +155,20 @@ Describe 'audit #30 -- only *.locked.yaml and *.custom.yaml may load as rules' {
                                    $_.Name -notlike '*.custom.yaml' -and
                                    $_.Name -notlike '*.custom.sample.yaml' }
         $bad | Should -BeNullOrEmpty -Because "not a rule and not a canonical sample: $($bad.Name -join ', ')"
+    }
+
+    It 'no stray non-rule yaml is TRACKED in the enrichment tree (what actually ships)' {
+        # The working-tree check above is NOT sufficient, and v2.2.406 proved it.
+        # The stray file was `git mv`d -- so it left the directory and that test went
+        # green -- but a later `git reset` unstaged the rename's DELETE half, so the
+        # OLD path stayed tracked and shipped to the public mirror regardless.
+        # What ships is the index, not the directory listing. Assert against git.
+        $si  = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+        $bad = @(git -C $si ls-files 'asset-profiling-enrichment/*.yaml' 2>$null |
+                    Where-Object { $_ -notlike '*.locked.yaml' -and
+                                   $_ -notlike '*.custom.yaml' -and
+                                   $_ -notlike '*.custom.sample.yaml' })
+        $bad | Should -BeNullOrEmpty -Because "tracked, therefore shipped: $($bad -join ', ')"
     }
 }
 

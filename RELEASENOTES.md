@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.411
+## v2.2.412
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI): #16 tranche 3, and #39 is proven live -- Detailed rows now land in the Detailed table (cecd0944)
+- docs(SI): refresh the handoff -- #34 phase 1 shipped, and name the two items a live run gates (3d74c09f)
 - feat(SI): #34 phase 1 -- operator rules can live outside the tree the updater writes to (5ade1916)
 - docs(SI): #36 was fixed in the data weeks before the doc said so, and two decisions land (af958784)
 - fix(SI): #39 -- the documented launch line ingested Detailed rows into the Summary table (f5e987e0)
@@ -32,14 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI): #25 third shape -- count and list were on different SCOPES (1efc5536)
 - fix(SI): #27 -- drop the coverage warning; low AadDeviceId coverage is normal (8033a764)
 - fix(SI): #29 -- an unloadable rule file is now reported, not silently skipped (59a18aeb)
-- docs(SI): #29 -- every custom tagging/profiling rule is inert, and has been since June (d8602230)
-- docs(SI): #27 PROVEN LIVE -- and the suspicion it was built to test is refuted (9339c492)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.412 — The Detailed-report routing fix is now confirmed by a real run
+
+**No new behaviour.** This release records that v2.2.410's fix was verified end to end against a
+live workspace, and continues internal tidying of the Risk Analysis engine.
+
+### v2.2.410 verified
+
+A full Detailed run was launched the documented way —
+`launcher.internal-vm.ps1 -ReportTemplate RiskAnalysis_Detailed` — and followed all the way to the
+data:
+
+- the run selected the Detailed destination at every step, including the mail recipients, the data
+  collection rule and the table;
+- the Detailed table gained a new snapshot (rows roughly doubled), and the Summary table received
+  **nothing**;
+- the run completed cleanly: 59 reports, a full workbook, 44 minutes.
+
+Before v2.2.410 that same command wrote its results into the Summary table.
+
+We also re-checked two earlier fixes against **that run's** export rather than an older one: finding
+counts still match their asset lists exactly, and the export still carries every column any row
+produced rather than only the columns present on the first row.
+
+### Internal
+
+A further block of Risk Analysis engine helpers (run progress, timing and workbook-safety) moved into
+a shared file. The engine's behaviour is unchanged — the functions are byte-for-byte identical and
+load in the same order — but the main script is smaller and easier to maintain.
 
 ---
 

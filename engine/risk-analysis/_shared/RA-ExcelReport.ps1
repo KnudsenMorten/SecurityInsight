@@ -32,9 +32,15 @@ function Get-RAColumnUnion {
     of the xlsx, the JSON sibling AND the Log Analytics ingest, for the whole report.
 
     A column declared in the YAML OutputPropertyOrder is protected because it is added
-    regardless. RemediationOptions / RecommendedAction / Recommendation are declared
-    nowhere, so they depended entirely on first-row luck -- which is why "remediation data
+    regardless. RemediationOptions / RecommendedAction were declared NOWHERE when this was
+    written, so they depended entirely on first-row luck -- which is why "remediation data
     is missing" was intermittent rather than total.
+
+    ⚠️ That example is now HISTORICAL: #26 part 2 (commit 5904f0f6) declared both in
+    Device_Recommendations_Detailed's OutputPropertyOrder, and a catalog-wide sweep on
+    2026-08-07 found NO report emitting an undeclared remediation column. The union below
+    is still required -- it protects every OTHER undeclared column, and declaring all of
+    them by hand is exactly the guarantee this function exists to stop depending on.
 
     Order is FIRST-SEEN, so the shape stays stable and human-readable rather than sorted.
     One pass over the rows: ~0.3s for the largest real report set (2,677 rows), ~19s at a

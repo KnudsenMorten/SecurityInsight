@@ -502,6 +502,45 @@ elseif ($cliBound.ContainsKey('ReportTemplate') -and -not [string]::IsNullOrWhit
     $global:ReportTemplate = $ReportTemplate_Default_Summary
 }
 
+# --- Reconcile the run mode with the resolved template (finding #39) ----------
+# $global:Summary / $global:Detailed are not labels. The engine reads them to
+# pick the mail lane, and -- far more expensively -- the Log Analytics TABLE and
+# the DCR (Invoke-RiskAnalysis.ps1, "Pick the DCR + table for this run").
+# Resolve-RunMode runs ABOVE, before the template is known, and never saw
+# -ReportTemplate, so `-ReportTemplate RiskAnalysis_Detailed` fell through to the
+# default mode and ingested Detailed rows into the Summary table. Confirmed in a
+# live workspace 2026-08-07 (64 mis-routed snapshots since 2026-06-06). The
+# template is the more specific statement of intent, so it wins over every
+# config-level mode source; a contradicting explicit CLI switch throws rather
+# than silently choosing a table.
+function Get-SIRunModeForTemplate {
+    param([string]$Template)
+    if ([string]::IsNullOrWhiteSpace($Template)) { return $null }
+    if ($Template -match '(?i)detailed') { return 'Detailed' }
+    if ($Template -match '(?i)summary')  { return 'Summary'  }
+    return $null   # unrecognised/custom template -- leave the resolved mode alone
+}
+
+$__tplMode = Get-SIRunModeForTemplate -Template $global:ReportTemplate
+if ($null -ne $__tplMode) {
+    $__cliS   = $cliBound.ContainsKey('Summary')  -and [bool]$cliBound['Summary']
+    $__cliD   = $cliBound.ContainsKey('Detailed') -and [bool]$cliBound['Detailed']
+    $__cliTpl = ($cliBound.ContainsKey('ReportTemplate')     -and -not [string]::IsNullOrWhiteSpace([string]$cliBound['ReportTemplate'])) -or `
+                ($cliBound.ContainsKey('RunAssetSimulation') -and -not [string]::IsNullOrWhiteSpace([string]$cliBound['RunAssetSimulation']))
+    if ($__cliTpl -and (($__cliS -and $__tplMode -eq 'Detailed') -or ($__cliD -and $__tplMode -eq 'Summary'))) {
+        throw ("Contradictory parameters: template '{0}' is a {1} template, but -{2} was passed. The run mode selects the Log Analytics table and DCR, so this would ingest {1} rows into the {2} table. Pass one or the other." -f `
+            $global:ReportTemplate, $__tplMode, $(if ($__cliS) { 'Summary' } else { 'Detailed' }))
+    }
+    $__wantSummary  = ($__tplMode -eq 'Summary')
+    $__wantDetailed = ($__tplMode -eq 'Detailed')
+    if ($global:Summary -ne $__wantSummary -or $global:Detailed -ne $__wantDetailed) {
+        Write-Info ("[LAUNCHER] run mode reconciled to template '{0}': Summary {1}->{2}, Detailed {3}->{4} (mode selects the LA table + DCR + mail lane)" -f `
+            $global:ReportTemplate, $global:Summary, $__wantSummary, $global:Detailed, $__wantDetailed)
+        $global:Summary  = $__wantSummary
+        $global:Detailed = $__wantDetailed
+    }
+}
+
 Write-Info ("[LAUNCHER] AutomationFramework={0} Summary={1} Detailed={2} BuildSummaryByAI={3}" -f `
     $global:AutomationFramework, $global:Summary, $global:Detailed, $global:BuildSummaryByAI)
 Write-Info ("[LAUNCHER] AutoBucketCount={0} AutoBucketCache={1} AutoBucketMax={2} ResetCache={3}" -f `

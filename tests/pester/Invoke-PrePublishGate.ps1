@@ -114,13 +114,37 @@ if ($failed.Count -gt 0) {
     Write-Host ''
 }
 
+# --- suites that failed to LOAD ------------------------------------------------
+# A container whose DISCOVERY throws contributes ZERO tests, so it adds zero to
+# FailedCount -- and a verdict computed only from FailedCount calls that READY.
+# Not hypothetical: under Pester 6 an empty `-ForEach` throws ("Value can not be
+# null or empty array"), and SI-PublishPayloadSanitization's violation-driven
+# -ForEach is empty in exactly the GOOD case. So a CLEAN payload made the whole
+# publish-sanitization suite fail to load, and CI runs 31150698932 and 31150980938
+# both printed PUBLISH GATE: READY having run 0 tests from it -- the one gate that
+# stops secrets reaching the public mirror. A suite that did not run is not a pass.
+$brokenContainers = @($result.Containers | Where-Object { $_.ErrorRecord -and @($_.ErrorRecord).Count -gt 0 })
+if ($brokenContainers.Count -gt 0) {
+    Write-Host ('SUITES THAT FAILED TO LOAD (' + $brokenContainers.Count + ')') -ForegroundColor Red
+    foreach ($c in $brokenContainers) {
+        $name = if ($c.Item -is [System.IO.FileInfo]) { $c.Item.Name } else { [string]$c.Item }
+        Write-Host ('  [' + $name + '] discovery failed -- 0 tests ran from this file') -ForegroundColor Red
+        $msg = ([string](@($c.ErrorRecord)[0].Exception.Message) -split "`n")[0]
+        Write-Host ('       -> ' + $msg) -ForegroundColor DarkGray
+    }
+    Write-Host ''
+}
+
 # --- verdict ---
-if ($result.FailedCount -eq 0) {
+if ($result.FailedCount -eq 0 -and $brokenContainers.Count -eq 0) {
     Write-Host '  PUBLISH GATE: READY  ' -BackgroundColor DarkGreen -ForegroundColor White
     Write-Host ''
     exit 0
 } else {
-    Write-Host ('  PUBLISH GATE: BLOCKED  (' + $result.FailedCount + ' failure(s))') -BackgroundColor DarkRed -ForegroundColor White
+    $why = @()
+    if ($result.FailedCount -gt 0)     { $why += ([string]$result.FailedCount + ' failure(s)') }
+    if ($brokenContainers.Count -gt 0) { $why += ([string]$brokenContainers.Count + ' suite(s) failed to load') }
+    Write-Host ('  PUBLISH GATE: BLOCKED  (' + ($why -join ', ') + ')') -BackgroundColor DarkRed -ForegroundColor White
     Write-Host ''
     exit 1
 }

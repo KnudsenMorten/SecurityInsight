@@ -361,6 +361,55 @@ function Get-SIRuleSet {
         Write-Warning ("Get-SIRuleSet: {0} of {1} rule file(s) for engine '{2}' FAILED TO PARSE and were not applied -- {3}. These rules are NOT in force for this run; classification and tagging ran without them. Fix the YAML (a common cause is a missing space after 'key:') and re-run." -f `
             $parseFailed, ($loaded + $parseFailed), $Engine, ($parseFailedNames -join ', '))
     }
+
+    # AUDIT #36 -- a rule that LOADS with zero detections does nothing, and said so
+    # to nobody. Parsing is not the only way a rule can be inert: the #29 repair left
+    # asset-profiling-enrichment/azure/AssetProfileByTags.custom.yaml ending at a bare
+    # `detections:` with nothing under it. It parses, it loads, it dedups -- and it
+    # matches no asset, ever. There is no *.locked.yaml sibling for it, so the whole
+    # Azure CMDB tag mapping was running on a rule with no rules in it.
+    # `mode: disable` is the ONE legitimate zero-detection case (the customer is
+    # suppressing a locked rule on purpose) and is excluded.
+    $emptyRules = @($results | Where-Object { $_.Mode -ne 'disable' -and @($_.Detections).Count -eq 0 })
+    if ($emptyRules.Count -gt 0) {
+        Write-Warning ("Get-SIRuleSet: {0} rule(s) for engine '{1}' loaded with ZERO detections and can never match -- {2}. A rule with no detections is inert; check the file's 'detections:' block is not empty (use 'mode: disable' if suppression was intended)." -f `
+            $emptyRules.Count, $Engine, (($emptyRules | ForEach-Object { $_.File }) -join ', '))
+    }
+
+    # AUDIT #35 -- a detect kind the evaluator does not know is DROPPED, silently.
+    # Invoke-SIDetect logs an unknown kind with Write-Verbose (prints for nobody) and
+    # then continues in any-mode / returns $false in all-mode. That is how the
+    # unregistered 'nameMatches' cost 95 detections their name-pattern arm for the
+    # whole v2.2 lifetime without a single visible symptom. Checked here, at load, so
+    # it costs one pass over the final rule set instead of a test in the per-asset
+    # hot loop -- and so a customer's typo'd kind is reported on the run that uses it,
+    # not just by the lint they may never run.
+    # Soft dependency: RuleEval.ps1 is dot-sourced alongside this file by the profile
+    # stage, but not by every caller, so absence of the registry is not an error.
+    if (Get-Command -Name 'Get-SIKindRegistry' -ErrorAction SilentlyContinue) {
+        $kindRegistry = Get-SIKindRegistry
+        $unknownKinds = @{}
+        foreach ($r in $results) {
+            foreach ($det in @($r.Detections)) {
+                $dmode = if ($det.Detect.any) { 'any' } elseif ($det.Detect.all) { 'all' } else { $null }
+                if (-not $dmode) { continue }
+                foreach ($spec in @($det.Detect.$dmode)) {
+                    $k = [string]$spec.kind
+                    if ([string]::IsNullOrWhiteSpace($k)) { continue }
+                    if (-not $kindRegistry.ContainsKey($k)) {
+                        if (-not $unknownKinds.ContainsKey($k)) { $unknownKinds[$k] = 0 }
+                        $unknownKinds[$k]++
+                    }
+                }
+            }
+        }
+        if ($unknownKinds.Count -gt 0) {
+            $kindDetail = (($unknownKinds.Keys | Sort-Object | ForEach-Object { '{0} ({1} detection(s))' -f $_, $unknownKinds[$_] }) -join ', ')
+            Write-Warning ("Get-SIRuleSet: {0} detect kind(s) used by engine '{1}' rules are NOT in the RuleEval registry and are SKIPPED at evaluation -- {2}. Those detection arms never match, and a detection whose only arm is unknown can never fire. Check the spelling, or that the kind is registered in RuleEval.ps1." -f `
+                $unknownKinds.Count, $Engine, $kindDetail)
+        }
+    }
+
     ,$results.ToArray()
 }
 

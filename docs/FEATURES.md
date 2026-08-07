@@ -66,6 +66,11 @@ keeps its chapter as it moves from planned → delivered.
 - **Fully customizable without forking.** Every detection rule ships "locked" and accepts an
   optional customer override file that survives upgrades — add your own rule, extend a shipped
   one, or disable it, all in plain YAML next to the original.
+- **Rules that cannot work are reported, never silently skipped.** ✅ 2026-08-07 — each run names
+  any match type the engine does not recognise, with how many detections it affects, and any rule
+  that loads with an empty detection block. A mistake in one of your own rules surfaces on the run
+  that uses it instead of staying invisible. A rule you deliberately switched off is not flagged —
+  suppression is a legitimate reason to have no detections.
 
 ## 4. Inputs — supported data providers
 
@@ -185,6 +190,9 @@ keeps its chapter as it moves from planned → delivered.
   table mapping the common Advanced-Hunting / KQL errors to their fix.
 - **Latest-snapshot semantics.** Every row carries a consistent collection timestamp so KQL
   always selects one coherent snapshot, even across shards.
+- **On-demand rule check that shows its denominator.** ✅ 2026-08-07 — validate your rule tree
+  whenever you like; the verdict is printed together with **how many rule files were examined**, so
+  a clean result can never mean "looked at nothing". Examining nothing is reported as a failure.
 
 ## 14. Documentation
 

@@ -1,0 +1,18 @@
+# SIA container build context = the SecurityInsight solution root (the Dockerfile needs
+# analyzer-web/src + analyzer/seed). The image must contain ONLY those. Exclude EVERYTHING
+# else from the ACR build upload — in particular NEVER upload customer config to the build
+# service: *.custom.* / config/ / DATA/ / demo/ stay out.
+*
+!analyzer-web
+!analyzer
+analyzer/*
+!analyzer/seed
+# never ship build artifacts or any customer/runtime config even from the included trees
+analyzer-web/**/bin
+analyzer-web/**/obj
+**/*.custom.ps1
+**/*.custom.json
+**/*.custom.csv
+**/*.custom.yaml
+**/config/
+**/DATA/

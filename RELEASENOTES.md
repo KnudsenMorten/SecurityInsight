@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.405
+## v2.2.406
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI): #30/#31 -- a SAMPLE file was winning over the shipped rule (e56f2f6d)
 - docs(SI): fix the one unresolved TOC anchor blocking publish (a77e5c16)
 - release(SI): VERSION 2.2.405 -- all six tag criteria met, verified on real runs (add02cca)
 - docs(SI): write down the tag/no-tag criteria before judging (c9d9addd)
@@ -33,13 +34,61 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI): audit #23 -- delete the duplicated 166-line prologue in the PTC engine (d8e5d74a)
 - fix(SI): audit #24 -- the AutoBucket probe now escalates on a 900s ceiling timeout (b50b3f5c)
 - docs(SI): #16 live gate PASSED on a complete RA run; #24 proven by the same run (f712ebf5)
-- docs(SI): correct my own #24 claim -- -ResetCache does NOT fix the slow reports (a35e1cb8)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.406 — An example rule was running as a real rule
+
+**Upgrade if you run asset profiling.** One file, shipped by us, was being applied to your estate as
+a live detection rule. This release is that fix.
+
+### A sample file was acting as a detection rule — and outranking the real one
+
+**Symptom.** None you could see. Runs completed normally and reported success.
+
+**Cause.** A stray duplicate of an example file — `ADDomainController.custom.sample - Copy.yaml` —
+shipped inside the profiling rules folder. The engine skipped example files by looking for `.sample.`
+in the name, and this name reads `.sample - Copy.yaml`, so the check did not match it. The file was
+loaded as a genuine rule.
+
+It then went further. When two rules share an id, the engine keeps one. **On any host that had not
+written its own `ADDomainController.custom.yaml`, the example won** — so the sample's contents, not
+our shipped `ADDomainController.locked.yaml`, decided how domain controllers were classified. Hosts
+that *had* written their own override were unaffected: their file still won.
+
+**Fix.** The engine no longer guesses which files are examples. **A rule is now `*.locked.yaml` (ours)
+or `*.custom.yaml` (yours), and nothing else is loaded** — examples, editor backups, `- Copy`
+duplicates and scratch files are all ignored, whatever they are called. Example files still ship and
+still sit beside the rules for you to copy from; they simply cannot take effect until you rename one
+to `*.custom.yaml`. The stray file is renamed to the correct `ADDomainController.custom.sample.yaml`.
+
+**Do you need to do anything?** No. If you never wrote your own `ADDomainController.custom.yaml`,
+domain-controller classification returns to our shipped rule on the next profiling run.
+
+### Two misleading warnings on every endpoint run
+
+**Symptom.** Every endpoint run printed:
+
+```
+WARNING: Get-SIRuleSet: skipping AssetTagging.custom.yaml (no id field)
+WARNING: Get-SIRuleSet: skipping AssetTagging.locked.yaml (no id field)
+```
+
+**Cause.** Those two files use a different, perfectly valid format that another part of the product
+reads. The engine has a check meant to recognise them and pass over them quietly, but the check could
+never match, so they fell through to the generic "this rule file looks malformed" path. Nothing was
+wrong with either file.
+
+**Why this is more than cosmetic.** v2.2.405 shipped a fix for genuinely unloadable rule files, whose
+whole point is that a warning about your rules must be believable. Printing two false warnings every
+run teaches the opposite. Endpoint rule-loading now emits **no warnings** unless something is really
+wrong.
 
 ---
 

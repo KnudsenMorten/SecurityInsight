@@ -126,9 +126,20 @@ function Get-SIRuleSet {
         $yamls = @(Get-ChildItem -Path $engineRoot -Filter '*.yaml' -Recurse -File -ErrorAction SilentlyContinue)
 
         foreach ($f in $yamls) {
-            # Skip .gitkeep, _samples, *.sample.yaml/json (sample/template files
-            # for customer reference -- they are NOT loaded by the engine).
-            if ($f.Name -like '_*' -or $f.Name -like '.*' -or $f.Name -like '*.sample.*') { continue }
+            # ALLOW-LIST -- a rule is *.locked.yaml (shipped) or *.custom.yaml
+            # (customer override). NOTHING else in this tree is a rule: samples,
+            # editor backups, "- Copy" duplicates, .gitkeep and _scratch files
+            # must never load.
+            #
+            # This used to be a blacklist ('_*', '.*', '*.sample.*'). It let
+            # 'ADDomainController.custom.sample - Copy.yaml' through, because
+            # -like '*.sample.*' needs the literal '.sample.' and that name reads
+            # '.sample - Copy.yaml'. The file loaded as a live rule and -- on any
+            # host without its own ADDomainController.custom.yaml -- WON over the
+            # shipped ADDomainController.locked.yaml, making sample content the
+            # effective detection rule. Verified, and it shipped in v2.2.405.
+            # A blacklist has to predict every wrong name; an allow-list does not.
+            if ($f.Name -notlike '*.locked.yaml' -and $f.Name -notlike '*.custom.yaml') { $skipped++; continue }
             # honor -IncludeCustom at the file-suffix level since
             # locked + custom now share one folder.
             if (-not $IncludeCustom -and $f.Name -like '*.custom.yaml') { continue }
@@ -164,7 +175,13 @@ function Get-SIRuleSet {
             # but belong to other engines (e.g. AssetTagging.custom.yaml uses
             # the asset-tagging-engine shape `AssetTagging: [...]` -- not a
             # rule shape). These should not produce a noisy WARN every run.
-            if ($obj -and ($obj.PSObject.Properties.Name -contains 'AssetTagging')) {
+            # ConvertFrom-Yaml returns a Hashtable, so .PSObject.Properties lists the
+            # HASHTABLE's own members (IsReadOnly, Keys, Values, Count, ...) and never
+            # the YAML keys -- this test was ALWAYS false. The AssetTagging files fell
+            # through to the 'no id field' branch instead and emitted a misleading
+            # WARNING every run, which is exactly the noise this guard exists to
+            # prevent. Ask the dictionary itself.
+            if ($obj -is [System.Collections.IDictionary] -and $obj.Contains('AssetTagging')) {
                 $skipped++; continue
             }
             $id = [string]$obj.id

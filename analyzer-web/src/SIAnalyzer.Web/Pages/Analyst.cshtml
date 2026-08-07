@@ -1,0 +1,200 @@
+@page
+@using SIAnalyzer.Web.Rendering
+@using SIAnalyzer.Web.Security
+@model SIAnalyzer.Web.Pages.AnalystModel
+@{
+    Layout = null;
+    var cspNonce = Model.HttpContext.GetCspNonce();
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SecurityInsight Analyzer - Analyst</title>
+<style>
+/* PIM-Manager-matched theme (blue #0969da, light surfaces, tab menu), mobile-first + accessible. */
+:root{--bg:#fff;--card:#fff;--surface:#f6f8fa;--ink:#1a1a1a;--muted:#57606a;--line:#d0d7de;--accent:#0969da;--accent-dk:#0a53be;--crit:#cf222e;--high:#bc4c00}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,system-ui,Arial,sans-serif;background:var(--surface);color:var(--ink);line-height:1.5}
+a{color:var(--accent)}
+a:focus-visible,button:focus-visible,summary:focus-visible,.tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.brandbar{background:var(--accent);color:#fff;padding:12px 20px;position:sticky;top:0;z-index:6}
+.brand{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.logo{background:#fff;color:var(--accent);border-radius:6px;padding:3px 8px;font-weight:800;font-size:14px}
+.brand-title{font-weight:700;font-size:17px;letter-spacing:.4px;text-transform:uppercase}
+.brand-sub{font-size:11px;opacity:.9}
+.tabs{display:flex;flex-wrap:wrap;gap:2px;background:var(--surface);border-bottom:1px solid var(--line);padding:0 12px;position:sticky;top:48px;z-index:5}
+.tab{padding:11px 16px;cursor:pointer;font-size:13px;font-weight:600;color:var(--muted);text-decoration:none;border-bottom:2px solid transparent;white-space:nowrap}
+.tab:hover{color:var(--accent)}.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.wrap{max-width:1080px;margin:0 auto;padding:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:18px}
+.card h2{font-size:16px;margin:0 0 12px}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.chip{background:#fff;border:1px solid var(--line);color:var(--accent);border-radius:20px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:600}
+.chip:hover{border-color:var(--accent)}
+textarea,input[type=text]{width:100%;background:#fff;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:10px;font-family:inherit;font-size:14px}
+textarea{min-height:64px;resize:vertical}
+.row{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-weight:700;cursor:pointer}
+.btn:hover{background:var(--accent-dk)}
+.btn.sec{background:#fff;color:var(--ink);border:1px solid var(--line)}
+.muted{color:var(--muted);font-size:13px}
+.kql{font-family:Consolas,monospace;font-size:13px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:10px;white-space:pre-wrap;display:none;margin-top:10px}
+.tbl-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px}
+th,td{text-align:left;padding:7px 9px;border-bottom:1px solid var(--line)}th{color:var(--muted)}
+.narr{margin-top:12px;padding:12px;border-left:3px solid var(--accent);background:var(--surface);border-radius:6px;white-space:pre-wrap}
+.warn{color:var(--high)}
+.partial-banner{font-size:14px;background:rgba(207,34,46,.10);border:2px solid var(--crit);color:#8b1a1a;border-radius:8px;padding:12px 14px;margin:0 0 14px}
+.gov-tag{display:inline-block;font-size:11px;font-weight:700;border-radius:12px;padding:2px 10px;background:rgba(9,105,218,.12);color:var(--accent-dk)}
+.gov-out{font-size:13px;color:var(--muted);min-height:1em;margin-top:8px}
+@@media (max-width:760px){.wrap{padding:14px}}
+@@media (max-width:420px){.tabs{top:46px}.brand-sub{flex-basis:100%}}
+</style>
+</head>
+<body>
+@Html.Raw(ExecHtmlRenderer.NavChrome("analyst", false))
+<main class="wrap" role="main">
+  @if (Model.Quality?.IsPartial == true)
+  {
+    <p class="partial-banner" role="alert"><strong>@SIAnalyzer.Web.Services.DataQuality.Warning</strong></p>
+  }
+  <p class="muted">Source: @(Model.IsLive ? "live workspace (read-only)" : "demo data") &middot; AI: @(Model.AiAvailable ? "on" : "unavailable (templated fallback)")</p>
+
+  <section class="card">
+    <h2>Ask a question</h2>
+    <div class="chips" id="chips">
+      <span class="chip" data-q="Which Tier 0 assets are internet-facing with a critical vulnerability?">Crown jewels exposed to the internet</span>
+      <span class="chip" data-q="Which privileged identities are stale or unused?">Stale privileged accounts</span>
+      <span class="chip" data-q="What high-risk findings are new since the last snapshot?">What is new this run</span>
+      <span class="chip" data-q="Why did our risk score change since last time?">Why did our score change</span>
+    </div>
+    <label class="muted" for="q">Your question</label>
+    <textarea id="q" placeholder="e.g. Which servers can a contractor account reach?"></textarea>
+    <div class="row">
+      <label class="muted" for="aud">Tone</label>
+      <select id="aud" class="btn sec"><option value="analyst">Analyst tone</option><option value="management">Executive tone</option></select>
+      <button type="button" class="btn" id="askBtn">Ask (AI composes guarded KQL)</button>
+      <label class="muted"><input type="checkbox" id="showq"> show query</label>
+    </div>
+    <div id="askout"></div>
+  </section>
+
+  <section class="card">
+    <h2>One-click analyses</h2>
+    <div class="chips">
+      @foreach (var a in Model.Prestaged)
+      {
+        @* AUDIT #19 + #13: was onclick="runPrestaged('@a.Id')" - HTML-encoded, but dropped into a
+           JS STRING LITERAL, so an id containing a quote would have escaped into code. Safe while
+           ids came from the static PrestagedLibrary; fragile the moment they became data-driven.
+           Now a data attribute read by a delegated listener - never parsed as code, and the inline
+           handler is gone so script-src can stay nonce-only. *@
+        <span class="chip" title="@a.Plain" data-prestaged-id="@a.Id">@a.Title</span>
+      }
+    </div>
+    <div id="preout"></div>
+  </section>
+
+  <section class="card">
+    <h2>Top findings</h2>
+    <p class="muted">Highest-scoring findings in the latest snapshot. A finding that has been
+      risk-accepted or exempted is <strong>marked, not hidden</strong> - it stays in the list and
+      keeps counting toward the score, so a governance decision never quietly improves the number.</p>
+    <div class="row"><button type="button" class="btn sec" id="wlBtn">Load top findings</button></div>
+    <div id="wlout"></div>
+  </section>
+
+  <section class="card">
+    <h2>Run read-only KQL</h2>
+    <p class="muted">Read-only only. Writes, control commands and off-allow-list tables are rejected by the guardrail.</p>
+    <label class="muted" for="kql">Read-only KQL</label>
+    <textarea id="kql" class="kql" style="display:block" placeholder="SI_Endpoint_Profile_CL | where CriticalityTier <= 1 | take 20"></textarea>
+    <div class="row"><button type="button" class="btn" id="kqlBtn">Run</button></div>
+    <div id="kqlout"></div>
+  </section>
+</main>
+<script nonce="@cspNonce">
+function esc(s){return (s==null?'':String(s)).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function toggleQ(){document.querySelectorAll('.qbox').forEach(function(e){e.style.display=document.getElementById('showq').checked?'block':'none';});}
+document.querySelectorAll('#chips .chip').forEach(function(c){c.onclick=function(){document.getElementById('q').value=c.dataset.q;};});
+function renderResult(target,data){
+  var el=document.getElementById(target);var h='';
+  if(data.narrative){h+='<div class="narr">'+esc(data.narrative)+(data.narrativeFromAi===false?'\n\n(generated - AI unavailable)':'')+'</div>';}
+  if(data.kql){h+='<div class="kql qbox" style="display:'+(document.getElementById('showq')&&document.getElementById('showq').checked?'block':'none')+'">'+esc(data.kql)+'</div>';}
+  var r=data.result;
+  if(r&&r.columns){h+='<div class="tbl-wrap"><table><thead><tr>'+r.columns.map(function(c){return '<th>'+esc(c)+'</th>';}).join('')+'</tr></thead><tbody>';
+    h+=r.rows.slice(0,100).map(function(row){return '<tr>'+row.map(function(v){return '<td>'+esc(v)+'</td>';}).join('')+'</tr>';}).join('');
+    h+='</tbody></table></div>';if(r.rows.length>100){h+='<p class="muted">Showing first 100 of '+r.rows.length+' rows.</p>';}}
+  el.innerHTML=h;
+}
+async function post(url,body){var r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});return r.json();}
+async function ask(){var q=document.getElementById('q').value.trim();if(!q)return;
+  document.getElementById('askout').innerHTML='<p class="muted">Working...</p>';
+  var d=await post('/api/adhoc',{question:q,audience:document.getElementById('aud').value});renderResult('askout',d);}
+async function runPrestaged(id){document.getElementById('preout').innerHTML='<p class="muted">Working...</p>';
+  var d=await post('/api/prestaged/run',{id:id,audience:document.getElementById('aud').value});renderResult('preout',d);}
+async function runKql(){var k=document.getElementById('kql').value.trim();if(!k)return;
+  document.getElementById('kqlout').innerHTML='<p class="muted">Working...</p>';
+  var d=await post('/api/query',{kql:k,audience:document.getElementById('aud').value});renderResult('kqlout',d);}
+
+// --- Worklist + the governance decision, in the place the finding is actually seen ---------
+var wlRows=[];
+async function loadWorklist(){
+  var el=document.getElementById('wlout');el.innerHTML='<p class="muted">Loading...</p>';
+  var r=await fetch('/api/worklist?top=25');
+  if(!r.ok){el.innerHTML='<p class="warn">Could not load the worklist ('+r.status+').</p>';return;}
+  wlRows=await r.json();renderWorklist();
+}
+function govBadge(g){
+  if(!g||!(g.riskAccepted||g.exempt))return '';
+  var until=g.expiryUtc?(' until '+String(g.expiryUtc).slice(0,10)):'';
+  return '<span class="gov-tag">'+esc(g.exempt?'Exempt':'Risk-accepted')+esc(until)+'</span>';
+}
+function renderWorklist(){
+  var el=document.getElementById('wlout');
+  if(!wlRows.length){el.innerHTML='<p class="muted">No findings in the latest snapshot.</p>';return;}
+  var h='<div class="tbl-wrap"><table><thead><tr><th>Asset</th><th>Severity</th><th>Tier</th><th>Score</th><th>Governance</th><th></th></tr></thead><tbody>';
+  h+=wlRows.map(function(w,i){var f=w.finding,g=w.governance;
+    return '<tr><td>'+esc(f.configurationName)+'</td><td>'+esc(f.securitySeverity)+'</td><td>'+esc(f.criticalityTierLevel)+
+      '</td><td>'+esc(Math.round(f.riskScoreTotal*10)/10)+'</td><td>'+(govBadge(g)||'<span class="muted">-</span>')+
+      // AUDIT #13: was onclick="acceptRow(i)". CSP blocks an inline handler however it was added -
+      // including one written through innerHTML like this one - so it is a data attribute now.
+      '</td><td><button type="button" class="btn sec" data-accept-row="'+i+'">Risk-accept</button></td></tr>';
+  }).join('');
+  h+='</tbody></table></div><p class="gov-out" id="wlmsg"></p>';
+  el.innerHTML=h;
+}
+/* AUDIT #13: every handler that used to be an inline on* attribute is bound here, so script-src
+   can stay 'self' + nonce. A nonce does NOT whitelist inline handlers -- leaving even one would
+   have forced 'unsafe-inline' across the whole app and made the CSP largely decorative.
+   The two row-level bindings are DELEGATED off the document because those rows are rendered later
+   by renderWorklist(); binding them directly would silently miss every row. */
+(function(){
+  var bind=function(id,fn){var e=document.getElementById(id);if(e){e.addEventListener('click',fn);}};
+  bind('askBtn',ask);
+  bind('wlBtn',loadWorklist);
+  bind('kqlBtn',runKql);
+  var sq=document.getElementById('showq');
+  if(sq){sq.addEventListener('change',toggleQ);}
+  document.addEventListener('click',function(ev){
+    if(!ev.target.closest)return;
+    var p=ev.target.closest('[data-prestaged-id]');
+    if(p){runPrestaged(p.getAttribute('data-prestaged-id'));return;}
+    var a=ev.target.closest('[data-accept-row]');
+    if(a){acceptRow(parseInt(a.getAttribute('data-accept-row'),10));}
+  });
+})();
+
+async function acceptRow(i){
+  var f=wlRows[i].finding;
+  var why=prompt('Why is this risk accepted? (a justification is required)');
+  if(!why)return;
+  var msg=document.getElementById('wlmsg');msg.textContent='Recording...';
+  var d=await post('/api/governance/risk-accept',{findingId:f.configurationId,configurationName:f.configurationName,justification:why});
+  msg.textContent=d.detail||'';
+  if(d.accepted){await loadWorklist();}
+}
+</script>
+</body>
+</html>

@@ -262,11 +262,67 @@ function Invoke-SIDiscover {
         return ,$ids
     }
 
+    function Get-SICorrelationCoverage {
+        <#
+          AUDIT #27 -- turn the second-pass merge counters into a coverage verdict.
+
+          Pure on purpose: the arithmetic and BOTH warning thresholds are the part worth
+          pinning in tests, and the stage around it cannot be executed offline. The stage
+          only formats and prints what this returns.
+
+          The headline number is CoveragePct, not Merged. An asset with no usable
+          AadDeviceId can never be correlated across MDE/EG/Entra however good the merge
+          logic is, so "merged N" on its own is not evidence that correlation works -- N
+          could be small because the estate is clean, or because almost nothing carried a
+          key. Only the ratio separates those two.
+        #>
+        param(
+            [int]$Considered,
+            [int]$Merged,
+            [int]$NoKey,
+            [int]$ConflictWithinRecord,
+            [int]$ConflictSharedId,
+            [int]$FinalCount
+        )
+        $conflicts = $ConflictWithinRecord + $ConflictSharedId
+        $withKey   = $Considered - $NoKey
+        if ($withKey -lt 0) { $withKey = 0 }
+        $pct = if ($Considered -gt 0) { [math]::Round((100.0 * $withKey / $Considered), 1) } else { 0 }
+        return [pscustomobject]@{
+            Considered           = $Considered
+            WithKey              = $withKey
+            CoveragePct          = $pct
+            Merged               = $Merged
+            Conflicts            = $conflicts
+            ConflictWithinRecord = $ConflictWithinRecord
+            ConflictSharedId     = $ConflictSharedId
+            NoKey                = $NoKey
+            FinalCount           = $FinalCount
+            HasConflicts         = ($conflicts -gt 0)
+            # NOTE there is deliberately NO "coverage is poor" verdict here.
+            # A first version warned below 50%. That was wrong, and the operator corrected it:
+            # a large share of records CANNOT have an AadDeviceId by nature. An Azure resource --
+            # a Key Vault, a storage account -- exists in Azure with no object in Entra ID at all,
+            # so it has no device id to carry. A low percentage is therefore the NORMAL shape of a
+            # mixed estate, not a fault, and warning on it would fire on every run and be learned
+            # into background noise -- the exact failure this finding set out to fix.
+        }
+    }
+
+    # AUDIT #27 -- these counters are the only evidence anyone has that cross-source
+    # correlation is actually working, so they are reported on EVERY run (see the summary
+    # at the end of this pass), not just under -Verbose.
+    # The two refusal reasons are counted SEPARATELY on purpose: they are different
+    # upstream data problems with different fixes.
+    #   * within-record  -- MDE/EG/Entra disagree about one asset's AadDeviceId
+    #   * shared-id      -- two differently-named assets claim the SAME AadDeviceId
     $byAadId          = @{}
     $keysToDrop       = New-Object System.Collections.Generic.List[string]
     $aadMergeCount    = 0
-    $zeroSkipCount    = 0
-    $conflictSkipCount = 0
+    $noKeyCount       = 0
+    $conflictWithinRecordCount = 0
+    $conflictSharedIdCount     = 0
+    $consideredCount  = $byKey.Count
     foreach ($entry in $byKey.GetEnumerator()) {
         $rec = $entry.Value
 
@@ -277,7 +333,10 @@ function Invoke-SIDiscover {
         }
         if ($allIds.Count -eq 0) {
             # No usable AadDeviceId at all (zero-GUID or absent) -- skip safely.
-            # Don't touch $zeroSkipCount; this record just lacks the merge key.
+            # AUDIT #27: this IS counted now. It was previously left uncounted on the
+            # grounds that the record "just lacks the merge key", but that is precisely
+            # the number that says how much of the estate can never correlate at all.
+            $noKeyCount++
             continue
         }
         if ($allIds.Count -gt 1) {
@@ -285,7 +344,7 @@ function Invoke-SIDiscover {
             # for this asset; refuse to use it as a merge key (would risk pulling
             # an unrelated device into the cluster). Log so the operator can fix
             # the upstream record (usually MDE has the wrong AadDeviceId).
-            $conflictSkipCount++
+            $conflictWithinRecordCount++
             $name = if ($rec.Name) { [string]$rec.Name } else { [string]$rec.AssetId }
             Write-SIDiag ('discover: skipping AadDeviceId merge for "{0}" -- record has {1} conflicting AadDeviceIds across MDE/EG/Entra ({2}). Fix the upstream record.' -f $name, $allIds.Count, (($allIds) -join ', '))
             continue
@@ -311,7 +370,7 @@ function Invoke-SIDiscover {
                 $pNorm = ($pName -replace '\..*$','').ToLowerInvariant()
                 $rNorm = ($rName -replace '\..*$','').ToLowerInvariant()
                 if ($pNorm -ne $rNorm -and $pNorm.Length -ge 3 -and $rNorm.Length -ge 3 -and $pNorm.Substring(0,3) -ne $rNorm.Substring(0,3)) {
-                    $conflictSkipCount++
+                    $conflictSharedIdCount++
                     Write-SIDiag ('discover: REFUSING AadDeviceId merge of {0} -- claimed by 2 records with very different names: "{1}" + "{2}". Keeping both as separate records. Fix the upstream AadDeviceId mapping.' -f $aadIdLc, $pName, $rName)
                     continue
                 }
@@ -342,10 +401,33 @@ function Invoke-SIDiscover {
         }
     }
     foreach ($k in $keysToDrop) { [void]$byKey.Remove($k) }
-    if ($conflictSkipCount -gt 0) {
-        Write-SIDiag ('second-pass merge: {0} record(s) skipped due to conflicting AadDeviceIds (see warnings above)' -f $conflictSkipCount)
+
+    # AUDIT #27 -- report correlation coverage on EVERY run.
+    #
+    # Both of these lines used to be Write-SIDiag, which prints only under -Verbose. The
+    # merge logic itself is sound (it lower-cases the key, skips the zero GUID, and refuses
+    # to merge on contradictory evidence rather than asserting "same device") -- but every
+    # OUTCOME of it was invisible. Correlation could fail across most of the estate and the
+    # run still looked clean, which is exactly the shape of the operator's report that
+    # correlation "isn't working as intended": it may be partly working, silently.
+    #
+    # Coverage is a data-quality metric, not a debug detail. The percentage is the headline
+    # number: an asset with no usable AadDeviceId can NEVER be correlated across
+    # MDE/EG/Entra, however good the merge logic is.
+    $cov = Get-SICorrelationCoverage -Considered $consideredCount -Merged $aadMergeCount `
+             -NoKey $noKeyCount -ConflictWithinRecord $conflictWithinRecordCount `
+             -ConflictSharedId $conflictSharedIdCount -FinalCount $byKey.Count
+
+    Write-SIInfo ('correlation (AadDeviceId): {0}/{1} record(s) carried a usable id ({2}%); merged {3}; refused {4}; {5} had no usable id (expected for records with no Entra object -- e.g. Azure resources such as Key Vaults or storage accounts); {6} asset(s) after merge.' -f `
+        $cov.WithKey, $cov.Considered, $cov.CoveragePct, $cov.Merged, $cov.Conflicts, $cov.NoKey, $cov.FinalCount)
+
+    if ($cov.HasConflicts) {
+        # Deliberately a WARN, and deliberately split by cause -- the two have different
+        # upstream fixes. These assets stay SPLIT across sources, so their tier and logon
+        # assignments are computed from partial evidence.
+        Write-SIWarn ('correlation: {0} merge(s) refused on conflicting AadDeviceIds -- {1} record(s) where MDE/EG/Entra disagree about one asset, {2} where two differently-named assets claim the same id. Those assets stay split across sources. Re-run with -Verbose to list them.' -f `
+            $cov.Conflicts, $cov.ConflictWithinRecord, $cov.ConflictSharedId)
     }
-    Write-SIDiag ('second-pass merge by AadDeviceId: collapsed {0} duplicate record(s) -> {1} final' -f $aadMergeCount, $byKey.Count)
 
     $assets = @($byKey.Values)
 

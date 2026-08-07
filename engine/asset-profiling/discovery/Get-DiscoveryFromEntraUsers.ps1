@@ -87,24 +87,20 @@ function Get-DiscoveryFromEntraUsers {
     # include signInActivity + customSecurityAttributes
     $url = 'https://graph.microsoft.com/v1.0/users?$select=id,displayName,userPrincipalName,accountEnabled,createdDateTime,jobTitle,department,onPremisesSyncEnabled,mail,userType,assignedLicenses,signInActivity,customSecurityAttributes&$top=999'
 
-    try {
-        do {
-            $resp = Invoke-RestMethod -Method Get -Uri $url `
-                -Headers @{ Authorization = ('Bearer ' + $token) }
-            foreach ($u in $resp.value) {
-                # Stamp IsDeleted=$false on every active-user row so the column
-                # exists for the deleted-user merge below (avoids null-vs-missing
-                # ambiguity downstream).
-                $u | Add-Member -NotePropertyName ENTRA_IsDeleted -NotePropertyValue $false -Force
-                [void]$rows.Add($u)
-            }
-            $url = $resp.'@odata.nextLink'
-        } while ($url)
-    } catch {
-        $msg = $_.Exception.Message
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-        Write-Warning ('EntraUsers: /users call failed -- {0}' -f $msg)
-        return @()
+    # Audit #4: retry transient failures and KEEP the pages already collected.
+    # Identity has only TWO sources, so discarding a throttled page-40-of-50 cost
+    # far more here than on the five-source endpoint engine.
+    . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared/Invoke-SIPagedRest.ps1')
+    $page = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'EntraUsers /users'
+    foreach ($u in $page.Rows) {
+        # Stamp IsDeleted=$false on every active-user row so the column exists for
+        # the deleted-user merge below (avoids null-vs-missing ambiguity downstream).
+        $u | Add-Member -NotePropertyName ENTRA_IsDeleted -NotePropertyValue $false -Force
+        [void]$rows.Add($u)
+    }
+    if (-not $page.Complete) {
+        Write-Warning ('EntraUsers: {0} -- continuing with {1} user(s) from {2} page(s); the run is NOT blocked.' -f `
+            $page.Error, $rows.Count, $page.Pages)
     }
 
     # Deleted users -- /directory/deletedItems/microsoft.graph.user lists users
@@ -116,21 +112,18 @@ function Get-DiscoveryFromEntraUsers {
     # active-user discovery already succeeded.
     $deletedUrl = 'https://graph.microsoft.com/v1.0/directory/deletedItems/microsoft.graph.user?$select=id,displayName,userPrincipalName,accountEnabled,createdDateTime,deletedDateTime,jobTitle,department,onPremisesSyncEnabled,mail,userType&$top=999'
     $deletedCount = 0
-    try {
-        do {
-            $resp = Invoke-RestMethod -Method Get -Uri $deletedUrl `
-                -Headers @{ Authorization = ('Bearer ' + $token) }
-            foreach ($u in $resp.value) {
-                $u | Add-Member -NotePropertyName ENTRA_IsDeleted -NotePropertyValue $true -Force
-                [void]$rows.Add($u)
-                $deletedCount++
-            }
-            $deletedUrl = $resp.'@odata.nextLink'
-        } while ($deletedUrl)
-    } catch {
-        $msg = $_.Exception.Message
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-        Write-Warning ('EntraUsers: deletedItems call skipped -- {0} (likely permission gap; active users already loaded).' -f $msg)
+    # Audit #4: same retry treatment. This block was already non-blocking (it warns
+    # and keeps the active users), but a transient 429 still lost every soft-deleted
+    # user; now it retries first and keeps whatever pages it did get.
+    $delPage = Invoke-SIPagedRest -Url $deletedUrl -Token $token -SourceLabel 'EntraUsers /directory/deletedItems'
+    foreach ($u in $delPage.Rows) {
+        $u | Add-Member -NotePropertyName ENTRA_IsDeleted -NotePropertyValue $true -Force
+        [void]$rows.Add($u)
+        $deletedCount++
+    }
+    if (-not $delPage.Complete) {
+        Write-Warning ('EntraUsers: deletedItems incomplete -- {0} (likely permission gap; {1} soft-deleted user(s) loaded, active users unaffected).' -f `
+            $delPage.Error, $deletedCount)
     }
     if ($deletedCount -gt 0) {
         Write-SIInfo ('[perms] EntraUsers: included {0} soft-deleted user(s) from /directory/deletedItems' -f $deletedCount)

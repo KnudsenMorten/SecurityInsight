@@ -142,17 +142,40 @@ function Connect-PlatformModern {
 
     # Verify cert is installed locally + valid (cert path is only usable when
     # both conditions hold)
+    #
+    # 2026-08-05: the old warning said "no matching cert ... (or expired)" for EVERY failure,
+    # which sent a real diagnosis down the wrong path. There are four distinct reasons this can
+    # fail and they need completely different fixes:
+    #   1. the cert genuinely is not installed          -> install it
+    #   2. it is installed but EXPIRED                  -> renew it
+    #   3. the store is not READABLE in this context    -> nothing is wrong with the cert
+    #   4. KV holds a thumbprint with stray whitespace  -> fix the KV secret
+    # Case 3 is the nasty one: a process that cannot see Cert:\LocalMachine\My gets an empty
+    # store and an identical "no matching cert" message, so a perfectly valid cert looks missing.
+    # (Observed for real: a sandboxed shell saw 0 certs while the same user in another shell saw 53.)
+    # So report which case it actually is.
     $modernCertUsable = $false
     if ($modernThumb) {
-        foreach ($store in @("Cert:\LocalMachine\My\$modernThumb", "Cert:\CurrentUser\My\$modernThumb")) {
-            $c = Get-Item -LiteralPath $store -ErrorAction SilentlyContinue
-            if ($c -and $c.NotAfter -gt (Get-Date)) {
-                $modernCertUsable = $true
-                break
+        # A thumbprint with stray whitespace/newline from KV can never match a store path.
+        $modernThumb = "$modernThumb".Trim()
+
+        $storeReadable = $false
+        foreach ($storeRoot in @('Cert:\LocalMachine\My', 'Cert:\CurrentUser\My')) {
+            $all = @(Get-ChildItem -Path $storeRoot -ErrorAction SilentlyContinue)
+            if ($all.Count -gt 0) { $storeReadable = $true }
+            $c = $all | Where-Object { $_.Thumbprint -eq $modernThumb } | Select-Object -First 1
+            if ($c) {
+                if ($c.NotAfter -gt (Get-Date)) { $modernCertUsable = $true; break }
+                Write-Warning ("Connect-PlatformModern: cert {0} IS installed in {1} but EXPIRED on {2:yyyy-MM-dd}. Renew it; falling back to secret-based auth meanwhile." -f $modernThumb, $storeRoot, $c.NotAfter)
             }
         }
+
         if (-not $modernCertUsable) {
-            Write-Warning ("Connect-PlatformModern: KV has Modern-Thumbprint = {0} but no matching cert in Cert:\LocalMachine\My or CurrentUser\My (or expired). Falling back to secret-based auth on this host." -f $modernThumb)
+            if (-not $storeReadable) {
+                Write-Warning ("Connect-PlatformModern: BOTH certificate stores read as EMPTY in this process, so cert {0} could not be checked at all -- this is almost certainly a context/permission problem (sandboxed, restricted or non-interactive session), NOT a missing certificate. Verify with: Get-ChildItem Cert:\LocalMachine\My. Falling back to secret-based auth." -f $modernThumb)
+            } else {
+                Write-Warning ("Connect-PlatformModern: KV has Modern-Thumbprint = {0} but no certificate with that thumbprint exists in Cert:\LocalMachine\My or Cert:\CurrentUser\My (the stores ARE readable and were searched). Check the KV value matches an installed cert. Falling back to secret-based auth on this host." -f $modernThumb)
+            }
         }
     }
 

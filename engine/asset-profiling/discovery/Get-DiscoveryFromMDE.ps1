@@ -47,18 +47,16 @@ function Get-DiscoveryFromMDE {
     $rows = New-Object System.Collections.ArrayList
     $url = 'https://api.securitycenter.microsoft.com/api/machines'
 
-    try {
-        do {
-            $resp = Invoke-RestMethod -Method Get -Uri $url `
-                -Headers @{ Authorization = ('Bearer ' + $token) }
-            foreach ($m in $resp.value) { [void]$rows.Add($m) }
-            $url = $resp.'@odata.nextLink'
-        } while ($url)
-    } catch {
-        $msg = $_.Exception.Message
-        if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $msg = $_.ErrorDetails.Message }
-        Write-Warning ('MDE direct: /api/machines failed -- {0}. (ExposureGraph already covers most tenants.)' -f $msg)
-        return @()
+    # Audit #4: retry transient failures and KEEP the pages already collected. A
+    # throttle mid-pagination used to discard every page and return @(), which the
+    # caller could not tell apart from "this tenant has no devices". A source that
+    # dies after retries degrades the run; it must never block it.
+    . (Join-Path (Split-Path -Parent $PSScriptRoot) 'shared/Invoke-SIPagedRest.ps1')
+    $page = Invoke-SIPagedRest -Url $url -Token $token -SourceLabel 'MDE /api/machines'
+    foreach ($m in $page.Rows) { [void]$rows.Add($m) }
+    if (-not $page.Complete) {
+        Write-Warning ('MDE direct: {0} -- continuing with {1} device(s) from {2} page(s); the run is NOT blocked. (ExposureGraph already covers most tenants.)' -f `
+            $page.Error, $rows.Count, $page.Pages)
     }
 
     $_total = $rows.Count; $_i = 0

@@ -62,171 +62,28 @@ if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:S
 }
 if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
 
-if (-not [bool]$global:AutomationFramework) {
-    # v2.2.233 -- accept either ClientSecret OR CertificateThumbprint. The old
-    # check required Secret, breaking SPN+cert customers entirely.
-    $hasSecret = -not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)
-    $hasCert   = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
-    if ([string]::IsNullOrWhiteSpace([string]$global:SpnTenantId) -or
-        [string]::IsNullOrWhiteSpace([string]$global:SpnClientId) -or
-        (-not $hasSecret -and -not $hasCert)) {
-        throw "Missing SPN globals (SpnTenantId/SpnClientId + one of SpnClientSecret OR SpnCertificateThumbprint). Launcher must set them or enable AutomationFramework."
-    }
-}
-
-if ([bool]$global:AutomationFramework) {
-    # --- Automation Framework branch (internal 2LINKIT infra) ---
-    $ScriptDirectory = $PSScriptRoot
-
-    # v2 bootstrap: walk up to find the AutomateITPS module (= repo root),
-    # then one call to Initialize-PlatformAutomationFramework takes care of
-    # cert-based Connect-AzAccount, fetching Modern secrets from KV, and
-    # populating the v1-contract $global:HighPriv_* / $global:AzureTenantId
-    # names. Zero v1 module imports.
-    $repoRoot = $ScriptDirectory
-    while ($repoRoot -and -not (Test-Path (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1'))) {
-        $repoRoot = Split-Path -Parent $repoRoot
-    }
-    if (-not $repoRoot) {
-        throw "AutomationFramework bootstrap: cannot find FUNCTIONS\AutomateITPS\AutomateITPS.psd1 walking up from '$ScriptDirectory'."
-    }
-    $global:PathScripts = $repoRoot
-    Write-Output ""
-    Write-Output "Repo root          -> $($global:PathScripts)"
-
-    Import-Module (Join-Path $repoRoot 'FUNCTIONS\AutomateITPS\AutomateITPS.psd1') -Global -Force -WarningAction SilentlyContinue
-
-    # Initialize-PlatformAutomationFramework does cert-based Connect-MgGraph
-    # internally. MSAL caches the resulting token under %LOCALAPPDATA%; if that
-    # cache is corrupted (e.g. partial write, version mismatch, half-encrypted
-    # remnant) the bootstrap fails with:
-    #   "ClientCertificateCredential authentication failed:
-    #    MSAL deserialization failed to parse the cache contents."
-    # Wipe the cache and retry once. This is harmless -- the next sign-in just
-    # recreates the cache from scratch.
-    $bootstrapAttempt = 0
-    while ($true) {
-        $bootstrapAttempt++
-        try {
-            $null = Initialize-PlatformAutomationFramework -IgnoreMissingSecrets
-            Write-Output "[INFO] Auth method (bootstrap)  : SPN + Certificate (Initialize-PlatformAutomationFramework)"
-            break
-        } catch {
-            $msg = "$($_.Exception.Message) $($_.Exception.InnerException.Message)"
-            $isCacheCorruption = $msg -match 'MSAL deserialization' -or $msg -match 'cache contents' -or $msg -match 'token cache encryption'
-            if ($isCacheCorruption -and $bootstrapAttempt -lt 2) {
-                Write-Warning "Initialize-PlatformAutomationFramework failed with MSAL cache corruption -- clearing cache and retrying once."
-                foreach ($p in @(
-                    (Join-Path $env:LOCALAPPDATA '.IdentityService'),
-                    (Join-Path $env:LOCALAPPDATA 'Microsoft\IdentityCache'),
-                    (Join-Path $env:LOCALAPPDATA '.mgraph')
-                )) {
-                    if (Test-Path -LiteralPath $p) {
-                        Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
-                        Write-Output "[INFO] Cleared cache: $p"
-                    }
-                }
-                try { Disconnect-MgGraph -ErrorAction SilentlyContinue | Out-Null } catch {}
-                Start-Sleep -Seconds 2
-                continue
-            }
-            throw
-        }
-    }
-
-    # Map AF-mode variables to the SPN globals the rest of this script expects.
-    $global:SpnTenantId     = $global:AzureTenantId
-    $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure
-    $global:SpnClientSecret = $global:HighPriv_Modern_Secret_Azure
-
-} else {
-    # --- Community / standalone branch (SPN globals set by launcher) ---
-    if (-not (Get-AzContext -ErrorAction SilentlyContinue)) {
-        $secretSecure = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
-        $credential   = New-Object System.Management.Automation.PSCredential ($global:SpnClientId, $secretSecure)
-        Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $credential -WarningAction SilentlyContinue | Out-Null
-    }
-}
-
-# Force TLS 1.2 for .NET Framework HTTP stack (PS 5.1 default can be TLS 1.0/1.1)
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-
-# 2026-05-02: silent defaults for AI batching globals so the per-chunk loop
-# stops emitting [WARN] AI_ChunkSize / AI_MaxRetries / AI_MaxTokens lines on
-# every batch when the launcher's locked config doesn't override them.
-if (-not $global:AI_ChunkSize  -or [int]$global:AI_ChunkSize  -lt 1) { $global:AI_ChunkSize  = 50 }
-if (-not $global:AI_MaxRetries -or [int]$global:AI_MaxRetries -lt 1) { $global:AI_MaxRetries = 3 }
-if (-not $global:AI_MaxTokens  -or [int]$global:AI_MaxTokens  -lt 1) { $global:AI_MaxTokens  = 16384 }
-
-# Output goes to v2.2/privilege-tier-catalog/ (the dedicated cross-engine catalog
-# folder). The engine script lives at v2.2/engine/privilege-tier-classifier/ --
-# two levels up reaches v2.2/, then 'privilege-tier-catalog/'. The catalog is
-# CONSUMED by the asset-profiling engines (Identity/Endpoint/Azure) and the RA
-# engine, so it lives in its own peer folder rather than under data/ or under
-# this engine's own tree.
-#Requires -Version 5.1
-<#
-.SYNOPSIS
-    SecurityInsight Identity Tiering -- collects AD groups, Entra roles, API permissions,
-    Azure roles; sends one AI request per category (4 total);
-    exports a fully tiered JSON output file.
-
-.DESCRIPTION
-    Data collection:
-      A) AD built-in group members (recursive, group-in-group)
-      B) Entra ID role definitions -- built-in + custom (no assignments)
-      C) API permission catalog from well-known Microsoft service principals (no grants)
-      D) Azure built-in + custom role definitions (no assignments)
-
-    AI tiering (4 batched calls -- one per category):
-      1) AD built-in groups
-      2) Entra ID roles (built-in + custom)
-      3) Entra API permissions
-      4) Azure RBAC roles
-    Output:
-      Single structured JSON file with all tier sections
-
-.NOTES
-    Solution       : SecurityInsight
-    File           : Build_Tier_Definitions_JSON_File.ps1
-    Developed by   : Morten Knudsen, Microsoft MVP
-    Blog           : https://mortenknudsen.net  (alias https://aka.ms/morten)
-    GitHub         : https://github.com/KnudsenMorten
-    Support        : For public repos, open a GitHub Issue on that solution's repo.
-
-
-#>
-
 # ----------------------------------------------------------------------
-#  Module dependencies -- centralized helper under _shared/
+#  -WhatIfMode IS NOT IMPLEMENTED BY THIS ENGINE -- refuse rather than lie.
+#
+#  The privilege-tier-classifier launchers expose -WhatIfMode and set
+#  $global:WhatIfMode, but this engine never reads it. The switch had NO effect: a
+#  "dry run" still sent the AI requests and still wrote the tiered JSON catalog that
+#  the asset-profiling and RA engines then consume. A switch that silently does the
+#  opposite of what its name promises is more dangerous than no switch at all,
+#  because it gets used precisely when someone is trying to be careful. Only the
+#  asset-tagging engine actually honours it.
+#
+#  Found 2026-08-05 while verifying the audit #16 split on a live run.
+#
+#  If real dry-run support is ever implemented here, DELETE this block -- do not
+#  soften it to a warning.
 # ----------------------------------------------------------------------
-. (Join-Path $PSScriptRoot '_shared\Ensure-Module.ps1')
-Ensure-SecurityInsightModules
-
-# v2.2.233 -- SPN name bridge (defensive copy of Initialize-LauncherConfig).
-# Mirrors $global:SI_SPN_* (v2.3 Setup Wizard output) onto the legacy
-# $global:Spn* names this engine still reads, so the engine works when invoked
-# outside the standard launcher path.
-if ($global:SI_SPN_TenantId        -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:SI_SPN_TenantId }
-if ($global:SI_SPN_AppId           -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:SI_SPN_AppId }
-if ($global:SI_SPN_Secret          -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:SI_SPN_Secret }
-if ($global:SI_SPN_ObjectId        -and -not $global:SpnObjectId)              { $global:SpnObjectId              = [string]$global:SI_SPN_ObjectId }
-if ($global:SI_SPN_CertThumbprint  -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:SI_SPN_CertThumbprint }
-# v2.2.278 -- bridge from internal-AutomateIT framework's HighPriv_Modern_*_Azure
-# globals (set by Connect-Platform). SI_SPN_* > HighPriv_* precedence.
-if ($global:HighPriv_Modern_TenantID                       -and -not $global:SpnTenantId)              { $global:SpnTenantId              = [string]$global:HighPriv_Modern_TenantID }
-if ($global:HighPriv_Modern_ApplicationID_Azure            -and -not $global:SpnClientId)              { $global:SpnClientId              = [string]$global:HighPriv_Modern_ApplicationID_Azure }
-if ($global:HighPriv_Modern_ApplicationSecret_Azure        -and -not $global:SpnClientSecret)          { $global:SpnClientSecret          = [string]$global:HighPriv_Modern_ApplicationSecret_Azure }
-if ($global:HighPriv_Modern_CertificateThumbprint_Azure    -and -not $global:SpnCertificateThumbprint) { $global:SpnCertificateThumbprint = [string]$global:HighPriv_Modern_CertificateThumbprint_Azure }
-
-# ============================================================
-# CONFIGURATION (v2: launcher is source of truth)
-# ============================================================
-
-if (-not $global:SettingsPath -or [string]::IsNullOrWhiteSpace([string]$global:SettingsPath)) {
-    $global:SettingsPath = $PSScriptRoot
+if ($global:WhatIfMode) {
+    throw ("-WhatIfMode is NOT implemented by the privilege-tier-classifier engine, so it would " +
+           "not have prevented anything: the AI requests are still sent and the tiered JSON " +
+           "catalog is still written. Refusing to run rather than pretend this is a dry run. " +
+           "Re-run without -WhatIfMode if you intended a real run.")
 }
-if ($null -eq $global:AutomationFramework) { $global:AutomationFramework = $false }
 
 if (-not [bool]$global:AutomationFramework) {
     # v2.2.233 -- accept either ClientSecret OR CertificateThumbprint. The old

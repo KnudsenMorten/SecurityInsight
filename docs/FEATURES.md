@@ -196,3 +196,24 @@ keeps its chapter as it moves from planned → delivered.
 
 *Items still in progress or planned are tracked internally in the backlog. Only delivered, in-use
 capabilities appear in this catalog.*
+
+## SI Analyzer (SIA)
+
+### Status — nothing is "delivered" yet (by design)
+
+SIA is **built but NOT yet live-verified.** Per the documentation model, a feature is only listed here
+once it has passed the **hosted live-verify release gate** — a real hosted run behind Entra SSO against
+the real internal SecurityInsight workspace, with AI on, on SIA's own dedicated Azure infrastructure
+(see [TESTS.md](TESTS.md) for the exact gate). That run has **not** been executed.
+
+Until it passes, the full SIA capability set — the executive risk view, the risk-over-time timeline, the
+AI exec narrative, the board-deck export + scheduled exec email, the analyst worklist, and the read-only
+MCP endpoint — is **built and offline-tested** but stays on the **backlog** in
+[the shared REQUIREMENTS.md](REQUIREMENTS.md) (`◻`/`🟡`), not claimed as delivered here. The offline xunit suite is
+green (216 tests, demo data, AI-off); offline-green is necessary but not sufficient for "delivered".
+
+**When the hosted live-verify gate passes,** each verified capability moves here from REQUIREMENTS.md
+(same wording, in customer language, with a delivery date), DESIGN.md is updated, and TESTS.md records the
+gate result.
+
+_No features have been promoted to this file yet._

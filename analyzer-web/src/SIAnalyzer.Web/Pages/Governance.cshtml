@@ -1,0 +1,9 @@
+@page
+@using SIAnalyzer.Web.Rendering
+@using SIAnalyzer.Web.Security
+@model SIAnalyzer.Web.Pages.GovernanceModel
+@{
+    Layout = null;
+    var html = GovernanceRenderer.Render(Model.Store, Model.HttpContext.GetCspNonce());
+}
+@Html.Raw(html)

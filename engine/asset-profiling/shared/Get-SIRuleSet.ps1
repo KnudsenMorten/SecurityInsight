@@ -69,7 +69,14 @@ function Get-SIRuleSet {
 
         # Pass $false to skip rules-custom/. Default loads both locked + custom.
         [Parameter()]
-        [bool]$IncludeCustom = $true
+        [bool]$IncludeCustom = $true,
+
+        # AUDIT #29 -- test seam. Overrides the solution root this function would otherwise
+        # derive from $PSScriptRoot, so the rule-loading behaviour (notably the parse-failure
+        # reporting below) can be exercised against a scratch folder instead of the real
+        # enrichment tree. Production callers never pass it.
+        [Parameter()]
+        [string]$SolutionRootOverride
     )
 
     if (-not (Get-Module -Name 'powershell-yaml')) {
@@ -78,7 +85,8 @@ function Get-SIRuleSet {
 
     # Resolve v2.2 root from this script's location.
     # $PSScriptRoot = v2.2/engine/asset-profiling/shared -> three parents up = v2.2 root.
-    $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    $siRoot = if (-not [string]::IsNullOrWhiteSpace($SolutionRootOverride)) { $SolutionRootOverride }
+              else { Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) }
 
     # rules now live under asset-profiling-enrichment/<engine>/
     # (locked + custom coexist in the same dir, distinguished by file suffix
@@ -92,6 +100,9 @@ function Get-SIRuleSet {
     $results = New-Object System.Collections.ArrayList
     $loaded  = 0
     $skipped = 0
+    # AUDIT #29 -- parse failures tracked apart from the benign skips; see the catch below.
+    $parseFailed = 0
+    $parseFailedNames = New-Object System.Collections.Generic.List[string]
 
     # also walk rules/shared/ + rules-custom/shared/ for cross-engine rules.
     # Each rules root contributes two scan folders: <Engine>/ and shared/.
@@ -134,6 +145,12 @@ function Get-SIRuleSet {
             } catch {
                 Write-Warning ('Get-SIRuleSet: skipping {0} (parse error: {1})' -f $f.Name, $_.Exception.Message)
                 $skipped++
+                # AUDIT #29 -- counted SEPARATELY from $skipped on purpose. Most skips above are
+                # deliberate and benign (sample files, foreign schemas, engine filters), so a
+                # blanket "skipped=N" says nothing. A file that fails to PARSE is different: it is
+                # a rule the operator wrote and believes is in force, and it is not.
+                $parseFailed++
+                [void]$parseFailedNames.Add($f.Name)
                 continue
             }
 
@@ -310,6 +327,23 @@ function Get-SIRuleSet {
     }
 
     Write-Verbose ("Get-SIRuleSet: engine={0} loaded={1} skipped={2} folders={3}" -f $Engine, $loaded, $skipped, ($folders -join ','))
+
+    # AUDIT #29 -- a rule file that will not PARSE must be visible on a normal run.
+    #
+    # Found by running the endpoint profiler live: all 8 *.custom.yaml files in this environment
+    # had been unparseable since 2026-06-11 (the space after each `key:` was stripped), so every
+    # customer tagging/profiling rule was inert -- while the run still reported
+    # "Engine completed successfully". The per-file warnings above scroll past in a long log, and
+    # the only aggregate was the Write-Verbose line above, which prints for nobody by default.
+    # Same defect shape as #27: the engine knew, and never said so where anyone would look.
+    #
+    # Deliberately a WARNING, not a throw: a broken custom rule must not stop a security run that
+    # still produces useful output -- consistent with the standing "a source failing must never
+    # block the run" decision. But it must not be silent either.
+    if ($parseFailed -gt 0) {
+        Write-Warning ("Get-SIRuleSet: {0} of {1} rule file(s) for engine '{2}' FAILED TO PARSE and were not applied -- {3}. These rules are NOT in force for this run; classification and tagging ran without them. Fix the YAML (a common cause is a missing space after 'key:') and re-run." -f `
+            $parseFailed, ($loaded + $parseFailed), $Engine, ($parseFailedNames -join ', '))
+    }
     ,$results.ToArray()
 }
 

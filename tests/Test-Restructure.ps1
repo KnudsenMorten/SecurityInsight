@@ -96,22 +96,32 @@ Write-Host ("  $($sampleYamls.Count) sample .yaml in asset-profiling-enrichment/
 # Verify Get-SIRuleSet didn't load any of them (they have no `id` field that would match basename)
 _Add 'Sample isolation' 'PASS' "$($sampleYamls.Count + $sampleSchemaCustoms.Count) sample files exist + are skipped by loaders"
 
-# === 7. Consolidator runs cleanly ===
-Write-Host "`n=== 7. Consolidator (Build-RiskAnalysis) ===" -ForegroundColor Cyan
-# Run consolidator. Write-Host doesn't capture across PS versions, so verify via FILE INSPECTION instead of stdout parsing.
-& (Join-Path $v22 'engine\risk-analysis\tools\Build-RiskAnalysis.ps1') *> $null
-$outYaml = Get-Content -Raw (Join-Path $v22 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml')
-$canonHits = ([regex]::Matches($outYaml, '__SI_CANONICAL__')).Count
-$consOk = ($canonHits -eq 264)
-Write-Host ("  canonical sentinel hits: $canonHits (expected 264)") -ForegroundColor $(if($consOk){'Green'}else{'Red'})
-$consMsg = if ($consOk) { 'PASS (264 reports)' } else { 'FAIL' }
-$consColor = if ($consOk) { 'Green' } else { 'Red' }
-$consStatus = if ($consOk) { 'PASS' } else { 'FAIL' }
-Write-Host ("  consolidator: " + $consMsg) -ForegroundColor $consColor
-_Add 'Consolidator' $consStatus '264 reports + 2 templates expected'
+# === 7. RETIRED -- audit #28 (2026-08-06) ===
+# This section used to RUN the consolidator:
+#     & engine\risk-analysis\tools\Build-RiskAnalysis.ps1
+# which regenerated the shipped report catalog from engine/risk-analysis/_source/ as a SIDE
+# EFFECT OF "TESTING", then asserted 264 canonical sentinels in the result.
+#
+# That was destructive and nothing caught it. The regenerated catalog is not the shipped one:
+# 264 reports instead of 118, and the templates renamed to *_Bucket -- so the launcher's
+# 'RiskAnalysis_Summary' no longer exists and the engine THROWS on every run
+# ("ReportTemplate '...' not found in YAML under ReportTemplates"). It also dropped 57 shipped
+# reports and added 203 that had never shipped.
+#
+# Git settled which artefact is authoritative: the catalog has been hand-edited continuously
+# (cross-domain re-keys, scope trims, per-report hotfixes) while _source/ and the consolidator
+# went untouched since commit 536e1405, the v2.2.0 flatten. THE CATALOG IS THE SOURCE OF TRUTH.
+# Both were retired on the operator's decision. Recover from git if ever needed:
+#     git show 536e1405:SOLUTIONS/SecurityInsight/engine/risk-analysis/tools/Build-RiskAnalysis.ps1
+#     git show 536e1405:SOLUTIONS/SecurityInsight/engine/risk-analysis/_source/
+#
+# The catalog is now only ever READ -- see section 8. A swap-in is caught by
+# tests/pester/SI-OutputColumnUnion.Tests.ps1, Describe 'audit #28 -- the shipped catalog must
+# stay the shipped catalog'.
+_Add 'Consolidator' 'PASS' 'RETIRED (audit #28) -- catalog is hand-maintained, not generated'
 
-# === 8. Output YAML parse ===
-Write-Host "`n=== 8. Output YAML parse ===" -ForegroundColor Cyan
+# === 8. Shipped catalog parse (READ-ONLY) ===
+Write-Host "`n=== 8. Shipped catalog parse ===" -ForegroundColor Cyan
 try {
     $out = Get-Content -Raw (Join-Path $v22 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml') | ConvertFrom-Yaml
     Write-Host ("  Reports: $($out.Reports.Count) / Templates: $($out.ReportTemplates.Count)")

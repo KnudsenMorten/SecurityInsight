@@ -11,6 +11,64 @@
     real files so the pipeline produces verifiable artifacts.
 #>
 
+function Test-SIValuePopulated {
+    <#
+        AUDIT #17 -- "does this cell count as filled in?", extracted so a test can execute
+        it. It was inline in the pre-ingest audit below, which meant the rule deciding
+        whether a run may reach Log Analytics had NO executing coverage: the Pester gate
+        parses the engines but never runs them, and Test-Smoke's SCHEMA-DRIFT check asserts
+        something different (declared vs emitted columns).
+
+        Deliberately treats the two EMPTY-CONTAINER serialisations as unpopulated -- a
+        column that only ever holds "{}" or "[]" is a data-flow regression wearing a value.
+    #>
+    param([Parameter()][AllowNull()]$Value)
+    if ($null -eq $Value) { return $false }
+    $s = "$Value"
+    return ($s -ne '' -and $s -ne '{}' -and $s -ne '[]')
+}
+
+function Get-SIColumnPopulationStats {
+    <#
+        AUDIT #17 -- per-column fill rate over the built rows. Pure: no I/O, no globals.
+        Pct is integer-TRUNCATED, which is why the halt below tests -eq 0 rather than a
+        threshold: 1 populated row in 10,000 truncates to 0% but must NOT halt the run.
+        There is a test pinning exactly that.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Rows,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Columns
+    )
+    $total = @($Rows).Count
+    foreach ($col in $Columns) {
+        $populated = 0
+        foreach ($row in $Rows) {
+            if ($row.PSObject.Properties[$col]) {
+                if (Test-SIValuePopulated $row.$col) { $populated++ }
+            }
+        }
+        $pct = if ($total -gt 0) { [int](100 * $populated / $total) } else { 0 }
+        [pscustomobject]@{ Column = $col; Populated = $populated; Total = $total; Pct = $pct }
+    }
+}
+
+function Get-SIDeadCriticalColumns {
+    <#
+        AUDIT #17 -- THE PRE-INGEST HALT DECISION. An always-on column at 0% population
+        means the data flow broke upstream, and ingesting anyway would overwrite
+        yesterday's good snapshot with a stale/empty one. Audit #5 established this guard
+        is the only thing standing between a broken collection and exactly that.
+
+        Only AlwaysOn columns can halt a run: a non-critical column at 0% is shown in the
+        audit table but must never stop the ingest.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Stats,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AlwaysOn
+    )
+    return @($Stats | Where-Object { $_.Column -in $AlwaysOn -and $_.Pct -eq 0 })
+}
+
 function Apply-SIDcrScopeFilter {
     # v2.2.245 -- always-on cache-scope filter. AzLogDcrIngestPS resolves
     # DCE/DCR by NAME-ONLY Where-Object lookup against $global:AzDceDetails /
@@ -243,17 +301,8 @@ function Write-SIClassificationToLogAnalytics {
     # 0% on an always-on column halts before LA ingest -- catches data-flow regressions
     # before they ship a stale snapshot that overwrites yesterday's good one.
     if ($flat.Count -gt 0) {
-        $stats = foreach ($col in $cfg.AuditCols) {
-            $populated = 0
-            foreach ($row in $flat) {
-                if ($row.PSObject.Properties[$col]) {
-                    $v = $row.$col
-                    if ($null -ne $v -and "$v" -ne '' -and "$v" -ne '{}' -and "$v" -ne '[]') { $populated++ }
-                }
-            }
-            $pct = if ($flat.Count -gt 0) { [int](100 * $populated / $flat.Count) } else { 0 }
-            [pscustomobject]@{ Column = $col; Populated = $populated; Total = $flat.Count; Pct = $pct }
-        }
+        # AUDIT #17: same computation, now in a function so it can be executed by a test.
+        $stats = @(Get-SIColumnPopulationStats -Rows $flat -Columns @($cfg.AuditCols))
         Write-Host ''
         Write-SIStep 'pre-ingest population audit:'
         foreach ($s in $stats) {
@@ -284,7 +333,8 @@ function Write-SIClassificationToLogAnalytics {
         }
         $populatedCount = @($colStats | Where-Object { $_.Populated -gt 0 }).Count
         Write-SIInfo ('schema-coverage: {0} of {1} emitted columns have at least one non-empty value' -f $populatedCount, $allCols.Count)
-        $deadCritical = @($stats | Where-Object { $_.Column -in $cfg.AlwaysOn -and $_.Pct -eq 0 })
+        # AUDIT #17: the halt decision, in a function so a test can exercise it.
+        $deadCritical = @(Get-SIDeadCriticalColumns -Stats $stats -AlwaysOn @($cfg.AlwaysOn))
         if ($deadCritical.Count -gt 0) {
             Write-Warning ('       {0} CRITICAL column(s) at 0%% population -- run halted before LA ingest. Columns: {1}' -f `
                 $deadCritical.Count, (($deadCritical.Column) -join ', '))

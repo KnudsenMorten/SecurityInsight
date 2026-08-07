@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.2.412
+## v2.2.413
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI): session handoff -- the next session's mandate is implementation, and #40 is the headline (ec8b13b2)
+- docs(SI): #24 and #26 were closed by runs, and the state table never caught up (f3e455ff)
+- test(SI): #34 phase 2 is SKIPPED by decision -- assert the guard it leaves behind (c51247e8)
 - feat(SI): #16 tranche 3, and #39 is proven live -- Detailed rows now land in the Detailed table (cecd0944)
 - docs(SI): refresh the handoff -- #34 phase 1 shipped, and name the two items a live run gates (3d74c09f)
 - feat(SI): #34 phase 1 -- operator rules can live outside the tree the updater writes to (5ade1916)
@@ -31,15 +34,31 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): fix the one unresolved TOC anchor blocking publish (a77e5c16)
 - release(SI): VERSION 2.2.405 -- all six tag criteria met, verified on real runs (add02cca)
 - docs(SI): write down the tag/no-tag criteria before judging (c9d9addd)
-- fix(SI): #25 third shape -- count and list were on different SCOPES (1efc5536)
-- fix(SI): #27 -- drop the coverage warning; low AadDeviceId coverage is normal (8033a764)
-- fix(SI): #29 -- an unloadable rule file is now reported, not silently skipped (59a18aeb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.413 — Internal safeguards around your own rule files
+
+**No change to how anything runs.** This release adds checks that protect the boundary between the
+files we ship and the rule files you own.
+
+Your own rules use the `*.custom.yaml` name; ours use `*.locked.yaml` and `*.custom.sample.yaml`.
+That naming is what keeps an update from replacing your work, so our build now refuses to release if
+that boundary is ever crossed — if a file with your suffix were about to ship, or if the rule
+protecting those files from being packaged stopped working. A release is blocked rather than
+shipped.
+
+This matters because the protection is a convention rather than a lock, and a similar naming slip
+has bitten before: a file named like a template but not quite matching it was once treated as a live
+rule.
+
+Also included: internal status corrections to our own records, with no effect on the product.
 
 ---
 

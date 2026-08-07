@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.2.409
+## v2.2.410
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI): #39 -- the documented launch line ingested Detailed rows into the Summary table (f5e987e0)
+- docs: PUB-2 is APPLIED, not pending -- the handoff went stale an hour after it was written (857fd25b)
+- docs(SI): handoff -- the whole NEXT-SESSION list is spent, and what remains is four decisions (ad522c91)
 - release(SI): 2.2.409 -- #38 closed, the rule lint now covers the files customers COPY (57a1c14d)
 - release(SI): 2.2.408 -- host-name matching restored, proven by a live run (86e30fa4)
 - revert(publish): drop extraFiles -- it made publish.yml unparseable to GitHub, blocking ALL publishing (c3248f6f)
@@ -31,15 +34,72 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #27 PROVEN LIVE -- and the suspicion it was built to test is refuted (9339c492)
 - docs(SI): RELEASENOTES v2.2.405 -- the four operator-visible fixes (91fae3f9)
 - fix(SI): #24 PROVEN LIVE -- and the guard's own log message was wrong (d86d5738)
-- fix(SI): #25 -- ImpactedAssetCount is derived from the list it sits beside (100f0352)
-- chore(SI): #28 -- retire _source/ + Build-RiskAnalysis.ps1 (operator decision) (db1f7ffc)
-- fix(SI): #26 part 2 + #28 -- _source/ is dead scaffolding; fix the catalog itself (5904f0f6)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.410 — Detailed results have been landing in the Summary table
+
+**Upgrade immediately if you send Risk Analysis results to Log Analytics and run both report
+templates.** This affects the data in your workspace, not just a run.
+
+### What happened
+
+Risk Analysis ships two report templates, Summary and Detailed, and each has its own destination
+table and its own data collection rule. Which one a run uses is decided by an internal run-mode flag.
+
+Launching a run the documented way —
+
+```
+launcher.internal-vm.ps1 -ReportTemplate RiskAnalysis_Detailed
+```
+
+— selected the Detailed **catalog** but left the run-mode flag on its default. The flag, not the
+template, is what chooses the destination, so a Detailed run wrote its rows into the **Summary**
+table, using the Summary collection rule and the Summary mail recipients. Passing `-Detailed`
+instead was unaffected and always routed correctly.
+
+**Symptom.** None during the run. Every affected run reported success and the rows were ingested
+without error — into the wrong table.
+
+**Why it matters.** The documented way to read the latest snapshot is
+`where CollectionTime == max(CollectionTime)`. When a Detailed run finishes after the Summary run
+that day — the usual order — that query returns Detailed rows to anything reading the Summary table:
+workbooks, dashboards, exports and downstream tooling alike. In the environment where this was found,
+Detailed rows accounted for the large majority of the Summary table, and the Detailed table had
+received a single snapshot.
+
+### Fixed
+
+The run mode is now reconciled with the report template after the template is resolved, so
+`-ReportTemplate RiskAnalysis_Detailed` routes to the Detailed table, collection rule and mail
+recipients. The correction is logged when it applies, so you can see it in the run log. Both VM
+launchers are fixed.
+
+Contradictory parameters — an explicit `-Summary` together with a Detailed template, or the reverse
+— now **stop the run** with a message naming the tables at stake, instead of quietly picking one. A
+custom template we do not recognise leaves your configured mode untouched.
+
+### What you should check
+
+Rows already written to the wrong table are still **correctly labelled**, so they can be identified
+and filtered without guesswork:
+
+```kusto
+SI_RiskAnalysis_Summary_CL
+| summarize Rows = count(), Reports = dcount(AssetDetectedInReportName) by CollectionTime,
+            Kind = iff(AssetDetectedInReportName has "Detailed", "Detailed", "Summary")
+| order by CollectionTime desc
+```
+
+Any snapshot reported as `Detailed` came from a mis-routed run. Whether to leave those rows in place,
+exclude them at query time, or purge the affected snapshots is your decision — no new ones will be
+created after this upgrade.
 
 ---
 

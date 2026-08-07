@@ -310,3 +310,49 @@ Describe 'WorkflowSyntax' {
         { ConvertFrom-Yaml (Get-Content -Raw -LiteralPath $p) } | Should -Not -Throw
     }
 }
+
+# ============================================================================
+Describe 'PublishManifest' {
+# ============================================================================
+# A publish must ship the tree that was TAGGED and verified -- nothing else.
+#
+# `publish.yml` resolves what to publish in this order:
+#   1. workflow_dispatch input `sourceRef`
+#   2. solution.publish.json `previewSourceRef` / `stableSourceRef`
+#   3. fall back to '' -> the workflow checks out the TRIGGER REF (the tag)
+#
+# SI used to pin `previewSourceRef: "preview/v2.2"`, a branch last touched
+# 2026-05-02 that main is 1,387 commits ahead of. Tagging
+# `SecurityInsight-v2.2.408-preview` would therefore have published MAY CODE to
+# the public mirror, labelled 2.2.408 -- and every step would have "succeeded".
+# `stableSourceRef: "main"` was milder but still wrong: main is a MOVING ref, so
+# a publish could ship a commit that was never tagged or verified (main moved
+# three times within the hour of the 2.2.406/407 releases).
+#
+# Same failure as the release/stable ring ref that was never created, and as
+# `_source/` (#28): a parallel ref that must be maintained by hand, isn't.
+# Deleting the keys is the fix -- the trigger ref is immutable and is exactly
+# what was tested. The other three solutions never set them.
+
+    It 'no solution pins a publish sourceRef (publish from the immutable tag)' {
+        # tests/pester -> tests -> SecurityInsight -> SOLUTIONS  (4 ups lands ON SOLUTIONS)
+        $solutionsRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath)))
+        $manifests = @(Get-ChildItem -Path $solutionsRoot -Filter 'solution.publish.json' -Recurse -File -ErrorAction SilentlyContinue)
+        $manifests.Count | Should -BeGreaterThan 0 -Because 'a green run must not mean "found no manifests"'
+
+        $pinned = foreach ($m in $manifests) {
+            $cfg = Get-Content -Raw -LiteralPath $m.FullName | ConvertFrom-Json
+            foreach ($key in 'stableSourceRef', 'previewSourceRef') {
+                if ($cfg.PSObject.Properties.Name -contains $key) {
+                    '{0}: {1} = {2}' -f (Split-Path (Split-Path $m.FullName -Parent) -Leaf), $key, $cfg.$key
+                }
+            }
+        }
+        $pinned | Should -BeNullOrEmpty -Because @"
+a pinned sourceRef publishes something OTHER than the tag that triggered it.
+Found: $($pinned -join '; ')
+Remove the key so publish.yml falls back to the trigger ref. If a pin is ever
+genuinely needed, it must name a TAG (immutable), never a branch.
+"@
+    }
+}

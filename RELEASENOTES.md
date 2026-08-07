@@ -1,9 +1,23 @@
 # Release notes for SecurityInsight
 
-## v2.2.407
+## v2.2.408
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI): 2.2.408 -- host-name matching restored, proven by a live run (86e30fa4)
+- revert(publish): drop extraFiles -- it made publish.yml unparseable to GitHub, blocking ALL publishing (c3248f6f)
+- fix(SI): #38 -- a shipped SAMPLE taught a detection the lint rejects, and #29's cause was half-recorded (e5ebdcd8)
+- fix(SI): #37 -- the rule lint printed PASS while holding a violation, and #36's alarm was wrong (e814b96e)
+- docs(SI): handoff state for a fresh session -- the old NEXT-SESSION list is spent (ea01166b)
+- fix(SI): #29 part 2 -- the rule lint was dead, and it was hiding #35 and #36 (9ee5ba98)
+- docs(SI): #34 -- operator rule data lives inside the shipped code tree (proposed, not built) (a69e66dc)
+- feat(publish): implement extraFiles, and ship the customer update strategy (ebb7c805)
+- feat(sync): RING-1 phase 1 core -- generic ring + capability gating (3f5e3497)
+- chore: triage 7 weeks of untracked residue, and stop it coming back (2057bab8)
+- fix(publish): PUB-1 -- a publish could ship a tree that was never tagged (3bb505a4)
+- fix(SI): #33 -- the SIA deploy had no az sign-in, so unattended it died first call (e3d06491)
+- docs(SI): #33 -- audit SI's readiness for sync-triggered auto-deploy (ae610ed4)
+- fix(SI): #32 -- a CLEAN payload disabled the sanitization gate, and it said READY (ea887c75)
 - release(SI): 2.2.407 -- actually remove the stray file 2.2.406 only renamed (021ab682)
 - fix(SI): #30/#31 -- a SAMPLE file was winning over the shipped rule (e56f2f6d)
 - docs(SI): fix the one unresolved TOC anchor blocking publish (a77e5c16)
@@ -20,26 +34,66 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - chore(SI): #28 -- retire _source/ + Build-RiskAnalysis.ps1 (operator decision) (db1f7ffc)
 - fix(SI): #26 part 2 + #28 -- _source/ is dead scaffolding; fix the catalog itself (5904f0f6)
 - fix(SI): #27 -- correlation coverage is reported on every run (f0466381)
-- fix(SI): #26 -- export columns are the union of all rows, at all THREE sites (cb2c9235)
-- fix(SI): #24 futility guard -- the AutoBucket probe now knows when to stop (63a2fc1b)
-- docs(SI): handoff -- #24 regression found in live test, plus a session-start guide (b7516559)
-- docs(SI): document how the RA column pipeline and cross-source correlation ACTUALLY work (861d4e4f)
-- docs(SI): findings #25-#27 -- all three operator suspicions confirmed in code (87aacba9)
-- fix(SI): audit #21 CLOSED -- company name accepted, payload gate now fully blocking (5041bc06)
-- docs(SI): 0 rows from publicip is BY DESIGN, not a fault (03751917)
-- docs(SI): record the 2026-08-06 commits in the audit ledger index (9564cc21)
-- fix(SI): audit #21 -- remove real org identifiers from the public payload (88e6a801)
-- refactor(SI): audit #16 tranche 3 -- RA engine now 10,559 -> 5,848 lines (-45%) (5e19495a)
-- docs(SI): #17 verified on a live profiling run (and the run that verified nothing) (1f8db44f)
-- fix(SI): audit #17 -- put the pre-ingest AlwaysOn halt under test (9531613b)
-- fix(SI): audit #23 -- delete the duplicated 166-line prologue in the PTC engine (d8e5d74a)
-- fix(SI): audit #24 -- the AutoBucket probe now escalates on a 900s ceiling timeout (b50b3f5c)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.408 — Rules that identify a server by its host name have not been applied since v2.2.0
+
+**Upgrade if you run asset profiling.** A matching rule has been silently inactive for the whole of
+v2.2, and it affects classification on every installation. Nothing about it was visible in a run:
+tiers were simply assigned less often than they should have been.
+
+### Host-name matching was being skipped
+
+**Symptom.** None you could see. Runs completed and reported success. Assets that should have been
+recognised from their name came back without the tier or role that rule would have given them.
+
+**Cause.** Name-pattern matching was implemented and working, but the entry that points the engine at
+it was absorbed into a comment during a source-wide reformatting in v2.2.0. The engine treats a match
+type it doesn't recognise as "skip quietly", so every rule arm that matched on host naming was passed
+over without a word.
+
+**How big.** Measured, not estimated: **95 detections across 93 rule files**. None of them stopped
+working entirely — each had another way to match — so the effect was silent *under*-classification
+rather than dead rules. A server recognisable only by its name (a domain controller named `dc01`, for
+example) stopped being recognised by that route.
+
+**Fixed, with three layers so it cannot repeat quietly.** The registration is restored and proven at
+the point of evaluation, not merely present in a list. The engine now warns **once per run** naming
+any match type it does not recognise, together with how many detections it affects — so a typo in
+your own rule is reported by the run that uses it. And a test asserts that every implemented matcher
+is reachable, derived from the source itself rather than a hand-kept list.
+
+### The engine now tells you when one of your own rules can never match
+
+A rule file whose detection block is empty loads without complaint, is counted, and can never match
+anything. Runs now name any such rule once per run. A rule you have deliberately switched off is not
+flagged — suppression is a legitimate reason to have no detections, and warning about it would only
+teach you to ignore the warning.
+
+### The rule checker was reporting clean without checking anything
+
+The on-demand rule checker looked in two folders that have not existed since the rules moved. Both
+lookups failed, it examined **zero** files, and reported no problems — and running the file did
+nothing at all. It now checks the real rule tree, states **how many files it examined** alongside the
+verdict, and treats "examined nothing" as a failure rather than a pass.
+
+It also had a counting fault that made it report **PASS while holding a violation**, but only when
+there was exactly one — which is precisely the situation after you have fixed all but the last of
+your own rules. Both the verdict and the file count are now correct.
+
+### One shipped example taught a rule that could not work
+
+An example in the Azure tag-mapping template set a field that no schema defines and no code reads,
+and set neither a tier nor a CMDB value — so following it produced a rule that matched your assets
+and then did nothing. The example now sets a real value and states the requirement inline. We checked
+all 551 shipped examples against the same rules: this was the only one.
 
 ---
 

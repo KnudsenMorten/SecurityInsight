@@ -162,7 +162,12 @@ detections:
           tag:   'Owner'
           # value omitted -> presence-only
     set:
-      hasBusinessOwner: true
+      # Every detection MUST set Tier or at least one cmdb* field. One that sets
+      # neither can never influence classification, and the rule lint rejects it.
+      # (This example used to set `hasBusinessOwner: true` -- a field that exists
+      # in no schema and is read by no code, so copying it produced a rule that
+      # matched assets and then did nothing.)
+      cmdbCriticality: 'Medium'
 
   # EXAMPLE 5 -- compound `all:` match (every condition must fire)
   - id: CmdbProductionRegulated

@@ -1,0 +1,42 @@
+{
+  "_comment": "SecurityInsight's DEPLOY CONTRACT. Ships WITH the solution (operator decision 2026-08-07) so changing how SI deploys never requires editing ~30 per-customer manifests. The customer's local Sync-AutomateIT.json says WHETHER they take SI and which OPTIONAL capabilities they want; the central promotion map says WHICH VERSION and which capabilities are approved for their ring; this file says HOW. Three owners, three files, no overlap.",
+
+  "schema": 1,
+  "solution": "SecurityInsight",
+
+  "_needsSchema_comment": "FALSE, and verified rather than assumed: analyzer-web/ contains no DbContext, no Migrations, no SqlConnection and no EntityFramework reference. SIA's only durable state is the two Azure Tables from audit #7/#9, and the APP creates them itself at startup (src/SIAnalyzer.Web/Program.cs:97 and :136, table.CreateIfNotExists()). Table storage is schemaless and additive, so there is nothing to migrate. The SQL/schema half of the platform update design is PIM's problem, not a shared one.",
+  "needsSchema": false,
+
+  "_capabilities_comment": "What KINDS of change an SI update performs. 'optional' means a customer may switch it off in their local manifest; a required capability cannot be blocked (the block is refused and reported, so nobody can brick their own install).",
+  "capabilities": [
+    {
+      "name": "code",
+      "optional": false,
+      "description": "The PowerShell engines and their rule/report catalogs -- plain file copy. This IS SecurityInsight; without it there is no solution."
+    },
+    {
+      "name": "container",
+      "optional": true,
+      "description": "Builds and rolls the SIA container image. Requires an Azure Container Registry and a Container Apps environment in the customer's own tenant."
+    },
+    {
+      "name": "web-frontend",
+      "optional": true,
+      "description": "The SI Analyzer (SIA) web UI: revision roll, managed-identity grants and Easy Auth. SIA is an EXTENSION of SecurityInsight, not the main program -- the engines run and produce full output with this switched off, so 'SI engine-only' is a supported topology, not a degraded one."
+    }
+  ],
+
+  "_deploy_comment": "Entry point for the capabilities above. Health-gates itself: PROD warms a new revision and REFUSES to shift traffic unless /health returns 200, keeps the previous revision provisioned for instant rollback, and re-checks health after the swap. Grant/auth steps are idempotent, so a daily re-run is safe.",
+  "deploy": {
+    "script": "analyzer-web/deploy/Deploy-SIAnalyzer.ps1",
+    "appliesTo": [ "container", "web-frontend" ],
+    "_auth_comment": "The script signs the az CLI in itself via auth/Connect-SIAzCli.ps1 (audit #33): MI -> Az PowerShell -> the SPN secret from THAT customer's AutomateIT Key Vault -> az login. An Az PowerShell context is NOT an az CLI context, so this cannot be inherited from the caller.",
+    "requiresUnattendedAuth": true
+  },
+
+  "_requires_comment": "Provisioning preconditions for the OPTIONAL capabilities only. A customer who blocks both needs none of these -- which is the point of making them blockable.",
+  "requires": {
+    "container": [ "azure-container-registry", "container-apps-environment" ],
+    "web-frontend": [ "azure-container-registry", "container-apps-environment", "entra-app-registration" ]
+  }
+}

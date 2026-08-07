@@ -846,8 +846,23 @@ function Test-SIKind_egKustoQuery {
 # Registry (kind name -> handler function name)
 # ----------------------------------------------------------------------------
 
+# AUDIT #35 -- the 'nameMatches' entry below was CODE that a bulk comment-rewrite
+# turned into a COMMENT, and it shipped that way for the whole v2.2 lifetime.
+# 0412976e added it under a header comment naming the preview it landed in. The
+# v2.2.0 flatten (536e1405, 2026-05-04) stripped the version framing out of that
+# header and JOINED THE TWO LINES, so the registration became the tail of a
+# comment. The handler (Test-SIKind_nameMatches, above) was never touched -- only
+# its registration vanished, so Invoke-SIDetect treated the kind as unknown and
+# skipped it: 95 detections across 93 rule files silently lost their name-pattern
+# arm, on every customer, for every v2.2 release. Same family as #29 (a bulk
+# rewrite corrupting a file nobody re-read) and the same fail-open shape -- the
+# only trace was a Write-Verbose that prints for nobody.
+#
+# Kept OUTSIDE the hashtable on purpose: SI-RuleKindRegistry.Tests.ps1 scans the
+# registry BODY for a commented-out entry, which is the corruption's signature.
+# Prose inside the body would be indistinguishable from the thing being detected.
 $script:SIKindRegistry = @{
-    # Implemented in 'nameMatches'                   = 'Test-SIKind_nameMatches'
+    'nameMatches'                   = 'Test-SIKind_nameMatches'
     'osPlatform'                    = 'Test-SIKind_osPlatform'
     'hasMdeMachineGroupTag'         = 'Test-SIKind_hasMdeMachineGroupTag'
     'egDetectedRoles'               = 'Test-SIKind_egDetectedRoles'

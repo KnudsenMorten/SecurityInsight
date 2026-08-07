@@ -257,9 +257,13 @@ BeforeDiscovery {
 
 Describe 'SI publish payload -- public docs carry no real org values' {
 
-    It 'has no denied value in <_.File> (line <_.Line>, <_.Kind>)' -ForEach $script:DocFindings {
-        # Same contract as the shared gate: the four public docs must be clean.
-        $false | Should -BeTrue -Because "$($_.File):$($_.Line) exposes [$($_.Kind)] '$($_.Match)' on the public mirror"
+    # GUARDED ON PURPOSE -- see the note on the matching guard below. $DocFindings is
+    # the VIOLATION list, so it is empty exactly when the payload is clean.
+    if ($script:DocFindings) {
+        It 'has no denied value in <_.File> (line <_.Line>, <_.Kind>)' -ForEach $script:DocFindings {
+            # Same contract as the shared gate: the four public docs must be clean.
+            $false | Should -BeTrue -Because "$($_.File):$($_.Line) exposes [$($_.Kind)] '$($_.Match)' on the public mirror"
+        }
     }
 
     It 'scanned a non-empty payload (control -- a green run must not mean "scanned nothing")' -ForEach $script:Summary {
@@ -277,11 +281,24 @@ Describe 'SI publish payload -- public docs carry no real org values' {
 
 Describe 'SI publish payload -- no NEW real org values in shipped code (#1a/#21)' {
 
+    # GUARDED ON PURPOSE -- $NewCodeFindings is the VIOLATION list, so it is empty in
+    # exactly the good case. Pester 6 throws on an empty -ForEach
+    # ("Value can not be null or empty array") and that error fails DISCOVERY OF THE
+    # WHOLE FILE, contributing ZERO tests. Because the gate counted failed *tests*, a
+    # CLEAN payload silently disabled the entire sanitization suite and still printed
+    # PUBLISH GATE: READY -- verified on CI runs 31150698932 and 31150980938, both of
+    # which ran 0 tests from this file. The cleaner the repo, the more broken the gate.
+    # -AllowNullOrEmptyForEach would also fix it but exists only in Pester 6, and the
+    # local gate loads 5.6.1 under powershell.exe -- this guard works on both.
+    # The two $script:Summary control tests below are NOT guarded: they must always run,
+    # because they are what proves the scan happened at all.
+    if ($script:NewCodeFindings) {
     It 'introduces no value outside the #21 baseline: <_.File>:<_.Line> [<_.Kind>]' -ForEach $script:NewCodeFindings {
         $false | Should -BeTrue -Because @"
 $($_.File):$($_.Line) ships [$($_.Kind)] '$($_.Match)' to the PUBLIC mirror and is NOT in the #21 baseline.
 Either remove the value, or -- if it is intentional -- add "$($_.File)|$($_.Kind)" to `$script:Baseline21 in this file with a note in docs/REQUIREMENTS.md #21.
 "@
+    }
     }
 
     It 'reports the #21 baseline that is still outstanding (informational, does not fail)' -ForEach $script:Summary {

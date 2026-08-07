@@ -3453,6 +3453,7 @@ and §9 of `docs/TESTS.md`. There is no separate doc set under `analyzer-web/`.
 
 | Area | Capability | Tag |
 |---|---|---|
+| 🔎 **Rule diagnostics** | Every run reports rules that cannot work: a match type the engine doesn't recognise (with the number of detections affected) and any rule that loads with an empty detection block. A rule you deliberately switched off is not flagged. The on-demand rule checker also states **how many files it examined** next to its verdict, so "clean" can no longer mean "looked at nothing" | v2.2.408 |
 | 🎯 **Outputs** | JSON sibling of every XLSX (default ON) | v2.1.40 |
 | 📊 **Outputs** | Direct ingest to two Log Analytics tables (`SI_RiskAnalysis_Summary_CL` + `_Detailed_CL`) via auto-created DCRs (no manual table provisioning) | v2.1.41 |
 | ☁️ **Outputs** | Optional upload of `.xlsx` + `.json` to UNC share OR Azure Storage, type auto-detected, **backup-then-overwrite** semantics so re-runs never lose data | v2.1.42 / v2.1.44 |

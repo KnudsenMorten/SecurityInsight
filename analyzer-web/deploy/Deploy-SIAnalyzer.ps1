@@ -98,6 +98,9 @@ param(
     [string]$ScheduleTableName = 'sischedule',
     [switch]$SkipGrant,
     [switch]$SkipAuth,
+    # Audit #33 -- skip the az CLI sign-in because the CALLER has already established it.
+    # Not a way to opt out of authentication: without a context every az call below fails.
+    [switch]$SkipAzLogin,
     # Audit #3b escape hatch -- only when the SI workspace legitimately lives in a
     # different resource group than the app. Never to co-locate in another solution.
     [switch]$AllowResourceGroupMismatch,
@@ -197,6 +200,29 @@ function Wait-Health {
 }
 
 Write-Host ">> SIA deploy - Env=$Env, App=$AppName, RG=$ResourceGroup" -ForegroundColor Cyan
+
+# --- AZ CLI SIGN-IN (audit #33) --------------------------------------------
+# This script is entirely az-based and used to have NO authentication step at all --
+# it assumed a human had already run `az login`. Run unattended by the daily sync
+# (PIM REQUIREMENTS.md sec.1, "Generic sync-triggered auto-deploy") there is no such
+# session, and it would die on the FIRST az call below, on every customer.
+#
+# The trap: an Az PowerShell context is NOT an az CLI context. Connect-AzAccount and
+# a VM's Managed Identity as consumed by Az PowerShell do nothing for `az` -- separate
+# token caches -- so a session that can read Key Vault happily still fails every az
+# command with "Please run 'az login'". Both halves must be established independently.
+#
+# Connect-SIAzCli bridges exactly that, from the customer's existing config globals:
+# MI -> Az PowerShell -> read the SPN secret from THAT customer's AutomateIT Key Vault
+# ($global:SpnKeyVaultName) -> `az login` as the SPN. Idempotent: an existing az
+# context is reused, so an interactive run by a human is unaffected.
+#
+# -SkipAzLogin is for a caller that has already signed the CLI in (e.g. a chained
+# deploy) -- it does not disable the check, it just declines to re-do it.
+if (-not $SkipAzLogin) {
+    . (Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'auth\Connect-SIAzCli.ps1')
+    Connect-SIAzCli
+}
 
 # --- LISTEN-PORT GATE (audit #12) ------------------------------------------
 # The image binds Kestrel to a FIXED port (deploy/Dockerfile: ASPNETCORE_URLS).

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.408
+## v2.2.409
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI): 2.2.409 -- #38 closed, the rule lint now covers the files customers COPY (57a1c14d)
 - release(SI): 2.2.408 -- host-name matching restored, proven by a live run (86e30fa4)
 - revert(publish): drop extraFiles -- it made publish.yml unparseable to GitHub, blocking ALL publishing (c3248f6f)
 - fix(SI): #38 -- a shipped SAMPLE taught a detection the lint rejects, and #29's cause was half-recorded (e5ebdcd8)
@@ -33,13 +34,33 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI): #25 -- ImpactedAssetCount is derived from the list it sits beside (100f0352)
 - chore(SI): #28 -- retire _source/ + Build-RiskAnalysis.ps1 (operator decision) (db1f7ffc)
 - fix(SI): #26 part 2 + #28 -- _source/ is dead scaffolding; fix the catalog itself (5904f0f6)
-- fix(SI): #27 -- correlation coverage is reported on every run (f0466381)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.409 — The example rules we ship are now checked before they reach you
+
+**No behaviour change. This is about the files you copy.**
+
+Every rule template we ship (`*.custom.sample.yaml`) exists to be copied — the header of each one
+tells you to save it without the `.sample` suffix and edit it. Until now our rule checker looked only
+at files the engine *loads*, so the templates themselves were the one category nothing validated.
+v2.2.408 fixed an example that had a real fault: it set a field that no schema defines and no code
+reads, and set neither a tier nor a CMDB value, so copying it produced a rule that matched your assets
+and then did nothing.
+
+Our checker now covers the templates too, and a fault in one **blocks the release** rather than
+shipping. Coverage went from 555 to **1,106** rule files. We also verified the check works by planting
+a deliberately broken template and confirming it is caught — before this change, that returned no
+findings at all.
+
+Checking your *own* rules is unchanged: it still reports on your files only, without 551 of our
+templates in the output.
 
 ---
 

@@ -227,6 +227,76 @@ Describe 'RuleSchemaCompliance' {
         }
     }
 
+    Context 'shipped SAMPLES must be clean -- customers are instructed to copy them (#38)' {
+        # The lint's allow-list used to be *.custom.yaml + *.locked.yaml, i.e.
+        # what the ENGINE loads. Samples load nowhere, so nothing checked them --
+        # while every one of them ships to the public mirror and to paying
+        # customers as the file to copy. One shipped example set a field no schema
+        # defines and no code reads, and set neither Tier nor any cmdb* field, so
+        # following it produced a rule that matched assets and did nothing.
+        # #29 skipped the files customers EDIT; this skipped the files they COPY.
+
+        BeforeAll {
+            $script:SamplesOnDisk = @(Get-ChildItem -Path $script:EnrichRoot -Filter '*.custom.sample.yaml' -Recurse -File -ErrorAction SilentlyContinue |
+                                      Where-Object { $_.FullName -notmatch '[\\/](OUTPUT|logs|staging)[\\/]' })
+        }
+
+        It 'finds shipped *.custom.sample.yaml templates on disk' {
+            $script:SamplesOnDisk.Count | Should -BeGreaterThan 0
+        }
+
+        It 'the lint SEES every shipped sample -- being unseen is the whole defect' {
+            foreach ($f in $script:SamplesOnDisk) {
+                $script:AllSummary.ScannedNames | Should -Contain $f.Name
+            }
+        }
+
+        It 'no violations in any shipped *.custom.sample.yaml (BLOCKING -- these publish)' {
+            $bad = @($script:AllSummary.Violations | Where-Object { $_.File -like '*.custom.sample.yaml' })
+            $detail = ($bad | ForEach-Object { '{0}: {1}' -f $_.Rule, (Split-Path -Leaf $_.File) }) -join ' | '
+            $bad | Should -BeNullOrEmpty -Because "a broken sample propagates by instruction: $detail"
+        }
+
+        It 'a broken sample IS caught (negative verification -- else this context proves nothing)' {
+            # Reproduces #38 exactly: a detection setting neither Tier nor any
+            # cmdb* field. Before samples were in the allow-list this returned 0.
+            $root = Join-Path ([System.IO.Path]::GetTempPath()) ('si-lint-sample-' + [guid]::NewGuid().ToString('N'))
+            $shared = Join-Path $root 'engine\asset-profiling\shared'
+            New-Item -ItemType Directory -Path $shared -Force | Out-Null
+            Copy-Item (Join-Path $script:SiRoot 'engine\asset-profiling\shared\RuleEval.ps1') $shared
+            $rules = Join-Path $root 'asset-profiling-enrichment\endpoint'
+            New-Item -ItemType Directory -Path $rules -Force | Out-Null
+            try {
+                @(
+                    'id:        ScratchSample'
+                    'appliesTo: endpoint'
+                    'mode:      append'
+                    "purpose:   'Scratch sample fixture'"
+                    "category:  'Scratch'"
+                    'detections:'
+                    '  - id: NoTierNoCmdb'
+                    '    detect:'
+                    '      any:'
+                    '        - kind: nameMatches'
+                    '          namePatterns:'
+                    "            - '(?i)^scratch\\d'"
+                    '    set:'
+                    '      someFieldNobodyReads: true'
+                ) | Set-Content -Path (Join-Path $rules 'ScratchSample.custom.sample.yaml') -Encoding UTF8
+                $v = @(Test-SISchemaCompliance -SolutionRoot $root)
+                @($v | Where-Object { $_.Rule -eq 'no-tier-or-cmdb' }).Count | Should -Be 1
+            } finally { Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+
+        It 'the annotated _TEMPLATE is exempt from id==filename only, not from the other checks' {
+            # Its id is a deliberate placeholder so the filename can never match,
+            # but it is the most-copied file in the tree, so everything else applies.
+            $tpl = @($script:SamplesOnDisk | Where-Object { $_.BaseName -like '_TEMPLATE*' })
+            $tpl.Count | Should -BeGreaterThan 0 -Because 'the grammar-reference template must exist'
+            @($script:AllSummary.Violations | Where-Object { $_.File -like '*_TEMPLATE*' }) | Should -BeNullOrEmpty
+        }
+    }
+
     Context 'shipped rules must be clean (they publish to the mirror and ~30 customers)' {
 
         It 'finds shipped *.locked.yaml rules on disk' {

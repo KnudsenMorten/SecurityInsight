@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.406
+## v2.2.407
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI): 2.2.407 -- actually remove the stray file 2.2.406 only renamed (021ab682)
 - fix(SI): #30/#31 -- a SAMPLE file was winning over the shipped rule (e56f2f6d)
 - docs(SI): fix the one unresolved TOC anchor blocking publish (a77e5c16)
 - release(SI): VERSION 2.2.405 -- all six tag criteria met, verified on real runs (add02cca)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI): audit #17 -- put the pre-ingest AlwaysOn halt under test (9531613b)
 - fix(SI): audit #23 -- delete the duplicated 166-line prologue in the PTC engine (d8e5d74a)
 - fix(SI): audit #24 -- the AutoBucket probe now escalates on a 900s ceiling timeout (b50b3f5c)
-- docs(SI): #16 live gate PASSED on a complete RA run; #24 proven by the same run (f712ebf5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.407 — Removes the stray file v2.2.406 should have deleted
+
+**Housekeeping. No behaviour change, and v2.2.406 was not unsafe.**
+
+v2.2.406 renamed the stray example file `ADDomainController.custom.sample - Copy.yaml` to its correct
+name — but a staging mistake on our side meant the **old path was still published**, so both names
+shipped. v2.2.407 removes the duplicate.
+
+**You were already protected in v2.2.406.** The actual fix there was the allow-list: the engine loads
+`*.locked.yaml` and `*.custom.yaml` and nothing else, so the stray file could not take effect no
+matter what it was called. Removing it is tidiness, not a second fix — which is exactly why the
+allow-list was the right fix rather than simply deleting the file.
+
+Our release check now verifies the **tracked** file list rather than the folder contents, because the
+folder looked correct while the published payload did not.
 
 ---
 

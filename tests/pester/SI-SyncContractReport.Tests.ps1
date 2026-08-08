@@ -140,6 +140,36 @@ Describe 'SI ships a valid deploy contract' {
         $names | Should -BeNullOrEmpty
     }
 
+    It 'declares minPlatformVersion, and it is well-formed' {
+        # PLAT-01, declared 2026-08-08. Absent until then, which Test-AitPlatformCompatible treats
+        # as "makes no demand" -- inert.
+        $script:Contract.PSObject.Properties.Name | Should -Contain 'minPlatformVersion'
+        "$($script:Contract.minPlatformVersion)".Trim() | Should -Match '^\d+\.\d+\.\d+$'
+    }
+
+    It 'minPlatformVersion is NOT above the platform core this repo actually ships' {
+        # THE GUARD THAT MATTERS. Declaring a minimum introduces a failure mode that did not exist
+        # while it was absent: a solution that states a requirement HOLDS when the requirement is
+        # not met -- and holds silently from the customer's side, they simply stop being updated.
+        # Raising this above what Platform* ships would hold EVERY assigned customer at once.
+        #
+        # The resolver takes the LOWEST of the two Platform* versions ("the core is only as new as
+        # its oldest half"), so compare against the lowest here too.
+        $req = "$($script:Contract.minPlatformVersion)".Trim()
+        $platformVersions = @()
+        foreach ($pf in @('PlatformConfiguration','PlatformMonitoring')) {
+            $p = Join-Path (Split-Path -Parent $script:SiRoot) (Join-Path $pf 'VERSION')
+            if (Test-Path -LiteralPath $p) { $platformVersions += ("$(Get-Content -Raw -LiteralPath $p)").Trim() }
+        }
+        if ($platformVersions.Count -eq 0) {
+            Set-ItResult -Skipped -Because 'Platform* VERSION files are not reachable -- this is a customer tree, where only SOLUTIONS/SecurityInsight exists'
+            return
+        }
+        $lowest = ($platformVersions | Sort-Object { [version]$_ } | Select-Object -First 1)
+        ([version]$req -le [version]$lowest) | Should -BeTrue -Because (
+            "SI declares minPlatformVersion=$req but the core ships $lowest (lowest of: $($platformVersions -join ', ')) -- every assigned customer would HOLD")
+    }
+
     It 'nothing references a capability that does not exist' {
         # Invariant kept from the old appliesTo/requires cross-check: whatever blocks exist, every
         # capability they name must be declared. Holds vacuously today and starts biting the moment

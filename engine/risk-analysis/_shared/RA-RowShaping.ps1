@@ -481,3 +481,71 @@ function ConvertTo-PSObjectDeep {
 
     return (_Convert $InputObject $true)
 }
+
+# Build the schema sample that CheckCreateUpdate-TableDcr-Structure uses to DECLARE the Log
+# Analytics custom table + DCR columns. The module takes the UNION of the property names across
+# every row it is handed (verified 2026-08-08: row 1 carried 53 columns, the union of the first 100
+# was 69, and the live DCR declared exactly those 69) -- so any column absent from the sample is
+# never declared, and Build-DataArrayToAlignWithSchema then SILENTLY DROPS it at ingest. The data
+# posts, the run logs SUCCESS, and the column simply does not exist in the table.
+#
+# AUDIT #48 -- the previous sample was `$global:final | Select-Object -First 100`, a POSITIONAL
+# sample. Measured on the 2026-08-08 Detailed export (2,216 rows / 151 columns): the first 100 rows
+# carried only 69 columns, so 82 were dropped at ingest -- 57 of them holding real data, including
+# RecommendedAction and RemediationOptions (first row 596) and the whole attack-path block
+# (AttackPath first appears on row 2215 of 2216). This is the SAME defect family as #26, which
+# fixed positional column discovery in the EXPORT while leaving the INGEST path untouched.
+#
+# Strategy: keep the leading $BaseCount rows (unchanged behaviour -- they carry the common shape and
+# give the module representative values for the columns nearly every row has), then walk the REST and
+# keep ONLY rows that introduce a column not yet seen. On that same export this produced ~109 rows
+# covering all 151 columns; a pure coverage pass needs just 12, but the leading block is retained so
+# this can never declare FEWER columns or worse types than the old code did.
+#
+# Types are inferred by the module from the sampled VALUES, which is why this picks real rows rather
+# than synthesising one wide row of empty strings -- that would declare every added column as string
+# and silently mistype the numeric ones (MaxCvssScore, EscalationWeight, SignInCount, ...).
+function Get-RASchemaCoverageSample {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowNull()]$Rows,
+        [int]$BaseCount = 100,
+        [int]$MaxRows   = 500
+    )
+
+    $all = @($Rows)
+    if ($all.Count -eq 0) { return @() }
+
+    $sample = New-Object System.Collections.Generic.List[object]
+    $seen   = New-Object 'System.Collections.Generic.HashSet[string]'
+
+    $take = [Math]::Min($BaseCount, $all.Count)
+    for ($i = 0; $i -lt $take; $i++) {
+        $row = $all[$i]
+        if ($null -eq $row) { continue }
+        $sample.Add($row)
+        foreach ($n in $row.PSObject.Properties.Name) { [void]$seen.Add($n) }
+    }
+
+    for ($i = $take; $i -lt $all.Count; $i++) {
+        if ($sample.Count -ge $MaxRows) { break }
+        $row = $all[$i]
+        if ($null -eq $row) { continue }
+        $introducesNew = $false
+        foreach ($n in $row.PSObject.Properties.Name) {
+            if (-not $seen.Contains($n)) { $introducesNew = $true; break }
+        }
+        if ($introducesNew) {
+            $sample.Add($row)
+            foreach ($n in $row.PSObject.Properties.Name) { [void]$seen.Add($n) }
+        }
+    }
+
+    # .ToArray() first: @(List[object] of PSCustomObjects) throws ArgumentException on PS 5.1.
+    # Emit the array NORMALLY (no comma-wrap) so the pipeline unrolls it and the caller's @()
+    # re-collects the rows. Comma-wrapping here was WRONG and was caught by the offline test: it
+    # emitted the array as ONE object, so `@(Get-RASchemaCoverageSample ...)` yielded a single
+    # element whose "columns" were object[]'s own members (Count, Length, ...) -- 1 row, 8 columns.
+    # Callers MUST wrap the call in @() so a single-row result does not collapse to a scalar.
+    return $sample.ToArray()
+}

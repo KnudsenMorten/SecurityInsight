@@ -276,7 +276,11 @@ Describe 'OutputArtifacts' {
                 Set-ItResult -Skipped -Because 'no Shodan scan output -- run PublicIP launcher first'
                 return
             }
-            $rows = @(Get-Content -Raw -LiteralPath $p | ConvertFrom-Json)
+            # PS 5.1 TRAP -- assign then wrap. `$x = @(pipeline | ConvertFrom-Json)` yields ONE
+            # element on 5.1 (7 unrolls), so the loop below would iterate a single opaque array and
+            # find no bad rows -- passing vacuously. Same defect this suite exists to catch.
+            $__parsed = Get-Content -Raw -LiteralPath $p | ConvertFrom-Json
+            $rows = @($__parsed)
             # Find any row that has Vulns. Scan should have at least one row total.
             @($rows).Count | Should -BeGreaterThan 0
             $bad = @()

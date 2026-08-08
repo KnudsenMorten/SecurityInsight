@@ -1040,7 +1040,17 @@ function Get-SISignalMapCached {
                                      -Engine $Engine -AssetType $AssetType -PromptVersion $PromptVersion
     if ($null -ne $cached) {
         $signals = @()
-        try { $signals = @(($cached.signals_json | ConvertFrom-Json)) } catch { }
+        # PS 5.1 TRAP -- assign the parse to a variable FIRST, then wrap. On 5.1 ConvertFrom-Json
+        # writes the whole array to the pipeline as ONE object (PS 7 unrolls it), so a direct
+        # `$x = @(pipeline | ConvertFrom-Json)` yields a SINGLE element -- the array itself -- and
+        # every downstream `foreach`/`.Count` over $signals then sees one opaque item instead of N
+        # signals. Measured on 5.1.20348: inline form = 1, assign-then-wrap = the real count.
+        # (A `return @(pipeline | ConvertFrom-Json)` inside a function accidentally survives because
+        # `return` unrolls a second time -- that is luck, not a pattern to copy.)
+        try {
+            $__parsedSignals = $cached.signals_json | ConvertFrom-Json
+            $signals = @($__parsedSignals)
+        } catch { }
         return @{ Signals = $signals; Reasoning = [string]$cached.reasoning; FromCache = $true; PromptVersion = $PromptVersion }
     }
 

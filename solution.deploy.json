@@ -4,8 +4,12 @@
   "schema": 1,
   "solution": "SecurityInsight",
 
-  "_needsSchema_comment": "FALSE, and verified rather than assumed: analyzer-web/ contains no DbContext, no Migrations, no SqlConnection and no EntityFramework reference. SIA's only durable state is the two Azure Tables from audit #7/#9, and the APP creates them itself at startup (src/SIAnalyzer.Web/Program.cs:97 and :136, table.CreateIfNotExists()). Table storage is schemaless and additive, so there is nothing to migrate. The SQL/schema half of the platform update design is PIM's problem, not a shared one.",
+  "_needsSchema_comment": "FALSE, and verified rather than assumed: SI has no relational database anywhere -- no DbContext, no Migrations, no SqlConnection, no EntityFramework. There is nothing to migrate. The SQL/schema half of the platform update design is PIM's problem, not a shared one.",
   "needsSchema": false,
+
+  "_web_frontend_removed": "REMOVED 2026-08-08 -- operator: 'remove the web-frontend from being deployed', 'it is NOT used anymore and will be replaced by new design'. The SIA web UI capability (and its deploy hook, and its 'requires' preconditions) are retired from this contract. SIA was never delivered: its hosted live-verify gate never ran, FEATURES.md lists none of it, and the single internal environment (cae-sia / ca-sia) is being decommissioned. WHY REMOVING IT MATTERS even though nothing deploys it today: the CURRENT production sync engine (C:\\AutomateIT\\bootstrap\\Sync-AutomateIT-Engine.ps1) never invokes a deploy hook at all -- verified 2026-08-08, it reads this file only for capabilities and minPlatformVersion -- but the v3 distribution/orchestration split (DOCS/REQUIREMENTS.md section 7) WILL act on declared capabilities, and would have deployed a retired app on the customers' behalf. A contract that declares something nobody should run is worse than one that declares nothing. Do NOT re-add it; the replacement belongs to the new design, not to this file.",
+
+  "_container_note": "'container' is ALSO SIA-only -- it builds and rolls the SIA image via the same retired deploy script. It is left declared for now because the operator's instruction named web-frontend specifically, and because the new design may reuse a container capability for the engines. RAISE IT: if SIA is gone entirely, this should go with it.",
 
   "_capabilities_comment": "What KINDS of change an SI update performs. 'optional' means a customer may switch it off in their local manifest; a required capability cannot be blocked (the block is refused and reported, so nobody can brick their own install).",
   "capabilities": [
@@ -17,26 +21,14 @@
     {
       "name": "container",
       "optional": true,
-      "description": "Builds and rolls the SIA container image. Requires an Azure Container Registry and a Container Apps environment in the customer's own tenant."
-    },
-    {
-      "name": "web-frontend",
-      "optional": true,
-      "description": "The SI Analyzer (SIA) web UI: revision roll, managed-identity grants and Easy Auth. SIA is an EXTENSION of SecurityInsight, not the main program -- the engines run and produce full output with this switched off, so 'SI engine-only' is a supported topology, not a degraded one."
+      "description": "Builds and rolls the SI container image. Requires an Azure Container Registry and a Container Apps environment in the customer's own tenant. Engine-only SI is a supported topology, not a degraded one -- a customer with no ACR must be able to decline this."
     }
   ],
 
-  "_deploy_comment": "Entry point for the capabilities above. Health-gates itself: PROD warms a new revision and REFUSES to shift traffic unless /health returns 200, keeps the previous revision provisioned for instant rollback, and re-checks health after the swap. Grant/auth steps are idempotent, so a daily re-run is safe.",
-  "deploy": {
-    "script": "analyzer-web/deploy/Deploy-SIAnalyzer.ps1",
-    "appliesTo": [ "container", "web-frontend" ],
-    "_auth_comment": "The script signs the az CLI in itself via auth/Connect-SIAzCli.ps1 (audit #33): MI -> Az PowerShell -> the SPN secret from THAT customer's AutomateIT Key Vault -> az login. An Az PowerShell context is NOT an az CLI context, so this cannot be inherited from the caller.",
-    "requiresUnattendedAuth": true
-  },
+  "_deploy_comment": "NO DEPLOY HOOK. Removed together with the web-frontend capability on 2026-08-08. SI's update is a pure code roll: the sync copies files and the engines run from disk on their next scheduled execution. Nothing needs to be built, rolled or health-gated at deploy time. If the new design gives SI a deploy step again, declare it here with its appliesTo capabilities -- and only capabilities that still exist.",
 
-  "_requires_comment": "Provisioning preconditions for the OPTIONAL capabilities only. A customer who blocks both needs none of these -- which is the point of making them blockable.",
+  "_requires_comment": "Provisioning preconditions for the OPTIONAL capabilities only. A customer who declines them needs none of these -- which is the point of making them blockable.",
   "requires": {
-    "container": [ "azure-container-registry", "container-apps-environment" ],
-    "web-frontend": [ "azure-container-registry", "container-apps-environment", "entra-app-registration" ]
+    "container": [ "azure-container-registry", "container-apps-environment" ]
   }
 }

@@ -5052,8 +5052,9 @@ Reports:
         // Query steps overview
         // Step 0  Define legacy operating system reference lists
         // Step 1  Build Nodes catalog as enrichment backbone using standard context fields
-        // Step 2  Find identity to group membership edges at stable grain
-        // Step 3  Find group permissions or roles on Azure targets
+        // Step 2  Find group permissions or roles on Azure targets  (declared FIRST since 2026-08-08
+        //          so the membership scan below can be pruned to only groups that hold such access)
+        // Step 3  Find identity to group membership edges at stable grain, pruned by step 2
         // Step 4  Assemble Identity -> Group -> Target paths at stable grain
         // Step 5  Enrich source identity and target using Nodes
         // Step 6  Apply prioritization logic and build attack path strings
@@ -5296,21 +5297,9 @@ Reports:
                 RiskFactor_Consequence;
 
 
-        // Step 2  Find identity to group membership edges at stable grain
-        let IdentityGroupMembership =
-            ExposureGraphEdges
-            | where EdgeLabel == "member of"
-            | where SourceNodeLabel in ("user", "serviceprincipal", "managedidentity")
-            | where TargetNodeLabel == "group"
-            | project
-                IdentityNodeId    = SourceNodeId,
-                IdentityNodeName  = SourceNodeName,
-                IdentityNodeLabel = SourceNodeLabel,
-                GroupNodeId       = TargetNodeId,
-                GroupNodeName     = TargetNodeName;
-
-
-        // Step 3  Find group permissions or roles on Azure targets
+        // Step 2  Find group permissions or roles on Azure targets
+        // NOTE  this let is declared BEFORE the membership let (they were the other way round until
+        // 2026-08-08) so the membership scan can be pruned by it. See the PRUNE note in step 3.
         let GroupAccessToTargets =
             ExposureGraphEdges
             | where EdgeLabel in ("has role on", "has permissions to")
@@ -5324,12 +5313,46 @@ Reports:
                 "microsoft.compute/virtualmachines",
                 "microsoft.cognitiveservices/accounts"
             )
-            | project
+            // distinct edge grain -- EG can carry several edge rows for the same group/target pair
+            // (different role definitions). They collapse in step 4's summarize anyway, so removing
+            // them HERE avoids multiplying them across every member of the group first.
+            | summarize by
                 GroupNodeId      = SourceNodeId,
                 EdgeLabel        = EdgeLabel,
                 FinalTargetId    = TargetNodeId,
                 FinalTargetName  = TargetNodeName,
                 FinalTargetLabel = TargetNodeLabel;
+
+
+        // Only the groups that actually hold access on one of the Azure target types above. Usually a
+        // tiny fraction of all groups in the tenant.
+        let GroupsWithAzureAccess =
+            GroupAccessToTargets
+            | distinct GroupNodeId;
+
+
+        // Step 3  Find identity to group membership edges at stable grain
+        // PRUNE (2026-08-08)  the membership scan is restricted to GroupsWithAzureAccess. This is
+        // SEMANTICALLY IDENTICAL -- step 4 inner-joins these two sets on GroupNodeId, so any member
+        // of a group with no Azure access was always discarded -- but it discards them BEFORE the
+        // cartesian instead of after. Without it this let materialises EVERY "member of" edge in the
+        // tenant and the join expands to (members x targets) per group, which is what made this
+        // report run 10 x 900s deterministic timeouts and return 0 rows on 2026-08-08 while the
+        // whole rest of the Summary template finished in ~25 minutes. Bucketing could not rescue it
+        // because the bucket filter lands on the CL enrichment let, not on this EG expansion, which
+        // is exactly what the engine's FUTILE-PRUNE message reports.
+        let IdentityGroupMembership =
+            ExposureGraphEdges
+            | where EdgeLabel == "member of"
+            | where SourceNodeLabel in ("user", "serviceprincipal", "managedidentity")
+            | where TargetNodeLabel == "group"
+            | where TargetNodeId in (GroupsWithAzureAccess)
+            | summarize by
+                IdentityNodeId    = SourceNodeId,
+                IdentityNodeName  = SourceNodeName,
+                IdentityNodeLabel = SourceNodeLabel,
+                GroupNodeId       = TargetNodeId,
+                GroupNodeName     = TargetNodeName;
 
 
         // Step 4  Assemble Identity -> Group -> Target paths at stable grain

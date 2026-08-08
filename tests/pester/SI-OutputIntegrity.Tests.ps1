@@ -26,7 +26,18 @@ BeforeAll {
         foreach ($dir in @('OUTPUT','output','risk-analysis-detection\OUTPUT')) {
             $p = Join-Path $script:V22Root (Join-Path $dir $Name)
             if (Test-Path -LiteralPath $p) {
-                try { return ,@(Get-Content -Raw -LiteralPath $p | ConvertFrom-Json) } catch { return ,@() }
+                # PS 5.1 TRAP -- do NOT collapse this into @(... | ConvertFrom-Json). PowerShell 5.1's
+                # ConvertFrom-Json writes the whole array to the pipeline as a SINGLE object (PS 7
+                # unrolls it), so @() around the pipeline yields ONE element -- the array itself --
+                # whose "properties" are object[]'s own members (Count, Length, Rank, ...). Measured
+                # on the real Summary sidecar 2026-08-08: the old form gave 1 row / 8 props and saw
+                # ImpactedAssetCount on ZERO rows, so every invariant below iterated nothing and
+                # PASSED VACUOUSLY -- this file is the guard for #25/#26 and it was not guarding.
+                # Assigning first, then wrapping the VARIABLE, gives the real 151 rows / 46 props.
+                try {
+                    $parsed = Get-Content -Raw -LiteralPath $p | ConvertFrom-Json
+                    return ,@($parsed)
+                } catch { return ,@() }
             }
         }
         return $null

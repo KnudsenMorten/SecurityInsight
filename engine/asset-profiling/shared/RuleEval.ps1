@@ -618,6 +618,11 @@ function Get-SIAssetTagPairs {
         if ($null -eq $v) { return @() }
         if ($v -is [string]) {
             $s = [string]$v
+            # PS 5.1 note -- `@(pipeline | ConvertFrom-Json)` collapses to a SINGLE element on 5.1
+            # (7 unrolls). This line is CORRECT anyway, but only because `return` unrolls a second
+            # time. Verified on 5.1.20348: this form yields the real element count. Do NOT copy the
+            # shape into a plain ASSIGNMENT (`$x = @(... | ConvertFrom-Json)`) -- that keeps the
+            # collapse and hands you one opaque array. See Invoke-Enrich.ps1's signals_json parse.
             if ($s.StartsWith('[')) { try { return @($s | ConvertFrom-Json -ErrorAction Stop) } catch { return @($s -split '[,;]\s*') } }
             return @($s -split '[,;]\s*')
         }

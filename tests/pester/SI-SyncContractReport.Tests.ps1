@@ -97,24 +97,29 @@ Describe 'SI ships a valid deploy contract' {
         [bool]$code.optional | Should -BeFalse
     }
 
-    It 'declares container as OPTIONAL' {
-        # Engine-only SI is a supported topology, not a degraded one -- a customer with no ACR
-        # must be able to decline it.
-        $c = Get-Capability -Name 'container'
-        $c | Should -Not -BeNullOrEmpty
-        [bool]$c.optional | Should -BeTrue
+    It 'declares NO SIA capability -- both web-frontend and container are retired' {
+        # Operator 2026-08-08, in two steps: "remove the web-frontend from being deployed" /
+        # "it is NOT used anymore and will be replaced by new design", then "remove container also".
+        # BOTH were SI Analyzer, not SecurityInsight: web-frontend rolled the SIA web UI, container
+        # built and rolled the SIA image, both via the same deploy hook. SIA was never delivered --
+        # its hosted live-verify gate never ran -- and its one internal environment is being
+        # decommissioned.
+        #
+        # This is the guard, and it matters precisely because re-adding one would look HARMLESS in
+        # testing: the current production sync engine never invokes a deploy hook at all, so nothing
+        # would happen locally. The v3 distribution/orchestration split WILL act on declared
+        # capabilities and would deploy a retired app on customers' behalf. Fail loudly instead.
+        $declared = @($script:Contract.capabilities | ForEach-Object { $_.name })
+        foreach ($dead in @('web-frontend','container')) {
+            $declared | Should -Not -Contain $dead
+        }
     }
 
-    It 'does NOT declare web-frontend -- SIA is retired from this contract' {
-        # Operator 2026-08-08: "remove the web-frontend from being deployed", "it is NOT used
-        # anymore and will be replaced by new design". SIA was never delivered (its hosted
-        # live-verify gate never ran) and its one internal environment is being decommissioned.
-        # This assertion is the guard: the CURRENT production sync engine never invokes a deploy
-        # hook at all, so re-adding the capability would look harmless in testing -- but the v3
-        # distribution/orchestration split WILL act on declared capabilities and would deploy a
-        # retired app to customers. Fail loudly instead.
-        @($script:Contract.capabilities | ForEach-Object { $_.name }) | Should -Not -Contain 'web-frontend'
-        $script:Contract.requires.PSObject.Properties.Name | Should -Not -Contain 'web-frontend'
+    It 'is a SINGLE-capability solution -- code only, and code is REQUIRED' {
+        $declared = @($script:Contract.capabilities | ForEach-Object { $_.name })
+        $declared.Count | Should -Be 1
+        $declared | Should -Contain 'code'
+        [bool](Get-Capability -Name 'code').optional | Should -BeFalse
     }
 
     It 'declares NO deploy hook -- SI updates are a pure code roll' {
@@ -124,17 +129,31 @@ Describe 'SI ships a valid deploy contract' {
         $script:Contract.PSObject.Properties.Name | Should -Not -Contain 'deploy'
     }
 
-    It 'every capability referenced by requires is a declared capability' {
-        # Replaces the old appliesTo check. Same invariant, now that requires is the only place
-        # capabilities are cross-referenced: nothing may name a capability that does not exist.
-        $declared = @($script:Contract.capabilities | ForEach-Object { $_.name })
-        $bad = @(@($script:Contract.requires.PSObject.Properties.Name) | Where-Object { $declared -notcontains $_ })
-        $bad -join ' || ' | Should -BeNullOrEmpty
+    It 'declares NO provisioning preconditions -- they were all SIA''s' {
+        # ACR + Container Apps environment (container) and the Entra app registration
+        # (web-frontend) existed solely for SIA. SecurityInsight itself needs no Azure resource
+        # provisioned before an update.
+        $names = @()
+        if ($script:Contract.PSObject.Properties.Name -contains 'requires' -and $script:Contract.requires) {
+            $names = @($script:Contract.requires.PSObject.Properties.Name)
+        }
+        $names | Should -BeNullOrEmpty
     }
 
-    It 'container still declares its provisioning preconditions' {
-        $script:Contract.requires | Should -Not -BeNullOrEmpty
-        @($script:Contract.requires.container) | Should -Contain 'container-apps-environment'
+    It 'nothing references a capability that does not exist' {
+        # Invariant kept from the old appliesTo/requires cross-check: whatever blocks exist, every
+        # capability they name must be declared. Holds vacuously today and starts biting the moment
+        # a deploy or requires block comes back.
+        $declared = @($script:Contract.capabilities | ForEach-Object { $_.name })
+        $referenced = @()
+        if ($script:Contract.PSObject.Properties.Name -contains 'requires' -and $script:Contract.requires) {
+            $referenced += @($script:Contract.requires.PSObject.Properties.Name)
+        }
+        if ($script:Contract.PSObject.Properties.Name -contains 'deploy' -and $script:Contract.deploy) {
+            $referenced += @($script:Contract.deploy.appliesTo)
+        }
+        $bad = @($referenced | Where-Object { $_ -and $declared -notcontains $_ })
+        $bad -join ' || ' | Should -BeNullOrEmpty
     }
 }
 

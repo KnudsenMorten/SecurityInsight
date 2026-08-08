@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.414
+## v2.2.415
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- chore(SI) v2.2.415: remove the container capability -- SI is a single-capability solution (0067cea1)
 - fix(SI) v2.2.414: half the Risk Analysis columns never reached Log Analytics (12b7bc66)
 - docs(SI): HOLD -- the platform architecture changed, so SI architecture work is postponed (d8a6ef18)
 - docs(routers): add Rule 0 (where a change is written) and the stay-in-your-own-workspace rule to all three CLAUDE.md (63135070)
@@ -33,13 +34,34 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #42 -- ServiceNow and MCP are mostly already here, and the connector gap is resumability (4d57a689)
 - feat(SI): #40 -- the sync could update SIA but never install it, and the missing half is built (36842a67)
 - docs(SI): session handoff -- the next session's mandate is implementation, and #40 is the headline (ec8b13b2)
-- docs(SI): #24 and #26 were closed by runs, and the state table never caught up (f3e455ff)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.415 — SecurityInsight is declared as what it is: a code update
+
+**Nothing to do, and nothing changes in how the engines run.** This release corrects what
+SecurityInsight *declares about itself* to the update mechanism.
+
+The solution previously advertised two optional deployment steps — building a container image and
+rolling a web front end. Both belonged to the separate Analyzer component, which is being replaced, and
+neither was ever delivered to anyone. Leaving them declared meant a future update mechanism could try to
+deploy a retired application on your behalf.
+
+SecurityInsight now declares a single capability: **the code itself**. An update is a file copy, and the
+engines pick up the new version on their next scheduled run. There is no build step, no container to
+roll, no health gate, and **no Azure resource that has to exist before an update can be applied**.
+
+**Also confirmed in this release:** the cross-domain attack-path summary report improved in v2.2.414 has
+been verified end to end. It previously spent **2 hours 30 minutes** repeatedly timing out and then
+reported *no findings* — indistinguishable from a genuinely clean result. It now completes in **90
+seconds** and returns the findings its detailed counterpart finds, so the summary and detailed reports
+agree.
 
 ---
 

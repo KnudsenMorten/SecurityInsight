@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.415
+## v2.2.416
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI) v2.2.416: declare minPlatformVersion 2.0.0 (PLAT-01) (8750fa54)
 - chore(SI) v2.2.415: remove the container capability -- SI is a single-capability solution (0067cea1)
 - fix(SI) v2.2.414: half the Risk Analysis columns never reached Log Analytics (12b7bc66)
 - docs(SI): HOLD -- the platform architecture changed, so SI architecture work is postponed (d8a6ef18)
@@ -33,13 +34,30 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #42 component map -- the retry half is reusable, the pagination half is not (21f9d3e5)
 - docs(SI): #42 -- ServiceNow and MCP are mostly already here, and the connector gap is resumability (4d57a689)
 - feat(SI): #40 -- the sync could update SIA but never install it, and the missing half is built (36842a67)
-- docs(SI): session handoff -- the next session's mandate is implementation, and #40 is the headline (ec8b13b2)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.416 — SecurityInsight now states which platform version it needs
+
+**Nothing changes in how anything runs.** This release adds one line to the contract SecurityInsight
+ships: the minimum version of the AutomateIT platform core it will run on, now declared as **2.0.0** —
+which is what the platform ships today, so every existing install already satisfies it.
+
+Until now SecurityInsight declared no requirement at all. That is treated as *"makes no demand"*, which
+is safe but means an update could in principle be applied onto a platform core too old to support it,
+and nothing would notice until something failed at run time. Stating the requirement lets the update
+mechanism check compatibility before installing rather than after.
+
+**One deliberate consequence, worth knowing.** A solution that states a requirement is also allowed to
+*refuse*. If the platform core cannot report its version, SecurityInsight will now decline to install
+rather than assume compatibility. That is the intended behaviour — an unverifiable core is treated as
+incompatible, not as fine — but it means the requirement is a real gate, not a label.
 
 ---
 

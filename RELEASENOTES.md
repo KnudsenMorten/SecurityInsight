@@ -1,45 +1,81 @@
 # Release notes for SecurityInsight
 
-## v2.2.413
+## v2.2.414
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.414: half the Risk Analysis columns never reached Log Analytics (12b7bc66)
+- docs(SI): HOLD -- the platform architecture changed, so SI architecture work is postponed (d8a6ef18)
+- docs(routers): add Rule 0 (where a change is written) and the stay-in-your-own-workspace rule to all three CLAUDE.md (63135070)
+- docs(routers): CORRECT the previous commit -- ~3 sessions run concurrently, so the git rules are load-bearing (10d1694b)
+- docs(routers): any session may change the framework -- one developer, so the "record and raise" detour is dropped (5ad239bb)
+- docs(framework): one framework document -- fold UPDATE-STRATEGY.md into DOCS/REQUIREMENTS.md, and route framework content there from every solution (6f60746d)
+- docs(SI): mark #44 and #47 NOT APPROVED, and bound the mandate so they cannot be built by accident (13526665)
+- docs(SI): 47.2d/e -- the profiling pipeline, where connectors slot in, and why correlation cannot shard (dabb1f3f)
+- docs(SI): 47.5c -- the dashboards are built; what is missing is rate-over-time, and it has a trap (265a5d8a)
+- docs(SI): #47 -- connector taxonomy, queue/send/retry, ServiceNow pull+push, and where the logic lives (3239065e)
+- docs(SI): #47 build plan -- containers, PS7, SQL, no backup, ServiceNow, MCP, rename first (e95edef7)
+- docs(SI): #Requires 5.1 is inert on pwsh 7 -- the real gate is accidental (5cb51527)
+- docs(SI): 44.0a -- PowerShell 7 for the connector, and pwsh7 is the actual runtime (1a787641)
+- docs(SI): 44.0 -- the connector recommendation consolidated into one findable place (19a9d285)
+- docs(SI): C17 -- container-vs-VM is the wrong question, and PIM's answer differs from SI's (7fdcb09e)
+- docs(SI): C16 -- C# is wrong for the engines and right for the connector, and the seam already exists (f196e60a)
+- docs(SI): C15 -- a 48-hour job is the wrong shape, and container is not the only option (f77925cb)
+- docs(SI): C14 -- the blackbox is real, and the monitoring is 60% built with the visible 40% missing (2a96c8aa)
+- docs(SI): DESIGN carries the connector facts, and two of its statements were wrong (b735391e)
+- docs(SI): #46 C11-C13 -- per-customer topology, capability-based sizing, and where the MCP servers run (29938d6c)
+- docs(SI): #46 concerns & ideas register -- and C0 resets the risk pricing for Manager (4bd10b5d)
+- docs(SI): #45 -- rename to SecurityInsight Manager, and the config prefix is the part that bites (4bb1e5f3)
+- feat(SI): #44 connector platform design + the two suites that can exist before the code (36859ade)
+- docs(SI): #43 -- sync updates the code but not the jobs, and needsSchema is a field with nothing behind it (4a25ec87)
+- docs(SI): #42 -- the Azure-component answer, and only ONE new resource is needed (e4f54a1e)
+- docs(SI): #42 component map -- the retry half is reusable, the pagination half is not (21f9d3e5)
+- docs(SI): #42 -- ServiceNow and MCP are mostly already here, and the connector gap is resumability (4d57a689)
+- feat(SI): #40 -- the sync could update SIA but never install it, and the missing half is built (36842a67)
 - docs(SI): session handoff -- the next session's mandate is implementation, and #40 is the headline (ec8b13b2)
 - docs(SI): #24 and #26 were closed by runs, and the state table never caught up (f3e455ff)
-- test(SI): #34 phase 2 is SKIPPED by decision -- assert the guard it leaves behind (c51247e8)
-- feat(SI): #16 tranche 3, and #39 is proven live -- Detailed rows now land in the Detailed table (cecd0944)
-- docs(SI): refresh the handoff -- #34 phase 1 shipped, and name the two items a live run gates (3d74c09f)
-- feat(SI): #34 phase 1 -- operator rules can live outside the tree the updater writes to (5ade1916)
-- docs(SI): #36 was fixed in the data weeks before the doc said so, and two decisions land (af958784)
-- fix(SI): #39 -- the documented launch line ingested Detailed rows into the Summary table (f5e987e0)
-- docs: PUB-2 is APPLIED, not pending -- the handoff went stale an hour after it was written (857fd25b)
-- docs(SI): handoff -- the whole NEXT-SESSION list is spent, and what remains is four decisions (ad522c91)
-- release(SI): 2.2.409 -- #38 closed, the rule lint now covers the files customers COPY (57a1c14d)
-- release(SI): 2.2.408 -- host-name matching restored, proven by a live run (86e30fa4)
-- revert(publish): drop extraFiles -- it made publish.yml unparseable to GitHub, blocking ALL publishing (c3248f6f)
-- fix(SI): #38 -- a shipped SAMPLE taught a detection the lint rejects, and #29's cause was half-recorded (e5ebdcd8)
-- fix(SI): #37 -- the rule lint printed PASS while holding a violation, and #36's alarm was wrong (e814b96e)
-- docs(SI): handoff state for a fresh session -- the old NEXT-SESSION list is spent (ea01166b)
-- fix(SI): #29 part 2 -- the rule lint was dead, and it was hiding #35 and #36 (9ee5ba98)
-- docs(SI): #34 -- operator rule data lives inside the shipped code tree (proposed, not built) (a69e66dc)
-- feat(publish): implement extraFiles, and ship the customer update strategy (ebb7c805)
-- feat(sync): RING-1 phase 1 core -- generic ring + capability gating (3f5e3497)
-- chore: triage 7 weeks of untracked residue, and stop it coming back (2057bab8)
-- fix(publish): PUB-1 -- a publish could ship a tree that was never tagged (3bb505a4)
-- fix(SI): #33 -- the SIA deploy had no az sign-in, so unattended it died first call (e3d06491)
-- docs(SI): #33 -- audit SI's readiness for sync-triggered auto-deploy (ae610ed4)
-- fix(SI): #32 -- a CLEAN payload disabled the sanitization gate, and it said READY (ea887c75)
-- release(SI): 2.2.407 -- actually remove the stray file 2.2.406 only renamed (021ab682)
-- fix(SI): #30/#31 -- a SAMPLE file was winning over the shipped rule (e56f2f6d)
-- docs(SI): fix the one unresolved TOC anchor blocking publish (a77e5c16)
-- release(SI): VERSION 2.2.405 -- all six tag criteria met, verified on real runs (add02cca)
-- docs(SI): write down the tag/no-tag criteria before judging (c9d9addd)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.414 — Your Risk Analysis data reaches Log Analytics complete
+
+**If you query Risk Analysis results in Log Analytics, this release is significant.** Roughly half the
+columns your reports produce were never arriving in the workspace — and nothing said so.
+
+**What was wrong.** When the engine creates the Log Analytics table, it describes the shape of the data
+using a sample of the rows. That sample was simply the first 100 rows. Any column that happens to be
+empty on all of those — and only appears further down the report — was never declared, and Azure
+Monitor silently discards data for columns it has not been told about. The rows arrived, the run
+reported success, and the columns quietly did not exist.
+
+Measured on a real report: **2,216 rows carrying 151 columns, of which the first 100 rows showed only
+69**. The remediation guidance you would most want to query — `RecommendedAction` and
+`RemediationOptions` — first appears on row 596. The attack-path detail appears on row 2,215 of 2,216.
+All of it was being dropped.
+
+**What changed.** The sample now keeps the leading rows and then adds any row that introduces a column
+not yet seen, so every column the report can produce is declared before the data is sent. Verified in a
+live workspace: the same query that returned **0** rows with remediation data now returns **195**, and
+attack-path data went from 0 to present. Column names that Log Analytics cannot accept are now filtered
+out rather than failing the entire table creation.
+
+**Two further correctness fixes on PowerShell 5.1.** Reading JSON behaves differently on PowerShell 5.1
+than on 7, and two places relied on the 7 behaviour. One affected the cached AI signal map used during
+asset enrichment, which could silently collapse to a single entry instead of the full set on 5.1. The
+other affected an internal verification step, which had been reporting success without actually
+checking anything. Both are corrected and confirmed identical on 5.1 and 7.
+
+**Also in this release.** The retired analyzer web front end has been removed from the deployment
+contract, so nothing attempts to deploy it. A slow cross-domain attack-path summary report has had its
+query narrowed to the groups that actually hold Azure access — the same results, far less work.
+
+**Nothing to do on your side.** Existing data is untouched; new runs simply carry the full column set.
 
 ---
 

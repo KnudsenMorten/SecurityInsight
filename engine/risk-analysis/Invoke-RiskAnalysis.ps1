@@ -3648,9 +3648,52 @@ elseif ([bool]$global:SendToLogAnalytics) {
                 # regardless of operator -Verbose. Restored in the catch/finally.
                 $_savedVerbosePreference = $global:VerbosePreference
                 $global:VerbosePreference = 'SilentlyContinue'
-                # Schema sample (first 100 rows) -- used by CheckCreateUpdate to
-                # infer the target table schema. Same pattern as IAC.
-                $schemaSample = @($global:final | Select-Object -First 100)
+                # Schema sample -- used by CheckCreateUpdate-TableDcr-Structure to DECLARE the
+                # table + DCR columns. AUDIT #48: this was `Select-Object -First 100`, a POSITIONAL
+                # sample, and the module declares the UNION of the property names across whatever it
+                # is handed. Measured 2026-08-08 on the Detailed export: 2,216 rows carried 151
+                # columns but the first 100 carried only 69 -- and the live DCR declared exactly
+                # those 69, so 82 columns were silently dropped at ingest (57 of them holding real
+                # data: RecommendedAction/RemediationOptions first appear on row 596, the whole
+                # attack-path block on row 2215 of 2216). The rows posted, the run logged SUCCESS,
+                # and the columns simply did not exist in Log Analytics. Same defect family as #26,
+                # which fixed positional discovery in the EXPORT and left the INGEST path alone.
+                # Get-RASchemaCoverageSample keeps the leading 100 rows and then adds only rows that
+                # introduce a NOT-YET-SEEN column, so it can never declare fewer columns than before.
+                $schemaSample = @(Get-RASchemaCoverageSample -Rows $global:final -BaseCount 100)
+
+                # DROP COLUMNS LOG ANALYTICS CANNOT ACCEPT (2026-08-08).
+                # The export carries 17 `<name>@odata.type` columns -- Graph/OData serialisation
+                # metadata that leaked into the row shape. `@` is not legal in a Log Analytics
+                # column name. This was HARMLESS only while the schema sample was the first 100
+                # rows, because those columns appear further down; widening the sample to full
+                # coverage exposed it at once and table creation failed with
+                # `InvalidParameter: User provided schema is invalid`, leaving the table
+                # NON-EXISTENT and every row unlanded -- while the run still printed
+                # "Engine completed successfully".
+                # ValidateFix-AzLogAnalyticsTableSchemaColumnNames is NOT sufficient here: measured
+                # 2026-08-08, it strips the dot but keeps the '@' (`AllIdentities@odata.type` ->
+                # `AllIdentities@odatatype`), so the name is still rejected. Run it first for the
+                # normalisations it DOES handle, then drop whatever is still illegal.
+                # Dropping them from the DECLARED schema is the correct outcome, not a workaround:
+                # Build-DataArrayToAlignWithSchema drops undeclared columns from the posted rows
+                # too, so declared and posted agree and only the 134 real columns land.
+                # NOTE the artifact columns still reach the .xlsx/.json export -- that is a separate
+                # defect (17 junk columns in a customer-facing workbook), recorded in REQUIREMENTS.
+                $schemaSample = @(ValidateFix-AzLogAnalyticsTableSchemaColumnNames -Data $schemaSample -Verbose:$false 4>$null)
+                $__legalSample = foreach ($__row in $schemaSample) {
+                    $__o = [ordered]@{}
+                    foreach ($__p in $__row.PSObject.Properties) {
+                        if ($__p.Name -match '^[A-Za-z][A-Za-z0-9_]*$') { $__o[$__p.Name] = $__p.Value }
+                    }
+                    [pscustomobject]$__o
+                }
+                $schemaSample = @($__legalSample)
+
+                Write-Info ("  schema sample: {0} row(s) covering {1} column(s) (of {2} row(s))" -f `
+                    $schemaSample.Count,
+                    (@($schemaSample | ForEach-Object { $_.PSObject.Properties.Name } | Sort-Object -Unique)).Count,
+                    (@($global:final)).Count)
 
                 # v2.2.321 -- always print where data is being sent. Shared
                 # Write-SIIngestTarget helper from Write-SIStyle.ps1 keeps the

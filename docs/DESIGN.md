@@ -391,6 +391,69 @@ Identity is **hard-disabled** regardless of the flag — identity tier is fully 
 
 When AI is on, it can only be invoked from **profile-phase** rules whose `detect.kind` is `aiClassify`. AI never runs inside the per-asset loop naively — the rule batches assets and submits one call per N. The same external-calls lint applies.
 
+### Provider contract (connectors)
+
+> 📌 `asset-profiling-providers/_manifest.schema.locked.json` refers to a `_PROVIDER_CONTRACT.md`.
+> **That file does not exist** — this section is the contract, per the one-doc-set rule. Anyone adding
+> a provider should read this rather than reverse-engineering `entra/`.
+
+A **provider** is a connector: a folder under `asset-profiling-providers/<id>/` holding a manifest plus
+the functions below. The engine never reaches into a provider folder directly — it goes through the
+provider id (see the lint rule below), so providers stay swappable.
+
+**`manifest.json` / `manifest.locked.json`** — validated against the locked JSON schema, and now
+enforced by `tests/pester/SI-ProviderContract.Tests.ps1` rather than by eye:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `id` | ✅ | lowercase + dashes, and **must equal the folder name** — the engine resolves provider → directory through it |
+| `kind` | ✅ | `in` (read), `out` (write) or `both` |
+| `engines` | ✅ | which engines it feeds — `identity` / `endpoint` / `azure` / `publicip`; non-empty |
+| `auth` | ✅ | `spn` / `umi` / `api-key` / `none` (+ optional `scopes`) |
+| `bulk` | ✅ | `true` when a read returns all assets in N pages rather than per-asset calls. A real boolean, not `"true"` |
+| `rateLimit` | — | `{ calls, per }`, e.g. `1000` per `1h`. **Declared today, not yet enforced** |
+| `description`, `schemaFragment` | — | documentation; optional schema fragment path |
+
+**Functions** (PowerShell, dot-sourced; `<X>` is the provider's Pascal-case name):
+
+| Function | Returns | Notes |
+|---|---|---|
+| `Read-<X>ProviderData -Engine -RunContext` | array of `[hashtable]` asset rows | the shape the COLLECT stage already consumes. Return `@()` for an engine this provider does not serve — do not throw |
+| `Test-<X>ProviderConnection` | `@{ Ok; Error; Detail }` | `Detail` should name the *fix* (which scope or setting is missing), not just restate the failure |
+| `Get-<X>ProviderManifest` | the parsed manifest | |
+
+**Rules for a well-behaved provider**
+- **Bulk, not per-asset.** A per-asset call pattern will not survive a large estate; that is what `bulk`
+  advertises.
+- **Page + retry through `Invoke-SIPagedRest`** (below) — never hand-roll retry.
+- **Read-only at collection time.** A `kind: out`/`both` provider's write path must not run inside a
+  collection run; writing belongs to a separate engine with its own gate, on the `asset-tagging`
+  pattern.
+- **Fail loudly, not open.** A provider that cannot reach its source must say so; a silently-empty
+  result becomes silently-missing enrichment, which is the hardest defect class to notice.
+
+### Paged REST + transient-fault retry — `Invoke-SIPagedRest`
+
+`engine/asset-profiling/shared/Invoke-SIPagedRest.ps1` is the **one** retry implementation; discovery
+modules and providers share it so retry behaviour cannot diverge between sources.
+
+| Parameter | Meaning |
+|---|---|
+| `-Url`, `-Token` | first page, and the bearer token. `-ExtraHeaders` is applied **after** the `Authorization` header and therefore **overrides** it — which is how a non-bearer scheme (basic / api-key) is supplied |
+| `-SourceLabel` | names the source in log lines |
+| `-MaxAttempts` (4) | attempts **per page** |
+| `-MaxDelaySeconds` (60) | ceiling on a single honoured `Retry-After`, so a pathological value cannot park a run |
+
+**Behaviour:** retries `429`, `502`, `503`, `504` and network-level errors with exponential backoff,
+**honouring the server's `Retry-After`** when one is sent (Graph and MDE both do). Returns
+`Pages` / `Retries` / `Complete` / `Error`, so a caller can distinguish *"all pages read"* from
+*"partial, and here is why"* — partial pages are preserved rather than discarded.
+
+⚠️ **Pagination is currently OData-specific**: the loop advances on `@odata.nextLink`. Sources that page
+differently (offset/limit, a `Link` header, a keyset predicate) need the advance step parameterised —
+the retry half is source-agnostic and should be reused as-is rather than forked, so that there is never
+more than one retry implementation to keep correct.
+
 ### Folder-level lint
 
 A pre-commit / CI check enforces:
@@ -773,6 +836,14 @@ Bridging dynamic discovery (left) with the business CMDB (right) is its own subs
 
 Provider `asset-profiling-providers/servicenow-cmdb/` (`kind: both`) is the only thing that talks to ServiceNow. The shipped flow is **CSV drop**: customer drops a `CMDB.csv` into the provider folder (or points `$global:SI_CmdbCsvPath` at a UNC path), and `Refresh-CmdbCache.ps1` loads it into the cache tables. Per-run reconciliation reads from cached tables only — never from the live CMDB. `Write-ProviderData` is the optional write-back path for patching discovered assets back to CMDB CIs.
 
+> 📌 **The manifest declares more than the implementation currently does.** `manifest.locked.json` says
+> `kind: both`, `auth: api-key`, `bulk: true` — that describes the *intended* live REST integration
+> (read CIs / services / relationships, optional write-back). **What ships today is the CSV reader
+> above**: there is no HTTP call in the provider at all. Read the manifest as the contract the
+> provider is being built toward, not as a description of what runs. A live REST read is planned; the
+> write-back half will be a separately gated capability, because writing into a customer's CMDB is a
+> materially different trust decision from reading it.
+
 #### CMDB cache (cached content)
 
 Business services and CI-to-service relationships are *data*, not rules. A local copy lives in storage tables, refreshed by a separate scheduled job. Engine runs read from the cache only.
@@ -790,7 +861,16 @@ CSV lookup order at refresh time:
 3. `asset-profiling-providers/servicenow-cmdb/CMDB.csv` (customer drop-in, gitignored)
 4. `asset-profiling-providers/servicenow-cmdb/sample/CMDB.csv` (shipped sample)
 
-Refresh job: `asset-profiling-providers/servicenow-cmdb/Refresh-CmdbCache.ps1`. Runs daily as a separate Container App Job (or scheduled task).
+Refresh job: `asset-profiling-providers/servicenow-cmdb/Refresh-CmdbCache.ps1`. Runs daily as a separate Container App Job (or scheduled task), and is also invoked by the SCHEDULE stage when the cached snapshot is older than the configured interval.
+
+> ⚠️ **Known limitation — the auto-refresh is a no-op when storage uses OAuth (the default since
+> v2.2.314).** `Refresh-CmdbCache.ps1` signs its Table Storage calls with a **shared key**, and an
+> OAuth-mode run carries no storage key, so the SCHEDULE stage logs that it is skipping the refresh
+> and falls through to the existing cached snapshot. The run still completes successfully — the CMDB
+> cache simply stops ageing forward. Until the helper is reworked to use OAuth bearer tokens against
+> the Table Storage REST API, refresh the cache by running the job **directly** with an account key,
+> or accept that the cache is only as fresh as the last key-authenticated refresh. A CMDB cache that
+> is stale rather than absent still reconciles; it just reflects an older CI/service picture.
 
 Three content categories now coexist:
 
@@ -3119,6 +3199,15 @@ Pick the layer that matches your operational posture. Most setups use Layer 1 da
 
 #### Layer 1 — CLI: `Show-SIRunHealth.ps1`
 
+> 🔴 **NOT YET SHIPPED — this section describes the intended tool, not one you can run.**
+> `Show-SIRunHealth.ps1` does not currently exist in the solution. The **data it reads is real** —
+> `SI_RunHealth_CL` is emitted by every asset-profiling and risk-analysis run — so the KQL further
+> down this chapter works today and can be run directly in the workspace. Two related gaps to know
+> about while this stands: the run-health **DCR is not created by setup** (so the heartbeat has
+> nowhere to land until it is provisioned), and heartbeat delivery is deliberately best-effort and
+> **swallows its own failures**, which means an absent row does not by itself prove a run failed.
+> Use the raw queries below in the meantime.
+
 The day-to-day tool. Reads `SI_RunHealth_CL` and prints three tables: failed replicas, memory warnings, and a planned-vs-completed run summary.
 
 ```powershell
@@ -3504,9 +3593,19 @@ safer?" view (risk score over time, what's new/closed, an AI exec summary + reco
 **analysts** a worklist that explains the top risk rows (the KQL facts plus an AI verdict). It adds no
 new data plane and no new AI infrastructure — it reuses what SecurityInsight already has, read-only.
 
-SIA is a **separate solution on its own dedicated Azure infrastructure: a central, hosted .NET web app
+SIA is a **separate solution on its own dedicated Azure infrastructure: a hosted .NET web app
 (ASP.NET Core), behind Entra SSO, modeled on CEH.** The earlier PowerShell/localhost POC is **retired**
 (a non-technical exec cannot run a script; the timeline/AI/exec functionality demands a real .NET app).
+
+> 🔑 **"Hosted" means a service, NOT a shared instance — one deployment per environment.** Each
+> environment runs **its own** SIA: its own Container Apps environment, registry, storage and Entra app
+> registration, in its own tenant, reading **only that tenant's** workspace through its own Managed
+> Identity. There is no multi-tenant instance and no central service anyone depends on at runtime;
+> `Deploy-SIAnalyzer.ps1` builds the image in **that environment's own registry** from the synced
+> source. The word "hosted" is here to rule out the retired localhost model — a browser URL with Entra
+> sign-in rather than a script on someone's laptop — not to imply a single shared deployment. A
+> consequence worth stating: because no instance ever sees more than one tenant's data, there is no
+> cross-tenant isolation surface to get wrong.
 Its proven logic — the read-only KQL guardrail, the snapshot diff + score timeline, the grounded AI
 prompts — was **ported to C#** and lives in `SIAnalyzer.Core`. Only `../analyzer/seed/demo-snapshot.json`
 survives, as the .NET app's demo-fallback seed.
@@ -3740,6 +3839,18 @@ read-only KQL + an explanation template), an ad-hoc prompt mode (free text → g
 KQL → run → explain), a guarded raw-KQL box, and drill-down.
 
 ### 8. MCP server
+
+> 🔑 **Where it runs:** `POST /mcp` is served **by the SIA app process itself** — it is not a separate
+> service, has no separate deployment, and is not centrally hosted. Because each environment runs its
+> own SIA (§1), the MCP endpoint lives inside **that environment's** container, on its private ingress,
+> behind that environment's Entra sign-in, exposing only that tenant's data. An MCP client reaches it
+> the same way a browser reaches the UI: over the private network, authenticated.
+>
+> 📌 **Not to be confused with Microsoft's own security MCP server.** Microsoft hosts an MCP server for
+> the Sentinel data lake and Defender; it requires no infrastructure and authenticates with Entra. That
+> is a *source* SI could consume as a provider (an outbound HTTPS client — nothing to deploy), whereas
+> `/mcp` here is SI **publishing its own** analysis to agents. Two opposite directions; they are
+> independent, and neither implies the other.
 
 `POST /mcp` is a minimal **JSON-RPC 2.0** MCP endpoint exposing tools that mirror the prestaged
 analyses + a **guarded query** + snapshot-diff / score-timeline / **exec_headline** /

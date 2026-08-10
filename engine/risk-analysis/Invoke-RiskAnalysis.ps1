@@ -5063,18 +5063,28 @@ try {
         $tw = _TierWeight $tierVal
 
         # v2.2.314 -- per-row population weight. Summary rows represent N
-        # asset-findings collapsed into one row (TotalIssuesImpactedAssets is the
-        # population). Detailed rows are one-finding-per-asset (weight = 1).
-        # Multiplying by population converges Summary KPI to Detailed KPI on the
-        # same underlying data -- pre-v2.2.314 the two reports diverged by 1-9
-        # points purely from per-row vs per-asset-finding averaging. Customer ask:
-        # "my customers cannot understand why the risk score is not same %
-        # between summary and detailed".
+        # asset-findings collapsed into one row; Detailed rows are one-finding-per-asset
+        # (weight = 1). Multiplying by population converges Summary KPI to Detailed KPI on the
+        # same underlying data -- pre-v2.2.314 the two reports diverged by 1-9 points purely
+        # from per-row vs per-asset-finding averaging. Customer ask: "my customers cannot
+        # understand why the risk score is not same % between summary and detailed".
+        #
+        # AUDIT #52 -- the population is now ImpactedAssetCount. It was
+        # TotalIssuesImpactedAssets, which has been removed as incorrect: it disagreed with
+        # ImpactedAssetCount on 64 of 311 live rows, with ratios from 0.125 to 2048.5.
+        # 🔴 THAT WAS NOT COSMETIC. This weight feeds the headline risk score, so a row whose
+        # count was inflated 2048x dominated its domain's KPI, and rows whose count was too
+        # low (ratio 0.125) were under-counted. The scores this converged were converging on a
+        # distorted population.
+        # ImpactedAssetCount is the honest population for a Summary row: array_length of the
+        # asset list actually shown beside it, so the weight and the evidence agree. It is also
+        # what the engine already substituted whenever the KQL supplied nothing -- so for the
+        # 247 of 311 rows that were already consistent, the weighting is unchanged.
         $rowWeight = 1.0
-        if ($r.PSObject.Properties['TotalIssuesImpactedAssets']) {
-            $tiia = 0
-            if ([int]::TryParse([string]$r.TotalIssuesImpactedAssets, [ref]$tiia) -and $tiia -gt 0) {
-                $rowWeight = [double]$tiia
+        if ($r.PSObject.Properties['ImpactedAssetCount']) {
+            $iac = 0
+            if ([int]::TryParse([string]$r.ImpactedAssetCount, [ref]$iac) -and $iac -gt 0) {
+                $rowWeight = [double]$iac
             }
         }
 

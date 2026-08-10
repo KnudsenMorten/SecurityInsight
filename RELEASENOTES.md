@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.416
+## v2.2.417
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.417: two reports were silently returning nothing, and a column was skewing the risk score (f6675bec)
 - feat(SI) v2.2.416: declare minPlatformVersion 2.0.0 (PLAT-01) (8750fa54)
 - chore(SI) v2.2.415: remove the container capability -- SI is a single-capability solution (0067cea1)
 - fix(SI) v2.2.414: half the Risk Analysis columns never reached Log Analytics (12b7bc66)
@@ -33,13 +34,95 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #42 -- the Azure-component answer, and only ONE new resource is needed (e4f54a1e)
 - docs(SI): #42 component map -- the retry half is reusable, the pagination half is not (21f9d3e5)
 - docs(SI): #42 -- ServiceNow and MCP are mostly already here, and the connector gap is resumability (4d57a689)
-- feat(SI): #40 -- the sync could update SIA but never install it, and the missing half is built (36842a67)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.417 — Two reports were quietly returning nothing, and a column was skewing your risk score
+
+**This is the most consequential release in a while. Three independent faults, all found in one day,
+all of which a successful run reported as success.** If you use Risk Analysis, read the first two
+sections — your numbers change.
+
+### 1. Azure recommendations were silently returning ZERO
+
+**Both Azure recommendation reports — Summary and Detailed — stopped returning anything.** Not an
+error, not a warning: valid queries, normal runtime, "completed successfully", and no findings. A run
+with a real problem looked exactly like a clean environment.
+
+**Why.** Both reports identified Azure assets by reading a raw property from the Microsoft security
+graph and requiring it to contain the text "Azure". Microsoft changed that property. It is now empty
+on essentially every node, and the literal number `0` on a small remainder — the word "Azure" no
+longer appears anywhere in it. Every asset failed the test, so the reports had nothing to work with.
+
+Measured on a live tenant the day it broke: the previous run produced **75** Summary and **304**
+Detailed rows; the next produced **0** and **0**.
+
+**What changed.** Azure assets are now identified by their **resource type**, which is part of the
+graph's structure rather than a payload field that can be reshaped without notice. This is the approach
+the attack-path reports already used. It is also faster, because it replaces per-node property parsing
+across a very large graph with a simple type check.
+
+> ⚠️ **Expect MORE Azure findings than before, not merely the old ones back.** The previous filter was
+> narrower than intended, so some genuine recommendations were never reported. On the reference tenant
+> the Summary went from 75 to 334 rows. The additional rows were verified to be real Azure resources —
+> SQL servers, storage accounts, key vaults, container registries, Log Analytics workspaces, virtual
+> networks, subscriptions and Azure-hosted VMs. **If your Azure recommendation count jumps after this
+> upgrade, that is the fix working.**
+
+### 2. A cross-domain attack-path report could run for hours and find nothing
+
+The credential-based lateral-movement report gathered **every** matching relationship in the tenant
+before narrowing them, on the assumption that a later step would keep the work small. It does not —
+narrowing the result does not narrow the search. On any tenant with a well-connected identity, that
+step multiplied out, and the report either took extraordinarily long or hit the query time limit and
+returned nothing.
+
+Splitting the work into smaller pieces could never help: the expensive part is a single highly
+connected object, and no amount of splitting divides one object.
+
+**Each step is now limited to what the previous step actually found** — which is exactly what the
+report already required, so **the results are unchanged**. On the reference tenant the slowest part
+went from **297 seconds on a good day (and a hard timeout on a bad one) to 108 seconds**, returning the
+same findings, with **no timeouts anywhere across two full report runs**.
+
+### 3. A column with three different meanings was skewing the headline risk score
+
+A column claiming to count issues across impacted assets was written by three different mechanisms and
+disagreed with the impacted-asset count beside it on **64 of 311 rows (21%)** — in both directions,
+from one-eighth of the true value to **2,048 times** it.
+
+**It was not only wrong on screen.** That value was the per-row weight used to average each domain's
+headline risk score, so a row inflated 2,048× dominated its domain, and undercounted rows barely
+registered. The weighting existed to make Summary and Detailed agree — they did agree, on a distorted
+population.
+
+The column is removed, and the weight now comes from the impacted-asset count, which is the number of
+assets actually listed beside it. **Some risk scores will move; where they do, the new value is the
+correct one.** For the 247 of 311 rows that were already consistent, nothing changes.
+
+Two related columns were tidied at the same time, each measured rather than assumed: a per-issue count
+that was **always exactly 1** on the 53 reports grouped one row per issue (kept on the 6 where it
+genuinely varies), and an issue list that merely restated the finding its own row already named —
+**1,818 of 1,818 detailed rows carried exactly one entry**.
+
+> **If you query these columns**, they no longer exist. If a raw count of findings is useful to you,
+> tell us — it should be a new, honestly-named column rather than this one revived.
+
+### 4. New: `RiskRating`
+
+Every report now carries a plain-language band beside the risk score — **Critical / High / Moderate /
+Low** — so you can filter and sort without memorising what a score of 20 means. It is derived in the
+same step that calculates the score, so the two can never disagree.
+
+*Named `RiskRating` deliberately: "risk level" and "risk score" already mean specific and different
+things in Microsoft Defender and Entra ID Protection, and reusing either would make your data ambiguous
+exactly where it needs to be precise.*
 
 ---
 

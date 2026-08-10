@@ -106,6 +106,40 @@ function Calculate-RiskScore {
         $tmp['RiskProbabilityScore']    = [double]$probAdj
         $tmp['RiskScoreTotal']          = [double]$risk
         $tmp['RiskScoreTotal_Weighted'] = [int][math]::Floor([double]$weighted)
+        # RiskRating -- the banded form of RiskScoreTotal, so a security team can filter without
+        # memorising what 20 means (operator, 2026-08-10).
+        #
+        # 🔑 NAMED 'RiskRating', NOT 'RiskLevel' (operator, 2026-08-10). 'RiskLevel' was the first
+        # name and it collides twice over:
+        #   1. INTERNALLY -- $global:RA_KPI.RiskLevel already exists (Invoke-RiskAnalysis.ps1:5137)
+        #      and means something DIFFERENT: the tenant-wide KPI level banded from GlobalScore,
+        #      which is higher-is-better. This column bands RiskScoreTotal, which is higher-is-WORSE.
+        #      Two columns, the same four words ('Critical'/'High'/'Moderate'/'Low'), opposite
+        #      directions -- and both surface in RA output. That is #52's defect class exactly.
+        #   2. EXTERNALLY -- Entra ID Protection user/sign-in risk and MDE device risk level both
+        #      use it, and SI_Endpoint_Profile_CL already carries MDE's own RiskScore.
+        # 'Rating' was verified unused anywhere in SI (0 occurrences) before being chosen; 'Band',
+        # 'Tier', 'Level', 'Severity', 'Category', 'Priority' and 'Score' were all already taken.
+        #
+        # 🔑 STAMPED HERE ON PURPOSE, in the same atomic block as the score it derives from.
+        # A band computed anywhere else could disagree with the score printed beside it -- which is
+        # exactly audit #52, where one column carried three definitions and was wrong on 21% of rows.
+        # Derived, never supplied: a report YAML must not set RiskRating.
+        #
+        # Banded on RiskScoreTotal, NOT RiskScoreTotal_Weighted -- measured 2026-08-10, the two are
+        # identical on all 1,818 rows of the Detailed export (the weight applies to KPI aggregation,
+        # not the row), so the unweighted score is the honest input.
+        #
+        # ⚠️ The bands are coarse because the SCORE is coarse: only 15 distinct values exist in 0..28
+        # (it is a product of small integers), and 897 of 1,818 rows sit at exactly 20 -- which is
+        # also the High threshold. So High is ~51% of findings, Moderate only ~3.5%, and a small
+        # scoring change flips ~900 rows across the boundary at once. Banding cannot fix that;
+        # widening the score's granularity would. Recorded so the thresholds are not "tuned" in
+        # response to a symptom whose cause is upstream.
+        $tmp['RiskRating'] = if     ($risk -ge 25) { 'Critical' }
+                             elseif ($risk -ge 20) { 'High'     }
+                             elseif ($risk -ge 12) { 'Moderate' }
+                             else                  { 'Low'      }
     }
 
     function _toDouble([object]$v) {
@@ -624,7 +658,8 @@ function Calculate-RiskScore {
     # per-report aggregates emitted under canonical OutputPropertyOrder names:
     #   ImpactedAssetCount        = length of ImpactedAssetsList (audit #25)     (int, scalar)
     #   UniqueIssues              = distinct ConfigurationName count             (int, scalar)
-    #   TotalIssuesImpactedAssets = total finding rows in report                 (int, scalar)
+    #   (TotalIssuesImpactedAssets REMOVED -- audit #52: three conflicting definitions,
+    #    disagreed with ImpactedAssetCount on 21% of live rows. Do not re-add.)
     #   ImpactedAssetsList        = distinct AssetName(s) across all rows         (array of string)
     #   IssueList                 = distinct ConfigurationName(s) across all rows (array of string)
     # Per user spec:
@@ -714,14 +749,16 @@ function Calculate-RiskScore {
                 if (-not $tmp2.Contains('UniqueIssues') -or [string]::IsNullOrWhiteSpace([string]$tmp2['UniqueIssues'])) {
                     $tmp2['UniqueIssues'] = [int]$uniqueIssues
                 }
-                if (-not $tmp2.Contains('TotalIssuesImpactedAssets') -or [string]::IsNullOrWhiteSpace([string]$tmp2['TotalIssuesImpactedAssets'])) {
-                    # Per-row scope: count of assets impacted by THIS row's issue.
-                    # Pre-v2.2.311 used $totalIssues (whole-report row count), which
-                    # made TII identical on every row and meaningless when each row
-                    # already represents one ConfigurationId x criticality bucket.
-                    $iacVal = if ($tmp2.Contains('ImpactedAssetCount')) { [int]$tmp2['ImpactedAssetCount'] } else { 1 }
-                    $tmp2['TotalIssuesImpactedAssets'] = $iacVal
-                }
+                # AUDIT #52 -- TotalIssuesImpactedAssets is GONE. Do not re-add it.
+                # It carried THREE different definitions at once: the KQL computed count() of
+                # source rows, this engine computed ImpactedAssetCount when the KQL supplied
+                # nothing, and the column name promises issues x assets. Measured in the live
+                # workspace 2026-08-10: it disagreed with ImpactedAssetCount on 64 of 311 rows
+                # (21%), with ratios from 0.125 to 2048.5 -- and a customer saw 102 against a
+                # three-asset list. Neither report grain needs it: ImpactedAssetCount +
+                # ImpactedAssetsList express the per-issue blast radius, UniqueIssues + IssueList
+                # express the per-asset one. A raw finding count, if ever wanted, must be a new
+                # and honestly-named column computed in exactly one place.
             }
             # ImpactedAssetsList + IssueList: Summary-only aggregate lists. YAML
             # may project them already (per-summary-group); otherwise engine fills
@@ -1062,7 +1099,7 @@ function Calculate-RiskScore {
                 # (AssetCount/TotalIssues/ImpactedAssets/Issues_Details + the
                 # RiskFactor_Weight engine-alias) are dropped because their data lives
                 # in YAML-declared columns under the new names (ImpactedAssetCount /
-                # TotalIssuesImpactedAssets / ImpactedAssetsList / IssueList /
+                # ImpactedAssetsList / IssueList /
                 # RiskScore_Weight_Factor). MoreDetails + RiskFactor_Consequence_Detailed
                 # + MITRE_* + ComplianceTags are force-included regardless of whether the
                 # per-report YAML lists them, so the schema stays stable across reports.
@@ -1092,7 +1129,25 @@ function Calculate-RiskScore {
                 # engine-aliases + internal helpers.
                 $extraColBlacklist = @{
                     'AssetCount'        = $true   # legacy alias -> ImpactedAssetCount
-                    'TotalIssues'       = $true   # legacy alias -> TotalIssuesImpactedAssets
+                    'TotalIssues'       = $true   # legacy alias, retired with audit #52
+                    # AUDIT #52 -- blacklisted so it cannot come back through the side door.
+                    # It was removed from every OutputPropertyOrder, which means a KQL still
+                    # emitting it would no longer be a declared column -- it would be APPENDED
+                    # as an "extra row-level column" and reappear in exports looking legitimate.
+                    # A customer .custom.yaml could do exactly that.
+                    'TotalIssuesImpactedAssets' = $true
+                    # AUDIT #52 (completed v2.2.417) -- IssueList came back through the SAME side
+                    # door, and the pre-publish gate caught it. #52 removed IssueList from 112
+                    # OutputPropertyOrders, but the ENGINE still injects it a few hundred lines
+                    # above (Detailed -> @(ConfigurationName); Summary -> @(ConfigurationId)) when
+                    # the KQL supplies none. Undeclared + engine-injected = appended here as an
+                    # "extra row-level column", so it reappeared on 1,777 of 1,777 Detailed rows.
+                    # 🔑 Blacklisting is SAFE for the 6 reports that legitimately KEEP IssueList --
+                    # a declared column is already in $h2 and returns on the first check above, so
+                    # this line can only ever drop the UNDECLARED, engine-injected copies.
+                    # Filtering here rather than deleting the injection on purpose -- $tmp2's
+                    # IssueList is still read upstream when building NVD/CVE detail URLs.
+                    'IssueList'         = $true
                     'ImpactedAssets'    = $true   # legacy alias -> ImpactedAssetsList
                     'Issues_Details'    = $true   # legacy alias -> MoreDetails
                     'RiskFactor_Weight' = $true   # legacy alias -> RiskScore_Weight_Factor

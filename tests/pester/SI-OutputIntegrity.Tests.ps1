@@ -125,3 +125,138 @@ Describe 'output integrity -- audit #26 on a REAL export' {
         $present.Count | Should -BeGreaterThan 0
     }
 }
+
+# ============================================================================
+Describe 'output integrity -- audit #52: the degenerate aggregate columns are gone' {
+# ============================================================================
+#
+#   A customer reported ImpactedAssetCount = 3 beside TotalIssuesImpactedAssets = 102, with a
+#   three-name asset list. Reproduced in the internal workspace, so it was never customer data:
+#   the column disagreed with ImpactedAssetCount on 64 of 311 live rows (21%), with ratios from
+#   0.125 to 2048.5, and the customer's own rows were a constant 34x.
+#
+#   Root cause: THREE definitions of one column. The KQL computed count() of source rows, the
+#   engine substituted ImpactedAssetCount whenever the KQL supplied nothing, and the name promised
+#   issues x assets. count() counts rows; make_set() de-duplicates and drops nulls -- so the count
+#   and the list beside it measured different things and diverged by construction. Exactly audit
+#   #25's defect family, one column across, which #25 never covered.
+#
+#   🔴 It was not cosmetic. The value was also the per-row POPULATION WEIGHT for the headline risk
+#   score (v2.2.314), so a row inflated 2048x dominated its domain's KPI. The weight now comes from
+#   ImpactedAssetCount.
+#
+#   Why this file did not catch it: it asserted ImpactedAssetCount against ImpactedAssetsList and
+#   never looked at the third column standing next to them.
+
+    It 'no export row carries TotalIssuesImpactedAssets' {
+        foreach ($name in @('RiskAnalysis_Summary.json','RiskAnalysis_Detailed.json')) {
+            $rows = Get-SidecarRows -Name $name
+            if ($null -eq $rows -or @($rows).Count -eq 0) { continue }
+            $bad = @($rows | Where-Object { $_.PSObject.Properties['TotalIssuesImpactedAssets'] })
+            $bad.Count | Should -Be 0 -Because (
+                "{0}: {1} row(s) still carry TotalIssuesImpactedAssets. It was removed as incorrect; if a report re-emits it the engine blacklist should drop it before export." -f $name, $bad.Count)
+        }
+    }
+
+    It 'the catalog declares TotalIssuesImpactedAssets nowhere' {
+        # The export test above only sees reports that produced rows. This one covers all 118.
+        $yamlPath = Join-Path $script:V22Root 'risk-analysis-detection\RiskAnalysis_Queries_Locked.yaml'
+        if (-not (Test-Path -LiteralPath $yamlPath)) {
+            Set-ItResult -Skipped -Because 'query catalog not present'
+            return
+        }
+        $hits = @(Select-String -LiteralPath $yamlPath -Pattern 'TotalIssuesImpactedAssets' -ErrorAction SilentlyContinue)
+        $hits.Count | Should -Be 0 -Because (
+            "the catalog still references TotalIssuesImpactedAssets on {0} line(s): {1}" -f $hits.Count, (($hits | Select-Object -First 3 | ForEach-Object { "L$($_.LineNumber)" }) -join ', '))
+    }
+
+    It 'UniqueIssues survives ONLY where it genuinely varies' {
+        # It is 1 by construction wherever ConfigurationId is in the summarize by-clause -- the row
+        # IS one issue. It was kept in the 6 reports grouped the other way (per asset), where it is
+        # the blast radius in the opposite direction. This asserts the surviving column is real:
+        # if every row that has it shows 1, the curation was wrong and it should go too.
+        $rows = Get-SidecarRows -Name 'RiskAnalysis_Summary.json'
+        if ($null -eq $rows -or @($rows).Count -eq 0) {
+            Set-ItResult -Skipped -Because 'no Summary JSON sidecar -- run the RA Summary launcher first'
+            return
+        }
+        $withUi = @($rows | Where-Object { $_.PSObject.Properties['UniqueIssues'] -and "$($_.UniqueIssues)" -ne '' })
+        if ($withUi.Count -eq 0) {
+            Set-ItResult -Skipped -Because 'this run produced no rows from the 6 reports that still declare UniqueIssues'
+            return
+        }
+        $varying = @($withUi | Where-Object { $n = 0; [int]::TryParse("$($_.UniqueIssues)", [ref]$n) -and $n -gt 1 })
+        $varying.Count | Should -BeGreaterThan 0 -Because (
+            "all {0} row(s) carrying UniqueIssues show 1, so it is degenerate everywhere it survives and should be removed from those reports too" -f $withUi.Count)
+    }
+
+    It 'IssueList never restates a single issue on a Detailed row' {
+        # On a Detailed row the finding IS the row, so a one-entry IssueList is pure redundancy.
+        # Measured before removal: 1,818 of 1,818 Detailed rows had exactly one entry.
+        $rows = Get-SidecarRows -Name 'RiskAnalysis_Detailed.json'
+        if ($null -eq $rows -or @($rows).Count -eq 0) {
+            Set-ItResult -Skipped -Because 'no Detailed JSON sidecar -- run the RA Detailed launcher first'
+            return
+        }
+        $bad = @($rows | Where-Object { $_.PSObject.Properties['IssueList'] -and $_.IssueList })
+        $bad.Count | Should -Be 0 -Because (
+            "{0} Detailed row(s) still carry IssueList; it duplicates the finding the row already names" -f $bad.Count)
+    }
+}
+
+# ============================================================================
+Describe 'output integrity -- RiskRating is a faithful band of RiskScoreTotal' {
+# ============================================================================
+#
+#   RiskRating is DERIVED, never supplied: it is stamped in _setScores, in the same atomic block as
+#   the score it bands, so the two cannot drift apart. That placement is deliberate -- audit #52 was
+#   one column carrying three definitions, wrong on 21% of rows, because it was computed in more
+#   than one place. This asserts the derivation on the real export rather than trusting it.
+#
+#   Bands (operator, 2026-08-10):  >=25 Critical | >=20 High | >=12 Moderate | else Low
+
+    It 'every row''s RiskRating matches the band its RiskScoreTotal falls in' {
+        foreach ($name in @('RiskAnalysis_Summary.json','RiskAnalysis_Detailed.json')) {
+            $rows = Get-SidecarRows -Name $name
+            if ($null -eq $rows -or @($rows).Count -eq 0) { continue }
+            $bad = @()
+            foreach ($r in $rows) {
+                $lv = $r.PSObject.Properties['RiskRating']
+                $sc = $r.PSObject.Properties['RiskScoreTotal']
+                if (-not $lv -or -not $sc) { continue }
+                if ([string]::IsNullOrWhiteSpace([string]$sc.Value)) { continue }
+                $s = [double]$sc.Value
+                $expect = if ($s -ge 25) { 'Critical' } elseif ($s -ge 20) { 'High' } elseif ($s -ge 12) { 'Moderate' } else { 'Low' }
+                if ([string]$lv.Value -ne $expect) { $bad += ('score={0} level={1} expected={2}' -f $s, $lv.Value, $expect) }
+            }
+            $bad | Should -BeNullOrEmpty -Because ("{0}: {1} row(s) disagree -- {2}" -f $name, @($bad).Count, (($bad | Select-Object -First 5) -join '; '))
+        }
+    }
+
+    It 'RiskRating is present wherever RiskScoreTotal is' {
+        # It is stamped by _setScores alongside the score, so a row with a score and no level means
+        # some other code path produced that row and bypassed the single source of truth.
+        foreach ($name in @('RiskAnalysis_Summary.json','RiskAnalysis_Detailed.json')) {
+            $rows = Get-SidecarRows -Name $name
+            if ($null -eq $rows -or @($rows).Count -eq 0) { continue }
+            $missing = @($rows | Where-Object {
+                $_.PSObject.Properties['RiskScoreTotal'] -and
+                -not [string]::IsNullOrWhiteSpace([string]$_.RiskScoreTotal) -and
+                (-not $_.PSObject.Properties['RiskRating'] -or [string]::IsNullOrWhiteSpace([string]$_.RiskRating))
+            })
+            $missing.Count | Should -Be 0 -Because (
+                "{0}: {1} row(s) carry RiskScoreTotal but no RiskRating -- a code path is stamping scores outside _setScores" -f $name, $missing.Count)
+        }
+    }
+
+    It 'only the four defined levels ever appear' {
+        foreach ($name in @('RiskAnalysis_Summary.json','RiskAnalysis_Detailed.json')) {
+            $rows = Get-SidecarRows -Name $name
+            if ($null -eq $rows -or @($rows).Count -eq 0) { continue }
+            $vals = @($rows | Where-Object { $_.PSObject.Properties['RiskRating'] -and $_.RiskRating } |
+                       ForEach-Object { [string]$_.RiskRating } | Sort-Object -Unique)
+            $unexpected = @($vals | Where-Object { $_ -notin @('Critical','High','Moderate','Low') })
+            $unexpected | Should -BeNullOrEmpty -Because ("{0}: unexpected level(s): {1}" -f $name, ($unexpected -join ', '))
+        }
+    }
+}

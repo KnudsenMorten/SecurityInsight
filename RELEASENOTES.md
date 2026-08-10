@@ -4,7 +4,7 @@
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI) v2.2.417: two reports were silently returning nothing, and a column was skewing the risk score (f6675bec)
+- fix(SI) v2.2.417: two reports were silently returning nothing, and a column was skewing the risk score (3b5d865a)
 - feat(SI) v2.2.416: declare minPlatformVersion 2.0.0 (PLAT-01) (8750fa54)
 - chore(SI) v2.2.415: remove the container capability -- SI is a single-capability solution (0067cea1)
 - fix(SI) v2.2.414: half the Risk Analysis columns never reached Log Analytics (12b7bc66)

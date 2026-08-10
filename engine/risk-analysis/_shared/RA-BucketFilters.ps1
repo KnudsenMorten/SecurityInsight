@@ -88,6 +88,12 @@ function New-BucketFilterKql {
   # partition, not a cap) AND keep every per-bucket join match (lossless).
   $egNativeKeys = New-Object System.Collections.Generic.List[string]
   foreach ($_cdc in @($script:_CrossDomainBucketCoalesce)) {
+      # AUDIT #56.3 -- @($null) yields a one-element array holding $null, and on PS 5.1
+      # $null.PSObject.Properties[...] throws "Cannot index into a null array". The engine always
+      # sets this to @() per report (Invoke-RiskAnalysis.ps1 ~:2141) so it never bites at run time,
+      # but it made the function impossible to unit-test and would bite if load order ever changed.
+      # Skipping nulls costs nothing and makes the partition property testable in isolation.
+      if ($null -eq $_cdc) { continue }
       $_k = if ($_cdc -is [System.Collections.IDictionary]) { [string]$_cdc['EgNativeKey'] }
             elseif ($_cdc.PSObject.Properties['EgNativeKey']) { [string]$_cdc.EgNativeKey }
             else { '' }

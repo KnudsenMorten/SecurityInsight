@@ -2385,9 +2385,21 @@ Reports:
         // Step 4  Hop 1 credential authenticates as an identity
         // Fixes applied
         // - Many graphs store the identity as Source and credential as Target, support both directions
+        // v2.2.419 (audit #56.2b) -- BOUND both directions to the credentials found in Step 3.
+        // These two scanned every "has credentials of" / "can authenticate as" /
+        // "can authenticate to" edge in the tenant, on the assumption that the Step 6 join would
+        // keep the work small. It does not: a join constrains the RESULT, not the SCAN, so the hop
+        // set stayed tenant-wide however the report was bucketed. Identical defect to #56 in
+        // Credential_Based_Lateral_Movement.
+        // Provably lossless: GitHubCredentials is summarized `by CredentialNodeId`, and Step 6 does
+        // `join kind=inner (Hop1) on CredentialNodeId`, so the semi-join removes EXACTLY the rows
+        // that inner join would discard. Note the two directions key the credential to opposite
+        // ends of the edge, so each is bounded on the end IT projects as CredentialNodeId.
+        let _GhCredIds = GitHubCredentials | distinct CredentialNodeId;
         let Hop1_Forward =
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "can authenticate as", "can authenticate to")
+            | where SourceNodeId in (_GhCredIds)
             | project
                 CredentialNodeId           = SourceNodeId,
                 Hop1_EdgeLabel             = EdgeLabel,
@@ -2398,6 +2410,7 @@ Reports:
         let Hop1_Reverse =
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "can authenticate as", "can authenticate to")
+            | where TargetNodeId in (_GhCredIds)
             | project
                 CredentialNodeId           = TargetNodeId,
                 Hop1_EdgeLabel             = EdgeLabel,
@@ -2412,6 +2425,13 @@ Reports:
         let Hop2 =
             ExposureGraphEdges
             | where EdgeLabel in ("can authenticate to", "has permissions to", "has role on")
+            // v2.2.419 (audit #56.2b) -- bound to the identities Hop 1 actually reached. Step 6 does
+            // `join kind=inner (Hop2) on $left.IntermediateIdentityId == $right.Hop2_SourceIdentityId`,
+            // so this removes EXACTLY the rows that inner join would discard. This is the more
+            // dangerous of the two hops -- its target list includes `subscriptions` and
+            // `resourcegroups`, node types that legitimately carry thousands of inbound edges, so
+            // left tenant-wide it is what turns the join into a cartesian product on a hub identity.
+            | where SourceNodeId in (Hop1 | distinct IntermediateIdentityId)
             | extend TargetNodeLabelNorm = NormalizeLabel(TargetNodeLabel)
             | where TargetNodeLabelNorm in (
                 "microsoft.compute/virtualmachines",
@@ -3244,11 +3264,24 @@ Reports:
             ComplianceTags         = any(tostring(column_ifexists("ComplianceTags","")))
               by CredentialNodeId, CredentialNodeName, CredentialNodeLabel;
 
+        // v2.2.419 (audit #56.2b) -- hop-bounding sets. This variant expresses its hops as INLINE
+        // join subqueries rather than named lets, so the bounds are hoisted here to be referenced
+        // below. Without them each hop scanned every matching edge in the tenant, because a join
+        // constrains the RESULT and not the SCAN. Same defect and same lossless remedy as #56.
+        let _GhCredIds = GitHubCredentials | distinct CredentialNodeId;
+        let _GhHop1IdentityIds =
+            ExposureGraphEdges
+            | where EdgeLabel in ("has credentials of", "can authenticate as", "can authenticate to")
+            | where SourceNodeId in (_GhCredIds)
+            | distinct TargetNodeId;
+
         // Step 4  Main attack path query GitHub Credential -> Identity
         GitHubCredentials
         | join kind=inner (
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "can authenticate as", "can authenticate to")
+            // bound to the credentials found in Step 3 -- exactly what the ON clause below requires
+            | where SourceNodeId in (_GhCredIds)
             | project
                 Hop1_SourceCredentialId = SourceNodeId,
                 Hop1_EdgeLabel          = EdgeLabel,
@@ -3261,6 +3294,8 @@ Reports:
         | join kind=inner (
             ExposureGraphEdges
             | where EdgeLabel in ("can authenticate to", "has permissions to", "has role on")
+            // bound to the identities Hop 1 reached -- exactly what the ON clause below requires
+            | where SourceNodeId in (_GhHop1IdentityIds)
             | extend TargetNodeLabelNorm = NormalizeLabel(TargetNodeLabel)
             | where TargetNodeLabelNorm in (
                 "microsoft.compute/virtualmachines",
@@ -6744,20 +6779,33 @@ Reports:
 
 
         // Step 6  Identity to data location access edges
+        // v2.2.419 (audit #56.2b) -- bound to the data locations a sensitivity scan actually found.
+        // This scanned every permission/role/access edge to any data-location-shaped node in the
+        // tenant. The Step 8 `join kind=inner SensitiveDataLocations on DataLocationNodeId` then
+        // discarded most of them -- but a join constrains the RESULT, not the SCAN, so the set was
+        // still materialised in full. Provably lossless: this removes exactly the rows that inner
+        // join would drop. Same defect and remedy as #56.
+        let _DsDataLocIds = SensitiveDataLocations | distinct DataLocationNodeId;
         let IdentityAccessToData =
             ExposureGraphEdges
             | extend TargetNodeLabelNorm = NormalizeLabel(TargetNodeLabel)
             | where EdgeLabel in ("has permissions to", "has role on", "can authenticate to", "has access to", "can access")
             | where TargetNodeLabelNorm in (DataLocationLabels)
+            | where TargetNodeId in (_DsDataLocIds)
             | project
                 IdentityNodeId     = SourceNodeId,
                 DataLocationNodeId = TargetNodeId;
+        // Identities that actually reach sensitive data -- the only ones the Step 8 credential
+        // inner join can keep, so both credential-edge directions below are bounded by it.
+        let _DsIdentityIds = IdentityAccessToData | distinct IdentityNodeId;
 
 
         // Step 7  Credential exposure edges support both directions
         let ExposedCredentialsToIdentity =
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "can authenticate as", "can authenticate to")
+            // v2.2.419 (#56.2b) -- identity is the TARGET in this direction, so bound that end.
+            | where TargetNodeId in (_DsIdentityIds)
             | project
                 CredentialNodeId    = SourceNodeId,
                 CredentialName      = SourceNodeName,
@@ -6767,6 +6815,8 @@ Reports:
         let IdentityToExposedCredentials =
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "uses credential", "uses credentials", "authenticated by")
+            // v2.2.419 (#56.2b) -- identity is the SOURCE in this direction, so bound that end.
+            | where SourceNodeId in (_DsIdentityIds)
             | project
                 IdentityNodeId      = SourceNodeId,
                 CredentialNodeId    = TargetNodeId,
@@ -7442,16 +7492,21 @@ Reports:
                 DataLocationNodeLabel = TargetNodeLabel;
 
         // Step 6  Identity -> data location access edges
+        // v2.2.419 (audit #56.2b) -- same bounding as the Summary sibling. This variant projects
+        // three extra identity columns, which is why it needs its own copy of these lets.
+        let _DsDataLocIds = SensitiveDataLocations | distinct DataLocationNodeId;
         let IdentityAccessToData =
             ExposureGraphEdges
             | extend TargetNodeLabelNorm = NormalizeLabel(TargetNodeLabel)
             | where EdgeLabel in ("has permissions to", "has role on", "can authenticate to", "has access to", "can access")
             | where TargetNodeLabelNorm in (DataLocationLabels)
+            | where TargetNodeId in (_DsDataLocIds)
             | project
                 IdentityNodeId     = SourceNodeId,
                 IdentityNodeName   = SourceNodeName,
                 IdentityNodeLabel  = SourceNodeLabel,
                 DataLocationNodeId = TargetNodeId;
+        let _DsIdentityIds = IdentityAccessToData | distinct IdentityNodeId;
 
         // Step 7  Credential exposure edges (support both directions)
         let ExposedCredentialsToIdentity =
@@ -7466,6 +7521,8 @@ Reports:
         let IdentityToExposedCredentials =
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "uses credential", "uses credentials", "authenticated by")
+            // v2.2.419 (#56.2b) -- identity is the SOURCE in this direction, so bound that end.
+            | where SourceNodeId in (_DsIdentityIds)
             | project
                 IdentityNodeId      = SourceNodeId,
                 CredentialNodeId    = TargetNodeId,

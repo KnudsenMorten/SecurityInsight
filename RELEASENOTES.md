@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.418
+## v2.2.419
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI) v2.2.419: the engine can now notice its own silent losses -- plus two unbounded attack-path reports (b4385a0a)
+- docs(SI): correct #56.3 -- I accused the sub-bucket pass, and the code does not support it (01816ee6)
 - fix(SI) v2.2.418: the attack-path timeout recovery was silently losing a finding (aa9957de)
 - fix(SI) v2.2.417: two reports were silently returning nothing, and a column was skewing the risk score (3b5d865a)
 - feat(SI) v2.2.416: declare minPlatformVersion 2.0.0 (PLAT-01) (8750fa54)
@@ -32,14 +34,62 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #45 -- rename to SecurityInsight Manager, and the config prefix is the part that bites (4bb1e5f3)
 - feat(SI): #44 connector platform design + the two suites that can exist before the code (36859ade)
 - docs(SI): #43 -- sync updates the code but not the jobs, and needsSchema is a field with nothing behind it (4a25ec87)
-- docs(SI): #42 -- the Azure-component answer, and only ONE new resource is needed (e4f54a1e)
-- docs(SI): #42 component map -- the retry half is reusable, the pagination half is not (21f9d3e5)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.419 — SecurityInsight now notices when a report quietly stops finding things
+
+**This release is mostly about making the engine catch its own mistakes**, prompted by three defects
+in short succession that shared one shape: the run succeeded, and the missing data looked like good
+news. A report that finds nothing and a report that is broken produced identical output.
+
+### The engine now compares each run against the last one
+
+Every report's result count is remembered, and at the end of a run SecurityInsight tells you if any
+report **produced findings before and produces none now**, or dropped by more than four-fifths. That is
+the exact signature of the Azure fault fixed in v2.2.417, which went from 75 findings to zero overnight
+and was noticed by a person, not the software.
+
+> **It warns; it never fails a run.** If you genuinely remediate everything, reaching zero is success,
+> and a check that cried wolf about success would be switched off within a week — and then it protects
+> nothing. **The signal is the change, not the number**, which is also why it compares your tenant
+> against itself rather than against any expected value.
+
+The comparison is stored per report *and* per report type, since the same report legitimately returns
+different counts in Summary and Detailed form.
+
+### Two attack-path reports were doing far more work than they needed
+
+The GitHub-to-Azure and data-sensitivity attack-path reports each gathered **every** matching
+relationship in the tenant before narrowing them, on the assumption that a later step kept the work
+small. It does not — narrowing the result does not narrow the search. Each stage is now limited to what
+the previous stage actually found, which is exactly what those reports already required, so **the
+results are unchanged**.
+
+Measured on the reference tenant, same findings returned:
+
+| report | before | after |
+|---|---|---|
+| GitHub to Azure resources | 70.5s | **36.5s** |
+| Data sensitivity to exposed credentials | 124.1s | **4.3s** |
+
+On a small estate that is merely faster. On a large one it is the difference between a report that
+completes and a report that hits the query time limit and tells you nothing — which is what happened to
+a third report in v2.2.418.
+
+### Also in this release
+
+- **A new build-time check** rejects any future report that filters on a raw security-graph property
+  without a fallback. That is precisely how the Azure fault happened: Microsoft reshaped a property, the
+  filter silently matched nothing. Eight existing filters are recorded as known risks to be worked off.
+- **The report-splitting logic is now covered by tests** proving that when a large report is split into
+  smaller pieces, every row lands in exactly one piece — no row can be dropped or counted twice.
 
 ---
 

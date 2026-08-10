@@ -2007,6 +2007,14 @@ if (-not (Get-Variable -Name AutoBucketMemo -Scope Script -ErrorAction SilentlyC
 # AUDIT #16: Adaptive bucketing: overflow/transient detection, the bucket-count cache and the challenger. Moved to _shared/RA-AutoBucketing.ps1; dot-sourced HERE to preserve load order.
 . (Join-Path $PSScriptRoot '_shared/RA-AutoBucketing.ps1')   # forward slash works on both Win + Linux
 
+# AUDIT #57.1(a): run-over-run row-count regression guard. Loaded after AutoBucketing because it
+# writes a sibling state file in the same OUTPUT folder. Moved to _shared/RA-RowCountGuard.ps1
+. (Join-Path $PSScriptRoot '_shared/RA-RowCountGuard.ps1')   # forward slash works on both Win + Linux
+
+# Per-report row counts for this run, filled in as each report finishes and compared against the
+# previous run at the end. Absence is the thing SI keeps failing to notice (#48, v2.2.415, #57).
+$global:RA_RowCountsThisRun = @{}
+
 #####################################################################################################
 # MAIN LOOP
 #####################################################################################################
@@ -3001,6 +3009,15 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
 
 if ($ResultAll.Count -eq 0) {
         Write-Info "No rows returned from query"
+        # AUDIT #57.1(a) -- RECORD THE ZERO **BEFORE** THIS `continue`.
+        # 🪤 The first cut of this guard captured only at "rows after filters", below. This early
+        # exit skips that entirely, so a report that produced NOTHING was the one case never
+        # recorded -- i.e. the guard would have missed #57, the exact defect it was built for.
+        # Caught by smoke-running it instead of trusting the unit tests. A zero is not the absence
+        # of a measurement; it IS the measurement, and it is the one that matters most.
+        if ($null -ne $global:RA_RowCountsThisRun) {
+            $global:RA_RowCountsThisRun[[string]$ReportName] = 0
+        }
         continue
     }
 
@@ -3052,6 +3069,12 @@ if ($ResultAll.Count -eq 0) {
     $totalAfter = ($ResultFiltered | Measure-Object).Count
     Tick "apply filters"
     Write-Info ("rows after filters:  {0}" -f $totalAfter)
+
+    # AUDIT #57.1(a) -- record the post-filter count for the run-over-run guard. Post-filter, not
+    # raw, because that is the number that reaches the customer's export and Log Analytics.
+    if ($null -ne $global:RA_RowCountsThisRun) {
+        $global:RA_RowCountsThisRun[[string]$ReportName] = [int]$totalAfter
+    }
 
     if ($EnableFilterAudit -and $FilteredOut.Count -gt 0) {
       Write-Info ("filtered away (out-of-scope only; blanks are kept): {0}" -f $FilteredOut.Count)
@@ -5808,6 +5831,22 @@ $aiSection
 }
 else {
     Write-Info "mail flag disabled; not sending"
+}
+
+# AUDIT #57.1(a) -- compare this run against the previous one and say so out loud. Runs only on a
+# completed run, so a crashed/partial run never poisons the baseline with its truncated counts.
+try {
+    if ($null -ne $global:RA_RowCountsThisRun -and $global:RA_RowCountsThisRun.Count -gt 0) {
+        Write-Section "row-count guard"
+        $__tplName = [string]$global:ReportTemplate
+        if ([string]::IsNullOrWhiteSpace($__tplName)) { $__tplName = 'UnknownTemplate' }
+        $null = Invoke-RARowCountGuard -SettingsPath $global:SettingsPath `
+                                       -TemplateName $__tplName `
+                                       -Counts $global:RA_RowCountsThisRun
+    }
+} catch {
+    # A guard must never be the reason a good run fails.
+    Write-Warn2 ("[RowCountGuard] skipped: {0}" -f $_.Exception.Message)
 }
 
 Send-RARunHealthEnd -ExitReason 'success'

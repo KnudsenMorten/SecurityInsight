@@ -43,15 +43,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -355,7 +353,6 @@ Reports:
               | extend Subcategory       = "CVEs (Missing Updates)"
               | summarize
                   UniqueIssues              = dcount(FindingName),
-                  TotalIssuesImpactedAssets = count(),
                   ImpactedAssetsList        = make_set(AssetName),
                   IssueList                 = make_set(FindingName),
                   MoreDetails      = strcat_array(make_set(strcat(FindingName, " => ", CveUrl)), "; "),
@@ -387,9 +384,9 @@ Reports:
                   cmdbCriticality, cmdbDataSensitivity,
                   RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed,
                   RiskScore_Weight_Detailed, RiskScore_Weight_Factor, RiskFactor_Weight,
-                  ImpactedAssetCount, ImpactedAssetsList, UniqueIssues, TotalIssuesImpactedAssets,
+                  ImpactedAssetCount, ImpactedAssetsList, UniqueIssues,
                   IssueList, MoreDetails
-              | order by CriticalityTier asc, RiskScore_Weight_Factor desc, ImpactedAssetCount desc, TotalIssuesImpactedAssets desc
+              | order by CriticalityTier asc, RiskScore_Weight_Factor desc, ImpactedAssetCount desc
 
     - ReportName: Device_Missing_CVEs_Detailed
       ReportPurpose: Per-row detail of overdue endpoint CVEs, prioritised by asset criticality, exploit signals, and exposure.
@@ -439,11 +436,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -831,15 +828,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -1072,7 +1067,6 @@ Reports:
                   iff(RF_P_LegacyEoS       == 1, dynamic(["LegacyEndOfSupport"]), dynamic([]))), ";")
               | summarize
                   UniqueIssues              = dcount(ConfigurationId),
-                  TotalIssuesImpactedAssets = count(),
                   ImpactedAssetsList        = make_set(coalesce(DI_DeviceName, DeviceName)),
                   RiskFactor_Consequence    = max(RiskFactor_Consequence),
                   RiskScore_Weight_Factor   = max(RiskScore_Weight_Factor),
@@ -1102,8 +1096,8 @@ Reports:
                   cmdbCriticality, cmdbDataSensitivity,
                   RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed,
                   RiskScore_Weight_Detailed, RiskScore_Weight_Factor, RiskFactor_Weight,
-                  ImpactedAssetCount, ImpactedAssetsList, UniqueIssues, TotalIssuesImpactedAssets
-              | order by CriticalityTier asc, RiskScore_Weight_Factor desc, ImpactedAssetCount desc, TotalIssuesImpactedAssets desc
+                  ImpactedAssetCount, ImpactedAssetsList, UniqueIssues
+              | order by CriticalityTier asc, RiskScore_Weight_Factor desc, ImpactedAssetCount desc
 
     - ReportName: Device_Recommendations_Detailed
       ReportPurpose: Per-row detail of non-compliant TVM secure configuration controls on endpoints, prioritised by criticality + exposure + legacy-OS.
@@ -1153,11 +1147,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - RecommendedAction
       - RemediationOptions
       - MoreDetails
@@ -1472,15 +1466,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - Recommendation
       - MoreDetails
       - AssetDetectedInReportName
@@ -1536,7 +1528,23 @@ Reports:
 
           let _Assets =
               ExposureGraphNodes
-              | where tostring(NodeProperties.rawData.environmentName) contains "Azure"
+              // v2.2.417 -- this filtered on the environmentName raw property and required it to
+              // contain the string "Azure".
+              // That predicate SILENTLY MATCHED NOTHING from 2026-08-10. Microsoft changed the
+              // property -- measured live that day, environmentName is now empty on 1,015,697 nodes
+              // and the literal number 0 on 208, and NO node anywhere carries the string "Azure".
+              // The report kept running (valid KQL, ~130s, exit success) and reported ZERO findings,
+              // down from 75 Summary / 304 Detailed the previous day. A clean run and a broken one
+              // were indistinguishable.
+              // 🔑 environmentName cannot be salvaged by hedging raw vs rawData (both empty) NOR by
+              // matching 0, because 0 appears on 90 Azure-labelled AND 118 non-Azure nodes -- it no
+              // longer discriminates at all. So the predicate is REPLACED, not patched.
+              // NodeLabel is the durable identifier and is already the convention elsewhere in this
+              // catalog (the Attack_Paths Hop2Edges target list matches explicit microsoft.* labels).
+              // Measured live -- 586 Azure assets across 27 resource types, reconciling exactly with
+              // the node census (493 microsoft.* + 85 resourcegroups + 8 subscriptions).
+              // Cheaper too -- a label prefix test replaces dynamic property-bag extraction on ~1M nodes.
+              | where NodeLabel startswith "microsoft." or NodeLabel in ("subscriptions", "resourcegroups")
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
               | where isnull(EG_IsExcluded) or EG_IsExcluded == false
@@ -1666,7 +1674,6 @@ Reports:
               | extend ConfigurationId   = "Recommendation"
               | summarize
                   UniqueIssues              = dcount(FindingName),
-                  TotalIssuesImpactedAssets = count(),
                   ImpactedAssetsList        = make_set(AssetName),
                   RiskFactor_Consequence    = max(RiskFactor_Consequence),
                   RiskScore_Weight_Factor   = max(RiskScore_Weight_Factor),
@@ -1696,8 +1703,8 @@ Reports:
                   cmdbCriticality, cmdbDataSensitivity,
                   RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed,
                   RiskScore_Weight_Detailed, RiskScore_Weight_Factor, RiskFactor_Weight,
-                  ImpactedAssetCount, ImpactedAssetsList, UniqueIssues, TotalIssuesImpactedAssets
-              | order by CriticalityTier asc, RiskScore_Weight_Factor desc, ImpactedAssetCount desc, TotalIssuesImpactedAssets desc
+                  ImpactedAssetCount, ImpactedAssetsList, UniqueIssues
+              | order by CriticalityTier asc, RiskScore_Weight_Factor desc, ImpactedAssetCount desc
 
 
     - ReportName: Azure_Recommendations_Detailed
@@ -1749,11 +1756,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -1803,7 +1810,23 @@ Reports:
 
           let _Assets =
               ExposureGraphNodes
-              | where tostring(NodeProperties.rawData.environmentName) contains "Azure"
+              // v2.2.417 -- this filtered on the environmentName raw property and required it to
+              // contain the string "Azure".
+              // That predicate SILENTLY MATCHED NOTHING from 2026-08-10. Microsoft changed the
+              // property -- measured live that day, environmentName is now empty on 1,015,697 nodes
+              // and the literal number 0 on 208, and NO node anywhere carries the string "Azure".
+              // The report kept running (valid KQL, ~130s, exit success) and reported ZERO findings,
+              // down from 75 Summary / 304 Detailed the previous day. A clean run and a broken one
+              // were indistinguishable.
+              // 🔑 environmentName cannot be salvaged by hedging raw vs rawData (both empty) NOR by
+              // matching 0, because 0 appears on 90 Azure-labelled AND 118 non-Azure nodes -- it no
+              // longer discriminates at all. So the predicate is REPLACED, not patched.
+              // NodeLabel is the durable identifier and is already the convention elsewhere in this
+              // catalog (the Attack_Paths Hop2Edges target list matches explicit microsoft.* labels).
+              // Measured live -- 586 Azure assets across 27 resource types, reconciling exactly with
+              // the node census (493 microsoft.* + 85 resourcegroups + 8 subscriptions).
+              // Cheaper too -- a label prefix test replaces dynamic property-bag extraction on ~1M nodes.
+              | where NodeLabel startswith "microsoft." or NodeLabel in ("subscriptions", "resourcegroups")
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
               | where isnull(EG_IsExcluded) or EG_IsExcluded == false
@@ -1993,13 +2016,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
       - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
       - IssueList
       - MoreDetails
@@ -2896,11 +2919,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -3542,13 +3565,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
       - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
       - IssueList
       - MoreDetails
@@ -4380,11 +4403,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -5019,13 +5042,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
       - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
       - IssueList
       - MoreDetails
@@ -5798,11 +5821,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -6392,13 +6415,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
       - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
       - IssueList
       - MoreDetails
@@ -7106,11 +7129,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -7754,13 +7777,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
       - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
       - IssueList
       - MoreDetails
@@ -7850,16 +7873,33 @@ Reports:
                 TargetNodeId, TargetNodeName, TargetNodeLabel,
                 EdgeLabel;
 
-        // Step 2  Hop 1 edges - no bucketing needed, naturally constrained by downstream join to CredentialEdges
+        // Step 2  Hop 1 edges -- BOUND to the credentials found in Step 1.
+        // v2.2.417 -- this previously claimed "no bucketing needed, naturally constrained by
+        // downstream join to CredentialEdges". That premise is FALSE. A join constrains the
+        // RESULT, not the SCAN -- Kusto still materialises every "has credentials of" /
+        // "can authenticate as" / "can authenticate to" edge in the tenant and only then
+        // discards non-matches. So this hop set never shrank, with or without bucketing, and
+        // the Step 7 inner joins exploded on hub identities (inbound x outbound edges). No
+        // bucket depth can split that, because a hub is a SINGLE node -- which is why
+        // sub-bucketing bisected forever with 3 of 4 children returning 0 rows in ~5s.
+        // The semi-join below removes EXACTLY the rows the Step 7 inner join would discard
+        // (CredentialsOnAssets groups by CredentialNodeId = CredentialEdges.TargetNodeId), so
+        // it is provably lossless -- and it makes bucketing actually work, because the hop set
+        // now shrinks WITH the bucket instead of staying tenant-wide.
         let Hop1Edges =
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "can authenticate as", "can authenticate to")
+            | where SourceNodeId in (CredentialEdges | distinct TargetNodeId)
             | project
                 SourceNodeId, SourceNodeName, SourceNodeLabel,
                 TargetNodeId, TargetNodeName, TargetNodeLabel,
                 EdgeLabel;
 
-        // Step 3  Hop 2 edges - filtered by EdgeLabel + TargetNodeLabel, constrained by downstream join to Hop1
+        // Step 3  Hop 2 edges -- BOUND to the identities reached in Step 2.
+        // Same defect and same lossless remedy as Step 2. This set is the more dangerous of the
+        // two, because its TargetNodeLabel list includes "subscriptions" and "resourcegroups" --
+        // node types that legitimately carry thousands of inbound edges -- so leaving it
+        // tenant-wide is what turned the Step 7 join into a cartesian product on hub nodes.
         let Hop2Edges =
             ExposureGraphEdges
             | where EdgeLabel in ("can authenticate to", "runs on", "has permissions to", "has role on")
@@ -7886,6 +7926,7 @@ Reports:
                 "resourcegroups",
                 "BlobContainer"
             )
+            | where SourceNodeId in (Hop1Edges | distinct TargetNodeId)
             | project
                 SourceNodeId, SourceNodeName, SourceNodeLabel,
                 TargetNodeId, TargetNodeName, TargetNodeLabel,
@@ -8457,15 +8498,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -8649,7 +8688,6 @@ Reports:
         | summarize
             Impact          = max(MaxCvssScore),
             UniqueIssues              = dcount(TargetAzureAssetId),
-            TotalIssuesImpactedAssets = count(),
             ImpactedAssetsList        = make_set(EntryPointDevice),
             IssueList                 = make_set(TargetAzureAsset),
             EntryVectorTypes          = make_set(FirstHopLabel),
@@ -8690,7 +8728,7 @@ Reports:
                   RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed,
                   RiskScore_Weight_Detailed, RiskScore_Weight_Factor, RiskFactor_Weight,
                   cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity,
-                  ImpactedAssetCount, UniqueIssues, TotalIssuesImpactedAssets,
+                  ImpactedAssetCount, UniqueIssues,
                   ImpactedAssetsList, IssueList
         | sort by RiskScore_Weight_Factor desc, RiskFactor_Probability desc, CriticalityTier asc, ImpactedAssetCount desc
 
@@ -8747,11 +8785,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -9056,11 +9094,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -9148,16 +9186,33 @@ Reports:
                 TargetNodeId, TargetNodeName, TargetNodeLabel,
                 EdgeLabel;
 
-        // Step 2  Hop 1 edges - no bucketing needed, naturally constrained by downstream join to CredentialEdges
+        // Step 2  Hop 1 edges -- BOUND to the credentials found in Step 1.
+        // v2.2.417 -- this previously claimed "no bucketing needed, naturally constrained by
+        // downstream join to CredentialEdges". That premise is FALSE. A join constrains the
+        // RESULT, not the SCAN -- Kusto still materialises every "has credentials of" /
+        // "can authenticate as" / "can authenticate to" edge in the tenant and only then
+        // discards non-matches. So this hop set never shrank, with or without bucketing, and
+        // the Step 7 inner joins exploded on hub identities (inbound x outbound edges). No
+        // bucket depth can split that, because a hub is a SINGLE node -- which is why
+        // sub-bucketing bisected forever with 3 of 4 children returning 0 rows in ~5s.
+        // The semi-join below removes EXACTLY the rows the Step 7 inner join would discard
+        // (CredentialsOnAssets groups by CredentialNodeId = CredentialEdges.TargetNodeId), so
+        // it is provably lossless -- and it makes bucketing actually work, because the hop set
+        // now shrinks WITH the bucket instead of staying tenant-wide.
         let Hop1Edges =
             ExposureGraphEdges
             | where EdgeLabel in ("has credentials of", "can authenticate as", "can authenticate to")
+            | where SourceNodeId in (CredentialEdges | distinct TargetNodeId)
             | project
                 SourceNodeId, SourceNodeName, SourceNodeLabel,
                 TargetNodeId, TargetNodeName, TargetNodeLabel,
                 EdgeLabel;
 
-        // Step 3  Hop 2 edges - filtered by EdgeLabel + TargetNodeLabel, constrained by downstream join to Hop1
+        // Step 3  Hop 2 edges -- BOUND to the identities reached in Step 2.
+        // Same defect and same lossless remedy as Step 2. This set is the more dangerous of the
+        // two, because its TargetNodeLabel list includes "subscriptions" and "resourcegroups" --
+        // node types that legitimately carry thousands of inbound edges -- so leaving it
+        // tenant-wide is what turned the Step 7 join into a cartesian product on hub nodes.
         let Hop2Edges =
             ExposureGraphEdges
             | where EdgeLabel in ("can authenticate to", "runs on", "has permissions to", "has role on")
@@ -9184,6 +9239,7 @@ Reports:
                 "resourcegroups",
                 "BlobContainer"
             )
+            | where SourceNodeId in (Hop1Edges | distinct TargetNodeId)
             | project
                 SourceNodeId, SourceNodeName, SourceNodeLabel,
                 TargetNodeId, TargetNodeName, TargetNodeLabel,
@@ -9743,15 +9799,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -9887,15 +9941,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -10037,11 +10089,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -10171,15 +10223,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -10317,15 +10367,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -10465,11 +10513,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -10593,15 +10641,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -10739,15 +10785,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -10884,15 +10928,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -11025,15 +11067,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -11168,15 +11208,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -11310,15 +11348,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -11455,15 +11491,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -11599,15 +11633,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -11742,15 +11774,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -11888,15 +11918,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -12032,15 +12060,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -12212,11 +12238,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -12369,15 +12395,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -12546,15 +12570,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -12707,15 +12729,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -12858,15 +12878,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -13007,15 +13025,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -13157,15 +13173,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -13309,15 +13323,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -13454,15 +13466,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -13602,15 +13612,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -13778,15 +13786,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -13928,15 +13934,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -14075,15 +14079,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -14223,13 +14225,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
       - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
       - IssueList
       - MoreDetails
@@ -14341,15 +14343,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -14490,15 +14490,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -14640,15 +14638,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -14788,15 +14784,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -14934,15 +14928,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -15103,11 +15095,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -15254,15 +15246,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -15419,15 +15409,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -15585,15 +15573,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -15755,11 +15741,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -15924,11 +15910,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -16094,11 +16080,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -16248,11 +16234,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -16403,11 +16389,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -16566,11 +16552,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -16737,11 +16723,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -16869,11 +16855,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -17038,11 +17024,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -17192,11 +17178,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -17358,11 +17344,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -17530,11 +17516,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -17697,11 +17683,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -17865,11 +17851,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -18031,11 +18017,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -18200,11 +18186,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -18370,11 +18356,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -18535,11 +18521,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -18698,11 +18684,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -18864,11 +18850,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -19037,11 +19023,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -19208,11 +19194,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -19377,11 +19363,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -19546,11 +19532,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -19716,11 +19702,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -19890,11 +19876,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -20065,11 +20051,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -20240,11 +20226,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -20375,11 +20361,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -20510,11 +20496,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -20676,11 +20662,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -20843,11 +20829,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -20975,15 +20961,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -21104,11 +21088,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -21208,15 +21192,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -21335,11 +21317,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -21439,15 +21421,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -21554,11 +21534,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -21650,11 +21630,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -21760,11 +21740,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -21867,11 +21847,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -21971,11 +21951,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22078,11 +22058,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22189,11 +22169,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22302,11 +22282,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22401,11 +22381,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22515,11 +22495,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22621,11 +22601,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22726,11 +22706,11 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy: RiskScoreTotal
@@ -22831,15 +22811,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -22956,15 +22934,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23078,15 +23054,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23202,15 +23176,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23324,15 +23296,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23448,15 +23418,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23578,15 +23546,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23701,15 +23667,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23827,15 +23791,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -23948,15 +23910,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:
@@ -24073,15 +24033,13 @@ Reports:
       - RiskScore_Weight_Detailed
       - RiskScore_Weight_Factor
       - RiskScoreTotal_Weighted
+      - RiskRating
       - cmdbId
       - cmdbName
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - UniqueIssues
-      - TotalIssuesImpactedAssets
       - ImpactedAssetsList
-      - IssueList
       - MoreDetails
       - AssetDetectedInReportName
       SortBy:

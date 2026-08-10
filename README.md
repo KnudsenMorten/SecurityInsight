@@ -3453,6 +3453,10 @@ and §9 of `docs/TESTS.md`. There is no separate doc set under `analyzer-web/`.
 
 | Area | Capability | Tag |
 |---|---|---|
+| ☁️ **Azure findings restored** | Azure recommendation reports had begun returning **nothing** — valid queries, normal runtime, "success", zero findings — because a Microsoft graph property they relied on changed shape. Assets are now identified by **resource type** (structure, not payload), which is also faster. Expect **more** Azure findings than before: the old filter was narrower than intended | v2.2.417 |
+| 🧭 **Attack paths bounded** | The credential lateral-movement report gathered every matching relationship tenant-wide before narrowing it, so a single well-connected identity could stall it past the query time limit and return nothing. Each step is now bounded by the previous one — **same findings, 297s → 108s**, no timeouts | v2.2.417 |
+| ⚖️ **Risk score corrected** | A column with three conflicting definitions (wrong on **21%** of rows, up to **2,048×**) was the per-row weight behind each domain's headline risk score. Removed; the weight now comes from the impacted-asset count. **Some scores will move — the new value is the correct one** | v2.2.417 |
+| 🏷️ **`RiskRating`** | Plain-language band beside every risk score — Critical / High / Moderate / Low — derived in the same step as the score, so the two can never disagree | v2.2.417 |
 | 🔎 **Rule diagnostics** | Every run reports rules that cannot work: a match type the engine doesn't recognise (with the number of detections affected) and any rule that loads with an empty detection block. A rule you deliberately switched off is not flagged. The on-demand rule checker also states **how many files it examined** next to its verdict, so "clean" can no longer mean "looked at nothing" | v2.2.408 |
 | ✅ **Checked templates** | The rule templates you are told to copy are validated before release — a fault in one blocks the build instead of shipping. Coverage spans **1,106** rule files (shipped rules + templates); checking your own rules stays scoped to your files | v2.2.409 |
 | 🎯 **Outputs** | JSON sibling of every XLSX (default ON) | v2.1.40 |

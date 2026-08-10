@@ -8441,6 +8441,20 @@ Reports:
             AssetCount desc
 
     - ReportName: Attack_Paths_Summary_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+      # v2.2.418 -- per-report bucket FLOOR. On 2026-08-10 this report hit the 900s
+      # ceiling on bucket 2 of 2 and only completed through the sub-bucket recovery
+      # pass (~640s extra); the 4 children then returned in 105-286s each. That is the
+      # signature of a partition that is simply too coarse, not of a broken query.
+      # 🔑 Deliberately NOT the #56 semi-join treatment. That fix was provably lossless
+      # because the credential report is a chain of INNER JOINS, so bounding a hop only
+      # removed rows the join would discard anyway. This report is a real graph
+      # traversal -- `[bridge*0..3]` and `[inherit*0..2]` carry NO node predicates, so
+      # paths may legitimately pass through nodes outside RelevantNodes. Restricting
+      # the edge set here would silently DROP valid attack paths. Wrong tool.
+      # The engine ignores a cached count below this floor and re-probes from it
+      # (RA-AutoBucketing.ps1 ~:634), and AutoBucket may still escalate above it.
+      # BucketCount is metadata, not query text, so the query hash is unchanged.
+      BucketCount: 8
       crossDomainBucketCoalesce:
       # Source-device CL key drives the EG-side partition: the bucket filter sits on
       # the VulnerableDevices source-node scan (the hot path before make-graph), and
@@ -8733,6 +8747,13 @@ Reports:
         | sort by RiskScore_Weight_Factor desc, RiskFactor_Probability desc, CriticalityTier asc, ImpactedAssetCount desc
 
     - ReportName: Attack_Paths_Detailed_Device_with_high_severity_vulnerabilities_allows_lateral_movement_Azure
+      # v2.2.418 -- same bucket FLOOR as the Summary sibling. This variant did NOT time
+      # out on 2026-08-10, but it is the same graph traversal over the same seed set at
+      # a finer grain, so it sits on the same margin. Raised together deliberately --
+      # leaving the pair inconsistent would mean the next slow XDR day takes out the
+      # one nobody had looked at. See the Summary entry for why the #56 semi-join fix
+      # is NOT applicable to a make-graph traversal.
+      BucketCount: 8
       ReportPurpose: Per-row detail of credential-driven attack paths from vulnerable devices to Azure targets,
         prioritized by FINAL TARGET business impact. EG drives path detection (VulnerableDevice -> Credential -> Identity -> AzureTarget) +
         scoring + tier; SI_Azure_Profile_CL contributes target asset metadata only (cmdbName, cmdbCriticality, cmdbDataSensitivity)

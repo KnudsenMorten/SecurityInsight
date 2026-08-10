@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.417
+## v2.2.418
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.418: the attack-path timeout recovery was silently losing a finding (aa9957de)
 - fix(SI) v2.2.417: two reports were silently returning nothing, and a column was skewing the risk score (3b5d865a)
 - feat(SI) v2.2.416: declare minPlatformVersion 2.0.0 (PLAT-01) (8750fa54)
 - chore(SI) v2.2.415: remove the container capability -- SI is a single-capability solution (0067cea1)
@@ -33,13 +34,38 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #43 -- sync updates the code but not the jobs, and needsSchema is a field with nothing behind it (4a25ec87)
 - docs(SI): #42 -- the Azure-component answer, and only ONE new resource is needed (e4f54a1e)
 - docs(SI): #42 component map -- the retry half is reusable, the pagination half is not (21f9d3e5)
-- docs(SI): #42 -- ServiceNow and MCP are mostly already here, and the connector gap is resumability (4d57a689)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.418 — A vulnerable-device attack-path report was timing out, and its recovery was losing a finding
+
+**Follow-up to v2.2.417.** One cross-domain report — vulnerable devices with a path to Azure — was
+splitting its work into two pieces, and on a slow day the second piece exceeded the query time limit.
+The engine then fell back to splitting that piece further and retrying, which looked like it worked.
+
+**It did not entirely work.** Comparing a clean run against a recovered one on identical data, the
+recovered run returned **one finding fewer** — and reported success. So a report could quietly under-
+report an attack path precisely on the days it was under strain.
+
+**What changed.** That report and its detailed counterpart now start from a finer split (eight pieces
+instead of two), so each piece finishes well inside the limit and the retry path is never entered.
+Measured on the reference tenant: every piece now completes in **98–146 seconds**, with **no timeouts
+and no retries**, and the report returns **all four findings** again instead of three.
+
+> **Why not the same fix as the attack-path change in v2.2.417?** Because it would have been wrong.
+> That report is a chain of joins, where narrowing a step provably cannot change the answer. This one
+> walks the security graph over paths of variable length, and parts of a path are not constrained to a
+> known set of node types — so narrowing the search there would silently discard genuine attack paths.
+> The symptom was similar; the cause was not.
+
+**If you saw this report return fewer findings than expected on a slow day, this is why.** Nothing
+about what the report looks for has changed — only how the work is divided.
 
 ---
 

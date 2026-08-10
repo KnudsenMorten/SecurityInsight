@@ -3453,6 +3453,7 @@ and §9 of `docs/TESTS.md`. There is no separate doc set under `analyzer-web/`.
 
 | Area | Capability | Tag |
 |---|---|---|
+| 🧩 **Attack-path retry no longer under-reports** | The vulnerable-device-to-Azure report could exceed the query time limit on a slow day; the retry that followed looked successful but returned **one finding fewer**. It now starts from a finer split — every piece completes in 98–146s with **no timeouts and no retries**, and all findings are returned | v2.2.418 |
 | ☁️ **Azure findings restored** | Azure recommendation reports had begun returning **nothing** — valid queries, normal runtime, "success", zero findings — because a Microsoft graph property they relied on changed shape. Assets are now identified by **resource type** (structure, not payload), which is also faster. Expect **more** Azure findings than before: the old filter was narrower than intended | v2.2.417 |
 | 🧭 **Attack paths bounded** | The credential lateral-movement report gathered every matching relationship tenant-wide before narrowing it, so a single well-connected identity could stall it past the query time limit and return nothing. Each step is now bounded by the previous one — **same findings, 297s → 108s**, no timeouts | v2.2.417 |
 | ⚖️ **Risk score corrected** | A column with three conflicting definitions (wrong on **21%** of rows, up to **2,048×**) was the per-row weight behind each domain's headline risk score. Removed; the weight now comes from the impacted-asset count. **Some scores will move — the new value is the correct one** | v2.2.417 |

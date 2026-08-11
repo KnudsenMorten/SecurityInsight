@@ -2015,6 +2015,15 @@ if (-not (Get-Variable -Name AutoBucketMemo -Scope Script -ErrorAction SilentlyC
 # previous run at the end. Absence is the thing SI keeps failing to notice (#48, v2.2.415, #57).
 $global:RA_RowCountsThisRun = @{}
 
+# AUDIT #57.1(d): run-over-run COLUMN-population guard -- the sibling of the row-count guard above.
+# #58.5 proved the gap: CMDB enrichment was blank on every OAuth run since v2.2.314, and because
+# every row was still present and correct in NUMBER, the row-count guard saw nothing and was right
+# not to. Rows can be intact while their content drains away. Moved to _shared/RA-ColumnFillGuard.ps1
+. (Join-Path $PSScriptRoot '_shared/RA-ColumnFillGuard.ps1')   # forward slash works on both Win + Linux
+
+# Per-report column fill snapshots for this run: report -> { '__rows' = n; '<col>' = filled }.
+$global:RA_ColumnFillThisRun = @{}
+
 #####################################################################################################
 # MAIN LOOP
 #####################################################################################################
@@ -3321,6 +3330,29 @@ if ($ResultAll.Count -eq 0) {
         foreach ($t in $TraceCols) { [void]$mergedCols.Remove($t) }
         foreach ($t in $TraceCols) { [void]$mergedCols.Add($t) }
         $global:FinalDesiredColumns = $mergedCols.ToArray()
+    }
+
+    # AUDIT #57.1(d) -- snapshot column fill from $Shaped, and ONLY from $Shaped.
+    # 🪤 $Shaped is the correct site and the earlier candidates are all wrong in a way that would
+    # make the guard miss the defect class it exists for:
+    #   * $ResultFiltered (where #57.1(a) captures) is PRE-shaping, so a column dropped by the
+    #     `Select-Object -Property $DesiredColumns` above -- audit #26, which really did lose
+    #     AssetName and AssetType from a delivered workbook -- would still read as fully populated.
+    #   * $RiskScoreArray is pre-shaping too, and additionally carries working columns that never
+    #     reach the customer, so it would raise findings about data nobody receives.
+    # $Shaped is what enters the export pool, and the export pool is what the customer opens.
+    # 🔴 ITS OWN try/catch, AND THIS IS NOT DEFENSIVE BOILERPLATE. This capture sits INSIDE the
+    # per-report try, whose catch does `Write-Warn2 "report failed -- skipping"` and moves to the
+    # next report. So an exception thrown in here would not merely lose the guard's measurement --
+    # it would DROP THE WHOLE REPORT FROM THE CUSTOMER'S EXPORT, silently, in the name of a feature
+    # whose entire purpose is to prevent silent loss. A guard must never be the reason a good run
+    # loses data.
+    if ($null -ne $global:RA_ColumnFillThisRun) {
+        try {
+            $global:RA_ColumnFillThisRun[[string]$ReportName] = Get-RAColumnFillSnapshot -Rows @($Shaped)
+        } catch {
+            Write-Warn2 ("[ColumnFillGuard] snapshot skipped for {0}: {1}" -f $ReportName, $_.Exception.Message)
+        }
     }
 
     foreach ($row in @($Shaped)) { $global:AllShapedRows.Add($row) | Out-Null }
@@ -5847,6 +5879,22 @@ try {
 } catch {
     # A guard must never be the reason a good run fails.
     Write-Warn2 ("[RowCountGuard] skipped: {0}" -f $_.Exception.Message)
+}
+
+# AUDIT #57.1(d) -- the column-population half of the same question. Deliberately a SEPARATE try,
+# so a fault in either guard cannot take the other one down with it.
+try {
+    if ($null -ne $global:RA_ColumnFillThisRun -and $global:RA_ColumnFillThisRun.Count -gt 0) {
+        Write-Section "column-fill guard"
+        $__tplNameC = [string]$global:ReportTemplate
+        if ([string]::IsNullOrWhiteSpace($__tplNameC)) { $__tplNameC = 'UnknownTemplate' }
+        $null = Invoke-RAColumnFillGuard -SettingsPath $global:SettingsPath `
+                                         -TemplateName $__tplNameC `
+                                         -Snapshots $global:RA_ColumnFillThisRun
+    }
+} catch {
+    # A guard must never be the reason a good run fails.
+    Write-Warn2 ("[ColumnFillGuard] skipped: {0}" -f $_.Exception.Message)
 }
 
 Send-RARunHealthEnd -ExitReason 'success'

@@ -1054,6 +1054,48 @@ Endpoint_Profile_CL
 | project Hostname, MostFrequentUserTier, MostFrequentUsers, OsPlatform, MachineGroup
 ```
 
+### Run-integrity guards — making absence loud
+
+A Risk Analysis run that produces *less* data than yesterday still exits 0, still writes a workbook and
+still looks successful. Absence reads as good news. Two guards run at the end of every run and compare
+this run against the previous one for the same report template. **Both WARN; neither ever fails a run** —
+a customer who genuinely remediates everything should reach zero, and a guard that cries wolf on success
+gets switched off.
+
+| Guard | Question it answers | State file |
+|---|---|---|
+| **Row-count guard** | did a report stop returning rows? | `OUTPUT/RowCountHistory.json` |
+| **Column-fill guard** | did the rows stay while their *content* drained? | `OUTPUT/ColumnFillHistory.json` |
+
+Both are keyed **template → report** (the same report legitimately returns different counts under a
+Summary vs a Detailed template, so keying by report alone would corrupt both baselines). The column
+guard adds a third level, **→ column**, storing the populated-row count per column plus `__rows` as the
+denominator.
+
+**Row-count guard** reports `WENT-TO-ZERO` (produced rows before, none now) and `LARGE-DROP` (fell by
+more than 80%).
+
+**Column-fill guard** reports, in descending severity:
+
+| Finding | Meaning |
+|---|---|
+| `COLUMN-VANISHED` | the column was populated before and is no longer in the schema at all |
+| `COLUMN-EMPTIED` | the column still ships and is blank on every row |
+| `FILL-DROP` | still populated, but its fill rate fell by more than 80% |
+
+Two properties are worth knowing when reading the output:
+
+- **Comparison is on fill *fraction*, not raw filled count.** Row counts move between runs for ordinary
+  reasons. A column that stays fully populated while its report legitimately halves is not a loss, and
+  is reported as nothing.
+- **A report that produced no rows is skipped by the column guard**, which defers to the row-count
+  guard. Every column in an empty report is trivially empty; reporting each one would bury the single
+  accurate message under dozens of derived ones.
+
+Both guards are advisory signals for the operator, not gates. A finding means *investigate before
+trusting this export* — most often an upstream property was renamed or reshaped, or an enrichment
+source stopped supplying data, neither of which produces an error anywhere else.
+
 ---
 
 ## Provider plugin contract

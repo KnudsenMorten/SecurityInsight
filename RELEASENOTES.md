@@ -1,9 +1,13 @@
 # Release notes for SecurityInsight
 
-## v2.2.422
+## v2.2.423
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.423: #57.1(d) column-fill guard -- LIVE-VERIFIED, promoted from 🟡 to delivered (ca4a5059)
+- fix(SI) #57.1(d): the snapshot could have DROPPED a report -- the guard needed guarding (0df1a7d4)
+- feat(SI) #57.1(d): the engine can now notice rows that stayed while their content drained (d0263df7)
+- docs(SI): replace the handoff -- the old one said "NOTHING IS COMMITTED" and a run was in flight (f379fd08)
 - fix(SI) v2.2.422: CMDB enrichment was empty on every OAuth run -- cache could not be written (849b5b8a)
 - fix(SI) v2.2.421: rename servicenow-cmdb -> generic-cmdb, and record that CMDB enrichment is BROKEN in production (f37d524a)
 - fix(SI) v2.2.420: hedge the last 8 raw graph-property filters, and close the lint ratchet to zero (582bc19b)
@@ -30,16 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): C17 -- container-vs-VM is the wrong question, and PIM's answer differs from SI's (7fdcb09e)
 - docs(SI): C16 -- C# is wrong for the engines and right for the connector, and the seam already exists (f196e60a)
 - docs(SI): C15 -- a 48-hour job is the wrong shape, and container is not the only option (f77925cb)
-- docs(SI): C14 -- the blackbox is real, and the monitoring is 60% built with the visible 40% missing (2a96c8aa)
-- docs(SI): DESIGN carries the connector facts, and two of its statements were wrong (b735391e)
-- docs(SI): #46 C11-C13 -- per-customer topology, capability-based sizing, and where the MCP servers run (29938d6c)
-- docs(SI): #46 concerns & ideas register -- and C0 resets the risk pricing for Manager (4bd10b5d)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.423 — the engine now tells you when a column quietly stops carrying data
+
+**Nothing about your reports changes. This release adds a warning that did not exist before.**
+
+The v2.2.422 fix uncovered an uncomfortable pattern. Three separate defects have now hidden the same
+way: a run finishes, exits cleanly, writes a workbook — and carries **less** data than the day before.
+Missing data reads as good news, so every one of them was found by a person noticing, never by the
+software.
+
+v2.2.419 added a guard for the obvious half: a report that stops returning **rows**. But the CMDB
+problem in v2.2.422 had every row present and correct in number — only the *columns* had drained. The
+row guard saw an unchanged count and stayed quiet, which was the right answer to the wrong question.
+
+**This release adds the missing half.** At the end of each run, every report's columns are compared
+with the same report's columns in the previous run, and you are told when one loses its content:
+
+| You will see | It means |
+|---|---|
+| `COLUMN-VANISHED` | the column was populated before and is now missing from the output entirely |
+| `COLUMN-EMPTIED` | the column is still there, and blank on every single row |
+| `FILL-DROP` | still populated, but far less of it than last time |
+
+**It warns; it never fails a run.** If you genuinely remediate everything, reaching zero is success, not
+a defect — and a warning that fires on good news gets switched off within a week, after which it
+protects nothing.
+
+**Two deliberate quiet cases**, so the signal stays worth reading:
+
+- **Ordinary changes in report size do not trigger it.** The comparison is on the *proportion* of rows
+  carrying a value, not the raw count, so a column that stays fully populated while its report shrinks
+  is reported as nothing.
+- **A report that returns no rows is left to the row-count guard.** Every column in an empty report is
+  empty; you get one accurate message instead of fifty derived ones.
+
+The first run after upgrading has nothing to compare against and simply records a baseline — you will
+see `baseline established`. Comparisons begin on the next run.
 
 ---
 

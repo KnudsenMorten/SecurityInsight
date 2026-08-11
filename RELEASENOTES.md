@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.421
+## v2.2.422
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.422: CMDB enrichment was empty on every OAuth run -- cache could not be written (849b5b8a)
 - fix(SI) v2.2.421: rename servicenow-cmdb -> generic-cmdb, and record that CMDB enrichment is BROKEN in production (f37d524a)
 - fix(SI) v2.2.420: hedge the last 8 raw graph-property filters, and close the lint ratchet to zero (582bc19b)
 - feat(SI) v2.2.419: the engine can now notice its own silent losses -- plus two unbounded attack-path reports (b4385a0a)
@@ -33,13 +34,51 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): DESIGN carries the connector facts, and two of its statements were wrong (b735391e)
 - docs(SI): #46 C11-C13 -- per-customer topology, capability-based sizing, and where the MCP servers run (29938d6c)
 - docs(SI): #46 concerns & ideas register -- and C0 resets the risk pricing for Manager (4bd10b5d)
-- docs(SI): #45 -- rename to SecurityInsight Manager, and the config prefix is the part that bites (4bb1e5f3)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.422 — CMDB enrichment works again: your criticality and data-sensitivity are back
+
+**This fixes the known issue flagged in v2.2.421, and if you use CMDB context it changes what you see.**
+
+`cmdbName`, `cmdbCriticality` and `cmdbDataSensitivity` were arriving **empty on every run** for anyone
+using modern storage authentication — which is the default. They now populate again.
+
+**What was wrong.** CMDB values are folded onto assets from a small cache, and the job that fills that
+cache still authenticated to storage the old way, with an account key. SecurityInsight stopped carrying
+storage keys some releases ago in favour of identity-based access, so the job quietly did nothing, the
+cache stayed empty, and the columns came through blank. Nothing failed — every run reported success.
+
+**`cmdbId` kept populating, which is exactly why nobody noticed.** The identifier was written onto
+assets by the tagging rules, while the record it pointed at was never loaded. A populated column beside
+three empty ones reads as "mostly working".
+
+**Verified end to end on a live tenant:**
+
+| | before | after |
+|---|---|---|
+| CMDB cache | `0 services` | **7 services** |
+| Asset profiles carrying CMDB values | **0** | 3 (of 72 assets) |
+| Risk Analysis rows carrying CMDB values | **0 of 1,810** | **55 of 477** |
+
+Domain controllers now correctly resolve to *Active Directory — Critical / Confidential*, and that
+context reaches the findings themselves.
+
+> ⚠️ **Expect risk scores to move — upward, and correctly.** Business criticality from your CMDB is one
+> of the weighted inputs to the risk score. It has been contributing **nothing** since the cache went
+> empty, so findings on assets you have marked Critical were being scored as though you had never told
+> us. They now carry the weight they should. If your scores rise after this upgrade, that is the reason.
+
+**Two smaller corrections in the same area.** The cache job now understands identity-based storage
+access explicitly rather than inferring it from a missing key, and a step that silently skipped itself
+when it could not authenticate now says so. A component that cannot do its job should never do it
+quietly.
 
 ---
 

@@ -29,7 +29,12 @@
 param(
     [Parameter()][string]$StorageAccountName,
     [Parameter()][string]$StorageKey,
-    [Parameter()][string]$CsvPath
+    [Parameter()][string]$CsvPath,
+
+    # v2.2.422 (#58.5) -- OAuth mode. New-SIStorageContext selects its auth by PARAMETER SET, so
+    # passing an empty -AccountKey does NOT yield OAuth; it binds to KeyAuth with a blank key and
+    # fails at signing time. The caller must say OAuth explicitly, which is what this switch is for.
+    [Parameter()][switch]$UseOAuth
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,7 +117,16 @@ $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $siRoot 'engine\asset-profiling\storage\StorageContext.ps1')
 . (Join-Path $siRoot 'engine\asset-profiling\storage\CmdbCache.ps1')
 
-$ctx = New-SIStorageContext -AccountName $StorageAccountName -AccountKey $StorageKey
+# v2.2.422 (#58.5) -- pick the auth mode explicitly. Infer OAuth when no key was supplied, so the
+# cron / KEDA entry point (which passes neither -StorageKey nor -UseOAuth on an OAuth tenant) still
+# does the right thing instead of failing at signing time with an empty key.
+$useOAuthMode = $UseOAuth.IsPresent -or [string]::IsNullOrWhiteSpace($StorageKey)
+$ctx = if ($useOAuthMode) {
+    Write-SIInfo ('CMDB cache: OAuth mode (storage account {0}). Requires the run identity to hold Storage Table Data Contributor on the account.' -f $StorageAccountName)
+    New-SIStorageContext -AccountName $StorageAccountName -UseOAuth
+} else {
+    New-SIStorageContext -AccountName $StorageAccountName -AccountKey $StorageKey
+}
 Initialize-SICmdbCacheTables -Context $ctx | Out-Null
 
 Write-SIStep ('CMDB cache refresh -- source: {0}' -f $CsvPath)

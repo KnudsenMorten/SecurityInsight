@@ -34,12 +34,22 @@ function New-SICmdbTableIfNotExists {
     $resourcePath = 'Tables'
     $url     = 'https://{0}.table.core.windows.net/{1}' -f $Context.AccountName, $resourcePath
     $date    = ConvertTo-SIRfc1123Date
-    $canon   = '/{0}/{1}' -f $Context.AccountName, $resourcePath
-    $sig     = Get-SISharedKeySignature -AccountName $Context.AccountName -AccountKey $Context.AccountKey -StringToSign ("$date`n$canon")
-    $auth    = 'SharedKeyLite {0}:{1}' -f $Context.AccountName, $sig
+    # v2.2.422 (#58.5) -- OAuth-aware. Under OAuth the helper returns a Bearer token and ignores
+    # the URL entirely, so no canonicalization is involved. Under KeyAuth we keep the EXISTING
+    # raw-canon signing byte-for-byte rather than switching to the helper: the helper derives its
+    # canon from [Uri].AbsolutePath, which is equivalent for the plain 'Tables' resource but NOT
+    # for the entity paths below, and changing signing for key-based customers is not this fix's
+    # job. Same dual-mode pattern FingerprintCache.ps1 already uses successfully.
+    $auth = if ($Context.Mode -eq 'OAuth') {
+        Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $url
+    } else {
+        $canon = '/{0}/{1}' -f $Context.AccountName, $resourcePath
+        $sig   = Get-SISharedKeySignature -AccountName $Context.AccountName -AccountKey $Context.AccountKey -StringToSign ("$date`n$canon")
+        'SharedKeyLite {0}:{1}' -f $Context.AccountName, $sig
+    }
     $headers = @{
         'x-ms-date'    = $date
-        'x-ms-version' = '2020-08-04'
+        'x-ms-version' = $(if ($Context.Mode -eq 'OAuth') { '2020-12-06' } else { '2020-08-04' })
         Accept         = 'application/json;odata=nometadata'
         'Content-Type' = 'application/json;charset=utf-8'
         Authorization  = $auth
@@ -97,17 +107,25 @@ function Set-SICmdbTableEntity {
     foreach ($wait in $delays) {
         if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }
         $date = ConvertTo-SIRfc1123Date
-        # Build SharedKeyLite signature from raw resource path (no [Uri] roundtrip).
-        $canon = '/{0}/{1}' -f $Context.AccountName, $resourcePath
-        $sig   = Get-SISharedKeySignature -AccountName $Context.AccountName -AccountKey $Context.AccountKey -StringToSign ("$date`n$canon")
-        $auth  = 'SharedKeyLite {0}:{1}' -f $Context.AccountName, $sig
+        # v2.2.422 (#58.5) -- OAuth-aware; see New-SICmdbTableIfNotExists for why KeyAuth keeps the
+        # raw-canon path. It matters MORE here: this resource path is an entity key such as
+        # sicmdbcis(PartitionKey='x',RowKey='y'), and [Uri].AbsolutePath would escape the quotes
+        # and parentheses, producing a canon that does not match what goes on the wire. Under
+        # OAuth the URL is not signed at all, so the Bearer branch is unaffected by any of it.
+        $auth = if ($Context.Mode -eq 'OAuth') {
+            Get-SITableAuthorizationHeader -Context $Context -Date $date -Url $url
+        } else {
+            $canon = '/{0}/{1}' -f $Context.AccountName, $resourcePath
+            $sig   = Get-SISharedKeySignature -AccountName $Context.AccountName -AccountKey $Context.AccountKey -StringToSign ("$date`n$canon")
+            'SharedKeyLite {0}:{1}' -f $Context.AccountName, $sig
+        }
         # NO If-Match header. Per MS docs, Insert-Or-Replace =
         # PUT WITHOUT If-Match. Including If-Match (even '*') makes the request
         # an Update Entity op, which REQUIRES the entity to already exist --
         # returns 404 for first-time inserts. That was the persistent 404 cause.
         $headers = @{
             'x-ms-date'    = $date
-            'x-ms-version' = '2020-08-04'
+            'x-ms-version' = $(if ($Context.Mode -eq 'OAuth') { '2020-12-06' } else { '2020-08-04' })
             Accept         = 'application/json;odata=nometadata'
             'Content-Type' = 'application/json;charset=utf-8'
             Authorization  = $auth
@@ -156,7 +174,7 @@ function Get-SICmdbTableEntities {
         try {
             $resp = Invoke-WebRequest -Method GET -Uri $url -Headers @{
                 'x-ms-date'    = $date
-                'x-ms-version' = '2020-08-04'
+                'x-ms-version' = $(if ($Context.Mode -eq 'OAuth') { '2020-12-06' } else { '2020-08-04' })
                 Authorization  = $auth
                 Accept         = 'application/json;odata=nometadata'
             } -UseBasicParsing -ErrorAction Stop
@@ -179,13 +197,27 @@ function Initialize-SICmdbCacheTables {
     [CmdletBinding()]
     param([Parameter(Mandatory)][object]$Context)
 
-    # v2.2.349 -- CmdbCache still uses SharedKey signing internally (Get-SISharedKeySignature
-    # reads $Context.AccountKey). Under OAuth mode the key is empty by design, so the
-    # signature helper throws "Cannot bind argument to parameter 'AccountKey' because
-    # it is an empty string." Skip table init silently in that case -- the empty-cache
-    # path in Reconcile already handles missing entries gracefully. TODO: rewrite
-    # CmdbCache to use OAuth bearer tokens against Table Storage REST.
-    if ($Context.Mode -eq 'OAuth' -or [string]::IsNullOrWhiteSpace([string]$Context.AccountKey)) {
+    # v2.2.422 (#58.5) -- THE OAUTH BAIL-OUT IS GONE, and it was not a small thing.
+    #
+    # It read: "Under OAuth mode the key is empty by design, so the signature helper throws ...
+    # Skip table init silently in that case -- the empty-cache path in Reconcile already handles
+    # missing entries gracefully. TODO: rewrite CmdbCache to use OAuth bearer tokens."
+    #
+    # "Handles it gracefully" turned out to mean: the cache is never written, so cmdbName /
+    # cmdbCriticality / cmdbDataSensitivity came through EMPTY on every run, for every customer on
+    # OAuth storage, since v2.2.314. Measured 2026-08-11 on live output -- 0 of 1,810 Detailed rows
+    # carried any of the three, while cmdbId sat at 66% (a foreign key pointing at records that were
+    # never loaded, which is exactly why it looked like it was working). ~510 references to cmdbName
+    # across the RA catalog silently produced blanks, and the cmdb WEIGHTED LAYER contributed nothing
+    # to risk scores the whole time. The operator's own read was "used it in a VM env and not had
+    # issues" -- the symptoms were absent, the data was not.
+    #
+    # 🔑 A silent `return` is never a graceful degradation when the thing being skipped is the only
+    # writer of data other code depends on. If a capability genuinely cannot run, SAY SO.
+    #
+    # Both write paths are now OAuth-aware, so there is nothing to skip. Mock stays supported.
+    if ([string]::IsNullOrWhiteSpace([string]$Context.AccountName) -and $Context.Mode -ne 'Mock') {
+        Write-SIWarn 'CMDB cache tables cannot be initialised -- no storage account resolved. cmdb* columns will be EMPTY this run.'
         return
     }
 

@@ -149,20 +149,26 @@ function Invoke-SISchedule {
                     if (Test-Path $legacyRefresh) { $refreshScript = $legacyRefresh }
                 }
                 if (Test-Path $refreshScript) {
-                    # v2.2.349 -- CMDB auto-refresh is OAuth-incompatible (the helper
-                    # uses SharedKey-signed Table Storage REST calls). Under v2.2.314+
-                    # OAuth-on-storage policy we no longer carry a storage key, so the
-                    # auto-refresh is silently a no-op -- Reconcile's empty-cache /
-                    # stale-cache fallback continues to operate against the most recent
-                    # cached snapshot. TODO: rewrite Refresh-CmdbCache.ps1 to use OAuth
-                    # bearer tokens against Table Storage REST; once that lands this
-                    # branch can fire under OAuth too.
-                    if ($RunContext.StorageContext.Mode -eq 'OAuth' -or [string]::IsNullOrWhiteSpace([string]$RunContext.StorageContext.AccountKey)) {
-                        Write-SIInfo "CMDB auto-refresh skipped (OAuth-on-storage; refresh helper rewrite pending). Reconcile continues against the existing cached snapshot."
+                    # v2.2.422 (#58.5) -- THE OAUTH SKIP IS GONE. CmdbCache's write paths are now
+                    # OAuth-aware (bearer token against Table REST), so there is nothing to skip.
+                    #
+                    # What this branch used to do, and why it mattered: it said the refresh was
+                    # "silently a no-op" and that Reconcile "continues against the existing cached
+                    # snapshot". On an OAuth tenant there IS no existing snapshot -- the cache was
+                    # never written in the first place -- so cmdbName / cmdbCriticality /
+                    # cmdbDataSensitivity were empty on EVERY run since v2.2.314. Measured
+                    # 2026-08-11: 0 of 1,810 rows carried them, while cmdbId sat at 66%.
+                    #
+                    # Pass the KEY only in KeyAuth mode; under OAuth the refresh script builds its
+                    # own OAuth context (Connect-AzAccount having already been done by the launcher).
+                    $isOAuth = ($RunContext.StorageContext.Mode -eq 'OAuth') -or
+                               [string]::IsNullOrWhiteSpace([string]$RunContext.StorageContext.AccountKey)
+                    $cmdbRefresh = if ($isOAuth) {
+                        & $refreshScript -StorageAccountName ([string]$RunContext.StorageContext.AccountName) -UseOAuth
                     } else {
-                        $cmdbRefresh = & $refreshScript -StorageAccountName ([string]$RunContext.StorageContext.AccountName) -StorageKey ([string]$RunContext.StorageContext.AccountKey)
-                        Write-SIInfo ("CMDB cache refreshed: {0} services written" -f $cmdbRefresh.ServicesWritten)
+                        & $refreshScript -StorageAccountName ([string]$RunContext.StorageContext.AccountName) -StorageKey ([string]$RunContext.StorageContext.AccountKey)
                     }
+                    Write-SIInfo ("CMDB cache refreshed: {0} services written" -f $cmdbRefresh.ServicesWritten)
                 } else {
                     Write-Warning ("Refresh-CmdbCache.ps1 not found at {0}" -f $refreshScript)
                 }

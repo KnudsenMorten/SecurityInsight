@@ -13,9 +13,13 @@
     Run as a separate scheduled task (KEDA cron job in production). Engine
     runs read from these tables only -- never call ServiceNow live.
 
-    ships in SAMPLE-CSV mode: reads providers/servicenow-cmdb/
-    sample/CMDB.csv. Real ServiceNow REST integration ships when a customer
-    needs it.
+    Reads a customer-maintained CSV from providers/generic-cmdb/CMDB.csv, falling back to
+    the shipped sample/CMDB.csv. Source-agnostic: the CSV can be exported from ServiceNow,
+    from another CMDB, or maintained by hand -- nothing here is ServiceNow-specific, which
+    is why the provider was renamed 'servicenow-cmdb' -> 'generic-cmdb' in v2.2.421.
+    A live ServiceNow CMDB (CIs, business services, relationships) is a separate, Pro
+    feature that does not exist yet; when it does it WINS over this CSV and only one CMDB
+    source is ever active. See docs/REQUIREMENTS.md #58.
 
     Usage:
         .\Refresh-CmdbCache.ps1 -StorageAccountName <sa> -StorageKey <key>
@@ -54,17 +58,38 @@ if ($PSBoundParameters.ContainsKey('SI_EnableCmdbProvider') -or (Get-Variable -N
 if (-not $StorageAccountName -and $global:SI_StorageAccount) { $StorageAccountName = [string]$global:SI_StorageAccount }
 if (-not $StorageKey         -and $global:SI_StorageKey)     { $StorageKey         = [string]$global:SI_StorageKey }
 
-# 3-tier CSV lookup. Customer files live OUTSIDE the platform-shipped
-# providers/ folder so `git pull` never overwrites them.
+# CSV lookup order. The customer's own CMDB.csv sits in the provider folder and is
+# GITIGNORED (.gitignore: asset-profiling-providers/**/CMDB.csv), so `git pull` and the
+# customer sync never overwrite it. (An earlier comment here described a
+# "providers-custom/" folder -- that folder has never existed; the gitignore is the
+# actual mechanism and it works.)
 #   1. -CsvPath param (explicit, highest priority)
 #   2. $global:SI_CmdbCsvPath (set in custom.ps1) -- use when CMDB lives outside the SI repo
-#   3. providers-custom/servicenow-cmdb/CMDB.csv -- standard customer drop point (gitignored)
-#   4. providers/servicenow-cmdb/sample/CMDB.csv -- last-resort sample shipped with the engine
+#   3. providers/generic-cmdb/CMDB.csv     -- standard customer drop point (gitignored)
+#   4. providers/servicenow-cmdb/CMDB.csv  -- LEGACY drop point, pre-v2.2.421 rename
+#   5. providers/generic-cmdb/sample/CMDB.csv -- last-resort sample shipped with the engine
 if (-not $CsvPath -and $global:SI_CmdbCsvPath) { $CsvPath = [string]$global:SI_CmdbCsvPath }
 if (-not $CsvPath) {
     $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-    $customerPath = Join-Path $siRoot 'asset-profiling-providers\servicenow-cmdb\CMDB.csv'
+    $customerPath = Join-Path $siRoot 'asset-profiling-providers\generic-cmdb\CMDB.csv'
     if (Test-Path $customerPath) { $CsvPath = $customerPath }
+}
+if (-not $CsvPath) {
+    # v2.2.421 -- LEGACY FALLBACK, and it is load-bearing rather than politeness.
+    # The provider was renamed servicenow-cmdb -> generic-cmdb. A customer CSV at the old
+    # path is GITIGNORED, so an update neither moves nor deletes it: their file stays in the
+    # old folder while the new folder arrives empty. Without this fallback the lookup below
+    # would find nothing and SKIP SILENTLY -- cmdbId / cmdbName / cmdbCriticality /
+    # cmdbDataSensitivity would go empty across ~510 references in the RA catalog, on a run
+    # that reports success. That is audit #48's failure class (silent COLUMN loss), and note
+    # the #57.1(a) row-count guard would NOT catch it: the rows still exist, only the columns
+    # empty out. Warn loudly so the customer migrates, but never lose their data.
+    $siRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $legacyPath = Join-Path $siRoot 'asset-profiling-providers\servicenow-cmdb\CMDB.csv'
+    if (Test-Path $legacyPath) {
+        $CsvPath = $legacyPath
+        Write-SIWarn ("CMDB CSV found at the LEGACY path '{0}'. The provider was renamed 'servicenow-cmdb' -> 'generic-cmdb' in v2.2.421 (it was never ServiceNow-specific). Your data is being used from the old location -- move CMDB.csv to 'asset-profiling-providers\generic-cmdb\CMDB.csv' at your convenience; this fallback will not be removed without notice." -f $legacyPath)
+    }
 }
 if (-not $CsvPath) { $CsvPath = Join-Path $PSScriptRoot 'sample\CMDB.csv' }
 
@@ -74,7 +99,7 @@ if (-not (Test-Path $CsvPath)) {
     # Reconcile finds zero CMDB matches, RA queries see empty cmdbId/cmdbName/
     # cmdbCriticality columns. Drop a CMDB.csv at the customer-drop path or
     # set $global:SI_CmdbCsvPath to enable enrichment.
-    Write-SIInfo ('CMDB CSV not present yet (looked at -CsvPath, $global:SI_CmdbCsvPath, asset-profiling-providers\servicenow-cmdb\CMDB.csv, sample\CMDB.csv). Skipping cache refresh -- cmdb columns will be empty until a CSV is provided.')
+    Write-SIInfo ('CMDB CSV not present yet (looked at -CsvPath, $global:SI_CmdbCsvPath, asset-profiling-providers\generic-cmdb\CMDB.csv, the legacy asset-profiling-providers\servicenow-cmdb\CMDB.csv, and sample\CMDB.csv). Skipping cache refresh -- cmdbId / cmdbName / cmdbCriticality / cmdbDataSensitivity will be EMPTY until a CSV is provided.')
     return
 }
 $pathSource = if ($CsvPath -like '*\asset-profiling-providers\*') { 'providers-custom (customer drop)' }

@@ -61,7 +61,7 @@ detections:
       # v2.2.274 -- cmdbId / cmdbDataSensitivity removed from this LOCKED file.
       # cmdb info is per-tenant; never inline it in shipped baseline rules.
       # Customers wire CMDB via the SI_EnableCmdbProvider provider chain
-      # (asset-profiling-providers/servicenow-cmdb/), or override THIS rule with
+      # (asset-profiling-providers/generic-cmdb/), or override THIS rule with
       # a sibling ADDomainController.custom.yaml carrying cmdbId.
       # See docs/RULE-REFERENCE.md "Locked vs. custom" for the override how-to.
 

@@ -493,7 +493,7 @@ flowchart LR
   *Read by:* `publicip`
 
 - *Optional* — **Provider connectors** *(`asset-profiling-providers/<provider>/`)*
-  Pluggable. Today: `entra` (built-in), `servicenow-cmdb` (CSV pull).
+  Pluggable. Today: `entra` (built-in), `generic-cmdb` (CSV pull).
   *Read by:* all asset-profiling engines
 
 > 🔒 **All inputs are read-only.** SecurityInsight never writes back to MDE / Entra / ARM during a collection run. The optional `CriticalAssetTagging` engine ships separately for customers who want active tag writes.
@@ -503,7 +503,7 @@ flowchart LR
 
 | Enrichment | What it does | Where you configure |
 |---|---|---|
-| **ServiceNow CMDB CSV** | Folds `cmdbId`, `cmdbName`, `cmdbCriticality` (`Critical`/`Important`/`Standard`), `cmdbDataSensitivity` (`Public`/`Internal`/`Confidential`/`Restricted`) onto every asset row at the Reconcile stage. Drives `RiskFactor_Consequence_Detailed` tokens (`BusinessCriticalAsset`, `RestrictedDataAccess`). | `asset-profiling-providers/servicenow-cmdb/CMDB.csv` (drop your file; gitignored) — see `sample/CMDB.csv` for column shape |
+| **ServiceNow CMDB CSV** | Folds `cmdbId`, `cmdbName`, `cmdbCriticality` (`Critical`/`Important`/`Standard`), `cmdbDataSensitivity` (`Public`/`Internal`/`Confidential`/`Restricted`) onto every asset row at the Reconcile stage. Drives `RiskFactor_Consequence_Detailed` tokens (`BusinessCriticalAsset`, `RestrictedDataAccess`). | `asset-profiling-providers/generic-cmdb/CMDB.csv` (drop your file; gitignored) — see `sample/CMDB.csv` for column shape |
 | **Azure OpenAI** (role/permission tier classification) | When a Microsoft role / permission isn't in the locked tier catalog, AI evaluates the permissions it grants and slots it into Tier 0–3. Off by default; opt in via `$global:SI_EnableAI = $true`. | Step 4 of bootstrap — `Validate-SIOpenAI.ps1` |
 | **Custom asset-profiling rules** (`*.custom.yaml`) | Override or add to the 559 locked enrichment rules. Customer wins on conflict (merge by `id`). | Drop `<RuleName>.custom.yaml` next to the matching `<RuleName>.locked.yaml` in `asset-profiling-enrichment/<domain>/` |
 | **Custom RA report exclusions** (`*.exclude.custom.json`) | Per-report exclusions (e.g. "exclude these ConfigurationIds from `Device_Recommendations_Summary` because we accept this risk"). | `risk-analysis-detection/<ReportName>.exclude.custom.json` |
@@ -540,7 +540,7 @@ For a fresh install, you'll copy these sample files to their `.custom.` siblings
 
 | Feature | Copy from | To | Edit |
 |---|---|---|---|
-| **ServiceNow CMDB enrichment** | `asset-profiling-providers/servicenow-cmdb/sample/CMDB.csv` | `asset-profiling-providers/servicenow-cmdb/CMDB.csv` | Drop your CMDB extract (columns: `id,name,criticality,dataSensitivity,...`) |
+| **ServiceNow CMDB enrichment** | `asset-profiling-providers/generic-cmdb/sample/CMDB.csv` | `asset-profiling-providers/generic-cmdb/CMDB.csv` | Drop your CMDB extract (columns: `id,name,criticality,dataSensitivity,...`) |
 | **Custom Risk Index weights** | `risk-analysis-detection/riskscore_weighted.schema.custom.sample.json` | `risk-analysis-detection/riskscore_weighted.schema.custom.json` | Adjust per-domain weight multipliers |
 | **Custom enrichment rule** (e.g. add a Tier 0 marker for your bastion hosts) | `asset-profiling-enrichment/endpoint/AssetProfileByApplicationServiceDetection/<App>.custom.sample.yaml` | Same name, drop `.sample.` segment | Set `id`, `match` criteria, `tier`, `tags` |
 | **Custom Azure-tag rule** | `asset-profiling-enrichment/azure/AssetProfileByTags.custom.sample.yaml` | `asset-profiling-enrichment/azure/AssetProfileByTags.custom.yaml` | Map your Azure-tag keys/values to tier verdicts |
@@ -1794,7 +1794,7 @@ The `Push-PreviewBundle.ps1` helper bundles the dev tree + `AutomateITPS` / `Aut
 | **publicip** | `engine/publicip/` | Shodan scanner for Tier 0/1 public IPs. Detects open ports + CVEs on internet-exposed assets. | `SI_VulnerabilityPIP_CL` |
 | **risk-analysis** | `engine/risk-analysis/` | **118 reports** (59 Summary + 59 Detailed, fully paired) across 4 security domains (Endpoint, Identity, Azure, PublicIP). EG-primary RA pattern: queries source from Microsoft Exposure Graph (nodes + edges), join `SI_*_Profile_CL` only for Tier / CMDB enrichment. 3-layer score model (RiskScoreTotal → RiskScore_Weight_Factor → RiskScoreTotal_Weighted). | `SI_RiskAnalysis_Summary_CL`, `SI_RiskAnalysis_Detailed_CL` |
 
-**Configuration pattern across all engines:** every rule YAML has a `.locked.yaml` (engine-shipped, never edited by customer) and matching `.custom.yaml` (customer-owned, gitignored). The two merge by `id`; Custom wins on conflict and adds new entries. Provider connectors are pluggable under `asset-profiling-providers/<provider>/` — currently `entra/` (built-in) and `servicenow-cmdb/` (read-only CSV pull).
+**Configuration pattern across all engines:** every rule YAML has a `.locked.yaml` (engine-shipped, never edited by customer) and matching `.custom.yaml` (customer-owned, gitignored). The two merge by `id`; Custom wins on conflict and adds new entries. Provider connectors are pluggable under `asset-profiling-providers/<provider>/` — currently `entra/` (built-in) and `generic-cmdb/` (read-only CSV pull).
 
 <a id="311-container-keda"></a>
 ### 🐳 4.11 Container & KEDA host-mode
@@ -3055,7 +3055,7 @@ Inventory snapshot (auto-derived from the current `risk-analysis-detection/`, `a
 | 🧬 **Profile schema** — flat-column LA columns the engine emits per asset | **697** fields total across 4 tables (`SI_Endpoint_Profile_CL` 168 + `SI_Identity_Profile_CL` 162 + `SI_Azure_Profile_CL` 321 + `SI_PublicIp_Profile_CL` 46) |
 | 📚 **Schema definitions** | **4** — `asset-profiling-schema/{azure,endpoint,identity,public-ip}.schema.locked.json` |
 | 👑 **Privilege tier catalog** | **1** — `privilege-tier-catalog/privilege-tier-catalog.locked.json` |
-| 🔌 **Provider connectors** | **2** — `asset-profiling-providers/{entra, servicenow-cmdb}` |
+| 🔌 **Provider connectors** | **2** — `asset-profiling-providers/{entra, generic-cmdb}` |
 
 **🤖 AI-classified tier catalog** — every role / permission slotted into Tier 0–3 by the AI integration in SecurityInsight:
 
@@ -3453,6 +3453,8 @@ and §9 of `docs/TESTS.md`. There is no separate doc set under `analyzer-web/`.
 
 | Area | Capability | Tag |
 |---|---|---|
+| 🏷️ **CMDB provider renamed to `generic-cmdb`** | It was called `servicenow-cmdb` and claimed to read ServiceNow CIs, business services and relationships with write-back — none of which existed. It reads **a CSV you maintain**, from any source. Your existing `CMDB.csv` still works from the old folder, with a message telling you where to move it. Precedence is now settled too: **only one CMDB is ever active**, a live CMDB (planned, paid) wins over the CSV, sources are never blended, and a failing source says so rather than silently falling back | v2.2.421 |
+| ⚠️ **Known issue — CMDB values blank** | `cmdbName` / `cmdbCriticality` / `cmdbDataSensitivity` are **not currently populated** (the cache they fold from is written with an older storage auth method the product no longer uses, so it stays empty). `cmdbId` still populates, which makes it easy to miss. Source CSV untouched; fix in progress | v2.2.421 |
 | 🛡️ **All graph filters hardened** | The last 8 filters that read one exact graph property path — across the two device CVE reports, the two device recommendation reports and the vulnerable-device attack paths (~1,400 rows in the detailed CVE report alone) — now check alternative locations and use whichever exists. This is the fault that emptied both Azure reports in v2.2.417. **Behaviour-neutral by construction** — it can only rescue a report that would otherwise go empty, never drop a finding. Verified live: the three high-volume reports identical (incl. 1,397 rows unchanged to the row); the two volatile attack-path reports also moved under a control run of *unchanged* code, so that variation is the data. The build check is now zero-tolerance — any new unhedged filter fails the build | v2.2.420 |
 | 🔔 **Run-over-run loss detection** | Every report's result count is remembered, and each run tells you if a report **found things before and finds none now** (or dropped >80%). That is the exact signature of the v2.2.417 Azure fault, which went 75 findings → 0 overnight and was caught by a person, not the software. **Warns, never fails** — remediating everything legitimately reaches zero, and a check that cries wolf on success gets switched off | v2.2.419 |
 | ⚡ **Two attack-path reports bounded** | GitHub-to-Azure and data-sensitivity gathered *every* matching relationship tenant-wide before narrowing. Each stage is now limited to what the previous stage found — **same findings**, GitHub **70.5s → 36.5s**, data-sensitivity **124.1s → 4.3s**. On a large estate this is the difference between completing and hitting the query time limit | v2.2.419 |

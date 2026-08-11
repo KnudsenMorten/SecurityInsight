@@ -140,7 +140,14 @@ function Invoke-SISchedule {
                           elseif ($age.State -eq 'never') { 'never synced' }
                           else { ('{0}h old >= {1}h interval' -f $age.HoursOld, $intervalH) }
                 Write-SIInfo ("CMDB provider ENABLED -- refreshing cache ({0}) ..." -f $reason)
-                $refreshScript = Join-Path $siRoot 'asset-profiling-providers\servicenow-cmdb\Refresh-CmdbCache.ps1'
+                # v2.2.421 -- provider renamed 'servicenow-cmdb' -> 'generic-cmdb' (it was never
+                # ServiceNow-specific; it reads a CSV). Fall back to the old folder so a partially
+                # updated install still finds the refresh script rather than skipping it.
+                $refreshScript = Join-Path $siRoot 'asset-profiling-providers\generic-cmdb\Refresh-CmdbCache.ps1'
+                if (-not (Test-Path $refreshScript)) {
+                    $legacyRefresh = Join-Path $siRoot 'asset-profiling-providers\servicenow-cmdb\Refresh-CmdbCache.ps1'
+                    if (Test-Path $legacyRefresh) { $refreshScript = $legacyRefresh }
+                }
                 if (Test-Path $refreshScript) {
                     # v2.2.349 -- CMDB auto-refresh is OAuth-incompatible (the helper
                     # uses SharedKey-signed Table Storage REST calls). Under v2.2.314+

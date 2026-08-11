@@ -1,0 +1,15 @@
+{
+  "$schema": "../_manifest.schema.json",
+  "id":          "generic-cmdb",
+  "kind":        "in",
+  "engines":     ["identity", "endpoint", "azure"],
+  "auth":        { "type": "none" },
+  "bulk":        true,
+  "description": "Generic CMDB import -- reads a customer-maintained CSV (cmdbID;cmdbName;DataSensitivity;Criticality;Owner;OwnerMail) and enriches asset profiles with cmdbId / cmdbName / cmdbCriticality / cmdbDataSensitivity. Source-agnostic: the CSV can be exported from ServiceNow, another CMDB, or maintained by hand.",
+
+  "_renamed_comment": "RENAMED from 'servicenow-cmdb' in v2.2.421. The old id was wrong in two ways and the operator corrected it: nothing here is ServiceNow-specific -- it is a plain CSV read -- and the previous manifest description claimed 'read CIs / business services / relationships, optionally write-back discovered metadata', none of which was ever implemented. A name promising a live ServiceNow integration also collided with the licensing model, where the RICH ServiceNow CMDB (live CIs + relationships + write-back) and the outbound incident connector are Pro features that do not exist yet, while THIS generic CSV import is free and does. Refresh-CmdbCache.ps1 still resolves the OLD directory as a fallback so an existing customer CSV is never silently ignored.",
+
+  "_kind_comment": "'in' not 'both'. The previous manifest said 'both', implying write-back to a CMDB. No write path exists -- the provider only reads. Write-back belongs to the future ServiceNow connector.",
+
+  "_auth_comment": "'none' not 'api-key'. There is no API call: the provider reads a CSV from disk. The previous 'api-key' described the unimplemented live-ServiceNow mode."
+}

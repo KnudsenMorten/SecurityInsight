@@ -313,7 +313,7 @@ detections:
       Purpose: 'System Center role (legacy boxes excluded)'
       Category: 'Application Service'
 
-      # cmdbId: foreign key into asset-profiling-providers/servicenow-cmdb/CMDB.csv
+      # cmdbId: foreign key into asset-profiling-providers/generic-cmdb/CMDB.csv
       # When set, the engine looks up this id at Reconcile and AUTO-STAMPS:
       #   cmdbName · cmdbCriticality · cmdbDataSensitivity
       # onto the profile row, sourced from the CSV row.

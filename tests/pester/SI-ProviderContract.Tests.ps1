@@ -203,22 +203,18 @@ Describe 'declared vs implemented -- the gap must stay visible' {
             $callsHttp = $joined -match 'Invoke-RestMethod|Invoke-WebRequest|Invoke-SIPagedRest|HttpClient'
             if (-not $callsHttp) { $offenders += $p.Folder }
         }
-        # Known and tracked: servicenow-cmdb ships in sample-CSV mode (#42, build order phase 2).
-        $unexpected = @($offenders | Where-Object { $_ -ne 'servicenow-cmdb' })
-        $unexpected -join ' || ' | Should -BeNullOrEmpty
-    }
-
-    It 'servicenow-cmdb is still the ONLY declared-but-unimplemented provider' {
-        # Pins the exception above so it cannot silently grow into a habit. When ServiceNow gains
-        # its REST path this case fails and BOTH it and the exception get deleted together --
-        # which is the point: the exception cannot outlive the gap it documents.
-        $sn = @($script:Providers | Where-Object { $_.Folder -eq 'servicenow-cmdb' })
-        $sn.Count | Should -Be 1
-        $code = @(Get-ChildItem -Path $sn[0].Path -Filter '*.ps1' -File -Recurse -ErrorAction SilentlyContinue |
-                  ForEach-Object { Get-Content -Raw -LiteralPath $_.FullName }) -join "`n"
-        $code | Should -Not -BeNullOrEmpty
-        ($code -match 'Invoke-RestMethod|Invoke-WebRequest|Invoke-SIPagedRest') | Should -BeFalse `
-            -Because 'when this fails, ServiceNow has gained its live REST path -- delete this case AND the allowance above it'
+        # v2.2.421 -- THE EXCEPTION IS GONE, and the gap it documented is closed.
+        # It read: "Known and tracked: servicenow-cmdb ships in sample-CSV mode (#42)".
+        # That provider was never ServiceNow: it reads a CSV. It has been renamed 'generic-cmdb',
+        # and its manifest now declares what it actually is (kind 'in', auth 'none') instead of
+        # promising "read CIs / business services / relationships, optionally write-back". With an
+        # honest manifest it is no longer a provider declaring auth it does not use, so it is not
+        # an offender and needs no allowance. ZERO TOLERANCE from here.
+        $offenders -join ' || ' | Should -BeNullOrEmpty -Because (
+            'a manifest that declares auth must actually make HTTP calls. The one historical ' +
+            'exception was closed by making the manifest truthful, not by adding an allowance -- ' +
+            'do not re-add one. The rich ServiceNow CMDB and the outbound connector are Pro ' +
+            'features that do not exist yet; when they land they will declare auth AND call REST.')
     }
 
     It 'the contract doc referenced by the schema is recorded as missing' {

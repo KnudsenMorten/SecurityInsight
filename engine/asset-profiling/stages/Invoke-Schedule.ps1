@@ -123,7 +123,31 @@ function Invoke-SISchedule {
     # (default 24h) so we don't re-read the CSV every engine run. Failure is
     # non-fatal: Reconcile handles a stale / empty cache gracefully.
     $cmdbRefresh = $null
-    if ($global:SI_EnableCmdbProvider) {
+
+    # AUDIT #58.1 -- resolve WHICH CMDB source is active before doing anything with one.
+    # Exactly one is ever active and sources are never merged (see shared/CmdbSource.ps1).
+    $__siRootForCmdb = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+    . (Join-Path $__siRootForCmdb 'engine\asset-profiling\shared\CmdbSource.ps1')
+    $__cmdbAvail = Get-SICmdbSourceAvailability -SolutionRoot $__siRootForCmdb `
+                                                -EnableCmdbProvider   $global:SI_EnableCmdbProvider `
+                                                -EnableServiceNowCmdb $global:SI_EnableServiceNowCmdb
+    $__cmdbPick = Resolve-SICmdbSource -Available $__cmdbAvail
+
+    # 🔴 #58.2 FAIL LOUD. A refused configuration stops the CMDB path outright. It must NOT quietly
+    # fall through to a lower-precedence source: silent substitution hands the customer plausible but
+    # stale data on a green run, and wrong-but-plausible is worse than empty because empty is visible.
+    if ($__cmdbPick.Fatal) {
+        Write-Error ("CMDB source resolution REFUSED: {0}" -f $__cmdbPick.Reason)
+    }
+    # Reason is already a full sentence beginning "CMDB source '<id>' selected ..." -- do not prefix it
+    # again, or the log reads "CMDB source: CMDB source 'generic-csv' selected".
+    Write-SIInfo ([string]$__cmdbPick.Reason)
+
+    # Stamp on the RunContext so Reconcile stamps it onto every row (#58.3) without re-resolving --
+    # and so the two stages can never disagree about which source answered.
+    $RunContext | Add-Member -MemberType NoteProperty -Name CmdbSource -Value ([string]$__cmdbPick.Source) -Force
+
+    if ($global:SI_EnableCmdbProvider -and $__cmdbPick.Source -eq 'generic-csv') {
         $intervalH = if ($global:SI_CmdbRefreshIntervalHours) { [int]$global:SI_CmdbRefreshIntervalHours } else { 24 }
         try {
             $siRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
@@ -170,7 +194,8 @@ function Invoke-SISchedule {
                     }
                     Write-SIInfo ("CMDB cache refreshed: {0} services written" -f $cmdbRefresh.ServicesWritten)
                 } else {
-                    Write-Warning ("Refresh-CmdbCache.ps1 not found at {0}" -f $refreshScript)
+                    # #58.2 -- the SELECTED source cannot answer. Say that, rather than naming a path.
+                    Write-Warning ("CMDB source 'generic-csv' was selected but its refresh script is missing at {0}. cmdb* will be populated only from whatever the cache already holds, and NO other CMDB source will be substituted for it -- exactly one source is ever active (#58.1)." -f $refreshScript)
                 }
             } else {
                 Write-SIInfo ("CMDB provider ENABLED -- cache fresh ({0}h old, interval {1}h) -- skip refresh" -f $age.HoursOld, $intervalH)
@@ -179,7 +204,12 @@ function Invoke-SISchedule {
             $loc = if ($_.InvocationInfo -and $_.InvocationInfo.ScriptName) {
                 '{0}:{1}' -f (Split-Path -Leaf $_.InvocationInfo.ScriptName), $_.InvocationInfo.ScriptLineNumber
             } else { 'unknown' }
-            Write-Warning ("CMDB auto-refresh failed at {0} -- {1}. Reconcile will use existing cache (if any)." -f $loc, $_.Exception.Message)
+            # #58.2 -- the old wording ("Reconcile will use existing cache (if any)") read as
+            # reassurance. It is not: continuing against an unrefreshed cache means cmdb* may be
+            # PLAUSIBLE BUT STALE, which is the failure mode this audit exists to stop -- empty is
+            # visible, wrong is not. Say what the reader must actually decide about. No other source
+            # is substituted; resolution picked exactly one before this ran.
+            Write-Warning ("CMDB refresh FAILED for the selected source 'generic-csv' at {0} -- {1}. Reconcile continues against the cache AS IT ALREADY STANDS, so cmdb* values may be STALE rather than absent; check the cache-age line above before trusting them. No other CMDB source will be substituted (#58.1/#58.2)." -f $loc, $_.Exception.Message)
         }
     }
 

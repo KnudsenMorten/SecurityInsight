@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.2.423
+## v2.2.424
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.424: #58.1 CMDB source precedence -- LIVE-VERIFIED. The "empty column" was NOT a bug. (bf2d6e14)
+- wip(SI) #58.1: CMDB source precedence -- NOT RELEASED, CmdbSource lands EMPTY in Log Analytics (a6a956f4)
+- docs(SI): refresh the handoff -- it still claimed 2.2.422 and an unanswered VisualCron question (4a89c32d)
 - release(SI) v2.2.423: #57.1(d) column-fill guard -- LIVE-VERIFIED, promoted from 🟡 to delivered (ca4a5059)
 - fix(SI) #57.1(d): the snapshot could have DROPPED a report -- the guard needed guarding (0df1a7d4)
 - feat(SI) #57.1(d): the engine can now notice rows that stayed while their content drained (d0263df7)
@@ -31,15 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #Requires 5.1 is inert on pwsh 7 -- the real gate is accidental (5cb51527)
 - docs(SI): 44.0a -- PowerShell 7 for the connector, and pwsh7 is the actual runtime (1a787641)
 - docs(SI): 44.0 -- the connector recommendation consolidated into one findable place (19a9d285)
-- docs(SI): C17 -- container-vs-VM is the wrong question, and PIM's answer differs from SI's (7fdcb09e)
-- docs(SI): C16 -- C# is wrong for the engines and right for the connector, and the seam already exists (f196e60a)
-- docs(SI): C15 -- a 48-hour job is the wrong shape, and container is not the only option (f77925cb)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.424 — one CMDB is in charge, and every row now tells you which one
+
+**If you use CMDB context, this adds a column. Nothing you already rely on changes.**
+
+Your CMDB values (`cmdbName`, `cmdbCriticality`, `cmdbDataSensitivity`) come from a source, and until
+now nothing in the export said which. Every asset row now carries **`CmdbSource`**, so *"where did this
+criticality come from?"* is answerable from the workbook itself, without asking anyone to dig through a
+run log on a machine you may not have.
+
+**Exactly one CMDB is ever active, and sources are never blended.** Today that is the free CSV
+importer, which is unchanged and stays free. The ordering is in place for richer CMDBs later: a live
+CMDB would win over the CSV, and when it does, the run says plainly that the CSV has stopped being read
+— rather than leaving you to notice from risk scores that moved.
+
+**Why never blended.** If two sources could both fill in `cmdbCriticality`, then *"why does this asset
+say Critical?"* has no answer you can check. One source, chosen the same way every run.
+
+**A selected source that fails will not quietly substitute another.** Silent substitution would hand
+you plausible-but-stale data on a run that reports success — an asset marked `Standard` from an old
+file while the real CMDB says `Critical`. **Wrong is worse than empty, because empty is visible.** If a
+CMDB is configured but cannot be used, the run says so and leaves the columns empty.
+
+One wording fix that came with it: the message shown when a CMDB refresh fails used to end *"will use
+existing cache (if any)"*, which read as reassurance. It now says what you actually need to decide —
+that the values may be **stale rather than absent**, and points you at the cache-age line.
+
+> ℹ️ **Adding any new column takes two runs to appear in Log Analytics.** The first run declares it and
+> the second populates it. This is normal Azure behaviour, not a fault — if `CmdbSource` looks empty
+> immediately after upgrading, check again after the next run.
 
 ---
 

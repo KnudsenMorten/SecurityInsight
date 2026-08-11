@@ -3065,6 +3065,22 @@
     },
     {
       "purpose": "audit",
+      "addedIn": "2.2.424",
+      "name": "CmdbSource",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "AUDIT #58.3 -- which CMDB source populated the cmdb* columns on this row: servicenow / generic-csv / none. Exactly one source is ever active and sources are never merged (#58.1), so this answers 'where did this cmdbCriticality come from?' from the export alone, without log archaeology."
+      }
+    },    {
+      "purpose": "audit",
       "addedIn": "2.3.6",
       "name": "CmdbMatchPhase",
       "source": "derived",

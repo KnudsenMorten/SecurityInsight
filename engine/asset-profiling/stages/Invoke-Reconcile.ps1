@@ -53,6 +53,24 @@ function Invoke-SIReconcile {
     try { Initialize-SICmdbCacheTables -Context $RunContext.StorageContext | Out-Null }
     catch { Write-Warning ("Initialize-SICmdbCacheTables failed: {0}. Continuing -- empty-cache path will fire." -f $_.Exception.Message) }
 
+    # AUDIT #58.3 -- which CMDB source answered this run. Stage Schedule resolves it once and stamps
+    # it on the RunContext; this is the ONLY consumer, so the two stages cannot disagree.
+    # 🪤 Re-resolve rather than leave it blank when the property is absent (Reconcile run standalone,
+    # or an older RunContext). A silently empty CmdbSource on every row is indistinguishable from the
+    # column-loss defect #57.1(d) exists to catch -- do not manufacture the shape we now guard for.
+    $__cmdbSourceForRun = $null
+    if ($RunContext.PSObject.Properties['CmdbSource']) { $__cmdbSourceForRun = [string]$RunContext.CmdbSource }
+    if ([string]::IsNullOrWhiteSpace($__cmdbSourceForRun)) {
+        . (Join-Path $siRoot 'engine\asset-profiling\shared\CmdbSource.ps1')
+        $__pick = Resolve-SICmdbSource -Available (Get-SICmdbSourceAvailability `
+                        -SolutionRoot $siRoot `
+                        -EnableCmdbProvider   $global:SI_EnableCmdbProvider `
+                        -EnableServiceNowCmdb $global:SI_EnableServiceNowCmdb)
+        $__cmdbSourceForRun = [string]$__pick.Source
+        Write-Warning ("CmdbSource was not stamped by Stage Schedule -- re-resolved here as '{0}'. Rows stay labelled rather than blank." -f $__cmdbSourceForRun)
+    }
+    Write-SIInfo ("CMDB source for this run: {0}" -f $__cmdbSourceForRun)
+
     # Cache freshness gate
     $age = Get-SICmdbCacheAge -Context $RunContext.StorageContext
     if ($age.State -eq 'critical') {
@@ -171,6 +189,11 @@ function Invoke-SIReconcile {
             CmdbMatchRule       = $CmdbMatchRule
             CmdbMatchConfidence = $confidence
             LastSeenInCmdb  = if ($matchedCi) { [string]$matchedCi.last_seen } else { $null }
+            # AUDIT #58.3 -- WHICH CMDB answered, in the DATA and not only in the log. "Where did this
+            # cmdbCriticality come from?" must be answerable from the export, on a machine the analyst
+            # has, without log archaeology. Resolved once in Stage Schedule and carried on the
+            # RunContext so the two stages can never disagree about the source.
+            CmdbSource      = $__cmdbSourceForRun
         }
         # Bolt onto record
         foreach ($k in $reconcileFields.Keys) {

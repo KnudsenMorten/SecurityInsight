@@ -852,7 +852,7 @@ function Build-SIEndpointProfileRow {
     # LA + Excel. Empty containers collapse to '' instead. Numeric CmdbMatchConfidence
     # is handled separately at the bottom.
     $cmdbStringFields = @('cmdbId','cmdbName','cmdbCriticality','cmdbDataSensitivity',
-                          'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','LastSeenInCmdb')
+                          'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','LastSeenInCmdb','CmdbSource')
     foreach ($f in $cmdbStringFields) {
         $v = if ($Record.PSObject.Properties[$f]) { $Record.$f } else { $null }
         # cmdbBag fallback for the 3 enrichment cols when $Record value is empty.

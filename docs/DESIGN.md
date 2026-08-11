@@ -194,7 +194,7 @@ A schema is the contract for one engine. It declares:
 ```jsonc
 {
   "engine": "identity",
-  "table":  "Identity_Profile_CL",
+  "table":  "SI_Identity_Profile_CL",
   "providers": {
     "in":  ["entra", "exposureGraph", "mde-identity"],
     "out": ["loganalytics", "generic-cmdb"]
@@ -317,7 +317,7 @@ Customer use cases:
   ]
 }
 ```
-After this, ORG-FINANCE members get Tier=2 in `Identity_Profile_CL`. Devices those users frequent get user-based-tier=2 too (cross-engine join).
+After this, ORG-FINANCE members get Tier=2 in `SI_Identity_Profile_CL`. Devices those users frequent get user-based-tier=2 too (cross-engine join).
 
 **Custom posture rule** (`posture-rules-custom/endpoint/OTSubnet_Tier0.yaml`) — live example ships with v2.2.
 
@@ -956,6 +956,21 @@ Pins beat membership rules and direct CMDB relationships. They are the only way 
 
 Each step records `CmdbMatchRule` (the id of the rule or relationship that fired) and `CmdbMatchConfidence` (1.0 for exact, 0.0–1.0 for fuzzy). Customers can debug "why did this asset map there" without reading engine code.
 
+##### 🔑 CMDB column naming — `cmdb*` vs `Cmdb*` is deliberate, and it tells you where the value came from
+
+**Log Analytics column names are case-sensitive in KQL**, so this matters before you write a query or bind a dashboard. The CMDB family splits into two namespaces:
+
+| namespace | means | columns |
+|---|---|---|
+| **`cmdb…`** (lower-case first letter) | **a value copied verbatim from the CMDB record.** SI does not compute or interpret it — what your CMDB said is what you get | `cmdbId`, `cmdbName`, `cmdbCriticality`, `cmdbDataSensitivity` |
+| **`Cmdb…`** (capital first letter) | **SI's own metadata about the match** — how, whether, and from which source the asset was reconciled. Computed by SI, not present in your CMDB | `CmdbSource`, `CmdbMatchPhase`, `CmdbMatchState`, `CmdbMatchRule`, `CmdbMatchConfidence`, `IsCmdbOrphan` |
+
+The practical consequence: **`cmdbCriticality` is your CMDB's opinion; every `Cmdb*` column is SI's account of how it got there.** When an asset's criticality looks wrong, `cmdb*` tells you what was read and `Cmdb*` tells you why that record was chosen.
+
+> ⚠️ **One documented exception: `LastSeenInCmdb`.** It carries a CMDB *value* (the matched record's `last_seen`), so by the rule above it would be `cmdbLastSeen`. It pre-dates the convention, and renaming a live column would split query history — Log Analytics retention is finite and there is no backfill, so old rows would keep the old name and no single query would see both. It is therefore left as-is and listed as an explicit exception in SI's own test suite rather than quietly tolerated.
+
+> 📌 **This convention is local to the CMDB family.** Every other data source SI reads — Defender for Endpoint, Entra, Exposure Graph, Shodan, Defender for Identity — uses capitalised column names throughout, because those sources have no equivalent value-versus-metadata split. Do not infer a general casing rule from `cmdb*`.
+
 **Gap table** — `Reconciliation_Gap_CL`, one row per CMDB CI that did not match any discovered asset:
 
 | Column             | Source                                                     |
@@ -973,8 +988,8 @@ Each step records `CmdbMatchRule` (the id of the rule or relationship that fired
 **Reverse gap** — the mirror direction (discovered asset with no CMDB CI) is captured by `CmdbMatchState=orphan-discovered` on the per-engine profile rows:
 
 ```kql
-Endpoint_Profile_CL
-| where CollectionTime == toscalar(Endpoint_Profile_CL | summarize max(CollectionTime))
+SI_Endpoint_Profile_CL
+| where CollectionTime == toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime))
 | where CmdbMatchState == 'orphan-discovered'
 ```
 
@@ -1011,7 +1026,7 @@ The launcher tree is deliberately **flat** (one file per flavour, no nested `_li
 
 #### Identity engine
 
-**MFA registration** — Identity Discovery bulk-fetches MFA + SSPR + passwordless registration via `/reports/authenticationMethods/userRegistrationDetails` (one paged call per run). 12 new flat columns in `Identity_Profile_CL`:
+**MFA registration** — Identity Discovery bulk-fetches MFA + SSPR + passwordless registration via `/reports/authenticationMethods/userRegistrationDetails` (one paged call per run). 12 new flat columns in `SI_Identity_Profile_CL`:
 
 | Column | Source | Use |
 |---|---|---|
@@ -1028,7 +1043,7 @@ The launcher tree is deliberately **flat** (one file per flavour, no nested `_li
 
 KQL example — privileged users without MFA:
 ```kql
-Identity_Profile_CL
+SI_Identity_Profile_CL
 | where Tier <= 1 and MfaIsRegistered == false
 | project Upn, Tier, IdentityType, MfaIsCapable, EntraRoles_Permanent
 ```
@@ -1045,11 +1060,11 @@ Identity_Profile_CL
 
 **Server-application catalog** (`server-applications.json`) — 500 entries (T0=89, T1=186, T2=212, T3=13), vendor + name pairs. Stage Enrich does ONE bulk `DeviceTvmSoftwareInventory` query per run (NOT per posture rule), populates `$asset.Metadata.TvmSoftware`, then in-process matches against the 500-entry catalog. ~99% reduction in Defender hunting calls vs naive one-rule-per-product.
 
-**Cross-engine user-based tier** — per device, find top-5 most-frequent logon users (3-day window via `DeviceLogonEvents`) → look up their tier in `Identity_Profile_CL` → MIN tier across them = `MostFrequentUserTier`. Three new flat columns: `MostFrequentUserTier`, `MostFrequentUsers`, `MostFrequentUsersCount`. Aggregator contributor `endpoint_user_based_tier` weight 0.9.
+**Cross-engine user-based tier** — per device, find top-5 most-frequent logon users (3-day window via `DeviceLogonEvents`) → look up their tier in `SI_Identity_Profile_CL` → MIN tier across them = `MostFrequentUserTier`. Three new flat columns: `MostFrequentUserTier`, `MostFrequentUsers`, `MostFrequentUsersCount`. Aggregator contributor `endpoint_user_based_tier` weight 0.9.
 
 KQL example — devices used by Tier-0 admins:
 ```kql
-Endpoint_Profile_CL
+SI_Endpoint_Profile_CL
 | where MostFrequentUserTier == 0
 | project Hostname, MostFrequentUserTier, MostFrequentUsers, OsPlatform, MachineGroup
 ```
@@ -1267,7 +1282,7 @@ SecurityInsight runs **four asset-profiling engines** (endpoint, identity, azure
 |---|---|---|---:|---|---|
 | endpoint | `SI_Endpoint_Profile_CL` | `dcr-si-endpoint-profile` | 160 | 2.3.6 | 2026-04-29 |
 | identity | `SI_Identity_Profile_CL` | `dcr-si-identity-profile` | 154 | 2.3.6 | 2026-04-29 |
-| azure | `Azure_Profile_CL` | `dcr-si-azure-profile` | 314 | 2.3.6 | 2026-04-29 |
+| azure | `SI_Azure_Profile_CL` | `dcr-si-azure-profile` | 314 | 2.3.6 | 2026-04-29 |
 | publicip | `SI_PublicIP_Profile_CL` | (publicip DCR) | — | 2.3.6 | — |
 
 ### Source legend
@@ -1433,7 +1448,7 @@ To override an existing column, repeat the locked entry's `name` in the custom f
 
 **Network/port exposure (all derived at enrich)**: `NsgEffectiveRules`, `OpenInboundPortsFromInternet`, `OpenInboundPortsFromExternalIps`, `OpenInboundPortsFromVnet`, `HasInternetExposedRdp`, `HasInternetExposedSsh`, `HasInternetExposedSmb`, `HasInternetExposedWinRm`, `HasInternetExposedDbPort`, `HasNarrowAdminAllow`, `PortExposureFindings`, `HighestPortRiskScore`, `OpenOutboundDestinations`, `NicCount`, `EffectiveIpAddresses_mde` (DeviceInfo.IPAddresses), `EffectiveIpAddresses_derived`.
 
-**User attribution / logon graph**: `LoggedOnUsers` (`[{UserName,DomainName,Sid}]`), `LoggedOnUsersCount_mde`, `LoggedOnUsersCount_derived`, `LoggedOnUserSids` (cross-engine join key to `Identity_Profile_CL.OnPremSid`), `MostFrequentUserTier` (derived), `MostFrequentUsers`, `PrimaryUser`, `Owner` (ARM `tags.owner`), `WeeklyActiveUsersCount`.
+**User attribution / logon graph**: `LoggedOnUsers` (`[{UserName,DomainName,Sid}]`), `LoggedOnUsersCount_mde`, `LoggedOnUsersCount_derived`, `LoggedOnUserSids` (cross-engine join key to `SI_Identity_Profile_CL.OnPremSid`), `MostFrequentUserTier` (derived), `MostFrequentUsers`, `PrimaryUser`, `Owner` (ARM `tags.owner`), `WeeklyActiveUsersCount`.
 
 **Lifecycle / freshness**: `FirstSeen`, `LastSeen`, `EgLastSeen`, `FirstSeenByInventory`, `LastSeenDays`, `LastDailyDeviceUsageDate`, `InactivityPeriod` (D{n}), `DaysInactive` (derived, profile), `IsStaleAsset` (derived, profile), `IsEnabledActive` (derived, profile, addedIn 2.3.3).
 
@@ -1476,7 +1491,7 @@ To override an existing column, repeat the locked entry's `name` in the custom f
 
 ---
 
-### Azure — `Azure_Profile_CL`
+### Azure — `SI_Azure_Profile_CL`
 
 - **DCR**: `dcr-si-azure-profile` · **Schema version**: `2.3.6` (2026-04-29) · **Field count**: 314
 - **Sources consumed**: `azure`, `exposureGraph`, `derived`
@@ -3374,7 +3389,7 @@ Rough guidance:
 
 Beyond the heartbeat itself, surface these in the Workbook or weekly review:
 
-- **`Identity_Profile_CL`** — row count per `RunId`; sudden drop = upstream Discovery regression.
+- **`SI_Identity_Profile_CL`** — row count per `RunId`; sudden drop = upstream Discovery regression.
 - **`ExitReason == 'error'` rate** — if > 0% over a week, an engine bug is shipping silent half-runs (the heartbeat fires but the work errored).
 - **Cadence skip ratio** — Stage Collect logs `N cadence-skipped`. A first run is 0% skipped, steady state should be 80–95% skipped (only T0 + due-cadence identities re-process). If steady state shows < 50% skipped, fingerprint cache writes are failing — see `Set-SIFingerprintRecord` warnings.
 - **EG enrichment rate** — Stage Collect logs `EG-enriched: N`. Should match `[perms] EG identity nodes: M entries indexed by AadObjectId` from Discover. If EG-enriched is 0 but EG nodes > 0, the join key extraction broke (see `Get-SIExposureGraphIdentities` in `IdentityRoleFetcher.ps1`).

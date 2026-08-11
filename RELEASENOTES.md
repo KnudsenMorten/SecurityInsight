@@ -1,9 +1,13 @@
 # Release notes for SecurityInsight
 
-## v2.2.424
+## v2.2.425
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.425: #59.3 the CMDB naming contract -- documented and enforced, and NOTHING renamed (3f22cfc2)
+- docs(SI) #59.3: the naming pass is MEASURED -- and the frontend is already broken by naming drift (c719bcbd)
+- docs(SI): the recorded next step is ANSWERED -- SI-as-data-provider is NOT numbered in the framework (e6e6a13a)
+- docs(SI): full session handoff -- and the column MODEL is recorded as the task, not the guards (fa28361c)
 - release(SI) v2.2.424: #58.1 CMDB source precedence -- LIVE-VERIFIED. The "empty column" was NOT a bug. (bf2d6e14)
 - wip(SI) #58.1: CMDB source precedence -- NOT RELEASED, CmdbSource lands EMPTY in Log Analytics (a6a956f4)
 - docs(SI): refresh the handoff -- it still claimed 2.2.422 and an unanswered VisualCron question (4a89c32d)
@@ -30,16 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): 47.2d/e -- the profiling pipeline, where connectors slot in, and why correlation cannot shard (dabb1f3f)
 - docs(SI): 47.5c -- the dashboards are built; what is missing is rate-over-time, and it has a trap (265a5d8a)
 - docs(SI): #47 -- connector taxonomy, queue/send/retry, ServiceNow pull+push, and where the logic lives (3239065e)
-- docs(SI): #47 build plan -- containers, PS7, SQL, no backup, ServiceNow, MCP, rename first (e95edef7)
-- docs(SI): #Requires 5.1 is inert on pwsh 7 -- the real gate is accidental (5cb51527)
-- docs(SI): 44.0a -- PowerShell 7 for the connector, and pwsh7 is the actual runtime (1a787641)
-- docs(SI): 44.0 -- the connector recommendation consolidated into one findable place (19a9d285)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.425 — the CMDB column names now mean something, and it is written down
+
+**Nothing is renamed. No query you have written stops working.** That is the point of this release.
+
+You have probably noticed that CMDB columns come in two spellings — `cmdbName` but `CmdbMatchState`.
+That is **deliberate, it tells you something useful, and until now it was nowhere in the documentation**:
+
+| spelling | what it is |
+|---|---|
+| **`cmdb…`** (small first letter) | a value copied **verbatim from your CMDB**. We do not compute or interpret it |
+| **`Cmdb…`** (capital first letter) | **our own record of the match** — how, whether, and from which source the asset was reconciled |
+
+So `cmdbCriticality` is your CMDB's opinion, and every `Cmdb*` column is our account of how we got
+there. When an asset's criticality looks wrong, the first tells you what was read and the second tells
+you why that record was chosen. **Log Analytics column names are case-sensitive**, so this is worth
+knowing before you write a query or point a dashboard at it.
+
+We considered renaming them into one style and decided against it: your saved queries, workbooks and
+dashboards are bound to the current names, and a rename would split your history at the point of
+upgrade — old rows keeping the old name, new rows the new one, with no single query able to see both.
+**A tidier column name is not worth breaking your reporting.** The rule is now documented instead, and
+our test suite fails the build if a future column lands on the wrong side of it.
+
+**Three columns you were already receiving are now properly described.** `CmdbMatchRule`,
+`CmdbMatchConfidence` and `LastSeenInCmdb` have been in your data for some time but were missing from
+the published schema, so tooling that reads the schema could not see them. No data changes — the
+description caught up with reality.
+
+**Corrected table names in the documentation.** Several examples referred to `Endpoint_Profile_CL`
+rather than `SI_Endpoint_Profile_CL`, including a query you could copy straight out of the docs and one
+reference table. Copy-pasted examples now run as printed.
+
+> ℹ️ One documented exception: `LastSeenInCmdb` holds a CMDB value but is spelled in the other style.
+> It pre-dates the convention, and renaming it would cause exactly the history split described above,
+> so it stays as it is and is listed as a known exception rather than quietly ignored.
 
 ---
 

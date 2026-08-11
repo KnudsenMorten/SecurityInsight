@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "engine": "azure",
-  "table": "Azure_Profile_CL",
+  "table": "SI_Azure_Profile_CL",
   "dcrName": "dcr-si-azure-profile",
   "extends": "SCHEMA.json",
   "sourcesConsumed": [
@@ -5698,6 +5698,57 @@
       "type": "string",
       "derivation": {
         "algorithm": "Reconcile-stage match outcome: matched / unmatched / ambiguous"
+      }
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchRule",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "Reconcile-stage identifier of the rule or relationship that produced the match: a rule id, 'rule-cmdbid', 'identity-match' or 'no-match'. Answers 'why did this asset map there' from the export alone. #59.3/N8 -- EMITTED since 2.3.6 but declared here only in 2.2.425; until then schema-driven tooling could not see it."
+      }
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "CmdbMatchConfidence",
+      "source": "derived",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "real",
+      "derivation": {
+        "algorithm": "Match confidence: 1.0 for an exact match, 0.0-1.0 for the fuzzy name+environment step. The only NUMERIC member of the Cmdb* family, which is why Build-*ProfileRow.ps1 handles it outside the cmdb string-coercion list. #59.3/N8 -- EMITTED since 2.3.6 but declared here only in 2.2.425."
+      }
+    },
+    {
+      "purpose": "audit",
+      "addedIn": "2.3.6",
+      "name": "LastSeenInCmdb",
+      "source": "cmdb",
+      "stage": {
+        "writtenBy": "reconcile",
+        "readBy": [
+          "risk_analysis",
+          "dashboard"
+        ]
+      },
+      "type": "string",
+      "derivation": {
+        "algorithm": "The matched CI's last_seen value, copied verbatim from the active CMDB source. #59.3/N8 -- EMITTED since 2.3.6 but declared here only in 2.2.425. KNOWN NAMING EXCEPTION (#59.3/N1): it carries a CMDB VALUE, so the cmdb* convention would name it cmdbLastSeen, but it pre-dates that convention and renaming would break customer queries at ~30d retention with no backfill. Exempted EXPLICITLY in SI-CmdbColumnNaming.Tests.ps1 rather than tolerated silently."
       }
     },
     {

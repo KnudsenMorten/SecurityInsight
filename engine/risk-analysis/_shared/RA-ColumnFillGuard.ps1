@@ -15,15 +15,24 @@
               exactly why it looked partly healthy. Every row was present and correct in number.
               The row-count guard saw 1,810 -> 1,810 and said nothing, correctly.
 
-    and because the oldest silent loss in this solution is the same shape:
+    🔴 WHAT THIS GUARD DOES **NOT** COVER -- corrected 2026-08-11, it was overclaimed.
+    It captures from $Shaped, i.e. WHAT THE ENGINE PRODUCES. Loss that happens AFTER that point is
+    invisible to it by construction:
 
-      #48     the DCR schema sample was positional, so 82 of 151 columns were dropped at ingest
-              for two months. Rows posted. The run logged SUCCESS.
+      #48     the DCR schema sample was positional, so 82 of 151 columns were dropped AT INGEST.
+              The engine produced all 151 correctly; Log Analytics stored 69. This guard would NOT
+              have caught it, and earlier text here claiming otherwise was wrong.
+
+    Ingest-side loss is covered by a DIFFERENT mechanism -- the union schema sample plus
+    tests/pester/SI-IngestSchemaCoverage.Tests.ps1. The two are COMPLEMENTARY, and neither is
+    redundant: this one guards the produced rows, that one guards what reaches the table.
+    Same lesson, opposite side of the ingest boundary.
 
     Three findings, in descending severity:
       * COLUMN-VANISHED -- the column was populated before and is not in the schema at all now.
-                           The #48 signature, and the one a naive implementation cannot see
-                           (see THE TRAP below).
+                           Its real-world shape is audit #26 (output shaping dropping a column
+                           from the export), NOT #48. It is also the one a naive implementation
+                           cannot see (see THE TRAP below).
       * COLUMN-EMPTIED  -- the column is still there, still had values yesterday, and is 100%
                            blank today. The #58.5 signature.
       * FILL-DROP       -- still populated, but its fill rate fell by more than $DropFraction.

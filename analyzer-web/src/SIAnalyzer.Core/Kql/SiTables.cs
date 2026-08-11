@@ -13,11 +13,22 @@ namespace SIAnalyzer.Core.Kql;
 ///     Source: engine/risk-analysis/Invoke-RiskAnalysis.ps1 (table-name + DCR config
 ///     around line 8057, column shaping ~7781) and the RA report YAML projections.
 ///
-///   * Asset profiling output (asset ATTRIBUTES) -> SI_{Endpoint|Identity|Azure|PublicIP}_Profile_CL.
+///   * Asset profiling output (asset ATTRIBUTES) -> one flat table per engine.
 ///     One flat row per asset per snapshot. These carry Tier (NOT "CriticalityTier"),
 ///     DisplayName, Hostname/Upn, AssetName, and the per-asset signal columns - but they
 ///     do NOT contain RiskScoreTotal (that is computed downstream by the RA engine).
 ///     Source: docs/DESIGN.md "table column names are UNPREFIXED" + the profile schema.
+///
+///     #59.3/N3 -- DO NOT DERIVE THESE NAMES FROM THE SI_{Engine}_Profile_CL PATTERN.
+///     Three engines follow it; publicip DOES NOT. Its table is SI_VulnerabilityPIP_CL,
+///     kept for continuity with the standalone Invoke-PublicIpScanner.ps1 era and applied
+///     as a per-engine override (launcher/publicip/LauncherConfig.defaults.ps1 ->
+///     $global:SI_PublicIp_TableName, honoured by engine/asset-profiling/stages/
+///     Invoke-Output.ps1). This file previously declared the pattern-derived
+///     "SI_PublicIP_Profile_CL", a table that exists NOWHERE in the product -- every
+///     PublicIP query the Analyzer issued would have returned a resolution failure.
+///     It was never caught because the SIA hosted live-verify gate has not yet run.
+///     SI-SchemaTableNames.Tests.ps1 now asserts these four against the engine.
 ///
 /// IMPORTANT - the RiskFactor_* duality (engine reality, see DESIGN.md scoring contract):
 ///   * RiskFactor_Consequence  / RiskFactor_Probability  are NUMERIC factors
@@ -37,7 +48,8 @@ public static class SiTables
     public const string EndpointProfile = "SI_Endpoint_Profile_CL";
     public const string IdentityProfile = "SI_Identity_Profile_CL";
     public const string AzureProfile    = "SI_Azure_Profile_CL";
-    public const string PublicIpProfile = "SI_PublicIP_Profile_CL";
+    // NOT SI_PublicIP_Profile_CL -- publicip is the one engine off the pattern. See above.
+    public const string PublicIpProfile = "SI_VulnerabilityPIP_CL";
 
     /// <summary>The RA Summary columns the Analyzer projects/maps. These exist on every
     /// RA report row (engine common header + per-report projection + engine stamps).</summary>

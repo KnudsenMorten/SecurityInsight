@@ -108,7 +108,7 @@ v2.2/
 
   asset-profiling-schema/         schemas — locked + customer overrides side-by-side
   asset-profiling-enrichment/     detection-rule yamls — locked + customer side-by-side
-  asset-profiling-providers/      provider plugins (entra, servicenow-cmdb, ...)
+  asset-profiling-providers/      provider plugins (entra, generic-cmdb, ...)
   staging/                        AI-built / shipped staging artefacts
   risk-analysis-detection/        consolidated KQL catalog + customer-editable scoring data
 
@@ -197,7 +197,7 @@ A schema is the contract for one engine. It declares:
   "table":  "Identity_Profile_CL",
   "providers": {
     "in":  ["entra", "exposureGraph", "mde-identity"],
-    "out": ["loganalytics", "servicenow-cmdb"]
+    "out": ["loganalytics", "generic-cmdb"]
   },
   "fields": [
     {
@@ -216,7 +216,7 @@ A schema is the contract for one engine. It declares:
       "name":     "Tier",
       "phase":    "profile",
       "source":   { "kind": "rule", "id": "identity.tier" },
-      "outputTo": ["loganalytics", "servicenow-cmdb"]
+      "outputTo": ["loganalytics", "generic-cmdb"]
     }
   ]
 }
@@ -376,7 +376,7 @@ The engine **never** writes to customer assets at run time:
 - Tagging rules emit a "WOULD-APPLY" log row only.
 - `Bootstrap-*.ps1` is the only place that writes (creates KV secret, DCR, RBAC, container app job). Bootstrap is opt-in and out-of-band.
 
-The single allowed write-back path at run time is via `kind: out` providers like `servicenow-cmdb` — and those are off unless the engine's schema lists them in `providers.out`.
+The single allowed write-back path at run time is via `kind: out` providers like `generic-cmdb` — and those are off unless the engine's schema lists them in `providers.out`.
 
 ### AI
 
@@ -834,7 +834,7 @@ Bridging dynamic discovery (left) with the business CMDB (right) is its own subs
 | Membership (grouping rules) | `asset-profiling-enrichment/shared/`  | on edit  | customer        |
 | Reconciliation + gaps       | engine (RECONCILE)                    | per run  | nobody          |
 
-Provider `asset-profiling-providers/servicenow-cmdb/` (`kind: both`) is the only thing that talks to ServiceNow. The shipped flow is **CSV drop**: customer drops a `CMDB.csv` into the provider folder (or points `$global:SI_CmdbCsvPath` at a UNC path), and `Refresh-CmdbCache.ps1` loads it into the cache tables. Per-run reconciliation reads from cached tables only — never from the live CMDB. `Write-ProviderData` is the optional write-back path for patching discovered assets back to CMDB CIs.
+Provider `asset-profiling-providers/generic-cmdb/` (`kind: both`) is the only thing that talks to ServiceNow. The shipped flow is **CSV drop**: customer drops a `CMDB.csv` into the provider folder (or points `$global:SI_CmdbCsvPath` at a UNC path), and `Refresh-CmdbCache.ps1` loads it into the cache tables. Per-run reconciliation reads from cached tables only — never from the live CMDB. `Write-ProviderData` is the optional write-back path for patching discovered assets back to CMDB CIs.
 
 > 📌 **The manifest declares more than the implementation currently does.** `manifest.locked.json` says
 > `kind: both`, `auth: api-key`, `bulk: true` — that describes the *intended* live REST integration
@@ -858,10 +858,10 @@ CSV lookup order at refresh time:
 
 1. `-CsvPath` parameter to `Refresh-CmdbCache.ps1`
 2. `$global:SI_CmdbCsvPath` (set in customer config — typically a UNC share)
-3. `asset-profiling-providers/servicenow-cmdb/CMDB.csv` (customer drop-in, gitignored)
-4. `asset-profiling-providers/servicenow-cmdb/sample/CMDB.csv` (shipped sample)
+3. `asset-profiling-providers/generic-cmdb/CMDB.csv` (customer drop-in, gitignored)
+4. `asset-profiling-providers/generic-cmdb/sample/CMDB.csv` (shipped sample)
 
-Refresh job: `asset-profiling-providers/servicenow-cmdb/Refresh-CmdbCache.ps1`. Runs daily as a separate Container App Job (or scheduled task), and is also invoked by the SCHEDULE stage when the cached snapshot is older than the configured interval.
+Refresh job: `asset-profiling-providers/generic-cmdb/Refresh-CmdbCache.ps1`. Runs daily as a separate Container App Job (or scheduled task), and is also invoked by the SCHEDULE stage when the cached snapshot is older than the configured interval.
 
 > ⚠️ **Known limitation — the auto-refresh is a no-op when storage uses OAuth (the default since
 > v2.2.314).** `Refresh-CmdbCache.ps1` signs its Table Storage calls with a **shared key**, and an
@@ -1084,7 +1084,7 @@ asset-profiling-providers/
     manifest.locked.json
     Read.ps1                                  bulk pull
     Test-Connection.ps1
-  servicenow-cmdb/
+  generic-cmdb/
     manifest.locked.json
     Refresh-CmdbCache.ps1                     daily cache refresh
     CMDB.csv                                  customer drop-in (gitignored)
@@ -1201,7 +1201,7 @@ A folder-level lint rule enforces that no file under `engine/` references a path
 | `exposure-graph`  | in   | identity, endpoint, azure      | XDR ExposureGraph*            |
 | `shodan`          | in   | public-ip                      | External REST + cache         |
 | `loganalytics`    | out  | all                            | DCR via AzLogDcrIngestPS      |
-| `servicenow-cmdb` | both | endpoint, identity, azure      | CMDB read (CSV) + write-back  |
+| `generic-cmdb` | both | endpoint, identity, azure      | CMDB read (CSV) + write-back  |
 | `local-files`     | out  | all                            | JSON / CSV / XLSX dump        |
 
 ### Reference implementation
@@ -1235,7 +1235,7 @@ Every field carries a `source` telling you where the value comes from:
 | Source | Description |
 |---|---|
 | `azure` | Azure Resource Graph + Az resource APIs — one row per Azure resource |
-| `cmdb` | Customer CMDB (servicenow-cmdb provider, default-disabled). Folded onto `Properties.collect.cmdb` at Reconcile. |
+| `cmdb` | Customer CMDB (generic-cmdb provider, default-disabled). Folded onto `Properties.collect.cmdb` at Reconcile. |
 | `derived` | Computed in the engine — Profile stage (drift hashes, IsEnabledActive, IsStaleAsset, AssetName, etc.) or Collect stage (PrimaryEntityId from EntityIds[0]) |
 | `entra` | Microsoft Entra ID (Graph users + servicePrincipals + groups + signInActivity) |
 | `exposureGraph` | Microsoft Defender Exposure Graph (ExposureGraphNodes + ExposureGraphEdges) — the v2.2 master discovery + property source |
@@ -1686,7 +1686,7 @@ All operator names case-insensitive on name AND value; comparisons case-insensit
 | `Purpose` | string | Human-readable role label (e.g. `'Domain Controller'`). Surfaces on the profile row. |
 | `Category` | string | Grouping label (e.g. `'Server Roles'`, `'CMDB Mapping'`). |
 | `Tags` | list of strings | Free-form tags, aggregated across rule matches. |
-| `cmdbId` | string | **OPTIONAL.** Foreign key into `asset-profiling-providers/servicenow-cmdb/CMDB.csv`. When set, the engine looks up `cmdbId` in the CSV at Reconcile and **auto-stamps** `cmdbName` + `cmdbCriticality` + `cmdbDataSensitivity` from the CSV row. |
+| `cmdbId` | string | **OPTIONAL.** Foreign key into `asset-profiling-providers/generic-cmdb/CMDB.csv`. When set, the engine looks up `cmdbId` in the CSV at Reconcile and **auto-stamps** `cmdbName` + `cmdbCriticality` + `cmdbDataSensitivity` from the CSV row. |
 
 > **DO NOT set `cmdbName`/`cmdbCriticality`/`cmdbDataSensitivity` inline.** They come from the CMDB CSV via the `cmdbId` lookup — setting them inline overrides the CSV (single-source-of-truth violation). `cmdbId` is silently ignored when CMDB is not configured (gated on `$global:SI_EnableCmdbProvider`), so community customers can leave cmdb fields inert in custom rules and flip the global to activate them.
 
@@ -3537,7 +3537,7 @@ their samples:
 
 - `asset-profiling-schema/*.locked.json` + `*.custom.sample.json`
 - `asset-profiling-providers/_manifest.schema.locked.json`, the built-in `entra/` provider, and
-  `servicenow-cmdb/Refresh-CmdbCache.ps1` + `sample/CMDB.csv`
+  `generic-cmdb/Refresh-CmdbCache.ps1` + `sample/CMDB.csv`
 - `asset-profiling-enrichment/**/*.locked.yaml` + `**/*.custom.sample.yaml`
 - `risk-analysis-detection/RiskAnalysis_Queries_Locked.yaml`, `risk-analysis.schema.locked.json`,
   `riskscore_weighted.schema.custom.sample.json`, `*.exclude.json.sample`

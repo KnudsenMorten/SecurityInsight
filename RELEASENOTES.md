@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.420
+## v2.2.421
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.421: rename servicenow-cmdb -> generic-cmdb, and record that CMDB enrichment is BROKEN in production (f37d524a)
 - fix(SI) v2.2.420: hedge the last 8 raw graph-property filters, and close the lint ratchet to zero (582bc19b)
 - feat(SI) v2.2.419: the engine can now notice its own silent losses -- plus two unbounded attack-path reports (b4385a0a)
 - docs(SI): correct #56.3 -- I accused the sub-bucket pass, and the code does not support it (01816ee6)
@@ -33,13 +34,48 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #46 C11-C13 -- per-customer topology, capability-based sizing, and where the MCP servers run (29938d6c)
 - docs(SI): #46 concerns & ideas register -- and C0 resets the risk pricing for Manager (4bd10b5d)
 - docs(SI): #45 -- rename to SecurityInsight Manager, and the config prefix is the part that bites (4bb1e5f3)
-- feat(SI): #44 connector platform design + the two suites that can exist before the code (36859ade)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.421 — The CMDB provider is renamed to what it actually is
+
+**Nothing changes in how your CMDB data is read.** This release corrects a name, and the description
+that went with it.
+
+The provider that imports CMDB data was called `servicenow-cmdb`, and its manifest described it as
+reading ServiceNow configuration items, business services and relationships, with optional write-back.
+**None of that existed.** It reads a CSV file — one you maintain, which can be exported from ServiceNow,
+from another CMDB, or written by hand. It is now called **`generic-cmdb`** and describes itself
+accurately.
+
+**Your CSV keeps working.** If your `CMDB.csv` sits in the old folder, it is still found and used, with
+a message telling you where to move it when convenient. Nothing needs to be done today, and nothing is
+deleted.
+
+> **Why the rename matters beyond tidiness.** A live ServiceNow CMDB — real configuration items,
+> relationships and write-back — is a planned paid feature. Calling the free CSV importer "ServiceNow"
+> made it impossible to describe which one you have. When the real integration arrives, the two are
+> distinguishable by name.
+
+**Also in this release:** the way CMDB sources will combine is now settled. Only **one** CMDB is ever
+active. A live CMDB, when present and licensed, takes precedence over the CSV; without one, the CSV is
+used. Sources are never blended, because a value that could have come from either source is a value
+nobody can explain. And if the chosen source fails, SecurityInsight will say so rather than quietly
+falling back — stale-but-plausible data is harder to spot than missing data.
+
+> ⚠️ **Known issue, now documented and being worked.** CMDB enrichment is **not currently populating**
+> `cmdbName`, `cmdbCriticality` or `cmdbDataSensitivity`. The cache these values are folded from is
+> written using an older storage authentication method that the product no longer uses by default, so
+> the cache stays empty and those columns come through blank — on a run that otherwise reports success.
+> `cmdbId` is still populated, which is why the problem is easy to miss. If you rely on CMDB criticality
+> in your reporting, treat those columns as unavailable until this is fixed. No data is lost; the source
+> CSV is untouched.
 
 ---
 

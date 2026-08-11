@@ -700,7 +700,7 @@ function Build-SIIdentityProfileRow {
     # which then renders as `{}` in LA + Excel. The expected shape is a clean
     # string scalar; non-string objects/empty containers collapse to ''.
     $cmdbStringFields = @('cmdbId','cmdbName','cmdbCriticality','cmdbDataSensitivity',
-                          'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','LastSeenInCmdb')
+                          'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','LastSeenInCmdb','CmdbSource')
     foreach ($f in $cmdbStringFields) {
         $v = if ($Record.PSObject.Properties[$f]) { $Record.$f } else { $null }
         if ($null -eq $v) { $row[$f] = $null; continue }

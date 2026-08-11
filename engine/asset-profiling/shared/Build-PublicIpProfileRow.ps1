@@ -488,7 +488,7 @@ function Build-SIPublicIpProfileRow {
     # in Metadata. Read TOP-LEVEL first (matches endpoint/identity/azure
     # Reconcile path), fall back to Metadata top-level when missing.
     foreach ($f in @('cmdbId','cmdbName','cmdbCriticality','cmdbDataSensitivity',
-                     'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','CmdbMatchConfidence','LastSeenInCmdb')) {
+                     'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','CmdbMatchConfidence','LastSeenInCmdb','CmdbSource')) {
         $v = $null
         if ($Record.PSObject.Properties[$f] -and $Record.$f) { $v = $Record.$f }
         elseif ($meta -is [System.Collections.IDictionary] -and $meta.Contains($f) -and $meta[$f]) { $v = $meta[$f] }

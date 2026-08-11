@@ -646,7 +646,7 @@ function Build-SIAzureProfileRow {
     # @{} / pscustomobject values upstream serialize to the literal string "{}" in
     # LA + Excel. Empty containers collapse to '' instead.
     $cmdbStringFields = @('cmdbId','cmdbName','cmdbCriticality','cmdbDataSensitivity',
-                          'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','LastSeenInCmdb')
+                          'CmdbMatchPhase','CmdbMatchState','CmdbMatchRule','LastSeenInCmdb','CmdbSource')
     foreach ($f in $cmdbStringFields) {
         $v = if ($Record.PSObject.Properties[$f]) { $Record.$f } else { $null }
         if ($null -eq $v) { $row[$f] = $null; continue }

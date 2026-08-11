@@ -25,13 +25,20 @@ BeforeAll {
 
     # Known unhedged raw-property filters as of v2.2.419, by the property they read.
     # Each is a live silent-zero risk of exactly the #57 shape. Burn this list DOWN, never up.
-    # Counted BY THE LINT, not by eye. A hand grep put this at 6 and was wrong twice over -- it
-    # counted a ReportPurpose sentence as a filter, and missed the two graph-match `and Device...`
-    # continuation lines, which are predicates just as much as `| where` is.
-    $script:BaselineUnhedged = @{
-        'deviceCategory'                                  = 4  # 4 reports narrow to Endpoint devices
-        'highRiskVulnerabilityInsights.hasHighOrCritical' = 4  # device attack-path pair: 2x `| where` + 2x graph-match `and`
-    }
+    # 🎯 BASELINE IS ZERO as of v2.2.420 -- all 8 were hedged with coalesce across
+    # rawData.X / raw.X / X. The ratchet is now fully closed: ANY unhedged raw-property filter
+    # fails this test.
+    #
+    # History, kept because it is the argument for the rule. The list was first counted BY HAND at
+    # 6 and was wrong in both directions -- it counted a ReportPurpose SENTENCE as a filter, and
+    # missed the two graph-match `and Device...` continuation lines, which gate rows exactly as
+    # `| where` does. The lint said 8. Count with the detector, never by eye.
+    #   deviceCategory                                  x4  (Device_Missing_CVEs + Device_Recommendations, Summary+Detailed)
+    #   highRiskVulnerabilityInsights.hasHighOrCritical x4  (device attack-path pair: 2x `| where` + 2x graph-match `and`)
+    #
+    # ⚠️ Do not re-add entries here to make a red run green. The correct fix is a coalesce hedge,
+    # or better, a structural identifier (NodeLabel / NodeId) that is schema rather than payload.
+    $script:BaselineUnhedged = @{}
 
     function Get-UnhedgedRawFilters {
         param([Parameter(Mandatory=$true)][string]$Path)

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.419
+## v2.2.420
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.420: hedge the last 8 raw graph-property filters, and close the lint ratchet to zero (582bc19b)
 - feat(SI) v2.2.419: the engine can now notice its own silent losses -- plus two unbounded attack-path reports (b4385a0a)
 - docs(SI): correct #56.3 -- I accused the sub-bucket pass, and the code does not support it (01816ee6)
 - fix(SI) v2.2.418: the attack-path timeout recovery was silently losing a finding (aa9957de)
@@ -33,13 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): #46 concerns & ideas register -- and C0 resets the risk pricing for Manager (4bd10b5d)
 - docs(SI): #45 -- rename to SecurityInsight Manager, and the config prefix is the part that bites (4bb1e5f3)
 - feat(SI): #44 connector platform design + the two suites that can exist before the code (36859ade)
-- docs(SI): #43 -- sync updates the code but not the jobs, and needsSchema is a field with nothing behind it (4a25ec87)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.420 — Hardening every remaining report against the fault that emptied the Azure reports
+
+**Nothing changes in what your reports find today.** This release removes the last places where a
+report could quietly stop matching if Microsoft reshapes the security graph.
+
+**The background.** In v2.2.417 both Azure recommendation reports went from 75 and 304 findings to
+**zero overnight**, because they identified assets by reading one exact property path out of the
+graph's free-form data and requiring one exact value. Microsoft changed that property. The query
+stayed valid, ran normally, reported success — and found nothing. A broken report and a clean
+environment looked identical.
+
+**What changed.** Eight remaining filters across six reports read graph properties the same fragile
+way — the two device CVE reports, the two device recommendation reports, and the vulnerable-device
+attack-path pair. Between them they carry the bulk of your findings; the detailed CVE report alone is
+around 1,400 rows. Each now checks the alternative locations a property can live in and uses whichever
+is present, so a future reshuffle no longer empties the report.
+
+> **The fix is deliberately behaviour-neutral.** The check takes the first value that exists, so with
+> today's data it resolves exactly as before — and by construction it can only ever *include* a report
+> that would otherwise have gone empty, never exclude anything it previously found.
+>
+> Verified on live runs. The three highest-volume reports returned **identical** counts, including the
+> detailed CVE report at 1,397 rows unchanged to the row. Two attack-path reports did return different
+> counts — and a control run of the *unchanged* code returned different counts again, one of them
+> returning to its original value. Those two reports track live vulnerability data that moves between
+> runs; the variation is the data, not this change.
+
+**Also in this release:** the build-time check introduced in v2.2.419 is now set to zero tolerance.
+Previously it recorded the eight known cases and blocked only new ones; with those cleared, **any**
+report filtering on a raw graph property without a fallback now fails the build.
+
+> **One limit, stated plainly.** This protects against a property *moving*. It does not protect
+> against its *value* changing — if a category label were renamed, the filter would still stop
+> matching. That case is covered by the run-over-run detection added in v2.2.419, which reports any
+> report that found things yesterday and finds none today.
 
 ---
 

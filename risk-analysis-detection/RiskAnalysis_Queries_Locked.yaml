@@ -130,7 +130,15 @@ Reports:
 
           let _Assets =
               ExposureGraphNodes
-              | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+              // v2.2.420 (audit #57.1b) -- HEDGED across property paths. This previously read only
+              // rawData.deviceCategory. NodeProperties is a payload bag Microsoft fills, not a
+              // schema: if the field moves path, the expression stays valid KQL and simply stops
+              // matching, so the report returns ZERO with a successful run. That is exactly #57,
+              // where rawData.environmentName was reshaped and two reports went 75->0 and 304->0
+              // overnight. coalesce takes the first non-null, so behaviour today is identical.
+              | where tostring(coalesce(NodeProperties.rawData.deviceCategory,
+                                        NodeProperties.raw.deviceCategory,
+                                        NodeProperties.deviceCategory)) == "Endpoint"
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
               | where EG_IsExcluded == false
@@ -522,7 +530,15 @@ Reports:
 
           let _Assets =
               ExposureGraphNodes
-              | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+              // v2.2.420 (audit #57.1b) -- HEDGED across property paths. This previously read only
+              // rawData.deviceCategory. NodeProperties is a payload bag Microsoft fills, not a
+              // schema: if the field moves path, the expression stays valid KQL and simply stops
+              // matching, so the report returns ZERO with a successful run. That is exactly #57,
+              // where rawData.environmentName was reshaped and two reports went 75->0 and 304->0
+              // overnight. coalesce takes the first non-null, so behaviour today is identical.
+              | where tostring(coalesce(NodeProperties.rawData.deviceCategory,
+                                        NodeProperties.raw.deviceCategory,
+                                        NodeProperties.deviceCategory)) == "Endpoint"
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
               | where EG_IsExcluded == false
@@ -946,7 +962,15 @@ Reports:
           // Tier and tag-based exclusion now come from the CL profile, not from EG.
           let _EG_Flags =
               ExposureGraphNodes
-              | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+              // v2.2.420 (audit #57.1b) -- HEDGED across property paths. This previously read only
+              // rawData.deviceCategory. NodeProperties is a payload bag Microsoft fills, not a
+              // schema: if the field moves path, the expression stays valid KQL and simply stops
+              // matching, so the report returns ZERO with a successful run. That is exactly #57,
+              // where rawData.environmentName was reshaped and two reports went 75->0 and 304->0
+              // overnight. coalesce takes the first non-null, so behaviour today is identical.
+              | where tostring(coalesce(NodeProperties.rawData.deviceCategory,
+                                        NodeProperties.raw.deviceCategory,
+                                        NodeProperties.deviceCategory)) == "Endpoint"
               | extend EG_AadDeviceId      = tostring(coalesce(NodeProperties.rawData.aadDeviceId, NodeProperties.raw.aadDeviceId, NodeProperties.aadDeviceId))
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
@@ -1261,7 +1285,15 @@ Reports:
           // Tier and tag-based exclusion now come from the CL profile, not from EG.
           let _EG_Flags =
               ExposureGraphNodes
-              | where tostring(NodeProperties.rawData.deviceCategory) == "Endpoint"
+              // v2.2.420 (audit #57.1b) -- HEDGED across property paths. This previously read only
+              // rawData.deviceCategory. NodeProperties is a payload bag Microsoft fills, not a
+              // schema: if the field moves path, the expression stays valid KQL and simply stops
+              // matching, so the report returns ZERO with a successful run. That is exactly #57,
+              // where rawData.environmentName was reshaped and two reports went 75->0 and 304->0
+              // overnight. coalesce takes the first non-null, so behaviour today is identical.
+              | where tostring(coalesce(NodeProperties.rawData.deviceCategory,
+                                        NodeProperties.raw.deviceCategory,
+                                        NodeProperties.deviceCategory)) == "Endpoint"
               | extend EG_AadDeviceId      = tostring(coalesce(NodeProperties.rawData.aadDeviceId, NodeProperties.raw.aadDeviceId, NodeProperties.aadDeviceId))
               | extend EG_IsCustomerFacing = tobool(coalesce(NodeProperties.rawData.isCustomerFacing, NodeProperties.raw.isCustomerFacing))
               | extend EG_IsExcluded       = tobool(coalesce(NodeProperties.rawData.isExcluded,       NodeProperties.raw.isExcluded))
@@ -8628,7 +8660,12 @@ Reports:
 
         let VulnerableDevices = ExposureGraphNodes
         | where set_has_element(Categories, "device")
-        | where NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+        // v2.2.420 (audit #57.1b) -- hedged across property paths; see the deviceCategory note.
+        // This one gates the vulnerable-device attack paths, so a silent miss here reports
+        // "no attack paths" rather than "the source data moved".
+        | where tobool(coalesce(NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                NodeProperties.raw.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                NodeProperties.highRiskVulnerabilityInsights.hasHighOrCritical)) == true
         // v2.2.404 -- surface AadDeviceId on the source-device node so the EG-side
         // bucket filter can partition on the SAME value the CL side (_SourceCmdb)
         // keys on (Source_AadDeviceId). crossDomainBucketCoalesce.EgNativeKey =
@@ -8699,7 +8736,9 @@ Reports:
         | make-graph SourceNodeId --> TargetNodeId with RelevantNodes on NodeId
         | graph-match (Device)-[devEdge]->(CredOrIdent)-[bridge*0..3]->(Principal)-[role]->(RoleScope)-[inherit*0..2]->(AzureAsset)
             where set_has_element(Device.Categories, "device")
-              and Device.NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+              and tobool(coalesce(Device.NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                  Device.NodeProperties.raw.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                  Device.NodeProperties.highRiskVulnerabilityInsights.hasHighOrCritical)) == true
               and (set_has_element(CredOrIdent.Categories, "secret") or set_has_element(CredOrIdent.Categories, "identity"))
               and set_has_element(AzureAsset.Categories, "environmentAzure")
               and AzureAsset.NodeLabel in~ ("microsoft.resources/subscriptions", "microsoft.storage/storageaccounts")
@@ -8924,7 +8963,12 @@ Reports:
 
         let VulnerableDevices = ExposureGraphNodes
         | where set_has_element(Categories, "device")
-        | where NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+        // v2.2.420 (audit #57.1b) -- hedged across property paths; see the deviceCategory note.
+        // This one gates the vulnerable-device attack paths, so a silent miss here reports
+        // "no attack paths" rather than "the source data moved".
+        | where tobool(coalesce(NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                NodeProperties.raw.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                NodeProperties.highRiskVulnerabilityInsights.hasHighOrCritical)) == true
         // Bucket filter at SOURCE -- partitions 1M-device tenants into shards
         // BEFORE make-graph constructs the graph. Engine substitutes
         // `__bucket_key = coalesce(DeviceKey, NodeId, ...)`. NodeId exists natively
@@ -8991,7 +9035,9 @@ Reports:
         | make-graph SourceNodeId --> TargetNodeId with RelevantNodes on NodeId
         | graph-match (Device)-[devEdge]->(CredOrIdent)-[bridge*0..3]->(Principal)-[role]->(RoleScope)-[inherit*0..2]->(AzureAsset)
             where set_has_element(Device.Categories, "device")
-              and Device.NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical == true
+              and tobool(coalesce(Device.NodeProperties.rawData.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                  Device.NodeProperties.raw.highRiskVulnerabilityInsights.hasHighOrCritical,
+                                  Device.NodeProperties.highRiskVulnerabilityInsights.hasHighOrCritical)) == true
               and (set_has_element(CredOrIdent.Categories, "secret") or set_has_element(CredOrIdent.Categories, "identity"))
               and set_has_element(AzureAsset.Categories, "environmentAzure")
               and AzureAsset.NodeLabel in~ ("microsoft.resources/subscriptions", "microsoft.storage/storageaccounts")

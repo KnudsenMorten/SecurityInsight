@@ -149,7 +149,23 @@ Reports:
                   AssetLabel  = NodeLabel,
                   AadDeviceId,
                   EG_IsCustomerFacing,
-                  EG_IsExcluded;
+                  EG_IsExcluded
+              // v2.2.429 -- PARTITION THE EG WORK, do not merely filter its result.
+              // The bucket filter further down sits AFTER both joins, so every bucket recomputed the
+              // ENTIRE edge+finding graph and then discarded 1/N of the rows. Bucketing therefore cost
+              // more in total and reduced nothing, which is why every bucket timed out identically at
+              // the 900s ceiling and the engine correctly reported the query as EG-BOUND rather than
+              // payload-bound. Filtering HERE shrinks _AssetNodeIdSet, which shrinks the materialized
+              // affecting-edge scan, which shrinks _Findings -- the actual expensive work.
+              // LOSSLESS, and the later block is deliberately LEFT IN PLACE as the safety net: both
+              // blocks receive the identical predicate (the engine substitutes every identical marker
+              // block), hashing the identical DeviceKey, so applying it twice is idempotent. Output is
+              // unchanged; only the volume the graph has to compute changes.
+              | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              //__BUCKET_FILTER_BEGIN__
+              | where 1 == 1
+              //__BUCKET_FILTER_END__
+              ;
 
           // v2.2.212 -- restored v2.2.207's 3-let architecture (materialize() of
           // filtered edges + _RelevantFindingIds + separate _Findings). The
@@ -549,7 +565,21 @@ Reports:
                   AssetLabel  = NodeLabel,
                   AadDeviceId,
                   EG_IsCustomerFacing,
-                  EG_IsExcluded;
+                  EG_IsExcluded
+              // v2.2.429 -- PARTITION THE EG WORK, do not merely filter its result. Identical change
+              // to Device_Missing_CVEs_Summary; same reasoning, same losslessness argument.
+              // The bucket filter further down sits AFTER both joins, so every bucket recomputed the
+              // ENTIRE edge+finding graph and then discarded 1/N of the rows -- bucketing cost more in
+              // total and reduced nothing. Filtering HERE shrinks _AssetNodeIdSet, which shrinks the
+              // materialized affecting-edge scan, which shrinks _Findings -- the expensive work.
+              // The later block is deliberately LEFT IN PLACE as the safety net: both blocks receive
+              // the identical predicate over the identical DeviceKey, so applying it twice is
+              // idempotent and the output is unchanged.
+              | extend DeviceKey = iif(isnotempty(AadDeviceId), AadDeviceId, AssetName)
+              //__BUCKET_FILTER_BEGIN__
+              | where 1 == 1
+              //__BUCKET_FILTER_END__
+              ;
 
           // v2.2.212 -- restored v2.2.207's 3-let architecture (materialize() of
           // filtered edges + _RelevantFindingIds + separate _Findings). The

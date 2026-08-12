@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.426
+## v2.2.427
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
 - fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (2a273f7e)
 - docs(SI): surface the si-v3 pointer where a session actually looks, not at line 6692 (6929e488)
 - docs(SI) #60: flag the three claims that measurement disproved, and point at the current design (90d59677)
@@ -33,13 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): replace the handoff -- the old one said "NOTHING IS COMMITTED" and a run was in flight (f379fd08)
 - fix(SI) v2.2.422: CMDB enrichment was empty on every OAuth run -- cache could not be written (849b5b8a)
 - fix(SI) v2.2.421: rename servicenow-cmdb -> generic-cmdb, and record that CMDB enrichment is BROKEN in production (f37d524a)
-- fix(SI) v2.2.420: hedge the last 8 raw graph-property filters, and close the lint ratchet to zero (582bc19b)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.427 — certificate authentication is now a first-class path for API tokens, not a fallback
+
+**If you authenticate with a certificate, SecurityInsight had no proper way to get an API token.** It
+had a path for a client secret, a path for a managed identity, and for everyone else it fell back to
+borrowing whatever Azure session happened to be open. When that borrowed session could not answer, you
+got a single opaque line:
+
+```
+lake-token: ClientCertificateCredential authentication failed:
+```
+
+No error code, no resource name, nothing to act on.
+
+**Why this mattered more than it looks.** Risk Analysis tries three routes to your data — the Sentinel
+data lake first, then a hybrid path, then Defender advanced hunting. Only the *last* of those has a
+15-minute per-query ceiling. On a certificate-authenticated tenant the first route failed at the token
+step, so **every query was pushed onto the one route that can time out** — which is what a customer
+saw as a report spending hours retrying and returning nothing.
+
+**What changed.** Certificates now use the same standard sign-in as a client secret, proving identity
+with the certificate itself. It works for Microsoft Graph, the Defender APIs and the Sentinel data
+lake, on both Windows PowerShell 5.1 and PowerShell 7.
+
+**One thing worth being clear about:** this does not grant your app anything it did not already have.
+If your app registration is not consented for a resource, you will now get a real Entra error naming
+the missing permission, instead of the unreadable line above. That is the point — **a failure you can
+act on rather than one you cannot.**
+
+**Do I need to do anything?** No. If you use a client secret or a managed identity, nothing about your
+run changes — that path is untouched and still takes precedence. If you use a certificate, token
+acquisition starts working.
 
 ---
 

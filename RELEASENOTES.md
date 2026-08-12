@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.429
+## v2.2.430
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
 - fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
 - fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
 - fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
@@ -33,13 +34,61 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release(SI) v2.2.423: #57.1(d) column-fill guard -- LIVE-VERIFIED, promoted from 🟡 to delivered (ca4a5059)
 - fix(SI) #57.1(d): the snapshot could have DROPPED a report -- the guard needed guarding (0df1a7d4)
 - feat(SI) #57.1(d): the engine can now notice rows that stayed while their content drained (d0263df7)
-- docs(SI): replace the handoff -- the old one said "NOTHING IS COMMITTED" and a run was in flight (f379fd08)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.430 — tagging a device `--Excluded--SI` in the Defender portal now actually excludes it, and you can see what was excluded
+
+🔴 **Read this one even if you skip the rest — it changes which assets appear in your reports.**
+
+### The tag did nothing if you set it in the Defender portal
+
+You can keep an asset out of Risk Analysis by tagging it `--Excluded--SI`. **If you set that tag as an
+MDE machine tag — the normal way, in the Defender portal — it was ignored.** SecurityInsight only looked
+at the exposure-graph tag lists, never at MDE machine tags.
+
+The tag was even *visible* on the asset in our own output, in its `AssetTags` column, while quietly
+having no effect. That is the worst shape a control can have: it looks applied. Reported by an operator
+who had tagged a large number of devices and kept seeing them in reports.
+
+**Fixed.** MDE machine tags are now read alongside the exposure-graph tag lists.
+
+⚠️ **Expect fewer assets in your reports after this update**, and that is the correction — those assets
+were supposed to be excluded all along. If you tagged devices and wondered why nothing changed, this is
+why. **Check the new report below before assuming anything is missing.**
+
+### You can now see what was excluded, and why
+
+Exclusion used to be invisible. An excluded asset simply vanished from every report, with nothing
+recording that it had been dropped or on whose authority — indistinguishable from collection being
+broken.
+
+- **New column `ExcludedReason`** on the endpoint profile, naming the tag *and* where it came from, e.g.
+  `MDE_MachineTags: Auto-CanBeOnboarded--Excluded--SI`. Empty when the asset is not excluded. It is
+  computed from the same single evaluation as the exclusion itself, so the reason can never disagree
+  with the filter it explains.
+- **New report `Endpoint_ExcludedAssets_Detailed`**, added to the Detailed template. One row per
+  suppressed asset with the tag that did it. It is the inverse of every other report — it deliberately
+  does *not* filter excluded assets out, because they are the subject.
+
+**Severity follows the asset's own tier, so a suppressed Tier 0 asset sorts to the top.** That is the
+finding worth reviewing: exclusion tags do not expire, and a critical asset silently suppressed by a tag
+somebody added months ago is a governance gap, not a preference.
+
+Assets excluded before you upgrade will still be listed; their reason reads *"tag not recorded"* until
+the endpoint profiler runs again.
+
+### Not the same thing as the `0 item(s)` line in your log
+
+`substituted block EXCLUDED_ASSET_TAGS ... with 0 item(s)` is a **different, optional** feature — your
+own list of *additional* tags to exclude, from `RiskAnalysisGlobalExclusions.custom.json`. `0 item(s)`
+simply means you have not configured one, and is not related to `--Excluded--SI`.
 
 ---
 

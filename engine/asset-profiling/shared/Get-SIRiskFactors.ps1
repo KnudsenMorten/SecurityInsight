@@ -141,15 +141,40 @@ function Test-SIDefenderAvOutOfDate {
     return ($st -inotmatch '^(Updated|Up\s*to\s*date|GoodHealth|HealthyAndUpToDate)$')
 }
 
-function Test-SIEndpointExcludedByTag {
-    <# Returns $true when any of the device's EG-supplied tag arrays contains
-       the '--Excluded--SI' marker. Operator-driven opt-out -- a device tagged
-       with that marker stays out of RA reports without code or query edits.
-       Reads EG manual + dynamic tag arrays (and the EG tags.tags fallback);
-       tolerates string-array, semicolon-joined-string, or single-string shapes. #>
+# Every field that can carry an operator's exclusion tag.
+# v2.2.430 -- MDE_MachineTags ADDED, and it was the important omission: tagging a device in the
+# Defender portal is the normal way an admin marks one, and those tags arrive as MDE_MachineTags. The
+# flat AssetTags column has always been built from MDE_MachineTags + EG_DeviceManualTags +
+# EG_DeviceDynamicTags, so a device could show '--Excluded--SI' in its own AssetTags text while
+# IsExcludedByTag stayed false -- the tag was visible in the output and did nothing. Reported by an
+# operator who had tagged "lots of devices" and saw them still in reports.
+# 'MachineTags' is kept as a defensive alias for record shapes that surface it unprefixed.
+$script:SIExclusionTagFields = @(
+    'MDE_MachineTags'
+    'EG_DeviceManualTags'
+    'EG_DeviceDynamicTags'
+    'EG_Tags'
+    'DeviceManualTags'
+    'DeviceDynamicTags'
+    'MachineTags'
+)
+$script:SIExclusionTagMarker = '--Excluded--SI'
+
+function Get-SIEndpointExclusionReason {
+    <# Returns WHICH tag excluded the device, as 'Field: tag' (multiple joined with '; '), or '' when
+       the device is not excluded.
+
+       Exists because exclusion was previously invisible: a device simply vanished from every report
+       with nothing saying it had been dropped or why. That is the silent-loss shape this codebase
+       fights everywhere else, and it is worse here because the operator cannot tell "excluded on
+       purpose" from "missing because collection broke".
+
+       Tolerates string-array, semicolon-joined-string, and single-string shapes -- the tag sources
+       genuinely arrive in all three. #>
     param([Parameter(Mandatory)]$Record)
-    $marker = '--Excluded--SI'
-    foreach ($field in @('EG_DeviceManualTags','EG_DeviceDynamicTags','EG_Tags','DeviceManualTags','DeviceDynamicTags')) {
+
+    $hits = New-Object System.Collections.Generic.List[string]
+    foreach ($field in $script:SIExclusionTagFields) {
         $val = Get-SIRecordValue -Record $Record -Name $field
         if ($null -eq $val) { continue }
         $items = @()
@@ -157,10 +182,25 @@ function Test-SIEndpointExcludedByTag {
         elseif ($val -is [string])       { $items = @($val -split ';') }
         else                             { $items = @([string]$val) }
         foreach ($item in $items) {
-            if ([string]$item -like ('*' + $marker + '*')) { return $true }
+            $s = ([string]$item).Trim()
+            if ($s -and $s -like ('*' + $script:SIExclusionTagMarker + '*')) {
+                $entry = '{0}: {1}' -f $field, $s
+                if (-not $hits.Contains($entry)) { $hits.Add($entry) }
+            }
         }
     }
-    return $false
+    if ($hits.Count -eq 0) { return '' }
+    ($hits -join '; ')
+}
+
+function Test-SIEndpointExcludedByTag {
+    <# Returns $true when any tag source carries the '--Excluded--SI' marker. Operator-driven opt-out --
+       a device tagged with that marker stays out of RA reports without code or query edits.
+       Now a thin wrapper over Get-SIEndpointExclusionReason so the flag and the REASON can never
+       disagree about what counts as excluded -- two functions applying the same rule separately is how
+       a column ends up contradicting the filter that uses it. #>
+    param([Parameter(Mandatory)]$Record)
+    -not [string]::IsNullOrEmpty((Get-SIEndpointExclusionReason -Record $Record))
 }
 
 function Get-SIEndpointRiskFactors {
@@ -173,6 +213,8 @@ function Get-SIEndpointRiskFactors {
     # was equivalent to just $days >= 30 since 9999 is the "never seen" sentinel.
     # Threshold 30d is aggressive; consider raising to 60-90 if false-positive rate is too high.
     $stale       = ($days -ge 30)
+    # '' when not excluded, else 'Field: tag'. Drives BOTH IsExcludedByTag and ExcludedReason below.
+    $excludedReason = [string](Get-SIEndpointExclusionReason -Record $Record)
 
     $CmdbMatchPhase = [string](Get-SIRecordValue -Record $Record -Name 'CmdbMatchPhase')
     $tierVal    = Get-SIRecordValue -Record $Record -Name 'Tier'
@@ -195,7 +237,11 @@ function Get-SIEndpointRiskFactors {
         DaysInactive          = [int64]$days   # Long, not Int -- matches existing DCR transform output type (avoids InvalidTransformOutput on schema migration)
         IsStaleAsset          = [bool]$stale
         IsCmdbOrphan          = [bool]$cmdbOrphan
-        IsExcludedByTag       = [bool](Test-SIEndpointExcludedByTag -Record $Record)
+        # Computed ONCE and used for both, so the flag and the reason cannot disagree. Calling
+        # Test-SIEndpointExcludedByTag separately here would evaluate the same rule twice, which is
+        # how a "why" column drifts away from the filter it is supposed to explain.
+        IsExcludedByTag       = [bool]$excludedReason
+        ExcludedReason        = [string]$excludedReason
     }
 }
 

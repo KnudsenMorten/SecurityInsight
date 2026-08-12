@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.434
+## v2.2.435
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI) v2.2.435: Okta identity servers are tiered, and an SCCM console stops claiming to be a site server (784f13d0)
 - fix(SI) v2.2.434: a refused cross-source merge now NAMES the assets, on the normal run (aa7e96fe)
 - @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
 - docs(SI): session handoff -- seven releases, one root cause, and what the customer still needs (dd27b5b9)
@@ -33,7 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI) #59.3: the naming pass is MEASURED -- and the frontend is already broken by naming drift (c719bcbd)
 - docs(SI): the recorded next step is ANSWERED -- SI-as-data-provider is NOT numbered in the framework (e6e6a13a)
 - docs(SI): full session handoff -- and the column MODEL is recorded as the task, not the guards (fa28361c)
-- release(SI) v2.2.424: #58.1 CMDB source precedence -- LIVE-VERIFIED. The "empty column" was NOT a bug. (bf2d6e14)
+
+---
+
+## v2.2.435 — Okta identity servers are now tiered, and an SCCM console no longer reports as a site server
+
+**If you don't run Okta, the only change you'll see is a clearer label on SCCM machines.**
+
+**Okta was completely absent from the server-application catalog.** All 500 entries covered Microsoft,
+Quest, Semperis, SailPoint, ManageEngine, Ping, Omada and IBM — but not the largest third-party identity
+provider. For a customer running Okta instead of Entra Connect, that meant their **single most critical
+identity server was invisible to tiering**: there was no Entra Connect to find, and nothing else to
+match. Seven entries now cover it:
+
+| | tier | why |
+|---|---|---|
+| Okta AD Agent, Okta LDAP Agent | **0** | A domain-joined directory **bridge** holding a standing AD service account. Taking it is taking the identity plane — the same reason Entra Connect is Tier 0. |
+| Okta Access Gateway, RADIUS Server Agent, MFA Credential Provider, IWA Web Agent | **1** | One pivot from the identity plane, matching the existing Web Application Proxy and AD FS Proxy entries. |
+| Okta Provisioning Agent | **1** | Same band as the SailPoint / Saviynt / Omada connectors already catalogued. |
+
+⚠️ **These entries are marked unverified in the catalog, deliberately and visibly.** Tier matching keys
+on the exact vendor/software-name pair that Microsoft Defender reports, and no Okta software existed in
+the tenant available to check against. If Defender normalises a name differently on your estate, the
+entry is **inert rather than wrong** — it will not mis-tier anything, it simply will not fire. Each entry
+carries the query to confirm it against your own tenant. **Okta Verify was deliberately left out**: it is
+an end-user app on ordinary workstations, and tiering on it would pull your whole estate into an
+identity band.
+
+**Separately: an SCCM admin console was being described as a site server.** The console's names were
+listed on the *site server* catalog entry as well as its own, so a report could call an administrator's
+laptop an "SCCM/MECM primary site server". **No tier changes** — a machine that can drive SCCM can reach
+everything SCCM manages, so the console stays Tier 1 and lowering it would hide exactly the workstation
+worth watching. The row now just says which of the two it actually is.
+
+**Also reviewed and closed, with no change:** SQL Server stays **Tier 2**. The catalog already records
+the nuance — *"Tier 1 when hosting identity/security/financial data"* — and that conditional is the right
+shape, because software inventory alone cannot tell which databases a server holds. Raising every SQL
+Server to Tier 1 would have made the tier claim something the evidence doesn't support, on every SQL host
+in every estate. Raise it per asset instead, via a CMDB criticality value or a tier tag.
+
+**Do I need to do anything?** No. If you run Okta, confirm the software names match your tenant using the
+query in each entry's notes.
 
 ---
 

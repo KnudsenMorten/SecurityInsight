@@ -1585,10 +1585,7 @@
     {
       "display_names": [
         "Microsoft Endpoint Configuration Manager",
-        "Microsoft System Center Configuration Manager",
-        "Configuration Manager Console",
-        "SCCM Console",
-        "MECM Console"
+        "Microsoft System Center Configuration Manager"
       ],
       "software_vendor": "microsoft",
       "software_name": "system_center_configuration_manager",
@@ -1596,7 +1593,7 @@
       "category": "Endpoint Mgmt",
       "server_role": "SCCM/MECM site server",
       "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"microsoft\"\n| where SoftwareName startswith \"system_center_configuration_manager\"",
-      "notes": ""
+      "notes": "TIER 1 is deliberate and matches this file's own T1 definition, which names 'SCCM/MECM primary site servers'. The recurring objection -- that a site server can deploy code to domain controllers and is therefore T0-equivalent -- is real, and the answer is that T0 is reserved here for hosts that ARE the identity plane rather than hosts that can reach it. A customer whose site server manages T0 hosts should raise it locally via the customer overlay; see also the 'Mgmt suite (T0 if managing T0 hosts)' System Center entry. Ruling reviewed and closed 2026-08-13 -- do not re-open without new evidence. The Console display names were REMOVED from this entry: they resolve to a different vendor|name pair and belong to the console entry, so listing them here made a report say 'site server' about a machine that only had the admin console."
     },
     {
       "display_names": [
@@ -2457,7 +2454,7 @@
       "category": "Database",
       "server_role": "Database",
       "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"microsoft\"\n| where SoftwareName startswith \"sql_server\"",
-      "notes": "T1 when hosting identity/security/financial data"
+      "notes": "T1 when hosting identity/security/financial data. RULING REVIEWED AND CLOSED 2026-08-13, operator confirmed T2 stands -- do not re-open without new evidence. The open question was 'the catalog says T2 but the operator said T1'. Both were right and there was no conflict to resolve: the BASE tier is T2, which is exactly what this file's own T2 definition names ('SQL Server hosting sensitive databases'), and the T1 case is the CONDITIONAL already stated at the front of this note. Software inventory alone cannot tell which databases a server holds, so the base tier is the honest default and the conditional is raised per asset -- via the customer overlay, a CMDB criticality value, or a manual tier tag. Promoting every SQL Server to T1 would have made the tier assert something the evidence does not support, on every SQL host in every estate."
     },
     {
       "display_names": [
@@ -4325,15 +4322,17 @@
     {
       "display_names": [
         "Microsoft Endpoint Configuration Manager Console",
+        "Configuration Manager Console",
+        "SCCM Console",
         "MECM Console"
       ],
       "software_vendor": "microsoft",
       "software_name": "endpoint_configuration_manager",
       "tier": 1,
       "category": "Endpoint Mgmt",
-      "server_role": "Endpoint Mgmt",
+      "server_role": "SCCM/MECM admin console",
       "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"microsoft\"\n| where SoftwareName startswith \"endpoint_configuration_manager\"",
-      "notes": ""
+      "notes": "The admin CONSOLE, which is usually on an administrator's workstation rather than on a site server. It stays TIER 1 -- a machine that can drive SCCM can reach everything SCCM manages, so the console is an endpoint-management admin surface in its own right and lowering it would hide exactly the workstation an attacker wants. What changed 2026-08-13 is only the LABEL: the console display names used to sit on the site-server entry as well, so a report could describe a machine that merely had the console installed as an 'SCCM/MECM site server'. Same tier either way -- but now the row says which one it actually is."
     },
     {
       "display_names": [
@@ -6305,6 +6304,94 @@
       "server_role": "Search/SIEM",
       "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"opensearch\"\n| where SoftwareName startswith \"opensearch\"",
       "notes": ""
+    },
+    {
+      "display_names": [
+        "Okta AD Agent",
+        "Okta Active Directory Agent"
+      ],
+      "software_vendor": "okta",
+      "software_name": "ad_agent",
+      "tier": 0,
+      "category": "Identity Sync",
+      "server_role": "Okta AD Agent server",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"ad_agent\"",
+      "notes": "TIER 0 for the same reason Entra Connect is: this is a domain-joined directory BRIDGE holding a standing AD service account that brokers authentication and provisioning. Taking it is taking the identity plane. Customers on Okta have no Entra Connect, so without this entry their single most critical identity server is invisible to tiering. UNVERIFIED PAIR -- no Okta software existed in the tenant available when this was written (checked 2026-08-13: 0 rows for vendor OR name containing 'okta'), and the catalog matches on an EXACT vendor|name key, so if Microsoft's normalisation differs this entry is INERT rather than wrong. Confirm with: DeviceTvmSoftwareInventory | where SoftwareVendor contains 'okta' | distinct SoftwareVendor, SoftwareName"
+    },
+    {
+      "display_names": [
+        "Okta LDAP Agent"
+      ],
+      "software_vendor": "okta",
+      "software_name": "ldap_agent",
+      "tier": 0,
+      "category": "Identity Sync",
+      "server_role": "Okta LDAP Agent server",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"ldap_agent\"",
+      "notes": "Same class as the AD Agent -- a directory bridge with standing credentials against the on-prem directory. UNVERIFIED PAIR, see the Okta AD Agent entry."
+    },
+    {
+      "display_names": [
+        "Okta Access Gateway",
+        "Okta Access Gateway Connector"
+      ],
+      "software_vendor": "okta",
+      "software_name": "access_gateway",
+      "tier": 1,
+      "category": "Identity",
+      "server_role": "Okta Access Gateway",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"access_gateway\"",
+      "notes": "TIER 1 by direct analogy with the entries already here: Microsoft Web Application Proxy and AD FS Proxy are both T1, and the T1 definition names 'AD FS proxy servers'. A reverse proxy fronting on-prem apps is one pivot from the identity plane, not on it. UNVERIFIED PAIR, see the Okta AD Agent entry."
+    },
+    {
+      "display_names": [
+        "Okta RADIUS Server Agent"
+      ],
+      "software_vendor": "okta",
+      "software_name": "radius_server_agent",
+      "tier": 1,
+      "category": "Identity",
+      "server_role": "Okta RADIUS agent",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"radius_server_agent\"",
+      "notes": "TIER 1 -- the T1 definition names 'MFA / RADIUS / NPS servers' outright. UNVERIFIED PAIR, see the Okta AD Agent entry."
+    },
+    {
+      "display_names": [
+        "Okta MFA Credential Provider for Windows"
+      ],
+      "software_vendor": "okta",
+      "software_name": "mfa_credential_provider_for_windows",
+      "tier": 1,
+      "category": "Identity",
+      "server_role": "Okta MFA credential provider",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"mfa_credential_provider\"",
+      "notes": "TIER 1 -- gates interactive and RDP logon on the hosts it is installed on, so it sits in the same band as the MFA/RADIUS servers the T1 definition names. UNVERIFIED PAIR, see the Okta AD Agent entry."
+    },
+    {
+      "display_names": [
+        "Okta IWA Web Agent",
+        "Okta Integrated Windows Authentication Web Agent"
+      ],
+      "software_vendor": "okta",
+      "software_name": "iwa_web_agent",
+      "tier": 1,
+      "category": "Identity",
+      "server_role": "Okta IWA web agent",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"iwa_web_agent\"",
+      "notes": "TIER 1 -- desktop SSO via Kerberos on a domain-joined IIS host. It holds a service account but is not the directory bridge itself, which is the line between T0 and T1 here. UNVERIFIED PAIR, see the Okta AD Agent entry."
+    },
+    {
+      "display_names": [
+        "Okta Provisioning Agent",
+        "Okta On-Premises Provisioning Agent"
+      ],
+      "software_vendor": "okta",
+      "software_name": "provisioning_agent",
+      "tier": 1,
+      "category": "Identity Governance",
+      "server_role": "Okta provisioning agent",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"provisioning_agent\"",
+      "notes": "TIER 1 -- provisions accounts into on-prem applications, which is the same band as the SailPoint / Saviynt / Omada governance connectors already catalogued at T1. Account creation into AD is the AD Agent's job, and that is T0. UNVERIFIED PAIR, see the Okta AD Agent entry."
     }
   ]
 }

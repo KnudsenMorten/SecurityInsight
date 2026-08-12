@@ -1,9 +1,25 @@
 # Release notes for SecurityInsight
 
-## v2.2.425
+## v2.2.426
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (4864e7cd)
+- docs(SI): surface the si-v3 pointer where a session actually looks, not at line 6692 (6929e488)
+- docs(SI) #60: flag the three claims that measurement disproved, and point at the current design (90d59677)
+- docs(SI): point main's router at the si-v3 branch, so a new session can find the v3 work (444152fc)
+- fix(SI): repair the bare table name I put in the README last night -- NO version bump, NO tag (d9c6a6cd)
+- design(SI) #60.5.2-5: the correlation prerequisite, measured -- and it is a fifth SI engine on SQL (d7d09ca8)
+- design(SI) #60.5.2: the correlation prerequisite -- MEASURED, and AssetId is not what its name promises (27308438)
+- design(SI) #60.5.1: the four connector capabilities -- and "mapping" already meant something else (b21dd4a6)
+- design(SI) #60.5.0f-h: SQL holds the DETERMINATION -- decide once, then instruct (85516412)
+- design(SI) #60.5.0c-e: asset lifecycle STATE by rules -- positive evidence closes, absence only proposes (612ebb68)
+- design(SI) #60.5.0: delta CANNOT close a ticket -- the sync reconciles STATE, with a mass-close guard (4bc46a07)
+- design(SI) #60.12: AI grounding index -- two targets with opposite economics, and a staleness trap (f587bc8c)
+- design(SI) #60.0: SI already IS the middleware -- and that reconciles the LA contradiction (5586d628)
+- design(SI) #60: consolidated architecture, the middleware framing, and an ideas register (dc1a8d65)
+- design(SI) #60.3: field mapper -- declarative only, and it is a prime silent-loss surface (85b069a0)
+- design(SI) #60: the SI platform architecture -- web, connector service, queue, SQL (eb2ab859)
 - release(SI) v2.2.425: #59.3 the CMDB naming contract -- documented and enforced, and NOTHING renamed (3f22cfc2)
 - docs(SI) #59.3: the naming pass is MEASURED -- and the frontend is already broken by naming drift (c719bcbd)
 - docs(SI): the recorded next step is ANSWERED -- SI-as-data-provider is NOT numbered in the framework (e6e6a13a)
@@ -18,28 +34,42 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) v2.2.422: CMDB enrichment was empty on every OAuth run -- cache could not be written (849b5b8a)
 - fix(SI) v2.2.421: rename servicenow-cmdb -> generic-cmdb, and record that CMDB enrichment is BROKEN in production (f37d524a)
 - fix(SI) v2.2.420: hedge the last 8 raw graph-property filters, and close the lint ratchet to zero (582bc19b)
-- feat(SI) v2.2.419: the engine can now notice its own silent losses -- plus two unbounded attack-path reports (b4385a0a)
-- docs(SI): correct #56.3 -- I accused the sub-bucket pass, and the code does not support it (01816ee6)
-- fix(SI) v2.2.418: the attack-path timeout recovery was silently losing a finding (aa9957de)
-- fix(SI) v2.2.417: two reports were silently returning nothing, and a column was skewing the risk score (3b5d865a)
-- feat(SI) v2.2.416: declare minPlatformVersion 2.0.0 (PLAT-01) (8750fa54)
-- chore(SI) v2.2.415: remove the container capability -- SI is a single-capability solution (0067cea1)
-- fix(SI) v2.2.414: half the Risk Analysis columns never reached Log Analytics (12b7bc66)
-- docs(SI): HOLD -- the platform architecture changed, so SI architecture work is postponed (d8a6ef18)
-- docs(routers): add Rule 0 (where a change is written) and the stay-in-your-own-workspace rule to all three CLAUDE.md (63135070)
-- docs(routers): CORRECT the previous commit -- ~3 sessions run concurrently, so the git rules are load-bearing (10d1694b)
-- docs(routers): any session may change the framework -- one developer, so the "record and raise" detour is dropped (5ad239bb)
-- docs(framework): one framework document -- fold UPDATE-STRATEGY.md into DOCS/REQUIREMENTS.md, and route framework content there from every solution (6f60746d)
-- docs(SI): mark #44 and #47 NOT APPROVED, and bound the mandate so they cannot be built by accident (13526665)
-- docs(SI): 47.2d/e -- the profiling pipeline, where connectors slot in, and why correlation cannot shard (dabb1f3f)
-- docs(SI): 47.5c -- the dashboards are built; what is missing is rate-over-time, and it has a trap (265a5d8a)
-- docs(SI): #47 -- connector taxonomy, queue/send/retry, ServiceNow pull+push, and where the logic lives (3239065e)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.426 — Asset Tagging now works on a certificate, instead of stopping at a sign-in prompt
+
+**If you authenticate with a certificate rather than a client secret, Asset Tagging could not start.**
+It stopped at an interactive Microsoft Graph sign-in prompt — on an unattended automation host, where
+nobody is there to answer it, so the run simply appeared to hang. Every other SecurityInsight engine
+already preferred a certificate; **this one had no certificate path at all.**
+
+**What was wrong.** Asset Tagging only ever read your client secret. When the platform had authenticated
+you with a certificate, the secret was empty, and the Graph module treated an empty secret as "ask the
+user to sign in". Nothing in the log said which credential was being used, so the prompt was the first
+sign anything was wrong.
+
+**What changed**
+
+- **Microsoft Graph now uses your certificate when you have one**, and falls back to a secret otherwise.
+- **The Defender API keeps using your secret**, deliberately: the Defender endpoint helper does not
+  accept a certificate at all. If you have *only* a certificate, Asset Tagging now mints the Defender
+  token from your certificate-backed Azure session instead — a route that did not exist before.
+- **The run states its credential up front**, e.g. `AutomationFramework auth: AppId=… cert=yes secret=no`,
+  so you can see what it will use before it uses it.
+- **It refuses to fall through to a prompt.** If no usable credential is present, you now get a message
+  naming the app id, the tenant and exactly which setting is missing, instead of a silent wait.
+- **The same gap is fixed for standalone (non-framework) installs**, where validation already accepted
+  "secret *or* certificate" but the Azure sign-in could only use a secret.
+
+**Do I need to do anything?** No. If you authenticate with a secret, nothing about your run changes.
+If you authenticate with a certificate, Asset Tagging starts working.
 
 ---
 

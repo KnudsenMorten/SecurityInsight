@@ -243,10 +243,29 @@ function Connect-GraphHighPriv {
   [CmdletBinding()]
   param()
 
-  Write-Info "Connecting to Microsoft Graph (app+secret)..."
-  Connect-MicrosoftGraphPS -AppId $global:SpnClientId `
-                           -AppSecret $global:SpnClientSecret `
-                           -TenantId $global:SpnTenantId
+  # CERTIFICATE FIRST. This engine was secret-only, so on a cert-authenticated customer
+  # $global:SpnClientSecret is empty, Connect-MicrosoftGraphPS gets a blank -AppSecret and falls back
+  # to an INTERACTIVE prompt -- on an unattended automation host, which then hangs. Reported from a live
+  # internal customer on v2.2.422. Every other SI engine already prefers cert; this one never learned to.
+  if (-not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)) {
+    Write-Info ("Connecting to Microsoft Graph (app+certificate, thumbprint {0})..." -f $global:SpnCertificateThumbprint)
+    Connect-MicrosoftGraphPS -AppId $global:SpnClientId `
+                             -CertificateThumbprint $global:SpnCertificateThumbprint `
+                             -TenantId $global:SpnTenantId
+  }
+  elseif (-not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
+    Write-Info "Connecting to Microsoft Graph (app+secret)..."
+    Connect-MicrosoftGraphPS -AppId $global:SpnClientId `
+                             -AppSecret $global:SpnClientSecret `
+                             -TenantId $global:SpnTenantId
+  }
+  else {
+    # Fail loudly rather than let the module prompt. An interactive prompt on an unattended host is
+    # indistinguishable from a hang, and that is exactly how this bug reached a customer.
+    throw ("Cannot connect to Microsoft Graph: neither `$global:SpnCertificateThumbprint nor " +
+           "`$global:SpnClientSecret is set for AppId '{0}' / tenant '{1}'. Refusing to fall through to " +
+           "an interactive prompt on an unattended host." -f $global:SpnClientId, $global:SpnTenantId)
+  }
 
   Set-MgRequestContext -ClientTimeout 900 -MaxRetry 6 -RetryDelay 5 -RetriesTimeLimit 600
 
@@ -524,11 +543,44 @@ function Invoke-AzureResourceGraphQuery {
 }
 
 function Get-DefenderAccessHeaders {
-  $ConnectAuth = Connect-MicrosoftRestApiEndpointPS -AppId $global:SpnClientId `
-                                                    -AppSecret $global:SpnClientSecret `
-                                                    -TenantId $global:SpnTenantId `
-                                                    -Uri "https://api.securitycenter.microsoft.com"
-  return $ConnectAuth[1]
+  <#
+      SECRET FIRST HERE, unlike Graph -- and that asymmetry is deliberate, not an oversight.
+
+      Connect-MicrosoftRestApiEndpointPS (MicrosoftGraphPS v1.803) takes -AppId / -AppSecret / -TenantId
+      and has NO -CertificateThumbprint parameter. The Defender API therefore cannot be reached through
+      that helper with a certificate at all, so where a secret exists it stays the path that works.
+      Operator ruling 2026-08-12: "if mde doesn't support certificate, then fallback to secret, which
+      exists for this customer."
+
+      The cert branch below covers the cert-ONLY customer, who otherwise had no route: it mints the
+      token via SI's own helper, which falls through to the Az context -- and on an AutomationFramework
+      host that context was established with the certificate. Headers are built to match the module's
+      shape exactly (Content-Type / Accept / Authorization) so every downstream Invoke-DefenderRest
+      caller is unaffected by which branch produced them.
+  #>
+  if (-not [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
+    $ConnectAuth = Connect-MicrosoftRestApiEndpointPS -AppId $global:SpnClientId `
+                                                      -AppSecret $global:SpnClientSecret `
+                                                      -TenantId $global:SpnTenantId `
+                                                      -Uri "https://api.securitycenter.microsoft.com"
+    return $ConnectAuth[1]
+  }
+
+  Write-Info "Defender API: no secret available -- acquiring a token via the certificate-backed Az context."
+  $tokenHelper = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'auth\Get-SIGraphToken.ps1'
+  if (-not (Test-Path -LiteralPath $tokenHelper)) {
+    throw ("Defender API needs either `$global:SpnClientSecret or the token helper at '{0}', and neither is present." -f $tokenHelper)
+  }
+  . $tokenHelper
+  $tok = Get-SIGraphToken -Resource Defender
+  if ([string]::IsNullOrWhiteSpace([string]$tok)) {
+    throw "Defender API token acquisition returned an empty token. Check that the SPN holds Machine.Read.All / Machine.ReadWrite.All on WindowsDefenderATP."
+  }
+  return @{
+    'Content-Type' = 'application/json'
+    Accept         = 'application/json'
+    Authorization  = "Bearer $tok"
+  }
 }
 
 function ConvertTo-PSObjectDeep {
@@ -1287,7 +1339,41 @@ if ($AutomationFramework) {
   }
   $global:SpnTenantId     = $global:AzureTenantId
   $global:SpnClientId     = $global:HighPriv_Modern_ApplicationID_Azure
-  $global:SpnClientSecret = $global:HighPriv_Modern_Secret_Azure
+
+  # THE ROOT CAUSE of the interactive-prompt bug: this block set the secret and NOTHING ELSE, so on a
+  # cert-authenticated internal customer SpnCertificateThumbprint stayed empty no matter what
+  # Initialize-PlatformAutomationFramework had resolved, and the Graph connect fell through to a prompt.
+  # Two further traps, both live here:
+  #   1. It read $global:HighPriv_Modern_Secret_Azure while this engine's own preamble bridge (line ~39)
+  #      reads $global:HighPriv_Modern_ApplicationSecret_Azure. One fact, two spellings -- so the
+  #      unconditional assignment below could also CLOBBER a secret the preamble had already resolved,
+  #      by overwriting it with the empty other name.
+  #   2. The SPN-globals pre-flight that accepts "secret OR cert" is guarded by
+  #      `if (-not $global:AutomationFramework)`, so on THIS path nothing ever checked that a usable
+  #      credential existed at all.
+  # Assign only what is actually populated, and accept either spelling of the secret.
+  $_afSecret = if (-not [string]::IsNullOrWhiteSpace([string]$global:HighPriv_Modern_Secret_Azure)) {
+                   [string]$global:HighPriv_Modern_Secret_Azure
+               } else {
+                   [string]$global:HighPriv_Modern_ApplicationSecret_Azure
+               }
+  if (-not [string]::IsNullOrWhiteSpace($_afSecret)) { $global:SpnClientSecret = $_afSecret }
+  if (-not [string]::IsNullOrWhiteSpace([string]$global:HighPriv_Modern_CertificateThumbprint_Azure)) {
+      $global:SpnCertificateThumbprint = [string]$global:HighPriv_Modern_CertificateThumbprint_Azure
+  }
+
+  # Say which credential this run will actually use, before using it. The failure being fixed here was
+  # invisible until the module put a prompt on screen; the run must state its own auth mode up front.
+  Write-Info ("AutomationFramework auth: AppId={0} cert={1} secret={2}" -f `
+      $global:SpnClientId,
+      $(if ($global:SpnCertificateThumbprint) { 'yes' } else { 'no' }),
+      $(if ($global:SpnClientSecret)          { 'yes' } else { 'no' }))
+  if ([string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint) -and
+      [string]::IsNullOrWhiteSpace([string]$global:SpnClientSecret)) {
+      throw ("AutomationFramework resolved no usable credential for AppId '{0}' (tenant '{1}'): neither " +
+             "HighPriv_Modern_CertificateThumbprint_Azure nor HighPriv_Modern_[Application]Secret_Azure is set. " +
+             "Check the Key Vault this platform config points at." -f $global:SpnClientId, $global:SpnTenantId)
+  }
 
   $script:GraphLastConnectUtc = [datetime]::MinValue
 
@@ -1301,14 +1387,25 @@ if ($AutomationFramework) {
 
 } else {
 
-  Write-Host "Connect using ServicePrincipal with AppId & Secret"
+  # The SAME defect as the AutomationFramework branch, in the branch nobody reported: the pre-flight
+  # above explicitly accepts "SpnClientSecret OR SpnCertificateThumbprint" (v2.2.238), and then this
+  # code could only ever use the secret. A cert-only community customer passed validation and died here
+  # on a null secret. Prefer cert, keep secret as the fallback -- same order as everywhere else in SI.
+  $_useCert = -not [string]::IsNullOrWhiteSpace([string]$global:SpnCertificateThumbprint)
+  Write-Host ("Connect using ServicePrincipal with AppId & {0}" -f $(if ($_useCert) { 'Certificate' } else { 'Secret' }))
 
   Write-Step "connecting to Azure"
   Tock
   try {
-    $SecureSecret = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
-    $Credential = New-Object System.Management.Automation.PSCredential ($global:SpnClientId, $SecureSecret)
-    Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $Credential -WarningAction SilentlyContinue
+    if ($_useCert) {
+      Connect-AzAccount -ServicePrincipal -ApplicationId $global:SpnClientId `
+                        -CertificateThumbprint $global:SpnCertificateThumbprint `
+                        -Tenant $global:SpnTenantId -WarningAction SilentlyContinue
+    } else {
+      $SecureSecret = ConvertTo-SecureString $global:SpnClientSecret -AsPlainText -Force
+      $Credential = New-Object System.Management.Automation.PSCredential ($global:SpnClientId, $SecureSecret)
+      Connect-AzAccount -ServicePrincipal -Tenant $global:SpnTenantId -Credential $Credential -WarningAction SilentlyContinue
+    }
     Write-Ok "azure connection step done"
   } catch { Write-Err2 "azure connection failed: $($_.Exception.Message)"; throw }
   Tick "azure connect"

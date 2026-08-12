@@ -40,6 +40,23 @@ Describe 'which tag sources can exclude an asset' {
     It 'a record with no tag fields at all does not throw' {
         { Get-SIEndpointExclusionReason -Record (Rec @{ AssetName = 'srv1' }) } | Should -Not -Throw
     }
+
+    It '🔴 a hostile tag value cannot kill the row build -- this runs for EVERY asset' {
+        # Throwing here would cost the customer their entire endpoint inventory for that run, to save a
+        # column that only explains an exclusion. Never the right trade.
+        $hostile = [pscustomobject]@{ MDE_MachineTags = [pscustomobject]@{ Nested = @{ Deep = 'x--Excluded--SI' } } }
+        { Get-SIEndpointExclusionReason -Record $hostile } | Should -Not -Throw
+        { Get-SIEndpointRiskFactors    -Record $hostile } | Should -Not -Throw
+    }
+
+    It '🔑 one bad tag source does not hide a good one' {
+        # Per-field guarding, not one outer catch: a broken MDE tag must not suppress a valid EG tag.
+        $mixed = [pscustomobject]@{
+            MDE_MachineTags     = [pscustomobject]@{ Weird = 'not-a-tag-shape' }
+            EG_DeviceManualTags = @('legit--Excluded--SI')
+        }
+        (Get-SIEndpointExclusionReason -Record $mixed) | Should -Match 'legit--Excluded--SI'
+    }
 }
 
 Describe 'tag shapes -- the sources genuinely arrive in three different forms' {

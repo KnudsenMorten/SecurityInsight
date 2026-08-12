@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.431
+## v2.2.432
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.432: the exclusion-tag reader runs for every asset and was undefended -- one odd tag could have killed a whole run (ec98ab93)
 - feat(SI) v2.2.431: the exclusions report existed only as Detailed -- add the Summary pair, and make parity a test (9869d29c)
 - feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
 - fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
@@ -33,10 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - wip(SI) #58.1: CMDB source precedence -- NOT RELEASED, CmdbSource lands EMPTY in Log Analytics (a6a956f4)
 - docs(SI): refresh the handoff -- it still claimed 2.2.422 and an unanswered VisualCron question (4a89c32d)
 - release(SI) v2.2.423: #57.1(d) column-fill guard -- LIVE-VERIFIED, promoted from 🟡 to delivered (ca4a5059)
-- fix(SI) #57.1(d): the snapshot could have DROPPED a report -- the guard needed guarding (0df1a7d4)
 
 ---
 
+## v2.2.432 — reading an exclusion tag can no longer cost you a whole profiling run
+
+**A hardening release. Nothing changes in what you see.**
+
+v2.2.430 taught SecurityInsight to read `--Excluded--SI` from MDE machine tags. That reader runs for
+**every endpoint asset, on every run** — and it was not defended against a tag arriving in an unexpected
+shape. If one ever did, the error would have surfaced in the middle of building the asset row and taken
+down **the entire profiling run**, not just that one tag.
+
+That trade is never worth making: you would lose your whole endpoint inventory for that run in order to
+report *why* one asset was excluded.
+
+**Now:** each tag source is read independently and guarded on its own. A source that cannot be read is
+skipped with a warning naming it, and **every other tag source still counts** — so a malformed MDE tag
+cannot hide a valid exposure-graph one. The exclusion decision and the tier are unaffected either way.
+
+**Do I need to do anything?** No.
+
+---
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
@@ -12458,4 +12477,5 @@ Stable customers: keep your current install untouched. The preview ships under `
 ---
 
 _For the raw commit log of every change since the prior tag, see the auto-generated section appended below by the publish workflow._
+
 

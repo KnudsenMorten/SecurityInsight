@@ -24372,6 +24372,118 @@ Reports:
         //__WEIGHTED_FACTORS_END__
         | order by CriticalityTier asc, AssetName asc
 
+    - ReportName: Endpoint_ExcludedAssets_Summary
+      ReportPurpose: How many endpoints are currently suppressed from Risk Analysis by an operator exclusion tag, grouped by
+        criticality tier, with the assets and the exact tags listed. The Summary answers "how much of the estate am I not
+        looking at, and is any of it critical"; the Detailed pair lists it asset by asset. Exclusion was previously invisible -
+        a tagged asset simply vanished from every report with nothing recording that it had been dropped or why. Severity
+        follows the asset's own tier, so suppressed Tier 0 assets sort to the top - exclusion tags never expire, and a critical
+        asset suppressed by a tag added months ago is a governance gap rather than a preference.
+      SecurityDomain: Endpoint
+      CategoryInputName: Category
+      SubcategoryInputName: Subcategory
+      ConfigurationIdInputName: ConfigurationId
+      CriticalityTierLevelInputName: CriticalityTierLevel
+      SecuritySeverityInputName: SecuritySeverity
+      RiskScoreOutputName: RiskScoreTotal
+      RiskConsequenceScoreOutputName: RiskConsequenceScore
+      RiskProbabilityScoreOutputName: RiskProbabilityScore
+      CriticalityTierLevelScope:
+      - Critical - tier 0
+      - High - tier 1
+      - Medium - tier 2
+      - Low - tier 3
+      SecuritySeverityScope:
+      - Very High
+      - High
+      - Medium-High
+      - Medium
+      - Low
+      SortBy:
+      - RiskScoreTotal_Weighted
+      OutputPropertyOrder:
+      - SecurityDomain
+      - Category
+      - Subcategory
+      - ConfigurationName
+      - ConfigurationId
+      - Impact
+      - SecuritySeverity
+      - CriticalityTier
+      - CriticalityTierLevel
+      - RiskFactor_Consequence_Detailed
+      - RiskFactor_Consequence
+      - RiskFactor_Probability_Detailed
+      - RiskFactor_Probability
+      - RiskConsequenceScore
+      - RiskProbabilityScore
+      - RiskScoreTotal
+      - RiskScore_Weight_Detailed
+      - RiskScore_Weight_Factor
+      - RiskScoreTotal_Weighted
+      - RiskRating
+      - cmdbId
+      - cmdbName
+      - cmdbCriticality
+      - cmdbDataSensitivity
+      - ImpactedAssetCount
+      - ImpactedAssets
+      - ExcludedReasons
+      - MoreDetails
+      - AssetDetectedInReportName
+      ReportQuery: |-
+        // Report   Endpoint_ExcludedAssets_Summary
+        // Purpose  How much of the estate is suppressed, per tier -- and by which tags.
+        //
+        // 🔑 THIS REPORT DELIBERATELY OMITS THE EXCLUSION FILTER every other endpoint report applies.
+        // Excluded assets are the subject here, so `where IsExcludedByTag == false` must NOT appear.
+        // Do not "fix" its absence -- adding it makes this report permanently return zero rows.
+        //
+        // CL-only: no ExposureGraph tables, so the engine routes it straight to Log Analytics. No
+        // advanced-hunting round trip, no body-size cap, no 900s ceiling.
+        SI_Endpoint_Profile_CL
+        | where CollectionTime == toscalar(SI_Endpoint_Profile_CL | summarize max(CollectionTime))
+        | summarize arg_max(CollectionTime, *) by PrimaryEntityId
+        // ExcludedReason is the v2.2.430 column. Fall back to the boolean for snapshots collected by an
+        // older engine, so the asset is still counted -- with the reason honestly unknown rather than
+        // the asset silently missing from its own exclusions report.
+        | extend ExcludedReason = tostring(column_ifexists("ExcludedReason", ""))
+        | extend _IsExcluded    = tobool(column_ifexists("IsExcludedByTag", false))
+        | where _IsExcluded == true or isnotempty(ExcludedReason)
+        | extend ExcludedReason = iif(isnotempty(ExcludedReason), ExcludedReason, "(tag not recorded -- snapshot predates ExcludedReason; re-run the endpoint profiler)")
+        | extend CriticalityTier      = toint(coalesce(column_ifexists("Tier", int(null)), 3))
+        | extend CriticalityTierLevel = case(CriticalityTier == 0, "Critical - tier 0", CriticalityTier == 1, "High - tier 1", CriticalityTier == 2, "Medium - tier 2", "Low - tier 3")
+        | extend SecuritySeverity     = case(CriticalityTier == 0, "Very High", CriticalityTier == 1, "High", CriticalityTier == 2, "Medium", "Low")
+        | extend SecurityDomain    = "Endpoint"
+        | extend Category          = "Governance"
+        | extend Subcategory       = "Suppressed Assets"
+        | extend ConfigurationName = "Assets excluded from Risk Analysis by an operator tag"
+        | extend ConfigurationId   = "ENDPOINT-EXCLUDED-BY-TAG-001"
+        | extend AssetName         = coalesce(column_ifexists("AssetName", ""), column_ifexists("Hostname", ""), column_ifexists("PrimaryEntityId", ""))
+        | extend cmdbId              = tostring(column_ifexists("cmdbId", ""))
+        | extend cmdbName            = tostring(column_ifexists("cmdbName", ""))
+        | extend cmdbCriticality     = tostring(column_ifexists("cmdbCriticality", ""))
+        | extend cmdbDataSensitivity = tostring(column_ifexists("cmdbDataSensitivity", ""))
+        //__BUCKET_FILTER_BEGIN__
+        | where 1 == 1
+        //__BUCKET_FILTER_END__
+        | summarize
+            ImpactedAssetCount = dcount(PrimaryEntityId),
+            ImpactedAssets     = strcat_array(array_sort_asc(make_set(AssetName)), ";"),
+            ExcludedReasons    = strcat_array(array_sort_asc(make_set(ExcludedReason)), " | "),
+            AssetId            = any(tostring(column_ifexists("AssetId","")))
+          by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
+             CriticalityTier, CriticalityTierLevel, SecuritySeverity,
+             cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity
+        | extend Impact      = strcat(tostring(ImpactedAssetCount), " asset(s) at tier ", tostring(CriticalityTier), " are suppressed from every Risk Analysis report.")
+        | extend MoreDetails = strcat("Excluded by -> ", ExcludedReasons)
+        //__WEIGHTED_FACTORS_BEGIN__
+        | extend RiskScore_Weight_Detailed = ""
+        | extend RiskScore_Weight_Factor   = 100
+        | extend RiskFactor_Weight         = 100
+        //__WEIGHTED_FACTORS_END__
+        | order by CriticalityTier asc, ImpactedAssetCount desc
+
 ReportTemplates:
 
     - ReportName: RiskAnalysis_Detailed
@@ -24442,6 +24554,7 @@ ReportTemplates:
       ReportPurpose: Overview
       ReportsIncluded:
       - Name: Device_Missing_CVEs_Summary
+      - Name: Endpoint_ExcludedAssets_Summary
       - Name: Device_Recommendations_Summary
       - Name: Endpoint_ActiveCompromise_Detected_Summary
       - Name: Azure_Recommendations_Summary

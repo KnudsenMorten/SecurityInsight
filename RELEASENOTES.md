@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.430
+## v2.2.431
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- feat(SI) v2.2.431: the exclusions report existed only as Detailed -- add the Summary pair, and make parity a test (9869d29c)
 - feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
 - fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
 - fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
@@ -33,13 +34,43 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): refresh the handoff -- it still claimed 2.2.422 and an unanswered VisualCron question (4a89c32d)
 - release(SI) v2.2.423: #57.1(d) column-fill guard -- LIVE-VERIFIED, promoted from 🟡 to delivered (ca4a5059)
 - fix(SI) #57.1(d): the snapshot could have DROPPED a report -- the guard needed guarding (0df1a7d4)
-- feat(SI) #57.1(d): the engine can now notice rows that stayed while their content drained (d0263df7)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.431 — the excluded-assets report now exists in Summary too, and Summary/Detailed parity is enforced
+
+**v2.2.430 shipped the excluded-assets report as Detailed only.** If you run the Summary template — as
+most scheduled runs do — you could not see which assets were being suppressed. That is now fixed.
+
+**New: `Endpoint_ExcludedAssets_Summary`.** It answers the question the Summary template is for: *how
+much of my estate am I not looking at, and is any of it critical?* One row per criticality tier, with
+the asset names and the exact tags that suppressed them. The Detailed pair still lists it asset by
+asset. Both are in their respective shipped templates, so a normal run picks them up.
+
+**And the reason it was missing in the first place is now a test.** Summary and Detailed are near
+identical queries living hundreds of lines apart in one 24,000-line file, and nothing read them
+together — so a fix applied to one could silently miss the other. Twice recently that happened, and both
+times an operator noticed rather than the build. There is now a parity check that fails the build when:
+
+- a report exists as Summary but not Detailed, or the reverse
+- the two variants get different query-splitting treatment
+- the two variants apply the exclusion filter differently
+- the two shipped templates drift apart, or name a report that does not exist
+- either excluded-assets report accidentally gains the standard exclusion filter — which would make it
+  permanently report "nothing suppressed", the most misleading possible answer from a governance report
+
+**Do I need to do anything?** No. Run the Summary template and the new report is there.
+
+⚠️ **Still true from v2.2.430:** the exclusion correction only takes effect once the **endpoint
+profiling** engine has run again. Risk Analysis reads the exclusion decision from the asset snapshot; it
+does not recompute it. Until that run, the report lists suppressed assets with the reason *"tag not
+recorded"*.
 
 ---
 

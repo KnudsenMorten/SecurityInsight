@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.433
+## v2.2.434
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.434: a refused cross-source merge now NAMES the assets, on the normal run (aa7e96fe)
 - @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
 - docs(SI): session handoff -- seven releases, one root cause, and what the customer still needs (dd27b5b9)
 - fix(SI) v2.2.432: the exclusion-tag reader runs for every asset and was undefended -- one odd tag could have killed a whole run (ec98ab93)
@@ -33,7 +34,39 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): the recorded next step is ANSWERED -- SI-as-data-provider is NOT numbered in the framework (e6e6a13a)
 - docs(SI): full session handoff -- and the column MODEL is recorded as the task, not the guards (fa28361c)
 - release(SI) v2.2.424: #58.1 CMDB source precedence -- LIVE-VERIFIED. The "empty column" was NOT a bug. (bf2d6e14)
-- wip(SI) #58.1: CMDB source precedence -- NOT RELEASED, CmdbSource lands EMPTY in Log Analytics (a6a956f4)
+
+---
+
+## v2.2.434 — when a device can't be matched across MDE/EG/Entra, the run now tells you which device
+
+**If your runs are clean, nothing changes — this warning only appears when it is earned.**
+
+SecurityInsight merges each device's records from Microsoft Defender, the exposure graph and Entra ID
+into one asset. When those sources **disagree about the same device's identity**, merging them would
+assert "same device" on contradictory evidence, so SecurityInsight refuses and keeps the records
+separate. That refusal is correct — but it means the asset's tier and sign-in data are computed from
+only part of the picture, so you want to fix the upstream record.
+
+**The problem: the run told you how many, never which.** You would see *"3 merge(s) refused on
+conflicting AadDeviceIds"* and, to find out which three devices, had to re-run the entire profiler in
+verbose mode. In practice nobody does that on a live tenant, so the warning got read and moved past —
+which is what happened to a real customer run.
+
+**Now the warning names them**, on the normal run, with no re-run and no verbose flag:
+
+```
+[WARN] correlation: 3 merge(s) refused on conflicting AadDeviceIds -- 3 record(s) where
+       MDE/EG/Entra disagree about one asset, 0 where two differently-named assets claim the same id.
+[WARN] correlation: MDE/EG/Entra disagree about the AadDeviceId of "HOST-A", "HOST-B", "HOST-C".
+       Fix the upstream record (usually MDE).
+```
+
+**And the verbose detail now says which source is wrong.** It used to list the conflicting ids with no
+indication of where each came from. It now attributes them — `MDE=… | EG=… | ENTRA=…` — so when two
+sources agree and one does not, you can see at a glance which record to correct.
+
+**Do I need to do anything?** Only if you see the warning. It points at a data-quality problem in the
+upstream source, not in SecurityInsight — most often a stale device id in Defender.
 
 ---
 

@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.432
+## v2.2.433
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
+- docs(SI): session handoff -- seven releases, one root cause, and what the customer still needs (dd27b5b9)
 - fix(SI) v2.2.432: the exclusion-tag reader runs for every asset and was undefended -- one odd tag could have killed a whole run (ec98ab93)
 - feat(SI) v2.2.431: the exclusions report existed only as Detailed -- add the Summary pair, and make parity a test (9869d29c)
 - feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
@@ -32,8 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): full session handoff -- and the column MODEL is recorded as the task, not the guards (fa28361c)
 - release(SI) v2.2.424: #58.1 CMDB source precedence -- LIVE-VERIFIED. The "empty column" was NOT a bug. (bf2d6e14)
 - wip(SI) #58.1: CMDB source precedence -- NOT RELEASED, CmdbSource lands EMPTY in Log Analytics (a6a956f4)
-- docs(SI): refresh the handoff -- it still claimed 2.2.422 and an unanswered VisualCron question (4a89c32d)
-- release(SI) v2.2.423: #57.1(d) column-fill guard -- LIVE-VERIFIED, promoted from 🟡 to delivered (ca4a5059)
+
+---
+
+## v2.2.433 — a correction: an empty new column is waiting on the clock, not on another run
+
+**Documentation only. No code changes, no behaviour changes.**
+
+The v2.2.424 note about new columns said *"adding any new column takes two runs to appear in Log
+Analytics — the first run declares it and the second populates it."* **That is wrong, and it is wrong in
+the direction that costs you time.**
+
+What a newly declared column is actually waiting for is **elapsed time** — roughly **45 minutes or
+more** from when the collection rule changes — and nothing you do makes it arrive sooner. Measured:
+three consecutive engine runs inside that window all read the column **0% populated**, and a raw test
+row sent directly to Azure — with no engine run involved at all — landed an existing column while
+silently dropping the new ones. The column then started working with no change of any kind.
+
+**Why the old wording mattered.** It told you to re-run once and check. You would re-run, still see an
+empty column, and reasonably conclude the feature was broken — starting a debug hunt for something that
+was already correct and simply not due yet. An empty new column inside that window is
+**indistinguishable from a genuinely broken one**, so the only safe order is to wait first and diagnose
+second.
+
+**What to do instead:** after an upgrade that adds a column, give it about an hour, then re-read. Do not
+re-run the engine to "get to run 2", and do not treat the empty readback as a signal until the window
+has passed.
+
+**Do I need to do anything?** No — unless you are currently debugging an empty new column, in which case
+check the clock before anything else.
 
 ---
 
@@ -342,9 +371,17 @@ One wording fix that came with it: the message shown when a CMDB refresh fails u
 existing cache (if any)"*, which read as reassurance. It now says what you actually need to decide —
 that the values may be **stale rather than absent**, and points you at the cache-age line.
 
-> ℹ️ **Adding any new column takes two runs to appear in Log Analytics.** The first run declares it and
-> the second populates it. This is normal Azure behaviour, not a fault — if `CmdbSource` looks empty
-> immediately after upgrading, check again after the next run.
+> ⏱️ **A newly added column reads empty for roughly the first hour, and re-running does not speed it
+> up.** The first time a column is declared, Log Analytics needs time before it begins accepting values
+> for it. Until then the column ingests empty even though everything sending it is correct. This is
+> normal Azure behaviour, not a fault. **So if `CmdbSource` is empty straight after upgrading, wait —
+> do not re-run, and do not start debugging.** Check again about an hour later.
+>
+> *(Corrected in v2.2.433. This note previously said the column "takes two runs" to appear. That was
+> wrong in the way that matters: what the column is waiting for is elapsed time, not runs. Measured —
+> three consecutive engine runs inside the window all returned the column 0% populated, and it then
+> began working with no change of any kind. As originally written, this note taught you to re-run once,
+> see it still empty, and conclude a working feature was broken.)*
 
 ---
 

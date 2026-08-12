@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.428
+## v2.2.429
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
 - fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
 - fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
 - fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (2a273f7e)
@@ -33,13 +34,49 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) #57.1(d): the snapshot could have DROPPED a report -- the guard needed guarding (0df1a7d4)
 - feat(SI) #57.1(d): the engine can now notice rows that stayed while their content drained (d0263df7)
 - docs(SI): replace the handoff -- the old one said "NOTHING IS COMMITTED" and a run was in flight (f379fd08)
-- fix(SI) v2.2.422: CMDB enrichment was empty on every OAuth run -- cache could not be written (849b5b8a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.429 — the CVE reports now split the work, instead of doing all of it and throwing most away
+
+**Affects `Device_Missing_CVEs_Summary` and `Device_Missing_CVEs_Detailed`.** These two are the reports
+most likely to time out on a large estate, and this is why.
+
+When a report is too big to run in one go, SecurityInsight splits it into slices. In these two reports
+the split was applied at the very **end** of the query — after both of the expensive joins across your
+exposure graph had already run. So every slice rebuilt the *entire* device-to-vulnerability graph and
+then discarded all but its own share. Splitting into more slices made the total work **larger**, not
+smaller, which is why every slice took exactly as long as the last and adding more never helped.
+
+**What changed.** The split now happens at the start, against the device list — so each slice looks at
+only its share of devices, and the graph work shrinks with it. Same reports, same output, less work per
+slice.
+
+**Nothing is lost.** Verified on live data, comparing every slice before and after:
+
+| report | before | after |
+|---|---|---|
+| `Device_Missing_CVEs_Summary` | 8 + 8 rows → 8 unique | **identical** |
+| `Device_Missing_CVEs_Detailed` | 1111 + 312 rows → 1298 exported | **identical** |
+
+Not just the totals — the **per-slice** counts are unchanged, which means each device still lands in
+exactly the same slice as before. The original end-of-query filter is deliberately left in place as a
+safety net; it now simply has nothing left to remove.
+
+**Will this stop the timeouts?** On a large estate it should help, because the expensive work is finally
+being divided. We could not prove the speed-up here — our own tenant is too small for the graph work to
+dominate, so the honest position is that the *correctness* is measured and the *speed-up* is reasoned.
+If a report was timing out for you, this is the change most likely to move it.
+
+⚠️ **It will not help if your reports are slow for a different reason.** If the Defender query itself is
+too large regardless of how few devices it covers, splitting cannot rescue it — the engine already
+detects that and stops early rather than retrying for hours.
 
 ---
 

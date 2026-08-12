@@ -4,7 +4,7 @@
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (4864e7cd)
+- fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (2a273f7e)
 - docs(SI): surface the si-v3 pointer where a session actually looks, not at line 6692 (6929e488)
 - docs(SI) #60: flag the three claims that measurement disproved, and point at the current design (90d59677)
 - docs(SI): point main's router at the si-v3 branch, so a new session can find the v3 work (444152fc)

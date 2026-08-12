@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.427
+## v2.2.428
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
 - fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
 - fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (2a273f7e)
 - docs(SI): surface the si-v3 pointer where a session actually looks, not at line 6692 (6929e488)
@@ -33,13 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI) #57.1(d): the engine can now notice rows that stayed while their content drained (d0263df7)
 - docs(SI): replace the handoff -- the old one said "NOTHING IS COMMITTED" and a run was in flight (f379fd08)
 - fix(SI) v2.2.422: CMDB enrichment was empty on every OAuth run -- cache could not be written (849b5b8a)
-- fix(SI) v2.2.421: rename servicenow-cmdb -> generic-cmdb, and record that CMDB enrichment is BROKEN in production (f37d524a)
 
 ---
 
 # Release notes — SecurityInsight v2.2
 
 > **Curated changelog**. The publish workflow auto-prepends the last 30 commits from the upstream monorepo as a raw activity log; this file is the human-friendly narrative on top.
+
+---
+
+## v2.2.428 — when a big report is split to rescue it, both halves of the query are now actually split
+
+**This affects you only if a report has ever timed out and gone into the recovery pass.** When a query
+is too big to finish, SecurityInsight splits it and retries the pieces. A query like that has two
+halves: the part that runs inside Defender, and a snapshot of your own asset data sent along with it.
+
+**The recovery pass was only splitting the first half.** The Defender-side filter narrowed correctly,
+but the asset snapshot did not — so every retry piece still carried the *entire* set of assets from the
+piece that failed. The log made it visible if you knew to look: every one of the eight retries printed
+the same line, including the four that belonged to a different half of the run:
+
+```
+'_ep' bucket 2/2: 426/845 row(s) inlined
+```
+
+**What changed.** The retry pieces now carry only their own share of the asset snapshot. Measured on a
+real 845-asset snapshot: each retry now carries **~100–111 assets instead of all 428**, roughly a
+quarter of the previous payload and its matching work.
+
+**Nothing is lost by splitting.** The pieces still add up exactly to what they replaced — verified with
+the engine's own partitioning: children sum to the parent, no asset appears twice, none disappears. The
+two halves of the query use the same key, the same hash and the same arithmetic, so an asset and its
+Defender-side counterpart always land in the same piece. Two tests now pin that, because a mismatch
+here would quietly drop real findings rather than fail loudly.
+
+**Will this fix a report that times out?** Sometimes. Where the recovery pass was carrying needless
+weight, it now does what it was designed to do. But where a report is genuinely too large on the
+Defender side, splitting the asset snapshot cannot rescue it — the engine already detects that case and
+stops early instead of burning hours proving it.
+
+**Do I need to do anything?** No. Reports that complete normally never enter this path and are
+unchanged.
 
 ---
 

@@ -36,11 +36,13 @@ BeforeAll {
     $ast = [System.Management.Automation.Language.Parser]::ParseFile($script:StagePath, [ref]$tokens, [ref]$errs)
     if ($errs -and $errs.Count) { throw "Discover stage has parse errors: $($errs.Count)" }
 
-    $fn = $ast.FindAll({ param($n)
-        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-SICorrelationCoverage'
-    }, $true)
-    if (-not $fn -or @($fn).Count -eq 0) { throw 'Get-SICorrelationCoverage missing from the Discover stage' }
-    . ([scriptblock]::Create(@($fn)[0].Extent.Text))
+    foreach ($fnName in @('Get-SICorrelationCoverage','Format-SIConflictList','Get-SIRecordAadAttribution')) {
+        $fn = $ast.FindAll({ param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fnName
+        }, $true)
+        if (-not $fn -or @($fn).Count -eq 0) { throw "$fnName missing from the Discover stage" }
+        . ([scriptblock]::Create(@($fn)[0].Extent.Text))
+    }
 
     $script:StageText = Get-Content -LiteralPath $script:StagePath -Raw
 }
@@ -142,5 +144,91 @@ Describe 'audit #27 -- the counts are actually visible, and actually counted' {
         # Surfacing the summary must not turn every conflicting record into console noise.
         $script:StageText | Should -Match "Write-SIDiag \('discover: skipping AadDeviceId merge"
         $script:StageText | Should -Match "Write-SIDiag \('discover: REFUSING AadDeviceId merge"
+    }
+}
+
+# ============================================================================
+Describe 'audit #27 follow-up -- a refused merge must NAME the assets' {
+# ============================================================================
+    # 2026-08-12: a customer run warned "3 merge(s) refused on conflicting AadDeviceIds". Nobody
+    # ever found out WHICH 3, because the identities were DIAG-only and the sole route to them was
+    # re-running the whole profiler with -Verbose against a live tenant mid-incident. The count was
+    # visible and still not actionable, so the finding was carried across sessions un-chased.
+
+    It 'the summary no longer tells the operator to re-run the profiler to find out which assets' {
+        # The old summary ended "Re-run with -Verbose to list them." -- a full profiler run to learn
+        # three names. That instruction is what made this un-chased.
+        $script:StageText | Should -Not -Match 'stay split across sources\. Re-run with -Verbose to list them'
+    }
+
+    It 'both refusal causes emit a WARN naming the affected assets' {
+        $script:StageText | Should -Match "Write-SIWarn \('correlation: MDE/EG/Entra disagree about the AadDeviceId of"
+        $script:StageText | Should -Match "Write-SIWarn \('correlation: one AadDeviceId is claimed by two differently-named assets"
+    }
+
+    It 'names are collected in BOTH refusal branches, not just one' {
+        $script:StageText | Should -Match '\$conflictWithinRecordNames\.Add'
+        $script:StageText | Should -Match '\$conflictSharedIdNames\.Add'
+    }
+
+    It 'lists every asset when the list is small -- the normal case' {
+        # Refusals need genuinely contradictory upstream data, so this is the shape that ships.
+        Format-SIConflictList -Items @('"A"','"B"','"C"') | Should -Be '"A", "B", "C"'
+    }
+
+    It 'is not itself a source of noise when one upstream sync breaks' {
+        $r = Format-SIConflictList -Items (1..25 | ForEach-Object { "host$_" }) -Max 20
+        $r | Should -Match 'and 5 more'
+        $r | Should -Match 're-run with -Verbose to list every one'
+    }
+
+    It 'never hides HOW MANY -- only how many are printed on one line' {
+        # The bound is a line-length bound, not a data bound. The true total comes from the count
+        # line above it, which is unbounded, and every name is still available at DIAG. A display
+        # limit that suppressed the real number would recreate the defect it is here to fix.
+        $c = Get-SICorrelationCoverage -Considered 500 -Merged 0 -NoKey 0 `
+                                       -ConflictWithinRecord 400 -ConflictSharedId 0 -FinalCount 500
+        $c.Conflicts | Should -Be 400
+        $script:StageText | Should -Match '\$cov\.Conflicts, \$cov\.ConflictWithinRecord, \$cov\.ConflictSharedId'
+    }
+
+    It 'handles an empty list without emitting a bare fragment' {
+        Format-SIConflictList -Items @() | Should -Be ''
+    }
+}
+
+# ============================================================================
+Describe 'audit #27 follow-up -- WHICH source disagrees is the remediation' {
+# ============================================================================
+    # "This asset has two AadDeviceIds" is not actionable. "EG and Entra agree, MDE does not" names
+    # the record to go and fix -- and the stage comment already said the fix is usually MDE's.
+
+    $zero = '00000000-0000-0000-0000-000000000000'
+
+    It 'attributes each id to the source that claimed it' {
+        $rec = [pscustomobject]@{ Raw = @(
+            @{ MDE_AadDeviceId = 'AAAA-1'; EG_AadDeviceId = 'bbbb-2' }
+            @{ ENTRA_AadDeviceId = 'BBBB-2' }
+        )}
+        $r = Get-SIRecordAadAttribution -r $rec -ZeroGuid $zero
+        # Lower-cased so the two spellings of the same id are visibly ONE id, not a third conflict.
+        $r | Should -Be 'MDE=aaaa-1 | EG=bbbb-2 | ENTRA=bbbb-2'
+    }
+
+    It 'excludes the zero GUID, which is "not Entra-joined" and not a disagreement' {
+        $rec = [pscustomobject]@{ Raw = @(
+            @{ MDE_AadDeviceId = $zero; EG_AadDeviceId = 'real-1' }
+        )}
+        Get-SIRecordAadAttribution -r $rec -ZeroGuid $zero | Should -Be 'EG=real-1'
+    }
+
+    It 'says (none) rather than an empty string when there is nothing to attribute' {
+        $rec = [pscustomobject]@{ Raw = @(@{ MDE_AadDeviceId = '' }) }
+        Get-SIRecordAadAttribution -r $rec -ZeroGuid $zero | Should -Be '(none)'
+    }
+
+    It 'the within-record DIAG line carries the attribution, not a bare id join' {
+        $script:StageText | Should -Match 'Get-SIRecordAadAttribution -r \$rec -ZeroGuid \$zeroGuid'
+        $script:StageText | Should -Not -Match "\`$allIds\.Count, \(\(\`$allIds\) -join ', '\)"
     }
 }

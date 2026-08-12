@@ -262,6 +262,57 @@ function Invoke-SIDiscover {
         return ,$ids
     }
 
+    # Helper: attribute this record's AadDeviceIds BY SOURCE -- "MDE=<id> | EG=<id> | ENTRA=<id>".
+    # Which source disagrees is the whole remediation. Knowing an asset carries two ids tells the
+    # operator nothing actionable; knowing EG and Entra agree while MDE says something else names
+    # the record to go and fix. The previous message joined the ids with no attribution at all.
+    function Get-SIRecordAadAttribution {
+        param($r, [string]$ZeroGuid)
+        $parts = New-Object System.Collections.Generic.List[string]
+        foreach ($sub in $r.Raw) {
+            foreach ($field in @('MDE_AadDeviceId','EG_AadDeviceId','ENTRA_AadDeviceId')) {
+                $v = [string]$sub.$field
+                if ([string]::IsNullOrWhiteSpace($v)) { continue }
+                $vLc = $v.ToLowerInvariant()
+                if ($vLc -eq $ZeroGuid) { continue }
+                $pair = '{0}={1}' -f ($field -split '_')[0], $vLc
+                if (-not $parts.Contains($pair)) { $parts.Add($pair) | Out-Null }
+            }
+        }
+        if ($parts.Count -eq 0) { return '(none)' }
+        return ($parts -join ' | ')
+    }
+
+    function Format-SIConflictList {
+        <#
+          Render the affected asset names for the summary WARN.
+
+          WHY THIS EXISTS. Audit #27 promoted the conflict COUNTS out of -Verbose but deliberately
+          left the per-record detail at DIAG, so the summary stayed readable. That decision was
+          right and stands -- but it left the operator with "3 merge(s) refused" and no way to learn
+          WHICH 3 without re-running the entire profiler with -Verbose. On 2026-08-12 a customer hit
+          exactly that: the warning was seen, the assets were never identified, and the finding was
+          carried across sessions un-chased because the only route to it was a full re-run against a
+          live tenant mid-incident.
+
+          Names are cheap and bounded -- refusals are rare by construction, since they need genuinely
+          contradictory upstream data. So the summary names them; the DIAG lines keep the full
+          per-source id detail and the remediation text.
+
+          The bound is a LINE-LENGTH bound, not a data bound: the true total is always printed by the
+          count line above, and the omitted names are all available at DIAG. It exists so one broken
+          upstream sync cannot push every other warning off the operator's screen.
+        #>
+        param(
+            [string[]]$Items,
+            [int]$Max = 20
+        )
+        $all = @($Items)
+        if ($all.Count -le $Max) { return ($all -join ', ') }
+        $shown = $all[0..($Max - 1)]
+        return ('{0}, and {1} more (re-run with -Verbose to list every one)' -f ($shown -join ', '), ($all.Count - $Max))
+    }
+
     function Get-SICorrelationCoverage {
         <#
           AUDIT #27 -- turn the second-pass merge counters into a coverage verdict.
@@ -316,12 +367,16 @@ function Invoke-SIDiscover {
     # upstream data problems with different fixes.
     #   * within-record  -- MDE/EG/Entra disagree about one asset's AadDeviceId
     #   * shared-id      -- two differently-named assets claim the SAME AadDeviceId
+    # ...and the NAMES behind those two counters, so the summary can say which assets are
+    # affected without costing the operator a full -Verbose re-run of the whole profiler.
     $byAadId          = @{}
     $keysToDrop       = New-Object System.Collections.Generic.List[string]
     $aadMergeCount    = 0
     $noKeyCount       = 0
     $conflictWithinRecordCount = 0
     $conflictSharedIdCount     = 0
+    $conflictWithinRecordNames = New-Object System.Collections.Generic.List[string]
+    $conflictSharedIdNames     = New-Object System.Collections.Generic.List[string]
     $consideredCount  = $byKey.Count
     foreach ($entry in $byKey.GetEnumerator()) {
         $rec = $entry.Value
@@ -346,7 +401,8 @@ function Invoke-SIDiscover {
             # the upstream record (usually MDE has the wrong AadDeviceId).
             $conflictWithinRecordCount++
             $name = if ($rec.Name) { [string]$rec.Name } else { [string]$rec.AssetId }
-            Write-SIDiag ('discover: skipping AadDeviceId merge for "{0}" -- record has {1} conflicting AadDeviceIds across MDE/EG/Entra ({2}). Fix the upstream record.' -f $name, $allIds.Count, (($allIds) -join ', '))
+            $conflictWithinRecordNames.Add(('"{0}"' -f $name)) | Out-Null
+            Write-SIDiag ('discover: skipping AadDeviceId merge for "{0}" -- record has {1} conflicting AadDeviceIds across MDE/EG/Entra ({2}). Fix the upstream record.' -f $name, $allIds.Count, (Get-SIRecordAadAttribution -r $rec -ZeroGuid $zeroGuid))
             continue
         }
 
@@ -371,6 +427,7 @@ function Invoke-SIDiscover {
                 $rNorm = ($rName -replace '\..*$','').ToLowerInvariant()
                 if ($pNorm -ne $rNorm -and $pNorm.Length -ge 3 -and $rNorm.Length -ge 3 -and $pNorm.Substring(0,3) -ne $rNorm.Substring(0,3)) {
                     $conflictSharedIdCount++
+                    $conflictSharedIdNames.Add(('"{0}" vs "{1}"' -f $pName, $rName)) | Out-Null
                     Write-SIDiag ('discover: REFUSING AadDeviceId merge of {0} -- claimed by 2 records with very different names: "{1}" + "{2}". Keeping both as separate records. Fix the upstream AadDeviceId mapping.' -f $aadIdLc, $pName, $rName)
                     continue
                 }
@@ -425,8 +482,23 @@ function Invoke-SIDiscover {
         # Deliberately a WARN, and deliberately split by cause -- the two have different
         # upstream fixes. These assets stay SPLIT across sources, so their tier and logon
         # assignments are computed from partial evidence.
-        Write-SIWarn ('correlation: {0} merge(s) refused on conflicting AadDeviceIds -- {1} record(s) where MDE/EG/Entra disagree about one asset, {2} where two differently-named assets claim the same id. Those assets stay split across sources. Re-run with -Verbose to list them.' -f `
+        Write-SIWarn ('correlation: {0} merge(s) refused on conflicting AadDeviceIds -- {1} record(s) where MDE/EG/Entra disagree about one asset, {2} where two differently-named assets claim the same id. Those assets stay split across sources.' -f `
             $cov.Conflicts, $cov.ConflictWithinRecord, $cov.ConflictSharedId)
+
+        # NAME them. The count alone is not actionable: knowing that 3 merges were refused tells the
+        # operator nothing they can go and fix, and the only route to the identities was a -Verbose
+        # re-run of the entire profiler -- which in a live tenant mid-incident nobody is going to do.
+        # That is why this exact warning was seen by a customer on 2026-08-12 and then carried
+        # across sessions un-chased. Names are bounded (refusals need contradictory upstream data),
+        # so they belong in the summary; the full per-source id detail stays at DIAG.
+        if ($conflictWithinRecordNames.Count -gt 0) {
+            Write-SIWarn ('correlation: MDE/EG/Entra disagree about the AadDeviceId of {0}. Fix the upstream record (usually MDE); re-run with -Verbose to see which source claims which id.' -f `
+                (Format-SIConflictList -Items $conflictWithinRecordNames))
+        }
+        if ($conflictSharedIdNames.Count -gt 0) {
+            Write-SIWarn ('correlation: one AadDeviceId is claimed by two differently-named assets: {0}. Fix the upstream AadDeviceId mapping.' -f `
+                (Format-SIConflictList -Items $conflictSharedIdNames))
+        }
     }
 
     $assets = @($byKey.Values)

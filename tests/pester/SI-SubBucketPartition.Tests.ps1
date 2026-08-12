@@ -83,3 +83,59 @@ Describe 'sub-bucket partitioning is lossless -- audit #56.3' {
         $child | Should -Be $parent
     }
 }
+
+Describe 'the CL side gets the SAME partition as the EG filter -- v2.2.428' {
+    <#
+        The other half of the alignment, and the half that was missing. Every test above pins the
+        EG-side filter. But a hybrid query has TWO sides: the EG predicate, and the CL snapshot inlined
+        as a datatable() literal. RA-GraphHunting.ps1 (~:149) picks the CL rows from
+        $script:_CurrentBucketCount/_Index, which the MAIN bucket loop sets before each call -- and
+        which the SUB-bucket pass did not set at all until v2.2.428.
+
+        The customer symptom: all 8 children of a 2-bucket report logged the identical
+        "'_ep' bucket 2/2: 426/845 row(s) inlined", including the four under parent 0/2. The CL side
+        stayed frozen on whatever the main loop finished on, so sub-bucketing narrowed the EG side
+        while every child still carried the full CL payload.
+    #>
+
+    It 'pairs (newT, subN) with exactly the modulus and index the EG filter encodes' {
+        # This is the invariant the fix depends on. If the loop's arithmetic and the filter's ever
+        # diverge, the CL rows inlined would be the counterparts of a DIFFERENT EG partition -- and
+        # the join would silently drop real matches. That is worse than the payload waste being fixed,
+        # which is why it is pinned rather than assumed.
+        foreach ($pT in 1,2,3,4,8) {
+            foreach ($K in 2,4) {
+                foreach ($pN in 0..($pT - 1)) {
+                    foreach ($j in 0..($K - 1)) {
+                        # verbatim from the sub-bucket loop in Invoke-RiskAnalysis.ps1
+                        $subN = $pN + ($j * $pT)
+                        $newT = $pT * $K
+                        $kql  = New-SubBucketFilterKql -ParentBucketCount $pT -ParentBucketIndex $pN -SubBucketCount $K -SubBucketIndex $j
+                        $kql | Should -Be (New-BucketFilterKql -BucketCount $newT -BucketIndex $subN) `
+                            -Because "parent $pN/$pT child $j/$K must hand the CL side ($newT, $subN)"
+                    }
+                }
+            }
+        }
+    }
+
+    It '🔴 the sub-bucket pass actually ASSIGNS those coordinates to the CL-side state' {
+        # The regression itself. The arithmetic above was always correct; the bug was that nobody
+        # handed the result to the CL side. Asserting the source is blunt, but this defect is
+        # invisible in every offline behavioural test -- it only shows up as a repeated log line in a
+        # customer transcript, which is how it survived from v2.2.277 to v2.2.428.
+        $engine = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'engine\risk-analysis\Invoke-RiskAnalysis.ps1'
+        $src    = Get-Content -LiteralPath $engine -Raw
+
+        # Isolate the sub-bucket loop so a match in the MAIN bucket loop cannot satisfy this.
+        $start = $src.IndexOf('$subFilter  = New-SubBucketFilterKql')
+        $start | Should -BeGreaterThan 0 -Because 'the sub-bucket loop must still exist'
+        # Window must comfortably span the loop body INCLUDING its comments -- a too-small window
+        # fails on a correct engine, which is a false alarm on the highest-blast-radius file we ship.
+        $len    = [Math]::Min(6000, $src.Length - [Math]::Max(0, $start - 400))
+        $window = $src.Substring([Math]::Max(0, $start - 400), $len)
+
+        $window | Should -Match '_CurrentBucketCount\s*=\s*\$newT'
+        $window | Should -Match '_CurrentBucketIndex\s*=\s*\$subN'
+    }
+}

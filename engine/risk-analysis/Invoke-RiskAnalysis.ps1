@@ -2869,6 +2869,23 @@ while (-not $bucketRunSucceeded) {
               $subFilter  = New-SubBucketFilterKql -ParentBucketCount $pT -ParentBucketIndex $pN -SubBucketCount $subFanOut -SubBucketIndex $j -ReportName $ReportName
               $subQuery   = Replace-BucketFilterBlock -Query $Query -BucketFilterKql $subFilter
 
+              # v2.2.428 -- narrow the CL side to the SAME partition as the EG filter above.
+              # This pass rewrote only the EG-side __BUCKET_FILTER__ and left
+              # $script:_CurrentBucketCount/_Index holding whatever the MAIN loop finished on, so
+              # RA-GraphHunting.ps1 (~:149) re-inlined the SAME CL rows into every child. A customer
+              # transcript shows all 8 children of a 2-bucket report printing the identical
+              # "'_ep' bucket 2/2: 426/845 row(s) inlined" -- including the four under parent 0/2,
+              # which should have carried bucket 1/2. Sub-bucketing therefore halved the EG side while
+              # each child still dragged the full 54KB CL payload and its join work.
+              # ALIGNMENT, which is what makes this safe rather than lossy: New-SubBucketFilterKql is
+              # literally New-BucketFilterKql(count = pT*K, index = pN + j*pT), and the CL side hashes
+              # with Get-SISha256Bucket -- documented as "identical math on KQL + PS", first 4 bytes of
+              # SHA256 mod N. Same key, same hash, same modulus => the CL rows inlined here are exactly
+              # the counterparts of the EG rows this filter selects. A mismatched pair would silently
+              # drop real join matches, which is worse than the payload waste being fixed.
+              $script:_CurrentBucketCount = $newT
+              $script:_CurrentBucketIndex = $subN
+
               Write-Info ("[sub-bucket] depth={0} parent={1}/{2}: running sub {3}/{4} (effective index {5}/{6})" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subN, $newT)
               $script:_LastGraphHuntingAllTimedOut = $true   # reset; Invoke-GraphHuntingQuery flips it false on non-timeout failure or success
               try {

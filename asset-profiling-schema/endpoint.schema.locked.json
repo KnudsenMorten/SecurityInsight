@@ -2898,7 +2898,7 @@
       "source": "derived",
       "derivation": {
         "algorithm": "Test-SIEndpointExcludedByTag",
-        "see": "engine/shared/Get-SIRiskFactors.ps1 -- true when any EG manual/dynamic/tags array contains '--Excluded--SI'. Operator-driven opt-out from RA reports."
+        "see": "engine/shared/Get-SIRiskFactors.ps1 -- true when any tag source contains '--Excluded--SI'. Operator-driven opt-out from RA reports. v2.2.430: MDE_MachineTags added to the scanned sources; before that a Defender-portal machine tag appeared in AssetTags but never set this flag."
       },
       "stage": {
         "writtenBy": "profile",
@@ -2909,6 +2909,24 @@
         ]
       },
       "addedIn": "2.3.5"
+    },
+    {
+      "name": "ExcludedReason",
+      "type": "string",
+      "purpose": "audit",
+      "source": "derived",
+      "derivation": {
+        "algorithm": "Get-SIEndpointExclusionReason",
+        "see": "engine/shared/Get-SIRiskFactors.ps1 -- WHICH tag excluded the asset, as 'Field: tag' (multiple joined with '; '); empty when not excluded. Paired with IsExcludedByTag exactly as UnsupportedOSReason is paired with UnsupportedOSDetected, and computed from the SAME single evaluation so the flag and the reason cannot disagree. Exists because exclusion was otherwise invisible: an excluded asset vanished from every report with nothing saying it had been dropped or why, which is indistinguishable from broken collection."
+      },
+      "stage": {
+        "writtenBy": "profile",
+        "readBy": [
+          "dashboard",
+          "risk_analysis"
+        ]
+      },
+      "addedIn": "2.3.6"
     },
     {
       "name": "UnsupportedOSReason",

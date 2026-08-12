@@ -173,20 +173,29 @@ function Get-SIEndpointExclusionReason {
        genuinely arrive in all three. #>
     param([Parameter(Mandatory)]$Record)
 
+    # PER-FIELD try/catch, on purpose. This runs for EVERY endpoint asset on every customer, inside the
+    # row builder -- so a single odd tag shape from any one source must not be able to kill the whole
+    # profile run. Losing the exclusion reason for one field costs a column; throwing here costs the
+    # customer their entire endpoint inventory for that run. Per-field rather than one outer catch so a
+    # bad MDE tag cannot also hide a good EG one.
     $hits = New-Object System.Collections.Generic.List[string]
     foreach ($field in $script:SIExclusionTagFields) {
-        $val = Get-SIRecordValue -Record $Record -Name $field
-        if ($null -eq $val) { continue }
-        $items = @()
-        if     ($val -is [System.Array]) { $items = @($val) }
-        elseif ($val -is [string])       { $items = @($val -split ';') }
-        else                             { $items = @([string]$val) }
-        foreach ($item in $items) {
-            $s = ([string]$item).Trim()
-            if ($s -and $s -like ('*' + $script:SIExclusionTagMarker + '*')) {
-                $entry = '{0}: {1}' -f $field, $s
-                if (-not $hits.Contains($entry)) { $hits.Add($entry) }
+        try {
+            $val = Get-SIRecordValue -Record $Record -Name $field
+            if ($null -eq $val) { continue }
+            $items = @()
+            if     ($val -is [System.Array]) { $items = @($val) }
+            elseif ($val -is [string])       { $items = @($val -split ';') }
+            else                             { $items = @([string]$val) }
+            foreach ($item in $items) {
+                $s = ([string]$item).Trim()
+                if ($s -and $s -like ('*' + $script:SIExclusionTagMarker + '*')) {
+                    $entry = '{0}: {1}' -f $field, $s
+                    if (-not $hits.Contains($entry)) { $hits.Add($entry) }
+                }
             }
+        } catch {
+            Write-Warning ("exclusion-tag read failed for field '{0}' ({1}) -- that field is skipped; other tag sources still count." -f $field, $_.Exception.Message)
         }
     }
     if ($hits.Count -eq 0) { return '' }

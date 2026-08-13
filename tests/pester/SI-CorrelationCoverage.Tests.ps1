@@ -195,6 +195,21 @@ Describe 'audit #27 follow-up -- a refused merge must NAME the assets' {
     It 'handles an empty list without emitting a bare fragment' {
         Format-SIConflictList -Items @() | Should -Be ''
     }
+
+    It 'BUG FIX -- a Max below 1 must not silently return the FIRST and LAST item' {
+        # $all[0..($Max-1)] with Max=0 becomes $all[0..-1], which PowerShell reads as "index 0, then
+        # index -1". `-Max 0` on three items returned "a, c, and 3 more" -- wrong items AND a wrong
+        # count, from a bounds argument. Unreachable today (callers use the default), but a silent
+        # wrong answer is exactly what a guard is for. Found by adversarial probe 2026-08-13.
+        $r = Format-SIConflictList -Items @('a','b','c') -Max 0
+        $r | Should -Not -Match 'and 3 more'
+        $r | Should -Not -Match '^a, c'
+        $r | Should -Match '3 item'          # states the true total instead
+    }
+
+    It 'and a negative Max is treated the same way, not indexed' {
+        { Format-SIConflictList -Items @('a','b','c') -Max -5 } | Should -Not -Throw
+    }
 }
 
 # ============================================================================

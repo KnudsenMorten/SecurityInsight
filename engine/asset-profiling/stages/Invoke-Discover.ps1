@@ -331,6 +331,12 @@ function Invoke-SIDiscover {
             [int]$Max = 20
         )
         $all = @($Items)
+        # 🪤 GUARD $Max < 1 BEFORE INDEXING. `$all[0..($Max-1)]` with $Max=0 becomes `$all[0..-1]`,
+        # which PowerShell reads as "index 0, then index -1" -- the FIRST and LAST elements -- so
+        # `-Max 0` on three items returned "a, c, and 3 more", wrong twice over. Unreachable today
+        # (callers use the default), but a silent wrong answer from a bounds argument is the kind of
+        # thing that only surfaces once someone passes a computed value.
+        if ($Max -lt 1) { return ('{0} item(s) (list suppressed -- Max={1})' -f $all.Count, $Max) }
         if ($all.Count -le $Max) { return ($all -join ', ') }
         $shown = $all[0..($Max - 1)]
         return ('{0}, and {1} more (re-run with -Verbose to list every one)' -f ($shown -join ', '), ($all.Count - $Max))

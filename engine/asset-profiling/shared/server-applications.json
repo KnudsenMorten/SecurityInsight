@@ -6364,7 +6364,7 @@
       "tier": 1,
       "category": "Identity",
       "server_role": "Okta MFA credential provider",
-      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"mfa_credential_provider\"",
+      "detection_kql": "DeviceTvmSoftwareInventory\n| where SoftwareVendor == \"okta\"\n| where SoftwareName startswith \"mfa_credential_provider_for_windows\"",
       "notes": "TIER 1 -- gates interactive and RDP logon on the hosts it is installed on, so it sits in the same band as the MFA/RADIUS servers the T1 definition names. UNVERIFIED PAIR, see the Okta AD Agent entry."
     },
     {

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.436
+## v2.2.437
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.437: two defects found by auditing v2.2.434-435, neither reachable, both real (76d7d009)
 - fix(SI) v2.2.436: a failed discovery source must not look like a stale estate (e7506799)
 - feat(SI) v2.2.435: Okta identity servers are tiered, and an SCCM console stops claiming to be a site server (784f13d0)
 - fix(SI) v2.2.434: a refused cross-source merge now NAMES the assets, on the normal run (aa7e96fe)
@@ -33,7 +34,28 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - design(SI) #60: the SI platform architecture -- web, connector service, queue, SQL (eb2ab859)
 - release(SI) v2.2.425: #59.3 the CMDB naming contract -- documented and enforced, and NOTHING renamed (3f22cfc2)
 - docs(SI) #59.3: the naming pass is MEASURED -- and the frontend is already broken by naming drift (c719bcbd)
-- docs(SI): the recorded next step is ANSWERED -- SI-as-data-provider is NOT numbered in the framework (e6e6a13a)
+
+---
+
+## v2.2.437 — two small corrections found by auditing v2.2.434–435
+
+**Nothing you can observe changes. This is a hardening release.**
+
+A review of the previous two releases turned up two defects, neither reachable in normal use, both fixed
+rather than left as traps:
+
+- **A list-truncation helper mis-handled a bound of zero.** Asked to show *"no more than 0"* affected
+  assets it returned the **first and last** item and a wrong total — a quirk of how PowerShell reads a
+  reversed index range. No shipped caller passes zero, so no run was ever affected, but a bounds
+  argument that silently returns wrong data is exactly the kind of thing that surfaces later when
+  someone passes a computed value. It now states the true count and suppresses the list.
+- **One Okta catalog entry's documentation query didn't match its own detection key.** The
+  MFA-credential-provider entry carried a verification query for a shorter software name than the one
+  it actually matches on. Detection was never affected — the query is documentation, and the engine
+  matches on the key — but anyone following that query to confirm the entry against their tenant would
+  have checked the wrong thing.
+
+**Do I need to do anything?** No.
 
 ---
 

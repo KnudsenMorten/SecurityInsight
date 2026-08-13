@@ -232,3 +232,75 @@ Describe 'audit #27 follow-up -- WHICH source disagrees is the remediation' {
         $script:StageText | Should -Not -Match "\`$allIds\.Count, \(\(\`$allIds\) -join ', '\)"
     }
 }
+
+# ============================================================================
+Describe 'A FAILED DISCOVERY SOURCE MUST NOT LOOK LIKE A STALE ESTATE' {
+    # NOTE -- NO EMOJI IN THIS FILE. These .ps1 files carry no BOM, so PowerShell 5.1 (the runtime SI
+    # ships on) decodes them as Windows-1252. A four-byte emoji then lands as four Latin-1 characters,
+    # and several of those ARE string delimiters to the parser: 0x92 decodes to a right single quote,
+    # 0x94 to a right double quote. Putting one inside a single-quoted test name therefore CLOSES the
+    # name early and the rest of the file parses as garbage. Cost a real debugging detour 2026-08-13:
+    # pwsh 7 parsed the same file cleanly because it defaults to UTF-8, so it only failed under Pester.
+# ============================================================================
+    <#
+        Measured 2026-08-13 on a real run, and this is the whole shape of it:
+
+          [INFO] source 'EndpointEG' returned     0 rows  (179,7s)     <- 61 rows in ~12s when healthy
+          ...
+          [INFO] asset filter [...]: 109 -> 20 (dropped 89 inactive)
+          RUN COMPLETE
+
+        EndpointEG carries the last-seen ACTIVITY signal. Without it, 51 assets aged out of the 30-day
+        window and the OUTPUT stage dropped them as inactive. Two earlier runs the same day both gave
+        109 -> 71. So the operator's inventory fell 72%, the run finished green, and the only trace was
+        a line describing a CORRECT filter decision.
+
+        TRAP: The zero and the sixty-one printed at the SAME [INFO] weight, one line apart. This codebase
+        already states the rule for CMDB data -- "wrong is worse than empty, BECAUSE EMPTY IS VISIBLE"
+        -- and here empty was not visible: it was disguised as a filter result one stage downstream.
+    #>
+
+    BeforeAll {
+        # THREE levels: tests\pester\<file> -> tests\pester -> tests -> <solution root>.
+        $si = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+        $script:DiscoverText = Get-Content -LiteralPath (Join-Path $si 'engine\asset-profiling\stages\Invoke-Discover.ps1') -Raw
+        $script:OutputText   = Get-Content -LiteralPath (Join-Path $si 'engine\asset-profiling\stages\Invoke-Output.ps1')   -Raw
+    }
+
+    It 'a discovery source returning ZERO rows warns -- it does not just get logged' {
+        $script:DiscoverText | Should -Match 'if \(\$cnt -eq 0\)'
+        $script:DiscoverText | Should -Match 'Write-SIWarn \("discovery source'
+        $script:DiscoverText | Should -Match 'returned NO rows'
+    }
+
+    It 'the zero-row warning carries the ELAPSED time' {
+        # It is what separates "nothing to return" (fast) from "did not manage to return it" (slow).
+        # 0 rows in 0.3s is an empty tenant; 0 rows in 180s is a throttle.
+        $script:DiscoverText | Should -Match 'returned NO rows after \{1:n1\}s'
+    }
+
+    It 'it WARNS and continues rather than failing the run' {
+        # Zero is legitimately zero sometimes -- a tenant with no Arc machines. Throwing here would
+        # trade a complete-but-suspect inventory for none at all.
+        $script:DiscoverText | Should -Not -Match 'if \(\$cnt -eq 0\)\s*\{\s*throw'
+    }
+
+    It 'the asset filter says so when it removes MOST of the estate' {
+        $script:OutputText | Should -Match 'this filter removed MOST of the estate'
+    }
+
+    It 'and it points UPSTREAM, at the per-source counts, which is where the answer is' {
+        # A warning that only says "a lot was dropped" restates the number above it. The useful part is
+        # naming the thing to go and look at.
+        $script:OutputText | Should -Match 'Check the per-source row counts in DISCOVER first'
+    }
+
+    It 'the majority test is REPORTING only -- it must not change what is filtered' {
+        # No threshold may alter behaviour: the filter decision is made before this, and the counts on
+        # the INFO line above are computed independently of it. A cap that changed the data would be
+        # the "no hard caps for scale fixes" mistake.
+        $script:OutputText | Should -Match '\$dropped -gt \(\$beforeCount / 2\)'
+        # the drop is computed before the warning, not by it
+        $script:OutputText | Should -Match '\$dropped = \$beforeCount - \$records\.Count'
+    }
+}

@@ -1010,6 +1010,23 @@ function Invoke-SIOutput {
             $dropped = $beforeCount - $records.Count
             $modeLabel = if ($requireMdeActive) { 'Strict (MDE-only)' } else { 'Mixed (MDE+EG+Entra, DEFAULT)' }
             Write-SIInfo ('asset filter [{0}, {1}d]: {2} -> {3} (dropped {4} inactive). Tighten with $global:SI_RequireMdeActive_Endpoint=$true; disable with $global:SI_IncludeInactive_Endpoint=$true.' -f $modeLabel, $staleDays, $beforeCount, $records.Count, $dropped)
+
+            # 🔴 SAY WHEN THIS FILTER IS DOING MOST OF THE WORK, because the same line reads the same
+            # whether the estate really is stale or a DISCOVERY SOURCE FAILED upstream.
+            # Measured 2026-08-13: 'EndpointEG' returned 0 rows after 180s (61 in ~12s when healthy).
+            # It carries the last-seen activity signal, so 51 assets aged out of the window and this
+            # filter dropped them -- 109 -> 20 where the two previous runs both gave 109 -> 71. The run
+            # finished GREEN and the only trace was this line, which describes a correct decision.
+            # The operator's inventory fell 72% and nothing called it a loss.
+            #
+            # This is a REPORTING line, not a threshold that changes behaviour: nothing is filtered
+            # differently, and the numbers above are unchanged. It fires on a majority drop because
+            # that is the point at which "the estate is stale" and "we failed to ask" stop being
+            # distinguishable from the output alone -- and the answer is upstream, in the per-source
+            # row counts, which is where it points.
+            if ($dropped -gt 0 -and $beforeCount -gt 0 -and $dropped -gt ($beforeCount / 2)) {
+                Write-SIWarn ('this filter removed MOST of the estate -- {0} of {1} assets ({2:n0}%). That is expected only if the estate really is that stale. Check the per-source row counts in DISCOVER first: a source that returned 0 rows takes its assets'' last-seen dates with it, and they are dropped here as "inactive" rather than reported as missing.' -f $dropped, $beforeCount, (100.0 * $dropped / $beforeCount))
+            }
         } else {
             Write-SIInfo 'asset filter: DISABLED ($global:SI_IncludeInactive_Endpoint = $true) -- emitting all assets including stale registrations'
         }

@@ -38,9 +38,19 @@ function Get-OptionalEnv {
     return $v
 }
 
+# ---- #55.1: run transcripts on the container host (see Start-SIInContainer.ps1) ----
+. /app/launcher/_lib/Start-LauncherTranscript.ps1
+. /app/launcher/_lib/Publish-LauncherTranscript.ps1
+
 $engine     = Get-RequiredEnv 'SI_ENGINE'
 $shardCount = [int](Get-OptionalEnv 'SI_SHARD_COUNT' 1)
 if ($shardCount -lt 1) { $shardCount = 1 }
+
+# '<engine>-producer', not '<engine>' -- the producer and its workers are separate
+# executions of the same engine, and logs that differ only by timestamp are the
+# ones you cannot tell apart at the moment you need to.
+$runLogEngine = ('{0}-producer' -f $engine)
+Start-SILauncherTranscript -Engine $runLogEngine -Flavour container -RepoRoot '/app' | Out-Null
 
 $global:SI_StorageAccount      = Get-RequiredEnv 'SI_STORAGE_ACCOUNT'
 $global:SI_WorkspaceResourceId = Get-RequiredEnv 'SI_WORKSPACE_RESOURCEID'
@@ -100,3 +110,7 @@ for ($i = 0; $i -lt $shardCount; $i++) {
 }
 
 Write-Host ('Done. {0} messages on {1}. KEDA will scale workers within ~30s.' -f $shardCount, $queueName)
+
+# #55.1(b). $ctx is the context this script already built for the queue -- same
+# account, so there is nothing to rebuild.
+Publish-SILauncherTranscript -Engine $runLogEngine -Context $ctx | Out-Null

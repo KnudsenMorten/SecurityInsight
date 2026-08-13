@@ -36,6 +36,19 @@
 
 $ErrorActionPreference = 'Stop'
 
+# ---- #55.1: run transcripts on the container host ----
+# The transcript helper has been default-on since v2.2.312 and 15 VM launchers
+# call it -- no container entrypoint ever did, so the host recommended for large
+# tenants was the only one that left no forensic record. Both helpers are
+# dot-sourced before the SI_ROLE dispatcher so every branch below can reach them.
+#
+# One transcript per PROCESS, started by whichever script does the actual work:
+# the 'producer' and 'ra' branches below hand off to a child pwsh that starts its
+# own, so starting one here as well would produce two files for one run, the
+# outer one a duplicate of the inner.
+. /app/launcher/_lib/Start-LauncherTranscript.ps1
+. /app/launcher/_lib/Publish-LauncherTranscript.ps1
+
 # ----------- SI_ROLE dispatcher ---------------------------------------
 # Container App Job '--command' / '--args' overrides are unreliable in az CLI
 # (argparse nargs='+' chokes on leading-dash PowerShell flags). Instead, every
@@ -68,10 +81,17 @@ if ($siRole) {
                 Write-Host "[SI_ROLE=worker SI_ENGINE=privilege-tier-classifier] dispatching to $classifierScript" -ForegroundColor Cyan
                 . '/app/config/SecurityInsight.custom.ps1'   # hydrate engine globals (same VM-launcher parity)
                 $global:SI_CustomConfigPath = '/app/config/SecurityInsight.custom.ps1'
+                # This branch runs the classifier IN-PROCESS, so it is the leaf
+                # that needs its own transcript -- there is no child pwsh below
+                # it to start one.
+                Start-SILauncherTranscript -Engine 'privilege-tier-classifier' -Flavour container -RepoRoot '/app' | Out-Null
                 # In-process call (NOT `& pwsh -File`) -- child pwsh would lose
                 # all the $global:* state we just hydrated from custom.ps1.
                 & $classifierScript
-                exit $LASTEXITCODE
+                $clsExit = $LASTEXITCODE
+                Publish-SILauncherTranscript -Engine 'privilege-tier-classifier' `
+                    -Context (New-SIRunLogStorageContext) | Out-Null
+                exit $clsExit
             }
             # else: fall through to legacy worker path below (Invoke-SIEngineRun)
         }
@@ -95,6 +115,14 @@ function Get-OptionalEnv {
 
 # Engine + sinks
 $engine     = Get-RequiredEnv 'SI_ENGINE'
+
+# Started here -- the earliest point the engine name is known, so the transcript
+# also captures the auth and config work below, which is where a container run
+# most often dies. Anything that throws BEFORE Connect-AzAccount succeeds cannot
+# be published either way (no credentials to upload with); everything after it is
+# covered by the orchestrator's own try/catch and the publish at the end.
+Start-SILauncherTranscript -Engine $engine -Flavour container -RepoRoot '/app' | Out-Null
+
 $assetLimit = [int](Get-OptionalEnv 'SI_ASSET_LIMIT' 0)
 $sinksCsv   = Get-OptionalEnv 'SI_SINKS' 'JSON,Excel,LA'
 $sinks      = $sinksCsv.Split(',') | ForEach-Object { $_.Trim() }
@@ -290,4 +318,13 @@ if ($useQueue -and $queueMessageId -and ($orchExit -eq 0 -or $null -eq $orchExit
         Write-Warning ('[trigger] could not delete shard message: {0}' -f $_.Exception.Message)
     }
 }
+
+# #55.1(b) -- the run log follows the run output to the staging container. This
+# runs on BOTH outcomes: a failed orchestrator was caught above and set $orchExit
+# rather than terminating, and its transcript is the one worth keeping. In KEDA
+# mode $kctx already exists for the shard queue, so reuse it rather than building
+# a second context for the same account.
+$runLogCtx = if ($useQueue -and $kctx) { $kctx } else { New-SIRunLogStorageContext }
+Publish-SILauncherTranscript -Engine $engine -Context $runLogCtx | Out-Null
+
 if ($orchExit -gt 0) { exit $orchExit }

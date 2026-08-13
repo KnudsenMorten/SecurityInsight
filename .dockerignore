@@ -1,18 +1,43 @@
-# SIA container build context = the SecurityInsight solution root (the Dockerfile needs
-# analyzer-web/src + analyzer/seed). The image must contain ONLY those. Exclude EVERYTHING
-# else from the ACR build upload — in particular NEVER upload customer config to the build
-# service: *.custom.* / config/ / DATA/ / demo/ stay out.
-*
-!analyzer-web
-!analyzer
-analyzer/*
-!analyzer/seed
-# never ship build artifacts or any customer/runtime config even from the included trees
-analyzer-web/**/bin
-analyzer-web/**/obj
+# TWO images build from THIS directory as their context, and they need opposite things:
+#
+#   * securityinsight-analyzer (analyzer-web/deploy/Dockerfile, context $siRoot in
+#     analyzer-web/deploy/Deploy-SIAnalyzer.ps1) COPYs three explicit paths --
+#     analyzer-web/src, the two .csproj files, and analyzer/seed. It never does `COPY .`,
+#     so what lands in the SIA image is decided by its Dockerfile, NOT by this file.
+#
+#   * si-orchestrator (container/Dockerfile, context `Split-Path -Parent $PSScriptRoot`
+#     in container/Sync-ContainerModules.ps1) does `COPY . /app/` and needs the WHOLE
+#     solution at runtime: container/, engine/, launcher/, auth/, asset-profiling-*/,
+#     risk-analysis-detection/ and its own ENTRYPOINT script.
+#
+# 🔴 THIS FILE USED TO OPEN WITH `*` PLUS AN ALLOWLIST OF analyzer-web + analyzer/seed.
+# That is correct for SIA and silently fatal for the orchestrator: under those rules
+# `COPY . /app/` copies neither the engine, nor the launcher, nor
+# /app/container/Start-SIInContainer.ps1 -- the image's own ENTRYPOINT. It never bit
+# because si-orchestrator has not been rebuilt since the rule landed (2026-08-07).
+# Since a .dockerignore only controls what is UPLOADED, and the SIA image's contents are
+# pinned by its COPY lines either way, a deny-list serves both builds. Keep it that way.
+# Guarded by tests/pester/SI-ContainerTranscript.Tests.ps1 ("the orchestrator build
+# context can still contain what the entrypoints need").
+
+# ---- NEVER upload customer or runtime config to the ACR build service ----
+# These carry real tenant values and secrets. This is the rule the original file was
+# written for, and it does not relax.
 **/*.custom.ps1
 **/*.custom.json
 **/*.custom.csv
 **/*.custom.yaml
 **/config/
 **/DATA/
+internal/
+demo/
+
+# ---- build artifacts ----
+analyzer-web/**/bin
+analyzer-web/**/obj
+
+# ---- run output: large, regenerated, and needed by neither image ----
+logs/
+output/
+staging/
+**/OUTPUT/

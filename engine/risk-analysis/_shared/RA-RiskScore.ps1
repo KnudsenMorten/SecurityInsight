@@ -779,6 +779,24 @@ function Calculate-RiskScore {
                 if ($hasYamlImpacted) {
                     # YAML projects either semicolon-joined string (strcat_array) or
                     # dynamic array (make_set). Normalize to ordered/unique array.
+                    #
+                    # AUDIT #25, FOURTH SHAPE -- measured on run 20260813T204314Z, not read.
+                    # A `make_set` list does NOT arrive in one shape: it depends on which ROUTE
+                    # the query took. The XDR Advanced Hunting path materializes a dynamic column
+                    # as an object[]; the LA-direct path (any report reading a *_CL table) returns
+                    # it as JSON TEXT. Splitting that text on ';' finds no separator, so the whole
+                    # JSON document became a SINGLE list element -- the list rendered as
+                    # [["a","b",...17 items...]] and its length read 1 next to a KQL-computed count
+                    # of 17. Endpoint_ExcludedAssets_Summary was the one report hitting it, because
+                    # it is the one whose Summary reads a CL table.
+                    # Parsed AS-IS on purpose: no blank-filtering and no re-sorting on this path,
+                    # so the array the engine publishes is exactly the one `array_length` counted
+                    # in KQL. Filtering here would recreate the mismatch from the other direction.
+                    if ($existingImpacted -is [string] -and $existingImpacted.TrimStart().StartsWith('[')) {
+                        $parsedImpacted = $null
+                        try { $parsedImpacted = @($existingImpacted | ConvertFrom-Json) } catch { $parsedImpacted = $null }
+                        if ($null -ne $parsedImpacted) { $existingImpacted = $parsedImpacted }
+                    }
                     if ($existingImpacted -is [string]) {
                         $existingImpacted = @($existingImpacted -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
                     }

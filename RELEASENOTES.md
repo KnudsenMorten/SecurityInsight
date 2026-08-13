@@ -1,9 +1,15 @@
 # Release notes for SecurityInsight
 
-## v2.2.437
+## v2.2.438
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.438: container runs keep a log, and two reports now count what they list (d4027df4)
+- fix(SI) #25 fourth shape: a make_set list arrives in TWO shapes, and the engine knew only one (2900c5d2)
+- docs(SI): the cert-store trap had TWO contradictory prescriptions, and the cause was neither of them (62409f2f)
+- docs(SI) #55: DESIGN never mentioned run transcripts at all -- and they have been default-on since v2.2.312 (27e921fe)
+- fix(SI) #25: the count/list guard was keyed on the LIST, so it walked past two reports that broke it (e74fa75d)
+- feat(SI) #55.1: the container host finally keeps a run transcript -- and could not have been rebuilt at all (ab0c8e0f)
 - fix(SI) v2.2.437: two defects found by auditing v2.2.434-435, neither reachable, both real (76d7d009)
 - fix(SI) v2.2.436: a failed discovery source must not look like a stale estate (e7506799)
 - feat(SI) v2.2.435: Okta identity servers are tiered, and an SCCM console stops claiming to be a site server (784f13d0)
@@ -28,12 +34,86 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - design(SI) #60.5.0c-e: asset lifecycle STATE by rules -- positive evidence closes, absence only proposes (612ebb68)
 - design(SI) #60.5.0: delta CANNOT close a ticket -- the sync reconciles STATE, with a mass-close guard (4bc46a07)
 - design(SI) #60.12: AI grounding index -- two targets with opposite economics, and a staleness trap (f587bc8c)
-- design(SI) #60.0: SI already IS the middleware -- and that reconciles the LA contradiction (5586d628)
-- design(SI) #60: consolidated architecture, the middleware framing, and an ideas register (dc1a8d65)
-- design(SI) #60.3: field mapper -- declarative only, and it is a prime silent-loss surface (85b069a0)
-- design(SI) #60: the SI platform architecture -- web, connector service, queue, SQL (eb2ab859)
-- release(SI) v2.2.425: #59.3 the CMDB naming contract -- documented and enforced, and NOTHING renamed (3f22cfc2)
-- docs(SI) #59.3: the naming pass is MEASURED -- and the frontend is already broken by naming drift (c719bcbd)
+
+---
+
+## v2.2.438 — container runs finally keep a log, and two reports now count what they list
+
+**If you run the engines on a VM, one number changes and nothing else. If you run them in containers,
+this release is the difference between having a record of a run and having none.**
+
+### 1. Two Summary reports disagreed with themselves about how many assets were involved
+
+Every Summary report carries an impacted-asset **count** next to the impacted-asset **list**. In two
+reports the count was computed over a different column than the list, so the number did not describe
+the thing printed beside it:
+
+- **the excluded-assets summary** (added in v2.2.431)
+- **the active-compromise summary**
+
+Both now derive the count from their own list, which is what the other reports already did.
+
+**A second defect underneath it, found only because the first fix exposed it.** The affected-asset list
+does not reach the engine in one shape: reports answered by Advanced Hunting deliver it as a real list,
+while reports reading your own profile tables deliver it as **text**. The engine understood the first
+form and one older text form, but not this one — so on the affected report the list arrived as a single
+run-together entry instead of 17 separate assets, while the count beside it was correct. It is now
+parsed properly, and left exactly as the query produced it so the number and the list can never drift
+apart again. Reports whose lists were already correct are untouched.
+
+⚠️ **The visible change: the excluded-assets count can drop slightly.** On the environment this was
+measured in it went **19 → 17**. It now counts distinct asset **names** — exactly the entries in the
+list. If those two numbers differ in your tenant it tells you something real: either two excluded
+assets share a hostname, or one has no name recorded. That is worth knowing, but a count that
+contradicts its own list is not the way to find out.
+
+**The check that was supposed to catch this reported PASS the whole time.** It selected reports by the
+name of the *list* column, so it inspected only reports that already followed the convention and
+walked silently past the two that did not. It now selects on the **count** — the thing being
+protected — and every report that computes one must be classifiable as *derives from its own list* or
+*publishes no list*; anything in a third shape now fails the build. "0 violations" means "N inspected",
+not "N skipped".
+
+Re-keying the check immediately found the second report, which had been **exempted** years-of-habit
+style on a claim nobody re-checked (*"this one has no list, so the rule is impossible here"* — true of
+the column's name, not of the report). It returns no rows in a healthy tenant, so it would have first
+misstated its numbers **on the day a real compromise was detected**.
+
+### 2. Container runs kept no forensic record at all
+
+Every VM run has been wrapped in a transcript since v2.2.312. The **container** host — the one
+recommended for large tenants — was never passed that flavour by any entrypoint, so it wrote no
+transcript. A container filesystem is ephemeral, so even the console output died with the replica.
+
+Now all three container entrypoints start a transcript, and it is uploaded at the end of the run to
+your staging storage account under `run-logs/<engine>/`, with the same 30-day retention as the local
+logs. Three deliberate properties:
+
+- **The upload never fails the run.** A collection run that dies because its log could not be uploaded
+  trades your inventory for your audit trail — the wrong way round.
+- **The transcript is closed before it is read**, so the uploaded file includes the tail — which on a
+  failed run is the part you actually want.
+- **It prunes its own blobs** at your configured retention, and deliberately sits outside the staging
+  prefix, whose 7-day cleanup rule would otherwise silently disagree with the 30-day setting.
+
+**Known limit, stated rather than hidden:** a run that fails *before* it authenticates cannot upload
+anything, because there are no credentials to upload with.
+
+### 3. If you build the container images yourself, the orchestrator image could not have been built
+
+The build-exclusion file added on 2026-08-07 was written for the analyzer image: it excluded
+**everything** and re-included only the analyzer's own folders. Both images build from the same
+context, so an orchestrator image built under those rules would have contained **no engine, no
+launcher, and not even its own entrypoint script** — it would have started and exited immediately.
+
+It never bit anyone because that image had not been rebuilt since the rule landed. It is now a
+deny-list. The analyzer image is byte-identical either way (its Dockerfile copies explicit paths and
+never the whole context), and the exclusions that keep customer configuration out of the build are
+kept — and now asserted by a test that evaluates the real rules rather than trusting them.
+
+**Do I need to do anything?** On a VM, no. **In containers: rebuild the orchestrator image** to pick
+up run transcripts — and note that this is the first rebuild that would have produced a working image
+since early August.
 
 ---
 

@@ -21621,10 +21621,18 @@ Reports:
           //__BUCKET_FILTER_BEGIN__
           | where 1 == 1
           //__BUCKET_FILTER_END__
+          // audit #25, second instance -- found 2026-08-13 by re-keying the guard off the COUNT.
+          // Same shape as Endpoint_ExcludedAssets_Summary: dcount(PrimaryEntityId) beside a list
+          // built from make_set(AssetName). This suite previously recorded this report as "the one
+          // with NO list, so array_length has nothing to derive from" -- that was true only of the
+          // NAME `ImpactedAssetsList`. It always projected the same list as `ImpactedAssets`, so the
+          // prescription was never impossible, just invisible.
+          // It has returned 0 rows on every estate measured so far, which is exactly why no
+          // export-based test ever caught it: the invariant is VACUOUS on an empty report. It would
+          // have first misstated its numbers on the day a real compromise was detected.
           | summarize
-              ImpactedAssetCount     = dcount(PrimaryEntityId),
               TotalIssues            = count(),
-              ImpactedAssets         = strcat_array(array_sort_asc(make_set(AssetName)), ";"),
+              ImpactedAssetsList     = make_set(AssetName),
             MdeDeviceId            = any(tostring(column_ifexists("MdeDeviceId",""))),
             EntraAccountObjectId   = any(tostring(column_ifexists("EntraAccountObjectId",""))),
             AzureResourceId        = any(tostring(column_ifexists("AzureResourceId",""))),
@@ -21635,6 +21643,8 @@ Reports:
             by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
                CriticalityTier, CriticalityTierLevel, SecuritySeverity,
                cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity, MsCriticalityLevel, MachineRiskState
+          | extend ImpactedAssetsList = array_sort_asc(ImpactedAssetsList)
+          | extend ImpactedAssetCount = array_length(ImpactedAssetsList)
           //__WEIGHTED_FACTORS_BEGIN__
           | extend RiskScore_Weight_Detailed = ""
           | extend RiskScore_Weight_Factor   = 100
@@ -24467,14 +24477,26 @@ Reports:
         //__BUCKET_FILTER_BEGIN__
         | where 1 == 1
         //__BUCKET_FILTER_END__
+        // audit #25. This block used to count dcount(PrimaryEntityId) beside a list built from
+        // make_set(AssetName) -- two different columns, so they diverged by construction (measured
+        // 19 vs 17 on a real export). The count is now DERIVED from the list, which is the fix #25
+        // established for every other report.
+        // The list is also named ImpactedAssetsList and left as a bare make_set on purpose:
+        //   * that is the canonical name the engine and the rest of the catalog already use -- the
+        //     old 'ImpactedAssets' shipped NULL in the export anyway, while the engine injected its
+        //     own ImpactedAssetsList beside it, which is where the 17 came from;
+        //   * SI-ImpactedAssetCount.Tests.ps1 selects reports on `ImpactedAssetsList = make_set`,
+        //     so a strcat_array-wrapped column named anything else is skipped in silence. That is
+        //     exactly how this regression reached a shipped report six days after #25 was closed.
         | summarize
-            ImpactedAssetCount = dcount(PrimaryEntityId),
-            ImpactedAssets     = strcat_array(array_sort_asc(make_set(AssetName)), ";"),
+            ImpactedAssetsList = make_set(AssetName),
             ExcludedReasons    = strcat_array(array_sort_asc(make_set(ExcludedReason)), " | "),
             AssetId            = any(tostring(column_ifexists("AssetId","")))
           by SecurityDomain, Category, Subcategory, ConfigurationName, ConfigurationId,
              CriticalityTier, CriticalityTierLevel, SecuritySeverity,
              cmdbId, cmdbName, cmdbCriticality, cmdbDataSensitivity
+        | extend ImpactedAssetsList = array_sort_asc(ImpactedAssetsList)
+        | extend ImpactedAssetCount = array_length(ImpactedAssetsList)
         | extend Impact      = strcat(tostring(ImpactedAssetCount), " asset(s) at tier ", tostring(CriticalityTier), " are suppressed from every Risk Analysis report.")
         | extend MoreDetails = strcat("Excluded by -> ", ExcludedReasons)
         //__WEIGHTED_FACTORS_BEGIN__

@@ -3250,6 +3250,52 @@ The table + DCR (`dcr-si-run-health`) auto-provision on first ingest via `AzLogD
 
 The heartbeat helper lives at `v2.2/engine/asset-profiling/shared/Send-SIRunHealthRow.ps1` and is invoked from `Invoke-SIEngineRun.ps1` (Start before stages, End in `finally`).
 
+### Run transcripts — every run keeps its own log
+
+The heartbeat above says *whether* a run finished. The transcript says *what it did*. Every launcher
+wraps its run in `Start-Transcript` via `launcher/_lib/Start-LauncherTranscript.ps1`, and this is **on
+by default** — nothing needs enabling.
+
+| | |
+|---|---|
+| **Path** | `<root>/logs/<engine>_<flavour>[_<simulation>][_<template>]_<yyyyMMddTHHmmssZ>.log` |
+| **Layout** | one `logs/` folder per install (deliberate — easier to grep than a tree), UTC stamp so the folder sorts chronologically |
+| **Retention** | 30 days, pruned at the start of each run; override with `$global:SI_LogRetentionDays` |
+| **Kill switch** | `$global:SI_DisableTranscript` — both knobs are documented in `config/SecurityInsight.custom.reference.ps1` |
+
+The helper is layout-aware: it resolves `SOLUTIONS/SecurityInsight/logs` in the monorepo and
+`<root>/logs` in the flat community layout, so a community install does not end up writing its
+transcripts somewhere its operator cannot find them.
+
+#### The container host publishes its transcript to blob storage
+
+A container filesystem is ephemeral, so a log written inside one dies with the replica. The three
+container entrypoints — `Start-SIInContainer.ps1` (worker + privilege-tier-classifier branches),
+`Start-RiskAnalysisInContainer.ps1` and `Invoke-ShardProducer.ps1` — start a transcript with
+`-Flavour container` and hand it to `launcher/_lib/Publish-LauncherTranscript.ps1` at run end, which
+uploads it to the staging account under `run-logs/<engine>/<file name>`.
+
+The **dispatch** branches deliberately start no transcript: they hand off to a child `pwsh` that starts
+its own, and two transcripts for one run is worse than one. Each leaf branch captures `$LASTEXITCODE`
+**before** publishing, because publishing runs commands — without that, a Container Apps Job would
+report the publish's exit code rather than the engine's.
+
+Three properties of the publisher, in priority order:
+
+- **It never throws.** Every failure path warns and returns `$null`. Failing a collection run because
+  its log could not be uploaded trades the customer's inventory for their audit trail, which is the
+  wrong way round.
+- **It stops the transcript before reading the file.** `Start-Transcript` buffers, so uploading an open
+  transcript ships a file missing exactly the tail an operator wants — the error at the end of a failed
+  run.
+- **It prunes its own blobs** at `$global:SI_LogRetentionDays` (30), matching local retention. Run logs
+  sit **outside** `staging/` on purpose: the staging lifecycle rule is prefix-scoped to `staging/` and
+  its 7 days would silently disagree with the 30-day retention everywhere else.
+
+**Known limit, stated rather than hidden:** anything that throws *before* `Connect-AzAccount` succeeds
+cannot be published, because there are no credentials to upload with. A container that dies on a missing
+environment variable still leaves nothing behind. Everything after that point is covered.
+
 ### Monitoring — three layers
 
 Pick the layer that matches your operational posture. Most setups use Layer 1 daily + Layer 2 on production tenants.

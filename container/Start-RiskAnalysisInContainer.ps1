@@ -36,6 +36,10 @@
 
 $ErrorActionPreference = 'Stop'
 
+# ---- #55.1: run transcripts on the container host (see Start-SIInContainer.ps1) ----
+. /app/launcher/_lib/Start-LauncherTranscript.ps1
+. /app/launcher/_lib/Publish-LauncherTranscript.ps1
+
 function Get-RequiredEnv {
     param([Parameter(Mandatory)][string]$Name)
     $v = [Environment]::GetEnvironmentVariable($Name)
@@ -129,6 +133,12 @@ $global:AutoBucketCount    = (Get-OptionalEnv 'SI_RA_AUTO_BUCKET'      '1') -in 
 $global:AutoBucketMax      = [int](Get-OptionalEnv 'SI_RA_AUTO_BUCKET_MAX' '1024')
 $global:AutoBucketCache    = (Get-OptionalEnv 'SI_RA_AUTO_BUCKET_CACHE' '1') -in '1','true','True','yes'
 
+# Started before the banner so the banner lands INSIDE the transcript -- it is the
+# run header an operator reads first. -Template mirrors what the VM launchers pass,
+# so a container log and a VM log for the same report have the same file name shape.
+Start-SILauncherTranscript -Engine 'risk-analysis' -Flavour container -RepoRoot '/app' `
+    -Template $global:ReportTemplate | Out-Null
+
 Write-Host '======================================================================'
 Write-Host (' SecurityInsight v2.2 Risk Analysis in container -- ts={0}' -f ([datetime]::UtcNow.ToString('o')))
 Write-Host ('  ReportTemplate    = {0}' -f $global:ReportTemplate)
@@ -174,4 +184,10 @@ if (-not (Test-Path -LiteralPath $engineScript)) {
 $global:AutomationFramework = $false
 
 & $engineScript
-exit $LASTEXITCODE
+$raExit = $LASTEXITCODE
+
+# #55.1(b). RA's own Phase 3 already publishes the XLSX/JSON to this account; the
+# run log now lands beside them instead of dying with the replica.
+Publish-SILauncherTranscript -Engine 'risk-analysis' -Context (New-SIRunLogStorageContext) | Out-Null
+
+exit $raExit

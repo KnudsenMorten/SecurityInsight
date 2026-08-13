@@ -150,6 +150,29 @@ function Invoke-SIDiscover {
         $perSourceCounts[$pair.Name] = $cnt
         $elapsed = ([datetime]::UtcNow - $srcStart).TotalSeconds
         Write-SIInfo ("source '{0}' returned {1,5} rows  ({2,5:n1}s)" -f $pair.Name, $cnt, $elapsed)
+
+        # 🔴 A CONFIGURED SOURCE THAT RETURNS NOTHING IS A WARNING, NOT AN OBSERVATION.
+        # Measured 2026-08-13, and this is exactly how it hurts: 'EndpointEG' returned 0 rows after
+        # 180s (it returns 61 in ~12s on a healthy run -- a throttle or timeout, not an empty estate).
+        # That source carries the last-seen ACTIVITY signal, so without it 51 assets fell outside the
+        # 30-day active window and the OUTPUT stage dropped them. The run then reported
+        # "asset filter: 109 -> 20 (dropped 89 inactive)" and finished GREEN.
+        #
+        # 🪤 The operator sees an inventory that shrank by 72% described as a correct filter decision.
+        # Nothing in the run said a source had failed -- a 0 and a 61 printed at the same [INFO]
+        # weight, one line apart from each other. This codebase already states the principle for CMDB
+        # data ("wrong is worse than empty, BECAUSE EMPTY IS VISIBLE"); here empty was NOT visible,
+        # because it was disguised as a filter result downstream.
+        #
+        # A source is only in $sources when it is configured and enabled, so zero is always worth
+        # saying out loud. It is legitimately zero sometimes -- a tenant with no Azure Arc machines,
+        # say -- which is why this warns and continues rather than failing the run. The elapsed time
+        # is on the line because it is what separates "nothing to return" (fast) from "did not manage
+        # to return it" (slow).
+        if ($cnt -eq 0) {
+            Write-SIWarn ("discovery source '{0}' returned NO rows after {1:n1}s. If this source normally returns data, treat every downstream count as suspect -- assets it uniquely contributes will be missing, and any that depend on it for their last-seen date can be dropped later as 'inactive' rather than reported as lost." -f $pair.Name, $elapsed)
+        }
+
         foreach ($a in $sourceRows) { [void]$rawAssets.Add($a) }
     }
     Write-Host ''

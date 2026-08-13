@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.435
+## v2.2.436
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- fix(SI) v2.2.436: a failed discovery source must not look like a stale estate (e7506799)
 - feat(SI) v2.2.435: Okta identity servers are tiered, and an SCCM console stops claiming to be a site server (784f13d0)
 - fix(SI) v2.2.434: a refused cross-source merge now NAMES the assets, on the normal run (aa7e96fe)
 - @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
@@ -33,7 +34,52 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release(SI) v2.2.425: #59.3 the CMDB naming contract -- documented and enforced, and NOTHING renamed (3f22cfc2)
 - docs(SI) #59.3: the naming pass is MEASURED -- and the frontend is already broken by naming drift (c719bcbd)
 - docs(SI): the recorded next step is ANSWERED -- SI-as-data-provider is NOT numbered in the framework (e6e6a13a)
-- docs(SI): full session handoff -- and the column MODEL is recorded as the task, not the guards (fa28361c)
+
+---
+
+## v2.2.436 — a data source that fails now says so, instead of your inventory quietly shrinking
+
+**If your runs are healthy you will never see these two lines. That is the point.**
+
+**What happened, on a real run.** One discovery source — the exposure-graph endpoint feed — returned
+**0 rows after 180 seconds**. On the two previous runs the same day it returned 61 rows in about 12
+seconds, so this was a timeout, not an empty estate. That source carries the **last-seen date** for
+devices. Without it, 51 machines looked like they had not been seen in 30 days, and the output filter
+dropped them as inactive.
+
+The run reported this:
+
+```
+[INFO] source 'EndpointEG' returned     0 rows  (179,7s)
+[INFO] asset filter [Mixed (MDE+EG+Entra, DEFAULT), 30d]: 109 -> 20 (dropped 89 inactive)
+RUN COMPLETE
+```
+
+**The inventory fell by 72% and the run finished green.** The only trace was a line describing a
+perfectly correct filter decision — and the `0` printed at exactly the same weight as the `61` had, one
+line apart. Nothing said a source had failed.
+
+**Two changes, both warnings only:**
+
+- **A configured source that returns no rows is now a WARNING**, with the elapsed time on the line —
+  because that is what separates *"there was nothing to return"* (fast) from *"we did not manage to
+  return it"* (slow). It warns and continues: zero is legitimately zero sometimes, and failing the run
+  would trade a complete-but-suspect inventory for none at all.
+- **The activity filter now says when it has removed most of the estate**, and points you upstream at
+  the per-source row counts — because that is where the answer is. A source that returned nothing takes
+  its assets' last-seen dates with it, and they get dropped here as *"inactive"* rather than reported as
+  missing.
+
+**Nothing is filtered differently.** No threshold changes behaviour, no asset is included or excluded
+that was not before, and every number already on those lines is unchanged. This is reporting only.
+
+**Why it matters more than it looks.** An empty result that arrives *disguised as a correct decision one
+stage later* is the hardest kind to catch, because everything downstream is behaving properly. This
+codebase already states the rule for CMDB data — *wrong is worse than empty, because empty is visible*.
+Here empty was **not** visible. Now it is.
+
+**Do I need to do anything?** No. If you see either warning, check the per-source counts in the DISCOVER
+phase before trusting that run's asset count.
 
 ---
 

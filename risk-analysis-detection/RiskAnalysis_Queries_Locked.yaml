@@ -24437,7 +24437,7 @@ Reports:
       - cmdbCriticality
       - cmdbDataSensitivity
       - ImpactedAssetCount
-      - ImpactedAssets
+      - ImpactedAssetsList
       - ExcludedReasons
       - MoreDetails
       - AssetDetectedInReportName

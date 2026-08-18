@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.439
+## v2.2.440
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.440 #25 fifth shape: the fix shipped in .438 was correct, and never ran (1268c65f)
+- fix(SI) v2.2.439 tests: my own new test file failed the gate it was written to protect (b202c607)
 - release(SI) v2.2.439: a finished Risk Analysis run could be thrown away at the final write (6f02fd8f)
 - release(SI) v2.2.438: container runs keep a log, and two reports now count what they list (d4027df4)
 - fix(SI) #25 fourth shape: a make_set list arrives in TWO shapes, and the engine knew only one (2900c5d2)
@@ -32,8 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - design(SI) #60.5.2: the correlation prerequisite -- MEASURED, and AssetId is not what its name promises (27308438)
 - design(SI) #60.5.1: the four connector capabilities -- and "mapping" already meant something else (b21dd4a6)
 - design(SI) #60.5.0f-h: SQL holds the DETERMINATION -- decide once, then instruct (85516412)
-- design(SI) #60.5.0c-e: asset lifecycle STATE by rules -- positive evidence closes, absence only proposes (612ebb68)
-- design(SI) #60.5.0: delta CANNOT close a ticket -- the sync reconciles STATE, with a mass-close guard (4bc46a07)
+
+---
+
+## v2.2.440 — the impacted-asset list was collapsing to one entry, and the fix for it never ran
+
+**One Summary report showed an impacted-asset count of 69 next to a list containing a single blank
+entry. The fix shipped in v2.2.438 was correct — and had no effect in production for six days.**
+
+### What you saw
+
+In `Endpoint_ExcludedAssets_Summary`, `ImpactedAssetCount` read 69 while `ImpactedAssetsList` held one
+empty item. The count was right; the list beside it was not.
+
+### Why the previous fix didn't take
+
+The list arrives from two different routes. Reports answered by Defender Advanced Hunting deliver a
+real array; reports reading your own `SI_*_CL` tables deliver **JSON text**. v2.2.438 taught the engine
+to parse that text — and did it with `@($text | ConvertFrom-Json)`.
+
+That line behaves differently depending on which PowerShell is running it:
+
+| host | result |
+|---|---|
+| **Windows PowerShell 5.1** — what every engine actually runs on | the whole array arrives as **one** item |
+| PowerShell 7 — what the test suite runs on | the items arrive individually |
+
+Windows PowerShell 5.1 writes a decoded JSON array to the pipeline as a single object; PowerShell 7
+unpacks it. So the parse worked everywhere it was tested and nowhere it was used, and the list kept
+collapsing to one element — the exact symptom the fix was written to remove.
+
+The engine now decodes into a variable first and never through the pipeline, which behaves identically
+on both. A second, quieter version of the same trap is fixed alongside it: an **empty** list decodes to
+"nothing" on PowerShell 7 and to "an empty array" on 5.1, so a check for "did this decode?" that looked
+for a missing value treated a perfectly good empty list as a failure.
+
+### The part worth knowing
+
+**The test suite runs on a different PowerShell than the engines do.** Any defect that depends on the
+host is invisible to it, which is precisely what happened here. The `#25` checks now also execute the
+real engine code inside a genuine PowerShell 5.1 process and assert the two hosts agree, so a
+difference like this fails the build instead of shipping.
+
+**Nothing you need to do.** No configuration change. If a report showed a count next to a one-item
+list, it now shows the full list; the count itself was never wrong.
 
 ---
 

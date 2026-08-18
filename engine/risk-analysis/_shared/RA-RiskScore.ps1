@@ -792,10 +792,34 @@ function Calculate-RiskScore {
                     # Parsed AS-IS on purpose: no blank-filtering and no re-sorting on this path,
                     # so the array the engine publishes is exactly the one `array_length` counted
                     # in KQL. Filtering here would recreate the mismatch from the other direction.
+                    # 🔴 ASSIGN FIRST, THEN WRAP. NEVER `@($s | ConvertFrom-Json)`.
+                    # This is the v2.2.439 correction to the v2.2.438 fix, and the difference is the
+                    # HOST, not the data. Windows PowerShell 5.1 -- which is what every SI engine
+                    # actually runs on -- writes a deserialized JSON array to the pipeline as ONE
+                    # object, so `@($s | ConvertFrom-Json)` collects a single element containing the
+                    # whole array. PowerShell 7 enumerates it and yields the items. Measured on this
+                    # machine, same string, same second:
+                    #     PS 5.1  @($j | ConvertFrom-Json).Count = 1
+                    #     pwsh 7  @($j | ConvertFrom-Json).Count = 4
+                    # So the fourth-shape fix was correct in pwsh 7 and INERT in production: the list
+                    # kept collapsing to a single element beside a KQL count of 69, which is exactly
+                    # the defect #25 was opened for -- reintroduced by the fix that closed it.
+                    # Assigning to a variable bypasses the pipeline write entirely, so `@()` then sees
+                    # a real array and behaves identically on both hosts.
+                    # 🪤 SUCCESS IS A FLAG, NOT A NULL CHECK -- the hosts disagree about null here too.
+                    # For '[]': PS 5.1 returns a non-null EMPTY array, pwsh 7 returns NULL. So
+                    # `if ($null -ne $parsed)` reads "parse failed" on pwsh for a perfectly good empty
+                    # array, falls through to the semicolon split, and republishes '[]' as a
+                    # one-element list -- the very shape this block exists to prevent. Caught by the
+                    # existing empty-array test, which is the only reason it is not in this release.
                     if ($existingImpacted -is [string] -and $existingImpacted.TrimStart().StartsWith('[')) {
                         $parsedImpacted = $null
-                        try { $parsedImpacted = @($existingImpacted | ConvertFrom-Json) } catch { $parsedImpacted = $null }
-                        if ($null -ne $parsedImpacted) { $existingImpacted = $parsedImpacted }
+                        $parsedOk       = $false
+                        try { $parsedImpacted = ConvertFrom-Json -InputObject $existingImpacted; $parsedOk = $true }
+                        catch { $parsedOk = $false }
+                        if ($parsedOk) {
+                            $existingImpacted = if ($null -eq $parsedImpacted) { @() } else { @($parsedImpacted) }
+                        }
                     }
                     if ($existingImpacted -is [string]) {
                         $existingImpacted = @($existingImpacted -split '\s*;\s*' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)

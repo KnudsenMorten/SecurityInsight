@@ -26,29 +26,29 @@
     -Mock path builds no rows at all. That gap is what this file closes.
 #>
 
+# ---------------------------------------------------------------------------------------------------
+# DISCOVERY-TIME, and it has to be: -Skip is evaluated during discovery, so this cannot live in a
+# BeforeAll.
+# 🪤 The pre-publish gate workflow installs Pester and powershell-yaml and NOTHING ELSE -- no
+# ImportExcel. The first version of this file did `Import-Module ImportExcel -ErrorAction Stop` in a
+# BeforeAll, which threw on the runner and took the ENTIRE FILE down: Pester reported "discovery failed
+# -- 0 tests ran", so all nine tests counted as failures and the gate went red on the very release that
+# fixed the bug. A test that cannot run must SKIP, loudly and locally; it must never fail the build for
+# a missing optional module.
+# The split below is deliberate: the ROOT CAUSE guards need no Excel at all and therefore run
+# EVERYWHERE, including CI. Only the round-trip through a real workbook needs the module.
+# ---------------------------------------------------------------------------------------------------
+$script:HasImportExcel = [bool](Get-Module -ListAvailable -Name ImportExcel -ErrorAction SilentlyContinue)
+
 BeforeAll {
-    $script:SIRoot = Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) '..'
-    $script:RaShared = Join-Path $script:SIRoot 'engine\risk-analysis\_shared'
-
-    if (-not (Get-Module -Name ImportExcel)) { Import-Module ImportExcel -Force -ErrorAction Stop }
-    . (Join-Path $script:RaShared 'RA-RunProgress.ps1')
-    . (Join-Path $script:RaShared 'RA-ExcelReport.ps1')
-    # Normally initialised by the engine (Invoke-RiskAnalysis.ps1:96); Export-Worksheet indexes it.
-    $script:_sheetWritten = @{}
-
-    $script:OutDir = Join-Path ([System.IO.Path]::GetTempPath()) ("si-raexport-" + [guid]::NewGuid().ToString('N').Substring(0,10))
-    New-Item -ItemType Directory -Force -Path $script:OutDir | Out-Null
+    $script:SIRoot   = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $PSCommandPath)) '..') ''
+    $script:RaEngine = Join-Path (Join-Path (Join-Path $script:SIRoot 'engine') 'risk-analysis') 'Invoke-RiskAnalysis.ps1'
+    $script:RaShared = Join-Path (Join-Path (Join-Path $script:SIRoot 'engine') 'risk-analysis') '_shared'
 
     $script:SampleRows = @(
         [pscustomobject]@{ AssetName='HOST-1'; OsPlatform='Windows11';         RiskScoreTotal=9 },
         [pscustomobject]@{ AssetName='HOST-2'; OsPlatform='WindowsServer2022'; RiskScoreTotal=4 }
     )
-}
-
-AfterAll {
-    if ($script:OutDir -and (Test-Path -LiteralPath $script:OutDir)) {
-        Remove-Item -LiteralPath $script:OutDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
 }
 
 Describe 'the platform behaviour the fix defends against' {
@@ -65,7 +65,23 @@ Describe 'the platform behaviour the fix defends against' {
     }
 }
 
-Describe 'Export-Worksheet survives a poisoned column list -- 2600 rows must never be lost again' {
+Describe 'Export-Worksheet survives a poisoned column list -- 2600 rows must never be lost again' -Skip:(-not $script:HasImportExcel) {
+
+    BeforeAll {
+        Import-Module ImportExcel -Force
+        . (Join-Path $script:RaShared 'RA-RunProgress.ps1')
+        . (Join-Path $script:RaShared 'RA-ExcelReport.ps1')
+        # Normally initialised by the engine (Invoke-RiskAnalysis.ps1:96); Export-Worksheet indexes it.
+        $script:_sheetWritten = @{}
+        $script:OutDir = Join-Path ([System.IO.Path]::GetTempPath()) ("si-raexport-" + [guid]::NewGuid().ToString('N').Substring(0,10))
+        New-Item -ItemType Directory -Force -Path $script:OutDir | Out-Null
+    }
+
+    AfterAll {
+        if ($script:OutDir -and (Test-Path -LiteralPath $script:OutDir)) {
+            Remove-Item -LiteralPath $script:OutDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 
     It 'writes the sheet even when the list carries BOTH spellings and a blank' {
         $p = Join-Path $script:OutDir 'collision.xlsx'
@@ -116,7 +132,8 @@ Describe 'Export-Worksheet survives a poisoned column list -- 2600 rows must nev
 Describe 'the ROOT CAUSE -- the cross-report union must compare case-insensitively' {
 
     BeforeAll {
-        $script:EngineSrc = Get-Content -Raw (Join-Path $script:SIRoot 'engine\risk-analysis\Invoke-RiskAnalysis.ps1')
+        # No modules, no Excel, no tenant -- these are the guards that must run on every runner.
+        $script:EngineSrc = Get-Content -Raw -LiteralPath $script:RaEngine
     }
 
     It 'the union no longer uses the ordinal List.Contains that admitted both spellings' {

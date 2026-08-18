@@ -165,7 +165,32 @@ function Export-Worksheet {
   }
 
   $Data = $Rows
-  if ($DesiredColumns) { $Data = $Data | Select-Object -Property $DesiredColumns }
+  # 🔒 SECOND LAYER: this export must never be the thing that destroys a completed run.
+  # PSObject property names are CASE-INSENSITIVE, so a column list carrying both 'OsPlatform' and
+  # 'OSPlatform' makes Select-Object throw
+  #     The property cannot be processed because the property "OSPlatform" already exists.
+  # In v2.2.438 that threw at the FINAL WRITE of a ~26-minute customer run: every query had already
+  # completed, 2600 rows were in the pool, and the Excel write runs BEFORE the JSON sibling -- so the
+  # entire run was lost to a duplicate string in a list.
+  # The producer was fixed too (Invoke-RiskAnalysis.ps1's cross-report union is now case-insensitive).
+  # This layer stays because the union is not the only caller, and because the trade is one-sided:
+  # dropping a duplicate name costs nothing, while throwing here costs the whole run.
+  # Blank names are dropped for the same reason -- Select-Object throws on those too.
+  if ($DesiredColumns) {
+    $_seenCol = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $_useCols = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($c in $DesiredColumns) {
+      if ([string]::IsNullOrWhiteSpace($c)) { continue }
+      if ($_seenCol.Add($c)) { [void]$_useCols.Add($c) }
+    }
+    $_dropped = @($DesiredColumns).Count - $_useCols.Count
+    if ($_dropped -gt 0) {
+      # Loud, not silent: a collision means two reports disagree about how to spell one column, and
+      # that is worth fixing at the source even though the export now survives it.
+      Write-Warning ("Export-Worksheet [{0}]: {1} duplicate/blank column name(s) removed from the export list (case-insensitive; first spelling kept). Two reports likely spell one column differently -- the sheet is complete, but fix the source." -f $safeSheet, $_dropped)
+    }
+    if ($_useCols.Count -gt 0) { $Data = $Data | Select-Object -Property $_useCols.ToArray() }
+  }
 
   if ($ColumnsToFlatten.Count -gt 0) {
     $Data = $Data | ForEach-Object {

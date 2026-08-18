@@ -297,3 +297,95 @@ Describe 'audit #25 -- the FOURTH shape: a make_set list arrives in two differen
         @($out).Count | Should -Be 0
     }
 }
+
+# DISCOVERY-TIME. `-Skip:` is evaluated during discovery, so this cannot live in a BeforeAll -- put it
+# there and every 5.1 test silently SKIPS on a runner that has PowerShell 5.1, which is the one place
+# they must run. Verified by counting: skipped=2 before this moved out, skipped=0 after.
+$script:Ps51Path  = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$script:HasPs51   = Test-Path -LiteralPath $script:Ps51Path
+
+Describe 'audit #25, FIFTH shape -- the normalizer must behave the same on the host the ENGINE runs on' {
+<#
+    v2.2.440. The fourth-shape fix (v2.2.438) was correct, tested, green -- and INERT in production
+    for six days, because of the HOST rather than the data.
+
+        PS 5.1   @($json | ConvertFrom-Json).Count  ->  1
+        pwsh 7   @($json | ConvertFrom-Json).Count  ->  4
+
+    Windows PowerShell 5.1 writes a deserialized JSON array to the pipeline as ONE object; PowerShell
+    7 enumerates it. Every SI engine runs under 5.1 (the launcher starts powershell.exe); the Pester
+    suite and the pre-publish gate both run under pwsh 7 (`shell: pwsh`). So the tests above exercised
+    the REAL engine block, passed honestly, and proved nothing about production -- the list kept
+    collapsing to a single element beside a KQL count of 69.
+
+    THE GENERAL LESSON, which is bigger than this column: a suite that runs on a different host from
+    the product cannot see host-sensitive defects. These tests re-run the SAME extracted block in a
+    real PS 5.1 child process, so the assertion is made where the engine actually lives.
+#>
+
+    BeforeAll {
+        $si  = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+        $src = Join-Path $si 'engine\risk-analysis\_shared\RA-RiskScore.ps1'
+
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($src, [ref]$tokens, [ref]$errors)
+        if ($errors.Count) { throw "RA-RiskScore.ps1 has parse errors: $($errors[0].Message)" }
+        $script:Norm51 = (@($ast.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.IfStatementAst] -and
+            $n.Clauses[0].Item1.Extent.Text -match '\$existingImpacted -is \[string\]'
+        }, $true)) | ForEach-Object { $_.Extent.Text }) -join "`n"
+
+        # Re-resolved for the RUN phase. The copy above the Describe is what -Skip reads at DISCOVERY
+        # time; discovery-scope variables are not visible inside It blocks, so both are needed and
+        # neither is redundant.
+        $script:Ps51Path = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+    }
+
+    It 'the extraction still matches (absence must not read as success)' {
+        $script:Norm51 | Should -Match 'ConvertFrom-Json'
+    }
+
+    It 'THE SOURCE MUST NOT PIPE INTO ConvertFrom-Json -- that is the 5.1 trap, in one line' {
+        # Host-independent, so this guard holds even on a runner with no PS 5.1. Assign the result
+        # to a variable and wrap that; never `@($s | ConvertFrom-Json)`.
+        $script:Norm51 | Should -Not -Match '\|\s*ConvertFrom-Json'
+        $script:Norm51 | Should -Match 'ConvertFrom-Json\s+-InputObject'
+    }
+
+    It 'a JSON array normalizes to 17 items under REAL PowerShell 5.1, not 1' -Skip:(-not $script:HasPs51) {
+        $json = ((1..17 | ForEach-Object { "asset$_" }) | ConvertTo-Json -Compress)
+        $probe = @"
+`$existingImpacted = '$json'
+$script:Norm51
+Write-Output @(`$existingImpacted).Count
+"@
+        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si25-probe-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
+        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
+        try {
+            $out = & $script:Ps51Path -NoProfile -ExecutionPolicy Bypass -File $f
+            [int](@($out)[-1]) | Should -Be 17
+        } finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'and the two hosts AGREE -- the property that was silently untrue' -Skip:(-not $script:HasPs51) {
+        $json = '["a","b","c","d"]'
+        $existingImpacted = $json
+        . ([scriptblock]::Create($script:Norm51))
+        $here = @($existingImpacted).Count
+
+        $probe = @"
+`$existingImpacted = '$json'
+$script:Norm51
+Write-Output @(`$existingImpacted).Count
+"@
+        $f = Join-Path ([System.IO.Path]::GetTempPath()) ("si25-probe-" + [guid]::NewGuid().ToString('N').Substring(0,8) + ".ps1")
+        Set-Content -LiteralPath $f -Value $probe -Encoding UTF8
+        try {
+            $there = [int](@(& $script:Ps51Path -NoProfile -ExecutionPolicy Bypass -File $f)[-1])
+            $there | Should -Be $here
+            $here  | Should -Be 4
+        } finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+    }
+}

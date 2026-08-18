@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.438
+## v2.2.439
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.439: a finished Risk Analysis run could be thrown away at the final write (6f02fd8f)
 - release(SI) v2.2.438: container runs keep a log, and two reports now count what they list (d4027df4)
 - fix(SI) #25 fourth shape: a make_set list arrives in TWO shapes, and the engine knew only one (2900c5d2)
 - docs(SI): the cert-store trap had TWO contradictory prescriptions, and the cause was neither of them (62409f2f)
@@ -33,7 +34,53 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - design(SI) #60.5.0f-h: SQL holds the DETERMINATION -- decide once, then instruct (85516412)
 - design(SI) #60.5.0c-e: asset lifecycle STATE by rules -- positive evidence closes, absence only proposes (612ebb68)
 - design(SI) #60.5.0: delta CANNOT close a ticket -- the sync reconciles STATE, with a mass-close guard (4bc46a07)
-- design(SI) #60.12: AI grounding index -- two targets with opposite economics, and a staleness trap (f587bc8c)
+
+---
+
+## v2.2.439 — a completed Risk Analysis run could be thrown away at the final write. Fixed.
+
+🔴 **Upgrade if you run Risk Analysis. On an affected tenant this destroys the entire run — not a
+report, the run.**
+
+### What happened
+
+Risk Analysis ran every report successfully — dozens of queries, tens of minutes, thousands of rows
+collected — and then died on the very last step, while writing the workbook:
+
+```
+The property cannot be processed because the property "OSPlatform" already exists.
+```
+
+No spreadsheet. And because the Excel file is written **before** the JSON sibling, no JSON either.
+Every query had already succeeded and the whole result was lost. Re-running just hit the same wall.
+
+### Why
+
+The workbook's column list is the union of the columns across all reports in your template. Two
+reports spelled one column differently — `OsPlatform` in the endpoint reports, `OSPlatform` in
+another — and the union compared names **case-sensitively**, so it kept both. Excel column names, like
+PowerShell property names, are **case-insensitive**, so the export then refused a list containing what
+it saw as the same column twice.
+
+It only bites when a single run includes two reports that disagree about the spelling of one column,
+which is why it survived earlier releases: the `RiskAnalysis_Detailed` template is a combination that
+brings both together.
+
+### What changed
+
+- **The union now compares case-insensitively.** The first spelling wins; no cell value changes.
+- **The export can no longer be the thing that loses your run.** It now removes duplicate and blank
+  column names itself and writes the sheet regardless, warning so the underlying disagreement still
+  gets fixed. A duplicate name in a list is not worth a lost run.
+- **A regression test now builds the poisoned column list on purpose** and asserts both that the export
+  survives it and that no row or column is dropped in the process.
+
+**Nothing you need to do.** No configuration, no re-tagging. If you saw this error, the same run now
+completes and produces both the `.xlsx` and the `.json`.
+
+> **On why this reached you.** The collision cannot happen inside a single report — only across two —
+> so no per-report test could produce it, and none of the offline tests assembled a real cross-report
+> union. That gap is now closed by the test described above.
 
 ---
 

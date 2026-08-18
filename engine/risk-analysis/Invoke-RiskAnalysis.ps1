@@ -3338,13 +3338,36 @@ if ($ResultAll.Count -eq 0) {
     if (-not $global:FinalDesiredColumns) {
         $global:FinalDesiredColumns = @($DesiredColumns)
     } else {
+        # 🔴 THE UNION MUST BE CASE-INSENSITIVE, AND THIS LINE IS THE WHOLE FIX.
+        # `List[string].Contains()` uses the ORDINAL comparer, so 'OsPlatform' (endpoint reports) and
+        # 'OSPlatform' (the DI_OSPlatform coalesce in the locked YAML) were BOTH admitted to the union.
+        # PSObject property names are case-INSENSITIVE, so the `Select-Object -Property $DesiredColumns`
+        # in Export-Worksheet then threw:
+        #     The property cannot be processed because the property "OSPlatform" already exists.
+        # 🪤 WHAT HID IT: the per-report build above uses PowerShell's `-notcontains`, which IS
+        # case-insensitive -- so no single report can ever collide with itself, and every report passes
+        # its own Select-Object at line ~3308. Only the union ACROSS reports could collide, and only
+        # when two reports spell one column differently. Switching from a PowerShell operator to a .NET
+        # List silently changed the comparison semantics at exactly the point where it mattered.
+        # 🔴 AND IT FAILED AT THE WORST POSSIBLE MOMENT: the Excel write is the LAST step and runs
+        # BEFORE the JSON sibling, so a 26-minute run with every query already complete and 2600 rows
+        # in the pool lost all of it. Reported from a real v2.2.438 customer run.
+        # FIRST SPELLING WINS: the union is first-seen order and row values are looked up
+        # case-insensitively anyway, so keeping the earlier spelling changes no cell value.
         $mergedCols = New-Object 'System.Collections.Generic.List[string]'
-        foreach ($c in $global:FinalDesiredColumns) { if (-not $mergedCols.Contains($c)) { [void]$mergedCols.Add($c) } }
-        foreach ($c in $DesiredColumns)             { if (-not $mergedCols.Contains($c)) { [void]$mergedCols.Add($c) } }
+        $seenCols   = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($c in $global:FinalDesiredColumns) { if ($seenCols.Add($c)) { [void]$mergedCols.Add($c) } }
+        foreach ($c in $DesiredColumns)             { if ($seenCols.Add($c)) { [void]$mergedCols.Add($c) } }
         # Re-pin the trace columns last. They are appended per report (see $TraceCols
         # above, "always the LAST four columns"), so a plain union would leave report 1's
         # copies stranded mid-sheet with later reports' columns after them.
-        foreach ($t in $TraceCols) { [void]$mergedCols.Remove($t) }
+        # Removal is case-insensitive too -- an ordinal Remove() would leave a differently-cased
+        # duplicate of a trace column stranded mid-sheet AND re-introduce the collision this fixes.
+        foreach ($t in $TraceCols) {
+            for ($i = $mergedCols.Count - 1; $i -ge 0; $i--) {
+                if ([string]::Equals($mergedCols[$i], $t, [System.StringComparison]::OrdinalIgnoreCase)) { $mergedCols.RemoveAt($i) }
+            }
+        }
         foreach ($t in $TraceCols) { [void]$mergedCols.Add($t) }
         $global:FinalDesiredColumns = $mergedCols.ToArray()
     }

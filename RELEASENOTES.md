@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.442
+## v2.2.443
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.443: 15 Detailed reports declared an asset name and never produced one (e96f0e26)
 - release(SI) v2.2.442: a Tier 0 report was fabricating every finding it produced (84bd5cb4)
 - release(SI) v2.2.441: an asset name is ATOMIC, and every silent cap now says what it dropped (2259bf7b)
 - release(SI) v2.2.440 #25 fifth shape: the fix shipped in .438 was correct, and never ran (1268c65f)
@@ -33,7 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): point main's router at the si-v3 branch, so a new session can find the v3 work (444152fc)
 - fix(SI): repair the bare table name I put in the README last night -- NO version bump, NO tag (d9c6a6cd)
 - design(SI) #60.5.2-5: the correlation prerequisite, measured -- and it is a fifth SI engine on SQL (d7d09ca8)
-- design(SI) #60.5.2: the correlation prerequisite -- MEASURED, and AssetId is not what its name promises (27308438)
+
+---
+
+## v2.2.443 — 15 Detailed reports promised an asset name and never delivered one
+
+**Follow-on from v2.2.442. Fixing one report raised the obvious question — how many others have the
+same problem? Fifteen did.**
+
+### The contract, and where it was broken
+
+Every one of the 60 **Detailed** reports promises three columns that identify what a finding is about:
+the asset's **name**, its **id** and its **type**. (The 60 **Summary** reports promise an impacted-asset
+*list* instead, which is the right thing for an aggregated view — they are unaffected, and cannot be
+affected.)
+
+**15 of the 60 Detailed reports promised those columns and never produced them.** Their rows arrived
+without the one field that says *which* user, service principal or device a finding concerns.
+
+### Why that is more than a blank column
+
+For `AssetName` it is not cosmetic:
+
+- the engine removes duplicate rows using the asset name as part of the key — with no name, genuinely
+  different rows look identical and get merged;
+- the AI summary identifies assets from that field, so affected findings could not be attributed.
+
+This is exactly what made v2.2.442's report collapse 296 rows into 12: there was no name to tell the
+rows apart.
+
+### What changed
+
+- **11 identity reports** now emit all three columns. Verified against live data: every row populated,
+  with real values.
+- **4 attack-path reports** now emit the id and type they were missing.
+- A check now enforces the contract across the whole catalogue, so a report cannot promise one of
+  these columns again without producing it.
+
+### ⚠️ What you will see
+
+Findings from the affected reports will now **name the identity involved** — several of them
+previously showed a blank asset. Row counts may also change slightly on those reports, because
+duplicate removal can now tell apart rows that were previously indistinguishable. Both are corrections.
+
+**Nothing you need to do.**
 
 ---
 

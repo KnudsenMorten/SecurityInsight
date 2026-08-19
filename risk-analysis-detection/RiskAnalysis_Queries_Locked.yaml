@@ -3566,6 +3566,8 @@ Reports:
             ConfigurationName,
             ConfigurationId,
             AssetName,
+            AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("AssetId_From_CL", ""), column_ifexists("ConfigurationId", "")),
+            AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure"),
             Impact,
             SecuritySeverity,
             CriticalityTier,
@@ -5049,6 +5051,8 @@ Reports:
             ConfigurationName,
             ConfigurationId,
             AssetName,
+            AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("AssetId_From_CL", ""), column_ifexists("ConfigurationId", "")),
+            AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure"),
             Impact,
             SecuritySeverity = SecuritySeverityLevel,
             CriticalityTier,
@@ -6410,6 +6414,8 @@ Reports:
             ConfigurationName,
             ConfigurationId,
             AssetName,
+            AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("AssetId_From_CL", ""), column_ifexists("ConfigurationId", "")),
+            AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure"),
             Impact,
             SecuritySeverity,
             CriticalityTier,
@@ -7784,6 +7790,8 @@ Reports:
             ConfigurationName,
             ConfigurationId,
             AssetName,
+            AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("AssetId_From_CL", ""), column_ifexists("ConfigurationId", "")),
+            AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("AssetType_From_CL", ""), column_ifexists("AssetLabel", ""), "Azure"),
             Impact,
             SecuritySeverity,
             CriticalityTier,
@@ -21853,6 +21861,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact=strcat("User departed ", DaysSinceLeave, " days ago, account still enabled"),
                   EmployeeLeaveDateTime=_leave, DaysSinceLeave, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -21958,6 +21969,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="Disabled account still has privileged role -- re-enable resurrects access",
                   DisabledPrivilegedUser, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -22065,6 +22079,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="Disabled account still has privileged group / role -- re-enable resurrects privilege", SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
 
@@ -22171,6 +22188,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="External guest holds Entra role assignment",
                   EntraRoles_Permanent, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -22280,6 +22300,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn,AppId),
                   Impact=strcat(PermanentRoleCount, " always-on role(s) instead of PIM-eligible"),
                   PermanentRoleCount, EligibleRoleCount, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -22393,6 +22416,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact=strcat(SignInCount, " sign-ins (30d) where no Conditional Access policy applied"), SignInCount, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
 
@@ -22495,6 +22521,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=AppId,
                   Impact=strcat("SPN granted ", array_length(MailScopes), " mailbox-impersonation scopes"), MailScopes, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
 
@@ -22605,6 +22634,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=AppId,
                   Impact="SPN ownership not aligned with app registration ownership", SpnOwner, AppOwner, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
 
@@ -22728,6 +22760,8 @@ Reports:
                 // Fifth instance of declared-but-never-wired (after AssetName elsewhere, AssetId, the
                 // tier aggregator and #61).
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   AssetName=coalesce(tostring(column_ifexists("AssetName","")), tostring(DisplayName)),
                   ConfigurationName=DisplayName, ConfigurationId=AppId,
                   Impact=strcat("SPN owns public resource (", ResourceType, "); inactive ", DaysInactive, "d"),
@@ -22838,6 +22872,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=Upn,
                   Impact="User has on-prem AD critical-group membership but no Entra role -- privilege is invisible to Entra-only audits", AdNestedCriticalGroups, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
 
@@ -22944,6 +22981,9 @@ Reports:
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
                 | project SecurityDomain="Identity", Category, Subcategory=strcat(RiskFactorCount, " concurrent risk factors"),
+                  AssetName=coalesce(column_ifexists("AssetName", ""), column_ifexists("DisplayName", "")),
+                  AssetId=coalesce(column_ifexists("AssetId", ""), column_ifexists("PrimaryEntityId", "")),
+                  AssetType=coalesce(column_ifexists("AssetType", ""), column_ifexists("ObjectType", ""), "Identity"),
                   ConfigurationName=DisplayName, ConfigurationId=coalesce(Upn,AppId),
                   Impact=strcat("Identity hits ", RiskFactorCount, " risk-factor flags simultaneously"), RiskFactorCount, MoreInfoUrl, Links, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
 

@@ -228,6 +228,8 @@ function Calculate-RiskScore {
     # still collapses correctly because duplicated rows match on ALL these columns.
     $deduped = New-Object System.Collections.Generic.List[object]
     $seenKeys = New-Object 'System.Collections.Generic.HashSet[string]'
+    # Per-report counter for the 4096-char URL-harvest skip; reported after the row loop.
+    $script:_mdOversizeSkipped = 0
     $cnInName = if ($PSBoundParameters.ContainsKey('ConfigurationIdInputName') -and $ConfigurationIdInputName) { $ConfigurationIdInputName } else { 'ConfigurationId' }
     # Bucket-level dimensions (Summary reports) PLUS optional per-row identity columns.
     # Detailed reports carry AssetName/AadDeviceId -- absent on Summary rows so they
@@ -482,7 +484,16 @@ function Calculate-RiskScore {
                 foreach ($item in $items) {
                     $s = [string]$item
                     if ([string]::IsNullOrWhiteSpace($s)) { continue }
-                    if ($s.Length -gt 4096) { continue }   # cell guard: skip oversized blobs
+                    # 🔒 COUNTED, NOT SILENT. A field over 4096 chars is skipped for URL harvesting --
+                    # and the fields most likely to exceed it are exactly the CVE/recommendation
+                    # rollups whose links matter most. It used to `continue` with no trace, so an
+                    # asset could show zero links while its data carried dozens. The skip stands
+                    # (scanning multi-MB blobs per row per report is the cost this guard avoids),
+                    # but the run now reports how many fields it passed over.
+                    if ($s.Length -gt 4096) {
+                        $script:_mdOversizeSkipped = 1 + [int]$script:_mdOversizeSkipped
+                        continue
+                    }
                     if ($s -notmatch 'https?://') { continue }
                     # Pull out EVERY URL from the field. Prior version used $s -match '^https?://'
                     # which kept the WHOLE string as one entry -- if a YAML rollup had
@@ -628,13 +639,25 @@ function Calculate-RiskScore {
         }
 
         # Dedupe (preserves order), cap at 25 URLs, then join with line-break and cap at 4000 chars.
+        # 🔒 A CAP MUST SAY WHAT IT DROPPED. Both limits below are real data loss in the cell an
+        # operator reads, and both used to be silent: 112 links became 25 with a bare "..." and no
+        # way to know 87 were missing, so the cell looked complete. An operator cannot audit a number
+        # they were never shown. The counts are now part of the value itself.
         if ($mdLines.Count -gt 0) {
             $deduped = [System.Collections.Generic.List[string]]::new()
             $seen2 = New-Object System.Collections.Generic.HashSet[string]
             foreach ($u in $mdLines) { if ($seen2.Add($u)) { [void]$deduped.Add($u) } }
-            $arr = @($deduped | Select-Object -First 25)
-            $joined = ($arr -join $sep)
-            if ($joined.Length -gt 4000) { $joined = $joined.Substring(0, 3990) + '...' }
+
+            $mdTotal = $deduped.Count
+            $arr     = @($deduped | Select-Object -First 25)
+            $joined  = ($arr -join $sep)
+            if ($mdTotal -gt $arr.Count) {
+                $joined += ($sep + ('[+{0} more link(s) not shown -- {1} total]' -f ($mdTotal - $arr.Count), $mdTotal))
+            }
+            if ($joined.Length -gt 4000) {
+                $cutMarker = '... [truncated at 4000 chars]'
+                $joined = $joined.Substring(0, [Math]::Max(0, 4000 - $cutMarker.Length)) + $cutMarker
+            }
             $tmp['MoreDetails'] = $joined
         }
 
@@ -654,6 +677,12 @@ function Calculate-RiskScore {
     }
 
     Write-Progress -Id 2 -Activity "Calculating Risk Scores" -Completed
+
+    # 🔒 The 4096-char URL-harvest skip is real loss in MoreDetails, so the run says how often it fired.
+    # Silence here previously meant an asset could show no links while its data carried dozens.
+    if ([int]$script:_mdOversizeSkipped -gt 0) {
+        Write-Info ("MoreDetails: skipped URL harvesting on {0} oversized field value(s) (>4096 chars); links in those fields are NOT in the MoreDetails cell" -f $script:_mdOversizeSkipped)
+    }
 
     # per-report aggregates emitted under canonical OutputPropertyOrder names:
     #   ImpactedAssetCount        = length of ImpactedAssetsList (audit #25)     (int, scalar)

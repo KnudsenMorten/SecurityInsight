@@ -296,7 +296,14 @@ function Invoke-SIOpenAIClassify {
             Sources      = $AssetPayload.Sources
             Hint         = $AssetPayload.Hint
             Metadata     = '<trimmed: payload exceeded token budget>'
+            # 🔒 The Metadata replacement above already announces itself with '<trimmed: ...>'.
+            # This slice did not, so the model saw a 20-item list as if it were the whole set and
+            # could classify an asset on partial posture evidence while reporting full confidence.
+            # Same disclosure treatment: the payload states what was cut.
             PostureHits  = @($AssetPayload.PostureHits | Select-Object -First 20)
+            PostureHitsTrimmed = $(if (@($AssetPayload.PostureHits).Count -gt 20) {
+                    'showing 20 of {0} posture hits -- classification is based on a SUBSET' -f @($AssetPayload.PostureHits).Count
+                } else { '' })
         }
         $userJson = $trimmed | ConvertTo-Json -Depth 8 -Compress
     }

@@ -123,12 +123,25 @@ function Resolve-AssetNamesForRow {
     )
 
     if (-not [string]::IsNullOrWhiteSpace([string]$fallback)) {
-        $val = ([string]$fallback).Trim()
-        if ($val -match '[,;]') {
-            $parts = @($val -split '\s*[,;]\s*' | Where-Object { $_ -and $_.Trim() })
-            return @($parts | ForEach-Object { $_.Trim() } | Select-Object -Unique)
-        }
-        return @($val)
+        # 🔴 ONE ROW, ONE ASSET -- DO NOT SPLIT THIS VALUE. (v2.2.441)
+        # This branch is reached only in DETAILED mode, where the column is a per-row single asset
+        # (see the comment above it). It used to split on [,;], which is not a list separator here --
+        # it is punctuation INSIDE a display name. Reported from a customer's Detailed AI summary,
+        # where one identity became three "assets":
+        #     "<Person> (Admin, Cloud, ID)"  ->  "<Person> (Admin" + "Cloud" + "ID)"
+        # and "Service Account, AI for IT" -> "Service Account" + "AI for IT".
+        # 🔑 The damage is not cosmetic. Each fragment aggregates as its OWN asset, so it gets its own
+        # risk score and its own row in the Top-N -- the real asset's findings are split across
+        # phantoms, the phantoms crowd out genuine assets in a ranked list, and the same person can
+        # appear twice (once whole from the JSON path, once shredded from here) with different scores.
+        # Bare words like "Cloud" and "ID)" then get presented to an operator as top-risk Tier 0 assets.
+        # 🪤 This is the SECOND time this exact class has been fixed in this function: Split-ImpactedAssets
+        # already carries a note about tokenizing on whitespace and exploding a description into ~10 fake
+        # assets. Same mistake, different delimiter -- an asset NAME is atomic, and only a column that is
+        # genuinely a LIST may be split. That column is handled above, by Split-ImpactedAssets.
+        # A multi-asset value arriving here would now stay whole: visibly wrong and traceable to its
+        # report, rather than silently manufacturing assets that never existed.
+        return @(([string]$fallback).Trim())
     }
 
     return @()

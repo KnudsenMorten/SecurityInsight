@@ -22680,13 +22680,24 @@ Reports:
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
-            | project LinkedAzureResourceId=AzureResourceId, ResourceType, ResourceTier=Tier;
+            // An empty id must never be a join key -- see the note on the join below
+            | where isnotempty(tostring(AzureResourceId))
+            | project LinkedAzureResourceId=tostring(AzureResourceId), ResourceType, ResourceTier=Tier;
         SI_Identity_Profile_CL
         | where CollectionTime == _ti
         | where IdentityType == "ServicePrincipal"
         | where (DaysInactive >= 90) or (IsHighRiskPermissionGrant == true)
         | mv-expand _role = todynamic(AzureRoles_Assignments)
-        | extend _scope = tostring(_role.scope)
+        // KQL dynamic property access is CASE-SENSITIVE and the property is `Scope`, not `scope`.
+        // With the lowercase spelling this yielded null on EVERY row -- measured 148 of 148 blank,
+        // versus 8 of 148 with the correct casing across 39 distinct real scopes.
+        | extend _scope = tostring(_role.Scope)
+        // EMPTY MUST NEVER JOIN TO EMPTY. This is what turned the casing typo into false findings:
+        // 148 blank scopes matched the 2 public resources whose AzureResourceId was also blank,
+        // producing 148 x 2 = 296 rows in which no SPN owned anything. Corrected, the report returns
+        // 0 rows on that estate -- the true answer. Both guards stay: the casing fix alone would
+        // leave 8 blank-scope rows still able to pair with a blank id.
+        | where isnotempty(_scope)
         | join kind=inner _publicResources on $left._scope == $right.LinkedAzureResourceId
         | extend DeviceKey = coalesce(tostring(column_ifexists("AzureResourceId","")), tostring(column_ifexists("Upn","")), tostring(column_ifexists("AppId","")))
                 //__BUCKET_FILTER_BEGIN__
@@ -22710,7 +22721,14 @@ Reports:
         | extend RiskScore_Weight_Factor   = 100
         | extend RiskFactor_Weight         = 100
         //__WEIGHTED_FACTORS_END__
+                // AssetName is DECLARED in this report's OutputPropertyOrder and was never projected,
+                // so every row arrived without the one column that says WHICH service principal --
+                // and the engine's per-row dedup keys on AssetName, so 296 rows collapsed to 12.
+                // It is present and populated on SI_Identity_Profile_CL; it simply was not selected.
+                // Fifth instance of declared-but-never-wired (after AssetName elsewhere, AssetId, the
+                // tier aggregator and #61).
                 | project SecurityDomain="Identity", Category, Subcategory,
+                  AssetName=coalesce(tostring(column_ifexists("AssetName","")), tostring(DisplayName)),
                   ConfigurationName=DisplayName, ConfigurationId=AppId,
                   Impact=strcat("SPN owns public resource (", ResourceType, "); inactive ", DaysInactive, "d"),
                   DaysInactive, IsHighRiskPermissionGrant, LinkedAzureResourceId, SecuritySeverity, CriticalityTier, CriticalityTierLevel, RiskFactor_Consequence, RiskFactor_Probability, RiskFactor_Probability_Detailed, RiskFactor_Weight
@@ -23974,13 +23992,21 @@ Reports:
             SI_Azure_Profile_CL
             | where CollectionTime == _ta
             | where IsPubliclyExposed == true
-            | project LinkedAzureResourceId=AzureResourceId, ResourceType, ResourceTier=Tier;
+            // An empty id must never be a join key -- see the note on the join below
+            | where isnotempty(tostring(AzureResourceId))
+            | project LinkedAzureResourceId=tostring(AzureResourceId), ResourceType, ResourceTier=Tier;
         SI_Identity_Profile_CL
         | where CollectionTime == _ti
         | where IdentityType == "ServicePrincipal"
         | where (DaysInactive >= 90) or (IsHighRiskPermissionGrant == true)
         | mv-expand _role = todynamic(AzureRoles_Assignments)
-        | extend _scope = tostring(_role.scope)
+        // KQL dynamic property access is CASE-SENSITIVE and the property is `Scope`, not `scope`.
+        // With the lowercase spelling this yielded null on EVERY row (measured 148/148 blank).
+        | extend _scope = tostring(_role.Scope)
+        // EMPTY MUST NEVER JOIN TO EMPTY -- blank scopes paired with blank resource ids and
+        // manufactured findings in which no SPN owned anything. See the Detailed variant for the
+        // full measurement.
+        | where isnotempty(_scope)
         | join kind=inner _publicResources on $left._scope == $right.LinkedAzureResourceId
         | extend DeviceKey = coalesce(tostring(column_ifexists("AzureResourceId","")), tostring(column_ifexists("Upn","")), tostring(column_ifexists("AppId","")))
         //__BUCKET_FILTER_BEGIN__

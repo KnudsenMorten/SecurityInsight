@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.441
+## v2.2.442
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.442: a Tier 0 report was fabricating every finding it produced (84bd5cb4)
 - release(SI) v2.2.441: an asset name is ATOMIC, and every silent cap now says what it dropped (2259bf7b)
 - release(SI) v2.2.440 #25 fifth shape: the fix shipped in .438 was correct, and never ran (1268c65f)
 - fix(SI) v2.2.439 tests: my own new test file failed the gate it was written to protect (b202c607)
@@ -33,7 +34,56 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI): repair the bare table name I put in the README last night -- NO version bump, NO tag (d9c6a6cd)
 - design(SI) #60.5.2-5: the correlation prerequisite, measured -- and it is a fifth SI engine on SQL (d7d09ca8)
 - design(SI) #60.5.2: the correlation prerequisite -- MEASURED, and AssetId is not what its name promises (27308438)
-- design(SI) #60.5.1: the four connector capabilities -- and "mapping" already meant something else (b21dd4a6)
+
+---
+
+## v2.2.442 — a Tier 0 report was producing findings that were entirely false. Fixed.
+
+🔴 **If you have been reviewing "SPN owns public resource" findings, they were not real. The report
+now reports what is actually true — which on the environment this was found in is nothing.**
+
+### What was wrong
+
+`Identity_SPN_OwnsResourcePublicAccess` (both the Summary and the Detailed view) reports service
+principals that hold rights over a **publicly exposed** Azure resource — "maximum blast radius if
+compromised". It is a Tier 0 finding, and it was **fabricating every row it produced**.
+
+The report reads the *scope* of each Azure role assignment and matches it against the resource ids of
+publicly exposed resources. It read that scope under the wrong name: `scope` instead of `Scope`. In the
+query language these are different properties, so the value came back **empty on every single row** —
+measured on a live environment: 148 of 148 empty, where the correct spelling finds 39 real scopes.
+
+An empty value was then used to match against the resource list. Two publicly exposed resources
+happened to have no resource id recorded, so **empty matched empty**: 148 empty scopes × 2 empty ids =
+**296 rows in which no service principal owned anything.** After duplicate removal, 12 findings were
+presented as real.
+
+### Why it was not obvious
+
+A report that returns nothing gets questioned. This one returned a confident, populated list of Tier 0
+findings, so it got acted on. Nothing about the output suggested the rows were manufactured — and the
+one column that would have made it obvious, the **name of the service principal**, was declared in the
+report's output but never actually filled in, so every row identified nobody.
+
+### What changed
+
+- The role scope is read under its correct name, so real scopes are found.
+- **An empty value can no longer be used to match**, on either side of the comparison. This is a
+  separate guard on purpose: correcting the name alone would still leave a handful of legitimately
+  empty scopes able to pair with an empty resource id.
+- The Detailed view now includes the **service principal's name**, which it always declared and never
+  provided. This also explains why 296 rows collapsed to 12 — with no name to tell them apart, the
+  engine's duplicate removal correctly saw them as the same row.
+- Both fixes are now enforced across the whole report catalogue, not just this report.
+
+### ⚠️ What you will see
+
+**These findings will disappear.** On the environment this was diagnosed on, the report went from 12
+findings to **0** — and 0 is the correct answer there. The run's own row-count guard will flag the drop
+to zero, which is expected for this release and not a sign of a collection failure.
+
+If your environment has genuine cases, they will now appear **for the first time**, with the service
+principal named.
 
 ---
 

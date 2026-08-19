@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.440
+## v2.2.441
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.441: an asset name is ATOMIC, and every silent cap now says what it dropped (2259bf7b)
 - release(SI) v2.2.440 #25 fifth shape: the fix shipped in .438 was correct, and never ran (1268c65f)
 - fix(SI) v2.2.439 tests: my own new test file failed the gate it was written to protect (b202c607)
 - release(SI) v2.2.439: a finished Risk Analysis run could be thrown away at the final write (6f02fd8f)
@@ -33,7 +34,60 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - design(SI) #60.5.2-5: the correlation prerequisite, measured -- and it is a fifth SI engine on SQL (d7d09ca8)
 - design(SI) #60.5.2: the correlation prerequisite -- MEASURED, and AssetId is not what its name promises (27308438)
 - design(SI) #60.5.1: the four connector capabilities -- and "mapping" already meant something else (b21dd4a6)
-- design(SI) #60.5.0f-h: SQL holds the DETERMINATION -- decide once, then instruct (85516412)
+
+---
+
+## v2.2.441 — asset names were being split into phantom "assets", and every silent cap now says what it dropped
+
+### 1. One identity was being reported as three assets
+
+In the Detailed AI-summary email, an identity named `SVC-Reporting (Admin, Cloud, ID)` was split on its
+commas and reported as **three separate assets** — `SVC-Reporting (Admin`, `Cloud`, and `ID)`. Bare
+words like `Cloud` were then ranked as Tier 0 top-risk assets.
+
+This is not only cosmetic. Each fragment was aggregated as its own asset with its own risk score and
+its own row in the Top-N list, so:
+
+- the real asset's findings were **divided across the fragments**,
+- the fragments **displaced genuine assets** from a ranked list meant for action,
+- and the same identity could appear **twice with different scores** — once whole, once shredded.
+
+The cause was a per-row asset column being treated as if it were a comma-separated list. It never was:
+that column holds exactly one asset. Lists are handled elsewhere and are unaffected — a comma inside a
+list entry is still preserved. **An asset name is now atomic.**
+
+### 2. Every cap that silently discarded data now states what it discarded
+
+A review of the whole solution for places where data could be trimmed found several limits that were
+real but invisible. None of them are new; what is new is that they announce themselves:
+
+| what | you now see |
+|---|---|
+| Links in **MoreDetails** (capped at 25) | `[+87 more link(s) not shown -- 112 total]` |
+| MoreDetails length cap | `... [truncated at 4000 chars]` |
+| Very large fields skipped when collecting links | reported once per run, with a count |
+| Asset/finding/link lists in the **AI summary** | `[+N more of M total]`, so the AI is not shown a partial list as if complete |
+| Schema-audit and tag-activity rows sent to Log Analytics (capped at 50) | a warning naming the exact number not ingested |
+| Posture evidence trimmed for AI classification | the payload states it is a subset |
+
+**What the review confirmed is unchanged and uncapped:** none of the 120 shipped report queries limits
+rows, asset collection has no limit by default, and the duplicate-row removal only ever removes rows
+that are identical across every column it compares.
+
+### 3. Very large reports: Excel and email now behave predictably
+
+- **Excel** has a hard ceiling of 1,048,576 rows per sheet, which was not handled at all — a large
+  enough tenant would get either an error or a workbook quietly missing rows. The workbook now holds
+  the **top 1,000,000 rows by risk score** and says how many were left out. Nothing is lost from the
+  run: the `.json` file beside it and the Log Analytics data still contain every row.
+- **Email**: an attachment above the size limit does not arrive smaller — the mail server rejects the
+  **entire message**, so you would lose the summary as well as the spreadsheet. Reports that would
+  exceed the limit are now **sent without the attachment**, with a notice at the top of the email
+  giving the file's location. Default budget is **20 MB of message**, measured the way mail servers
+  measure it (attachments are encoded for transport, which adds roughly a third), so it admits a
+  workbook of about 14 MB. Adjust with `$global:SI_MaxMailAttachmentMB`.
+
+**Nothing you need to do.** No configuration changes, no re-tagging.
 
 ---
 

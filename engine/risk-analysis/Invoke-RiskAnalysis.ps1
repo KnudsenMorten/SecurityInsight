@@ -4687,8 +4687,19 @@ if ([bool]$global:BuildSummaryByAI) {
                 Select-Object -First 5 |
                 ForEach-Object { ("{0} ({1:N0})" -f $_.Key, $_.Value) }) -join '; '
 
+            # 🔒 Say what was trimmed. These slices feed the AI prompt, so an undisclosed cut does not
+            # just hide data -- it lets the model state "the affected assets are X, Y, Z" as if the
+            # list were complete. The counts make the truncation visible to the model AND to anyone
+            # reading the prompt back.
+            if ($f.AssetRiskScores.Count -gt 5) {
+                $topAssetsForFinding += ('; [+{0} more of {1} total]' -f ($f.AssetRiskScores.Count - 5), $f.AssetRiskScores.Count)
+            }
+
             $finLinks = ""
-            if ($f.Links.Count -gt 0) { $finLinks = (@($f.Links) | Select-Object -First 6) -join "; " }
+            if ($f.Links.Count -gt 0) {
+                $finLinks = (@($f.Links) | Select-Object -First 6) -join "; "
+                if ($f.Links.Count -gt 6) { $finLinks += ('; [+{0} more]' -f ($f.Links.Count - 6)) }
+            }
 
             $findingLines2 += ("{0}. ConfigId={1}; Name={2}; Severity={3}; Domain={4}; Category={5}/{6}; AffectedAssetCount={7}; TotalRiskScore={8:N0}; WeightedRiskScore={9:N0}; TopAffectedAssets=[{10}]; Links={11}" -f `
                 $rankF, $f.ConfId, $f.ConfName, $f.Severity, $f.Domain, $f.Category, $f.Subcategory, $f.AffectedAssetCount, $f.TotalRiskScore, $f.TotalRiskScore_Weighted, $topAssetsForFinding, $finLinks)
@@ -4705,10 +4716,16 @@ if ([bool]$global:BuildSummaryByAI) {
             if ($a.Domains.Count -gt 0) { $domainSummary = (@($a.Domains) | Sort-Object) -join ", " }
 
             $topItems = ""
-            if ($a.TopItems.Count -gt 0) { $topItems = ($a.TopItems | Select-Object -First 8) -join "; " }
+            if ($a.TopItems.Count -gt 0) {
+                $topItems = ($a.TopItems | Select-Object -First 8) -join "; "
+                if ($a.TopItems.Count -gt 8) { $topItems += ('; [+{0} more of {1} total]' -f ($a.TopItems.Count - 8), $a.TopItems.Count) }
+            }
 
             $linkList = ""
-            if ($a.Links.Count -gt 0) { $linkList = (@($a.Links) | Select-Object -First 6) -join "; " }
+            if ($a.Links.Count -gt 0) {
+                $linkList = (@($a.Links) | Select-Object -First 6) -join "; "
+                if ($a.Links.Count -gt 6) { $linkList += ('; [+{0} more]' -f ($a.Links.Count - 6)) }
+            }
 
             $assetLines += ("{0}. Asset={1}; Tier={2}; CMDB={3} [{4}] (Criticality={5}, DataSensitivity={6}); Findings={7}; TotalRiskScore={8:N0}; WeightedRiskScore={9:N0}; Domains=[{10}]; TopItems={11}; Links={12}" -f `
                 $rank, $a.Asset, $a.TierLevel, $a.CmdbName, $a.CmdbId, $a.CmdbCriticality, $a.CmdbDataSensitivity, $a.Findings, $a.TotalRiskScore, $a.TotalRiskScore_Weighted, $domainSummary, $topItems, $linkList)
@@ -5455,7 +5472,40 @@ if ([bool]$global:Report_SendMail -eq $true) {
     } else {
         "Security Insights | Risk Analysis | $($global:ReportTemplate) | $tenantTag"
     }
-    $attachments = @($global:OutputXlsx)
+    # 🔒 ATTACHMENT SIZE GUARD (v2.2.441). A workbook that exceeds the relay's limit does not
+    # "arrive smaller" -- the whole MESSAGE is rejected, so the operator loses the AI summary and the
+    # findings too, not just the spreadsheet. With the Excel cap now allowing up to 1,000,000 rows the
+    # .xlsx can comfortably reach hundreds of MB, so this is reachable, not theoretical.
+    # 🔑 The trade: DROP THE ATTACHMENT, SEND THE MAIL. The body carries the summary and the top
+    # findings, which is the part people read; the workbook is recoverable from disk and from the
+    # blob upload. Losing the mail to save the attachment would be the wrong way round.
+    # ⚠️ Base64 inflates an attachment by ~37% on the wire, so the cap is compared against the ENCODED
+    # size, not the size on disk. A 10 MB file is ~13.7 MB of message -- which is why a naive on-disk
+    # check passes and the relay still rejects.
+    # 20 MB is the MESSAGE budget, not the on-disk file size -- the limit relays actually enforce.
+    # Because base64 inflates by ~37%, a 20 MB budget admits a workbook of roughly 14.6 MB on disk.
+    # Both numbers are printed in the warning so there is never any doubt which one was measured.
+    $_mailMaxMb    = if ($global:SI_MaxMailAttachmentMB -gt 0) { [double]$global:SI_MaxMailAttachmentMB } else { 20 }
+    $_attachNotice = ''
+    $attachments   = @()
+    if (Test-Path -LiteralPath $global:OutputXlsx) {
+        # One implementation of the size rule, in RA-Mail.ps1, so the boundary the tests pin is the
+        # boundary the engine applies.
+        $_fit       = Test-SIMailAttachmentFits -SizeBytes ((Get-Item -LiteralPath $global:OutputXlsx).Length) -MaxMb $_mailMaxMb
+        $_encodedMb = $_fit.EncodedMb
+        $_diskMb    = $_fit.DiskMb
+        if (-not $_fit.Fits) {
+            Write-Warn2 ("mail: NOT attaching {0} -- {1} MB on disk (~{2} MB once base64-encoded) exceeds the {3} MB attachment limit. The mail is still sent WITH the summary; the workbook stays on disk{4}. Raise with `$global:SI_MaxMailAttachmentMB." -f `
+                (Split-Path $global:OutputXlsx -Leaf), $_diskMb, $_encodedMb, $_mailMaxMb, $(if ($global:ExportDestination) { " and at $($global:ExportDestination)" } else { '' }))
+            $_attachNotice = ('<p style="margin:12px 0;padding:10px;border-left:4px solid #c00;background:#fff4f4;">' +
+                '<b>The full report was too large to attach</b> ({0} MB, ~{1} MB encoded; limit {2} MB).<br/>' +
+                'This email still contains the complete summary below. The workbook is available at:<br/>' +
+                '<code>{3}</code>{4}</p>') -f $_diskMb, $_encodedMb, $_mailMaxMb, $global:OutputXlsx,
+                $(if ($global:ExportDestination) { '<br/><code>' + $global:ExportDestination + '</code>' } else { '' })
+        } else {
+            $attachments = @($global:OutputXlsx)
+        }
+    }
 
     $aiEnabled = [bool]$global:BuildSummaryByAI
 
@@ -5865,6 +5915,10 @@ $aiSection
     Write-Info ("   UseSSL     : '{0}'" -f $global:SMTP_UseSSL)
     Write-Info ("   SmtpUser   : '{0}'" -f $__userLabel)
     Write-Info ("   Anonymous  : '{0}'" -f ([bool]$global:Mail_SendAnonymous))
+
+    # Prepended, not appended: a missing attachment must be the first thing the reader sees, or they
+    # scroll a complete-looking summary and never learn the workbook was omitted.
+    if (-not [string]::IsNullOrWhiteSpace($_attachNotice)) { $bodyHtml = $_attachNotice + $bodyHtml }
 
     try {
         if ([bool]$global:Mail_SendAnonymous) {

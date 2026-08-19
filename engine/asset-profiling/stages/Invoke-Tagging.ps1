@@ -131,6 +131,13 @@ function Invoke-SITagging {
 
             Write-SIInfo ('audit table : {0}_CL  /  DCR : {1}' -f $auditTable, $auditDcr)
             Write-SIInfo ('audit rows  : {0}' -f $activity.Count)
+            # 🔒 Same silent cap as Invoke-SchemaOutput: rows past the 50th never reached Log
+            # Analytics and nothing said so, which reads as "there were only 50 tagging actions".
+            $auditCap = if ($global:SI_TagActivityRowCap -gt 0) { [int]$global:SI_TagActivityRowCap } else { 50 }
+            if ($activity.Count -gt $auditCap) {
+                Write-SIWarn ('audit rows  : only the first {0} of {1} row(s) are ingested to {2} (cap; raise with $global:SI_TagActivityRowCap). {3} row(s) are NOT in Log Analytics.' -f `
+                    $auditCap, $activity.Count, $auditTable, ($activity.Count - $auditCap))
+            }
             # v2.2.246 -- DCR/DCE scope filter (see Invoke-Output.ps1 for rationale).
             $global:AzDceDetails = Get-AzDceListAll @authParams -Verbose:$false 4>$null
             $global:AzDcrDetails = Get-AzDcrListAll @authParams -Verbose:$false 4>$null
@@ -148,7 +155,7 @@ function Invoke-SITagging {
                 -DcrName                                    $auditDcr `
                 -DcrResourceGroup                           $global:SI_DcrResourceGroup `
                 -TableName                                  $auditTable `
-                -Data                                       (@($activity | Select-Object -First 50)) `
+                -Data                                       (@($activity | Select-Object -First $auditCap)) `
                 -LogIngestServicePricipleObjectId           $global:SI_LogIngest_ObjectId `
                 -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
                 -AzLogDcrTableCreateFromAnyMachine          $true `

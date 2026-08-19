@@ -14,6 +14,34 @@
 #  deeper than the engine root the main script derives $siRoot from.
 #######################################################################################################
 
+function Test-SIMailAttachmentFits {
+    <#
+        Will this file fit inside the relay's message-size limit once it is attached?
+
+        🔑 THE ANSWER IS NOT THE FILE SIZE. MIME attachments are base64-encoded, which inflates them
+        by ~37%, so a 10 MB workbook is ~13.7 MB of message. A check against the on-disk size passes
+        and the relay still rejects -- and an oversized attachment does not arrive truncated, it takes
+        the WHOLE MESSAGE with it. The operator then loses the AI summary and the findings as well as
+        the spreadsheet, which is the opposite of the intended trade.
+
+        Pure and parameterised so the boundary is provable without a mail server or a 250 MB file.
+        Returns the numbers as well as the verdict, because the caller has to tell the operator what
+        was too big and by how much.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][long]$SizeBytes,
+        [Parameter()][double]$MaxMb = 20
+    )
+    $encodedMb = [Math]::Round(($SizeBytes * 1.37) / 1MB, 1)
+    [pscustomobject]@{
+        DiskMb    = [Math]::Round($SizeBytes / 1MB, 1)
+        EncodedMb = $encodedMb
+        MaxMb     = $MaxMb
+        Fits      = ($encodedMb -le $MaxMb)
+    }
+}
+
 function Send-MailAnonymous {
     [CmdletBinding()]
     param(

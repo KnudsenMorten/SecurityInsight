@@ -115,6 +115,13 @@ function Invoke-SISchemaOutput {
 
             Write-SIInfo ('audit table : {0}_CL  /  DCR : {1}' -f $auditTable, $auditDcr)
             Write-SIInfo ('audit rows  : {0}' -f $auditRows.Count)
+            # 🔒 A cap that nobody is told about is indistinguishable from "there were only 50".
+            # This one silently dropped every audit row past the 50th on its way to Log Analytics.
+            $auditCap = if ($global:SI_SchemaAuditRowCap -gt 0) { [int]$global:SI_SchemaAuditRowCap } else { 50 }
+            if ($auditRows.Count -gt $auditCap) {
+                Write-SIWarn ('audit rows  : only the first {0} of {1} row(s) are ingested to {2} (cap; raise with $global:SI_SchemaAuditRowCap). {3} row(s) are NOT in Log Analytics.' -f `
+                    $auditCap, $auditRows.Count, $auditTable, ($auditRows.Count - $auditCap))
+            }
             # v2.2.246 -- same DCR/DCE name-collision guard as Stage Output.
             # AzLogDcrIngestPS resolves names against $global:AzD*Details via
             # name-only Where-Object; cross-scope same-named records hijack
@@ -137,7 +144,7 @@ function Invoke-SISchemaOutput {
                 -DcrName                                    $auditDcr `
                 -DcrResourceGroup                           $global:SI_DcrResourceGroup `
                 -TableName                                  $auditTable `
-                -Data                                       (@($auditRows | Select-Object -First 50)) `
+                -Data                                       (@($auditRows | Select-Object -First $auditCap)) `
                 -LogIngestServicePricipleObjectId           $global:SI_LogIngest_ObjectId `
                 -AzDcrSetLogIngestApiAppPermissionsDcrLevel $false `
                 -AzLogDcrTableCreateFromAnyMachine          $true `

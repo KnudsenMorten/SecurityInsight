@@ -163,3 +163,78 @@ Describe 'the ROOT CAUSE -- the cross-report union must compare case-insensitive
         { $script:SampleRows | Select-Object -Property $merged.ToArray() } | Should -Not -Throw
     }
 }
+
+Describe 'the Excel worksheet ceiling is enforced, and the RIGHT rows survive' -Skip:(-not $script:HasImportExcel) {
+<#
+    v2.2.441, operator instruction. A worksheet holds 1,048,576 rows INCLUDING the header. There was
+    no handling for this at all: a large enough tenant would either throw inside EPPlus or get a
+    workbook silently missing the overflow, with nothing in the run saying which.
+
+    Two properties matter and both are asserted, because enforcing the cap while cutting the WRONG
+    end would be worse than the original bug -- an operator would open a spreadsheet of the
+    lowest-risk assets and believe it was the whole estate.
+#>
+
+    BeforeAll {
+        Import-Module ImportExcel -Force
+        . (Join-Path $script:RaShared 'RA-RunProgress.ps1')
+        . (Join-Path $script:RaShared 'RA-ExcelReport.ps1')
+        $script:_sheetWritten = @{}
+        $script:CapOutDir = Join-Path ([System.IO.Path]::GetTempPath()) ("si-xlcap-" + [guid]::NewGuid().ToString('N').Substring(0,10))
+        New-Item -ItemType Directory -Force -Path $script:CapOutDir | Out-Null
+        # 120 rows, score descending 120..1
+        $script:CapRows = 1..120 | ForEach-Object { [pscustomobject]@{ AssetName = ("host-{0:D3}" -f $_); RiskScoreTotal_Weighted = (121 - $_) } }
+    }
+
+    AfterAll {
+        $global:SI_ExcelMaxDataRows = $null
+        if ($script:CapOutDir -and (Test-Path -LiteralPath $script:CapOutDir)) {
+            Remove-Item -LiteralPath $script:CapOutDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'writes exactly the cap and keeps the HIGHEST-ranked rows, cutting the tail' {
+        $global:SI_ExcelMaxDataRows = 100
+        $p = Join-Path $script:CapOutDir 'cap.xlsx'
+        Export-Worksheet -Path $p -SheetName 'Details' -Rows $script:CapRows `
+            -DesiredColumns @('AssetName','RiskScoreTotal_Weighted') `
+            -SortColumn 'RiskScoreTotal_Weighted' -SortDescending -TableStyle 'Medium9' -WarningAction SilentlyContinue
+        $back = @(Import-Excel -Path $p)
+        $back.Count | Should -Be 100
+        [int]$back[0].RiskScoreTotal_Weighted  | Should -Be 120 -Because 'the top-ranked row must survive'
+        [int]$back[-1].RiskScoreTotal_Weighted | Should -Be 21  -Because 'the LOW-risk tail is what gets cut, never the high-risk head'
+    }
+
+    It 'says exactly how many rows were left out, and where they still are' {
+        $global:SI_ExcelMaxDataRows = 100
+        $p = Join-Path $script:CapOutDir 'cap-warn.xlsx'
+        $w = $null
+        Export-Worksheet -Path $p -SheetName 'Details' -Rows $script:CapRows `
+            -DesiredColumns @('AssetName','RiskScoreTotal_Weighted') `
+            -SortColumn 'RiskScoreTotal_Weighted' -SortDescending -TableStyle 'Medium9' `
+            -WarningVariable w -WarningAction SilentlyContinue
+        $t = (@($w) -join ' ')
+        $t | Should -Match 'leaving 20 row\(s\) out'
+        $t | Should -Match '\.json'   # the overflow must be findable, not merely acknowledged
+    }
+
+    It 'NEGATIVE PASS -- below the cap nothing is trimmed and nothing is said' {
+        $global:SI_ExcelMaxDataRows = 1000
+        $p = Join-Path $script:CapOutDir 'nocap.xlsx'
+        $w = $null
+        Export-Worksheet -Path $p -SheetName 'Details' -Rows $script:CapRows `
+            -DesiredColumns @('AssetName','RiskScoreTotal_Weighted') `
+            -SortColumn 'RiskScoreTotal_Weighted' -SortDescending -TableStyle 'Medium9' `
+            -WarningVariable w -WarningAction SilentlyContinue
+        @(Import-Excel -Path $p).Count | Should -Be 120
+        (@($w) -join ' ') | Should -Not -Match 'exceed Excel'
+    }
+
+    It 'the shipped default is 1,000,000 and stays under Excel hard limit of 1,048,576' {
+        # Operator chose a round million over the technical maximum. What must never drift is the
+        # relationship: the default has to stay BELOW 1,048,576 or the cap does not cap anything.
+        $src = Get-Content -Raw -LiteralPath (Join-Path $script:RaShared 'RA-ExcelReport.ps1')
+        $src | Should -Match 'else \{ 1000000 \}'
+        1000000 | Should -BeLessThan 1048576
+    }
+}

@@ -164,6 +164,30 @@ function Export-Worksheet {
     return
   }
 
+  # 🔒 EXCEL'S CEILING -- ENFORCED HERE, AND LOUDLY (operator instruction, v2.2.441).
+  # A worksheet holds 1,048,576 rows INCLUDING the header. There was no handling for this at all: a
+  # large enough tenant would either throw deep inside EPPlus or produce a workbook silently missing
+  # the overflow, and nothing in the run would say which. Neither is acceptable, so the cut is made
+  # here, deliberately, and reported.
+  # 📌 The cap is a round 1,000,000 rather than the technical maximum of 1,048,575 -- operator's call,
+  # for simplicity. It sits ~48k below the hard limit, which also leaves headroom rather than landing
+  # exactly on the edge of what EPPlus will accept.
+  #
+  # 🔑 WHY CUTTING THE TAIL IS THE RIGHT END. The caller sorts by the weighted risk score DESCENDING
+  # before export (and Export-Worksheet sorts again on -SortColumn), so the rows that survive are the
+  # HIGHEST-risk ones. Truncating an unsorted set would be arbitrary; truncating this one keeps
+  # exactly the rows an operator opens the workbook to find.
+  # 🔒 NOTHING IS LOST FROM THE RUN -- only from the .xlsx. The JSON sibling is written from the full
+  # set and the LA ingest sends the full set, so the overflow remains available in both. The warning
+  # names the JSON explicitly, because "the spreadsheet is the data" is the assumption that makes a
+  # silent cut dangerous.
+  $_xlMaxDataRows = if ($global:SI_ExcelMaxDataRows -gt 0) { [int]$global:SI_ExcelMaxDataRows } else { 1000000 }
+  $_rowsTotal = @($Rows).Count
+  if ($_rowsTotal -gt $_xlMaxDataRows) {
+    Write-Warning ("Export-Worksheet [{0}]: {1} rows exceed Excel's worksheet limit. Writing the TOP {2} by {3} and leaving {4} row(s) out of the .xlsx. Nothing is lost from the run -- the .json sibling and the Log Analytics ingest both carry all {1} rows. (Override with `$global:SI_ExcelMaxDataRows.)" -f `
+        $safeSheet, $_rowsTotal, $_xlMaxDataRows, $(if ($SortColumn) { $SortColumn } else { 'input order' }), ($_rowsTotal - $_xlMaxDataRows))
+  }
+
   $Data = $Rows
   # 🔒 SECOND LAYER: this export must never be the thing that destroys a completed run.
   # PSObject property names are CASE-INSENSITIVE, so a column list carrying both 'OsPlatform' and
@@ -208,6 +232,12 @@ function Export-Worksheet {
 
   if ($SortColumn) {
     $Data = $Data | Sort-Object -Property $SortColumn -Descending:$SortDescending.IsPresent
+  }
+
+  # The Excel-ceiling cut, applied AFTER the sort so the rows kept are the top-ranked ones and not
+  # whichever happened to arrive first. See the note where $_xlMaxDataRows is resolved above.
+  if ($_rowsTotal -gt $_xlMaxDataRows) {
+    $Data = $Data | Select-Object -First $_xlMaxDataRows
   }
 
   # ALSO flatten any [object[]] / IDictionary / IEnumerable cell into

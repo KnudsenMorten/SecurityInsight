@@ -238,7 +238,7 @@ keeps its chapter as it moves from planned → delivered.
   same rows, columns, order, table, filter, frozen header, widths and formatting. Two related wins:
   numbers are passed as numbers rather than converted to text, so on comma-decimal systems a value
   like `9.8` can no longer be misread as `98`; and container runs now produce the same column widths
-  as Windows runs instead of falling back to a narrow default.
+  as Windows runs instead of falling back to a narrow default. It also uses **about five times less memory** than the old export (1.9 GB where the old needed 10 GB at the same size), so the faster path is also the one less likely to exhaust a collection host.
 
 ## 13. Operations & day-2
 

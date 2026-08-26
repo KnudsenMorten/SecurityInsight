@@ -2256,6 +2256,26 @@ wrap targets, vertical alignment and date formats are applied per column.
 | end to end, 20,000 × 291 | — | **148.9 s** |
 | end to end, **121,111 × 291** (a real customer shape) | **20,051.92 s** observed in production | **1,261.6 s** measured |
 
+| at 20,000 × 291, like for like | old path | bulk path |
+|---|---|---|
+| time | 3,472.09 s | **107.17 s**  (32×) |
+| peak memory | 10,032 MB | **1,887 MB**  (5.3× less) |
+| file size | 4.44 MB | **4.44 MB**  (identical) |
+
+🔑 **The bulk path also uses ~5× LESS memory**, because a row held as a preallocated `object[]` is far
+lighter than the `[pscustomobject]` rebuild it replaced. The faster export is also the one less likely
+to exhaust a collection host.
+
+🪤 **STYLING A COLUMN MATERIALISES A CELL IN EVERY EMPTY SLOT OF IT** (v2.2.448). `LoadFromArrays`
+correctly writes NO cell for a null, and this sheet is ~85% structurally empty — so applying vertical
+alignment to all 291 columns inflated the workbook **3.6×**: 0.67 MB → 2.40 MB at 3,000 × 291, and
+4.44 MB → 16.03 MB at 20,000 × 291. **Nulls themselves cost nothing** — 0.56 MB with 251 null columns,
+0.56 MB without. Range-based styling is **not** cheaper (2.41 MB, measured); the saving comes from
+styling **7 columns instead of 291**. Top alignment is therefore set only where `WrapText` is, which
+is the only place it is visible — in a normal-height single-line row `Top` and the default `Center`
+are indistinguishable. ⚠️ Not merely a disk concern: the mail attachment cap is 20 MB, so an inflated
+workbook can silently stop being attached for a customer who was previously under it.
+
 **Nothing observable about the workbook changes.** Rows, columns, order, table, filter, header,
 widths, wrapping and alignment are all identical — pinned by `SI-ExcelBulkExport.Tests.ps1`.
 

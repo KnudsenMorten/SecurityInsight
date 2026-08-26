@@ -296,6 +296,20 @@ function Send-RARunHealthEnd {
     param([string]$ExitReason = 'success', [string]$ErrorMessage = '', [int]$AssetCount = -1)
     if ($script:_RunHealthEndSent) { return }
     $script:_RunHealthEndSent = $true
+    # 🔴 AUDIT #62 -- A RUN THAT LOST BUCKETS MUST NOT REPORT A BARE 'success'.
+    # The customer run that exposed this shipped ~1,100 findings short and recorded a clean success,
+    # so nothing downstream -- workbook, mail, SI_RunHealth_CL -- could tell a partial run from a
+    # whole one. This is the machine-readable half of the fix; the log verdicts are the human half.
+    # 🔒 Crash detection is UNAFFECTED: per the contract above it keys on a Start row with NO End row,
+    # never on this string. ⚠️ A dashboard filtering `ExitReason == 'success'` will stop counting
+    # these runs -- which is the point, but worth knowing before you go looking for them.
+    try {
+        if ($null -ne $script:_RABucketLossRun -and $script:_RABucketLossRun.Count -gt 0) {
+            if ($ExitReason -eq 'success') { $ExitReason = 'success-partial' }
+            $__bl = ("{0} bucket(s) produced no rows -- affected report(s) are PARTIAL (audit #62)" -f $script:_RABucketLossRun.Count)
+            $ErrorMessage = if ([string]::IsNullOrWhiteSpace($ErrorMessage)) { $__bl } else { ($ErrorMessage + ' | ' + $__bl) }
+        }
+    } catch { }
     try {
         Send-SIRunHealthRow -RunContext $script:_RunHealthCtx -Phase 'End' `
                             -AssetCount $AssetCount -ExitReason $ExitReason -ErrorMessage $ErrorMessage
@@ -2011,6 +2025,63 @@ if (-not (Get-Variable -Name AutoBucketMemo -Scope Script -ErrorAction SilentlyC
 # writes a sibling state file in the same OUTPUT folder. Moved to _shared/RA-RowCountGuard.ps1
 . (Join-Path $PSScriptRoot '_shared/RA-RowCountGuard.ps1')   # forward slash works on both Win + Linux
 
+# ============================ AUDIT #62 -- BUCKET-LOSS ACCOUNTING ====================================
+# 🔴 THE DEFECT: a bucket that fails is logged and SKIPPED, and the report then ships as if complete.
+# Found in a customer run 2026-08-26. `Device_Recommendations_Detailed` lost buckets 10 and 11 of 26
+# to HTTP 500 after all four retries; the engine printed two `[ERR] query failed for bucket N/26`
+# lines and ran to completion normally. Measured against the previous night on the same estate:
+# 162,495 -> 150,148 raw rows, 15,220 -> 14,084 after dedup -- roughly 1,100 findings absent from the
+# workbook, from the Log Analytics table and from the email. The run looked clean.
+#
+# ⚠️ `RowCountGuard` CANNOT catch this and reported green. It asks "did any report lose ALL of its
+# findings"; this report still produced 14,084 rows, so it passed. Same family as #58.5 (every row
+# present, the columns blank): THE RUN LOOKS CLEAN AND THE DATA IS PARTIAL.
+#
+# 🔑 The bucket loop already knows the number it needs -- it simply never compared buckets ATTEMPTED
+# with buckets that CONTRIBUTED. There are SIX distinct paths that drop a bucket's rows, and a fix
+# that covered only the one in the customer's log would have left five silent:
+#   1. every remaining bucket skipped after a deterministic 900s timeout
+#   2. transient-retry budget exhausted
+#   3. any other query error
+#   4. result conversion threw
+#   5. a sub-bucket still timing out at MAX DEPTH
+#   6. a sub-bucket failing for a non-timeout reason
+#
+# 📌 A lost bucket does NOT fail the run. Partial data beats no data, and the report is still worth
+# having -- but it must be IMPOSSIBLE to mistake for complete. Hence a loud per-report verdict, a
+# run-level roll-up, and the count carried into SI_RunHealth_CL.
+$script:_RABucketLoss    = New-Object System.Collections.Generic.List[string]   # current report
+$script:_RABucketLossRun = New-Object System.Collections.Generic.List[string]   # whole run
+
+function Reset-RABucketLoss {
+    $script:_RABucketLoss = New-Object System.Collections.Generic.List[string]
+}
+
+function Add-RABucketLoss {
+    param([Parameter(Mandatory)][string]$Reason)
+    if ($null -eq $script:_RABucketLoss) { Reset-RABucketLoss }
+    [void]$script:_RABucketLoss.Add($Reason)
+}
+
+function Write-RABucketLossVerdict {
+    # Called at the report footer, right after the row total, so the count and the caveat that
+    # qualifies it are never separated in the log.
+    param(
+        [Parameter(Mandatory)][string]$ReportName,
+        [int]$BucketCount = 0,
+        [int]$RowsKept    = 0
+    )
+    if ($null -eq $script:_RABucketLoss -or $script:_RABucketLoss.Count -eq 0) { return }
+    $lost = $script:_RABucketLoss.Count
+    Write-Err2 ("INCOMPLETE REPORT -- '{0}': {1} of {2} bucket(s) contributed NO rows. The {3} row(s) above are a PARTIAL result and the findings from those bucket(s) are missing from the workbook, the Log Analytics table AND the email. This is NOT an empty-result report and NOT a row-count regression the guard can see -- it is data that was never retrieved." -f `
+        $ReportName, $lost, $BucketCount, $RowsKept)
+    foreach ($r in $script:_RABucketLoss) {
+        Write-Err2 ("        lost bucket -- {0}" -f $r)
+        [void]$script:_RABucketLossRun.Add(("{0} :: {1}" -f $ReportName, $r))
+    }
+    Write-Err2 ("        RE-RUN THIS REPORT. A bucket lost to a 500 or a timeout usually succeeds on the next run; nothing here is a permanent data condition.")
+}
+
 # Per-report row counts for this run, filled in as each report finishes and compared against the
 # previous run at the end. Absence is the thing SI keeps failing to notice (#48, v2.2.415, #57).
 $global:RA_RowCountsThisRun = @{}
@@ -2491,11 +2562,18 @@ while (-not $bucketRunSucceeded) {
   # count (the v2.2.272 escalation), record failed indices and sub-bucket only
   # those after the main loop. Lossless; preserves successful buckets' rows.
   $failedBucketIndices = New-Object System.Collections.Generic.List[int]
+  Reset-RABucketLoss   # audit #62 -- per-report, so one report's losses never leak into the next
 
   for ($b = 0; $b -lt $bucketCountToUse; $b++) {
 
       if ($script:_AutoBucketSkipRemainingBuckets) {
           Write-Warn2 ("bucket {0}/{1}: skipping (prior bucket deterministically timed out at 900s on every attempt -- remaining buckets would do the same)." -f ($b + 1), $bucketCountToUse)
+          # #62 LOSS PATH 1 -- ⚠️ CURRENTLY UNREACHABLE. `$script:_AutoBucketSkipRemainingBuckets` is
+          # initialised to $false and is never assigned $true anywhere in the solution, so this branch
+          # is dead code (another "declared but never wired" case). The accounting is wired anyway:
+          # it costs nothing, and if the flag is ever hooked up this is the widest loss path there is
+          # -- it would drop EVERY remaining bucket at once.
+          Add-RABucketLoss ("bucket {0}/{1}: skipped after a prior bucket hit the 900s ceiling on every attempt" -f ($b + 1), $bucketCountToUse)
           continue
       }
 
@@ -2622,6 +2700,8 @@ while (-not $bucketRunSucceeded) {
                   elseif ($bucketAttempt -ge $bucketTransientRetries) {
                       Write-Err2 ("bucket {0}/{1}: transient platform error after {2} retry attempt(s) -- skipping bucket and continuing. Error: {3}" -f `
                         $bucketNo, $bucketCountToUse, $bucketTransientRetries, $errMsg)
+                      # #62 LOSS PATH 2 -- this is the one the customer's 2026-08-26 run hit twice.
+                      Add-RABucketLoss ("bucket {0}/{1}: transient platform error survived all {2} retries -- {3}" -f $bucketNo, $bucketCountToUse, $bucketTransientRetries, $errMsg)
                       $bucketAttemptDone = $true
                       $resp              = $null
                   } else {
@@ -2648,6 +2728,8 @@ while (-not $bucketRunSucceeded) {
               # 3) Anything else -> log + skip bucket (existing behaviour).
               else {
                   Write-Err2 ("query failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $errMsg)
+                  # #62 LOSS PATH 3 -- the catch-all. Anything not classified as overflow or transient.
+                  Add-RABucketLoss ("bucket {0}/{1}: query failed -- {2}" -f $bucketNo, $bucketCountToUse, $errMsg)
                   $bucketAttemptDone = $true
                   $resp              = $null
               }
@@ -2678,6 +2760,9 @@ while (-not $bucketRunSucceeded) {
               $bucketResult = ConvertTo-PSObjectDeep $rawResults -StripOData -CastPrimitiveArrays
           } catch {
               Write-Err2 ("result conversion failed for bucket {0}/{1}: {2}" -f $bucketNo, $bucketCountToUse, $_.Exception.Message)
+              # #62 LOSS PATH 4 -- the query SUCCEEDED and the rows were still lost. Easily the most
+              # deceptive of the six: nothing upstream reports a failure at all.
+              Add-RABucketLoss ("bucket {0}/{1}: query succeeded but result conversion threw -- {2}" -f $bucketNo, $bucketCountToUse, $_.Exception.Message)
               continue
           }
       }
@@ -2916,8 +3001,12 @@ while (-not $bucketRunSucceeded) {
                       $subQueue.Enqueue(@{ N = $subN; T = $newT; D = ($depth + 1); PK = $thisParentKey })
                   } elseif ($script:_LastGraphHuntingAllTimedOut) {
                       Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} timed out at MAX DEPTH {5} -- giving up on this slice (rows in this sub-bucket NOT included). Error: {6}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $depth, $subErr)
+                      # #62 LOSS PATH 5 -- the message already says "NOT included"; now it is COUNTED too.
+                      Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: still timing out at MAX DEPTH {5}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $depth)
                   } else {
                       Write-Err2 ("[sub-bucket] depth={0} parent={1}/{2} sub={3}/{4} failed (non-timeout): {5}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subErr)
+                      # #62 LOSS PATH 6.
+                      Add-RABucketLoss ("sub-bucket depth={0} parent={1}/{2} sub={3}/{4}: failed (non-timeout) -- {5}" -f $depth, $pN, $pT, ($j + 1), $subFanOut, $subErr)
                   }
               }
           }
@@ -2981,6 +3070,11 @@ if ($bucketRunSucceeded -and [bool]$global:AutoBucketCount) {
         # $ResultAll = @(Deduplicate-Rows -Rows $ResultAll)
         $ResultAll = @($ResultAll)   # enforce array
         Write-Info ("total rows across all buckets: {0}" -f $ResultAll.Count)
+        # 🔴 AUDIT #62 -- the caveat goes HERE, immediately under the number it qualifies. Printed
+        # anywhere else and an operator reads the total as complete. Buckets recovered by the
+        # sub-bucket pass are NOT counted: the 900s path queues for splitting and only paths 5/6
+        # record a loss if that split also fails.
+        Write-RABucketLossVerdict -ReportName $ReportName -BucketCount $bucketCountToUse -RowsKept $ResultAll.Count
 
     } else {
 
@@ -6012,6 +6106,31 @@ $aiSection
 else {
     Write-Info "mail flag disabled; not sending"
 }
+
+# 🔴 AUDIT #62 -- THE RUN-LEVEL ROLL-UP, and it sits ABOVE the row-count guard on purpose.
+# The guard is the thing an operator trusts to say "nothing went missing", and on the run that
+# exposed this it printed "no report lost its findings" while ~1,100 findings were absent. So the
+# roll-up has to be read FIRST, and it has to say plainly that the guard cannot see this class.
+# 📌 Deliberately not fatal. Every report that survived is still correct and still worth having;
+# what must not happen is a partial run reading as a clean one.
+try {
+    if ($null -ne $script:_RABucketLossRun -and $script:_RABucketLossRun.Count -gt 0) {
+        Write-Section "INCOMPLETE DATA -- buckets lost this run"
+        $__lossByReport = @{}
+        foreach ($entry in $script:_RABucketLossRun) {
+            $__rn = ($entry -split ' :: ', 2)[0]
+            $__lossByReport[$__rn] = [int]$__lossByReport[$__rn] + 1
+        }
+        Write-Err2 ("{0} bucket(s) across {1} report(s) produced NO rows this run. Those findings are missing from the workbook, the Log Analytics table and the email." -f `
+            $script:_RABucketLossRun.Count, $__lossByReport.Keys.Count)
+        foreach ($k in ($__lossByReport.Keys | Sort-Object)) {
+            Write-Err2 ("    {0}  --  {1} bucket(s) lost" -f $k, $__lossByReport[$k])
+        }
+        Write-Err2 ("The row-count guard below CANNOT detect this: it asks whether a report lost ALL of its findings, and these reports still produced rows. Re-run the affected reports -- a bucket lost to a 500 or a timeout usually succeeds next time.")
+    } else {
+        Write-Info ("[BucketLoss] every bucket in every report contributed -- no partial reports this run.")
+    }
+} catch { }
 
 # AUDIT #57.1(a) -- compare this run against the previous one and say so out loud. Runs only on a
 # completed run, so a crashed/partial run never poisons the baseline with its truncated counts.

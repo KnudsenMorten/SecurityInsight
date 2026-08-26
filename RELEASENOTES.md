@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.445
+## v2.2.446
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.446: audit #62 -- a failed bucket no longer shrinks a report in silence (571ab809)
 - docs(SI) v2.2.445: the three public docs the release notes alone did not cover (4d2e4bd7)
 - release(SI) v2.2.445: a 5h34m Excel export, measured down to ~15 minutes (08010c22)
 - release(SI) v2.2.444: one empty string in the recipient list threw away a finished run (f9d83adc)
@@ -33,9 +34,68 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
 - fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
 - fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
-- fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
 
 ---
+
+## v2.2.446 — a failed query bucket no longer shrinks a report in silence
+
+**Found in a production log, not in the code.** A Detailed run lost **2 of 26 query buckets** on one
+report to a platform error, after all four retries. The engine logged the two failures and **ran to
+completion normally** — the workbook was written, the data uploaded, the email sent. Nothing said the
+report was incomplete.
+
+Measured against the previous night's run of the same report on the same estate:
+
+```
+raw rows      162,495  ->  150,148
+after dedup    15,220  ->   14,084     (~1,100 findings simply absent)
+```
+
+Those findings were missing from the spreadsheet, from Log Analytics **and** from the email, and
+nothing in the run indicated it.
+
+### Why the existing safety net did not catch it
+
+The run-over-run row-count guard printed **"no report lost its findings"**, and it was right by its own
+definition: it asks whether a report lost *all* of its findings, and this one still produced 14,084
+rows. A report that loses *some* of its data looks exactly like a report whose environment genuinely
+improved.
+
+### What changed
+
+Every path that can drop a bucket's rows is now counted and reported. **There are six** — the one in
+this log, plus five others that would have stayed silent if only the reported case had been fixed:
+retries exhausted, any other query error, a query that **succeeded** but whose results failed to
+convert, and two sub-bucket failure modes.
+
+**Per report**, immediately under the row total it qualifies:
+
+```
+[ERR] INCOMPLETE REPORT -- 'Device_Recommendations_Detailed': 2 of 26 bucket(s) contributed NO rows.
+      The 14084 row(s) above are a PARTIAL result ...
+      lost bucket -- bucket 10/26: transient platform error survived all 4 retries -- ...
+      RE-RUN THIS REPORT. A bucket lost to a 500 or a timeout usually succeeds on the next run ...
+```
+
+**Per run**, printed *above* the row-count guard so the two are never read out of order, with a total
+per affected report and an explicit note that the guard cannot see this class of loss.
+
+**In `SI_RunHealth_CL`**, a run that lost buckets records `success-partial` instead of `success`, with
+the count in the message — so partial runs are queryable rather than only visible in a log.
+
+⚠️ **If you have a dashboard filtering on `ExitReason == "success"`, these runs will stop appearing
+there.** That is the intent, but worth knowing before you go looking for them. Crash detection is
+unaffected: it keys on a run that started and never finished, never on this value.
+
+🔑 **A healthy run now says so out loud** — `[BucketLoss] every bucket in every report contributed`.
+Silence is not evidence that a check ran, so the check reports success as well as failure.
+
+📌 **A lost bucket does not fail the run.** Partial data beats no data and the surviving reports are
+still correct; what must never happen again is a partial run reading as a clean one.
+
+📌 **A bucket that is recovered by automatic splitting is not counted as a loss.** Timed-out buckets
+are re-queued and usually succeed; only a split that also fails is reported. A false "incomplete"
+would teach operators to ignore the line, which would be worse than not having it.
 
 ## v2.2.445 — a 5½-hour Excel export, cut to about 15 minutes
 

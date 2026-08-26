@@ -422,14 +422,42 @@ function Invoke-SISentinelLakeQuery {
         db  = ('{0}-{1}' -f $wsName, $wsGuid)
     } | ConvertTo-Json -Depth 4 -Compress
 
+    # 🔑 v2.2.451 -- ASK FOR THE RESPONSE, NOT AN EXCEPTION.
+    # The Sentinel data lake is NOT onboarded on most tenants, so a 400 InvalidDatabaseInQuery / 403 /
+    # 404 here is the EXPECTED answer, and the caller already falls back to hybrid/AH silently. But a
+    # PowerShell transcript records EVERY terminating error, so that expected answer printed a full
+    # HTTP dump -- including the workspace GUID -- into the customer's log, twice per attempt:
+    # once for Invoke-RestMethod and once for our own `throw`. Customers rang up asking what had
+    # broken. Nothing had.
+    # 🔒 Behaviour is unchanged -- same detection, same fallback, same deferred-warning policy. Only
+    # the mechanism changes: a RETURNED failure instead of a THROWN one.
+    # 🪤 PS 5.1 has no -SkipHttpErrorCheck, so there the catch still runs and the first transcript
+    # entry remains. The second one is removed on BOTH hosts. Customer engines are pwsh 7.
     $stage = 'token'
+    $lakeFail = $null
     try {
         $token = Get-SIGraphToken -Resource SentinelDataLake
         $stage = 'query'
-        $resp = Invoke-RestMethod -Method Post `
-            -Uri 'https://api.securityplatform.microsoft.com/lake/kql/v2/rest/query' `
-            -Headers @{ Authorization = ('Bearer ' + $token); 'Content-Type' = 'application/json' } `
-            -Body $body -ErrorAction Stop
+        $irm = @{
+            Method  = 'Post'
+            Uri     = 'https://api.securityplatform.microsoft.com/lake/kql/v2/rest/query'
+            Headers = @{ Authorization = ('Bearer ' + $token); 'Content-Type' = 'application/json' }
+            Body    = $body
+        }
+        $lakeHttpStatus = 0
+        if ($PSVersionTable.PSVersion.Major -ge 6) {
+            $irm['SkipHttpErrorCheck'] = $true
+            $irm['StatusCodeVariable'] = 'lakeHttpStatus'
+        } else {
+            $irm['ErrorAction'] = 'Stop'
+        }
+        $resp = Invoke-RestMethod @irm
+        if ($lakeHttpStatus -and ($lakeHttpStatus -lt 200 -or $lakeHttpStatus -ge 300)) {
+            # Non-2xx WITHOUT an exception (PS7 path). Build the same message the catch would have,
+            # so the caller's pattern matching is byte-for-byte unaffected.
+            $bodyText = if ($null -ne $resp) { try { ($resp | ConvertTo-Json -Depth 6 -Compress) } catch { [string]$resp } } else { '' }
+            $lakeFail = ('lake-{0}: HTTP {1} | api-body: {2} | db: {3}-{4}' -f $stage, $lakeHttpStatus, $bodyText, $wsName, $wsGuid)
+        }
     } catch {
         # PS 5.1 WebException loses the response body; recover it from the
         # underlying HTTP response so the actual error reaches the retry loop
@@ -450,10 +478,14 @@ function Invoke-SISentinelLakeQuery {
             }
         }
         $dbField = ('{0}-{1}' -f $wsName, $wsGuid)
-        $msg = if ($apiBody) { ('lake-{0}: {1} | api-body: {2} | db: {3}' -f $stage, $_.Exception.Message, $apiBody, $dbField) }
-               else          { ('lake-{0}: {1} | db: {2}' -f $stage, $_.Exception.Message, $dbField) }
-        throw $msg
+        $lakeFail = if ($apiBody) { ('lake-{0}: {1} | api-body: {2} | db: {3}' -f $stage, $_.Exception.Message, $apiBody, $dbField) }
+                    else          { ('lake-{0}: {1} | db: {2}' -f $stage, $_.Exception.Message, $dbField) }
     }
+
+    # 🔴 RETURN the failure, never THROW it. A re-thrown error is still a terminating error, and the
+    # transcript would record exactly the block this change exists to remove -- the same mistake I
+    # made once already in the advanced-hunting probe (v2.2.445) and caught before shipping.
+    if ($lakeFail) { return [pscustomobject]@{ _SILakeError = $lakeFail } }
 
     # ADX/KQL v2 response shape: Tables[0] = primary, .Columns[].ColumnName, .Rows[][]
     if (-not $resp -or -not $resp.Tables -or $resp.Tables.Count -eq 0) { return ,@() }

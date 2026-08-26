@@ -636,6 +636,13 @@ function Export-AISummaryWorksheet {
   }
 
   Close-ExcelPackage $excel
+  # 🔴 THIRD WRITER. This function bypasses Export-Worksheet entirely and runs LAST (after the
+  # Details sheet), so without this call it re-saves the package and EPPlus strips
+  # applyAlignment="1" back off cellStyleXfs -- undoing the default top-alignment for the whole
+  # workbook. Missed when the alignment was first wired in: only Export-Worksheet's two save
+  # paths were covered, and a live run then produced a workbook in the degraded state.
+  # Whoever saves the file LAST has to be the one that leaves it normalised.
+  Set-WorkbookDefaultTopAlignment -Path $Path
 }
 
 # =================================================================================================

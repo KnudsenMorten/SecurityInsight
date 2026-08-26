@@ -54,6 +54,20 @@ keeps its chapter as it moves from planned → delivered.
   field like leaked-credential status) flow through without a redeploy; unknown roles are tiered
   by AI on the fly.
 
+- **Excluding a device actually excludes it — and you can see what was excluded.** ✅ 2026-08-12 —
+  tagging a device `--Excluded--SI` in the Defender portal now removes it from Risk Analysis, and a
+  dedicated report lists every suppressed asset with the exact tag that did it, so an exclusion can
+  never quietly hide an asset forever.
+- **A failed data source no longer looks like a shrinking estate.** ✅ 2026-08-13 — if a discovery
+  source returns nothing, the run says so. Previously your inventory simply got smaller, which is
+  indistinguishable from assets genuinely going away.
+- **When a device cannot be matched across MDE, Exposure Graph and Entra, the run names it.**
+  ✅ 2026-08-12 — conflicting device identifiers are reported per asset with the source that claimed
+  each one, instead of the asset silently splitting in two.
+- **Reading an exclusion tag can no longer cost you a profiling run.** ✅ 2026-08-12
+- **Container runs keep a log.** ✅ 2026-08-13 — runs in containers now write a transcript and upload
+  it alongside the VM runs, with the same 30-day retention.
+
 ## 3. Dynamic detection & classification
 
 - **100% dynamic, rule-driven detection.** 20+ detection methods (name patterns, installed
@@ -71,6 +85,13 @@ keeps its chapter as it moves from planned → delivered.
   that loads with an empty detection block. A mistake in one of your own rules surfaces on the run
   that uses it instead of staying invisible. A rule you deliberately switched off is not flagged —
   suppression is a legitimate reason to have no detections.
+
+- **Your own rules can live outside the folder we update.** ✅ 2026-08-07 — point the engine at your
+  own rule directory and updates can never overwrite your work.
+- **The example rules we ship are checked before they reach you.** ✅ 2026-08-07 — a broken sample
+  propagates by instruction, so shipped samples are now validated in the build.
+- **Okta identity servers are tiered, and an SCCM console no longer reports as a site server.**
+  ✅ 2026-08-13
 
 ## 4. Inputs — supported data providers
 
@@ -96,6 +117,10 @@ keeps its chapter as it moves from planned → delivered.
   Index weights, and per-report finding exclusions are all customer-owned overlay files merged at
   load time.
 
+- **CMDB enrichment: one source is in charge, and every row says which.** ✅ 2026-08-11 — criticality
+  and data-sensitivity come from a single defined CMDB source per asset, the column names state what
+  they mean, and each row records where its CMDB data came from.
+
 ## 6. Outputs — pick any combination
 
 - **Excel + executive email.** A ranked XLSX of findings with an optional AI-written executive
@@ -110,6 +135,14 @@ keeps its chapter as it moves from planned → delivered.
 - **Power BI dataset refresh** and a pre-built **Azure Monitor Workbook** for visual exploration.
 - **Run-health alerting.** A simple KQL alert fires when a run starts but never finishes.
 
+- **Your Risk Analysis data reaches Log Analytics complete.** ✅ 2026-08-08 — every column produced by
+  a report is included in the ingest schema, so nothing is dropped between the report and the table.
+- **Detailed results land in the Detailed table.** ✅ 2026-08-07 — Detailed and Summary runs are routed
+  to their own destinations rather than sharing one.
+- **A finished run can no longer be lost at the final write.** ✅ 2026-08-18 — a column-naming clash
+  between two reports used to discard a completed run's entire output at the last step. The workbook
+  is now written regardless, and the accompanying `.json` and Log Analytics data are unaffected.
+
 ## 7. Risk Analysis reports
 
 - **100+ ready-to-use reports** across Identity, Azure, Endpoint and Public IP domains, paired as
@@ -122,6 +155,17 @@ keeps its chapter as it moves from planned → delivered.
   Defender / Entra / Azure portal and MITRE ATT&CK.
 - **Tunable per tenant.** Add reports, override a shipped report's query, narrow severity/tier
   scope, or exclude specific findings/CVEs/configurations per report — via overlay files.
+
+- **SecurityInsight notices when a report quietly stops finding things.** ✅ 2026-08-10 — every report
+  is compared against the previous run and a drop in findings is reported, so a report that breaks
+  cannot look like an environment that improved.
+- **The engine tells you when a column quietly stops carrying data.** ✅ 2026-08-11
+- **Large reports are split so they finish, and both halves of the split stay correct.** ✅ 2026-08-12
+  — oversized queries are divided automatically, and the CVE reports now split the work instead of
+  computing all of it and discarding most.
+- **The excluded-assets report exists in Summary as well as Detailed**, and Summary/Detailed parity is
+  enforced so the two views cannot drift apart. ✅ 2026-08-12
+- **An impacted-asset count always matches the list printed beside it.** ✅ 2026-08-18
 
 ## 8. Severity, criticality & the tier model
 
@@ -172,6 +216,9 @@ keeps its chapter as it moves from planned → delivered.
 - **Per-run transcripts + run health.** Every run writes a transcript and a Start/End health row,
   so failed or hung runs are easy to spot.
 
+- **SecurityInsight states which platform version it needs**, and is declared as a code update, so an
+  update cannot half-apply. ✅ 2026-08-09
+
 ## 12. Performance & scale
 
 - **Bulk-fetch, never per-asset.** All external data is fetched once and indexed; the rule loop is
@@ -193,6 +240,12 @@ keeps its chapter as it moves from planned → delivered.
 - **On-demand rule check that shows its denominator.** ✅ 2026-08-07 — validate your rule tree
   whenever you like; the verdict is printed together with **how many rule files were examined**, so
   a clean result can never mean "looked at nothing". Examining nothing is reported as a failure.
+
+- **Certificate authentication is a first-class path.** ✅ 2026-08-12 — both Risk Analysis API tokens
+  and Asset Tagging authenticate with a certificate instead of stopping at a sign-in prompt.
+- **Limits announce themselves.** ✅ 2026-08-18 — where a run has to bound what it produces (links in
+  a cell, rows in a worksheet, the size of an emailed report) it now states what was left out and
+  where the complete data still is, rather than trimming silently.
 
 ## 14. Documentation
 

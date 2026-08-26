@@ -1,9 +1,13 @@
 # Release notes for SecurityInsight
 
-## v2.2.443
+## v2.2.444
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.444: one empty string in the recipient list threw away a finished run (f9d83adc)
+- docs(SI): FEATURES.md was 35 releases stale, and the v3 section did not know v3 had started (c2cfc9f8)
+- docs(SI): 47 settings the engines read that no config file or doc ever listed (48993db0)
+- docs(SI): route v2.2.439-.443 into the four-doc model instead of the router file (3be6c2ba)
 - release(SI) v2.2.443: 15 Detailed reports declared an asset name and never produced one (e96f0e26)
 - release(SI) v2.2.442: a Tier 0 report was fabricating every finding it produced (84bd5cb4)
 - release(SI) v2.2.441: an asset name is ATOMIC, and every silent cap now says what it dropped (2259bf7b)
@@ -30,12 +34,59 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
 - fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (2a273f7e)
 - docs(SI): surface the si-v3 pointer where a session actually looks, not at line 6692 (6929e488)
-- docs(SI) #60: flag the three claims that measurement disproved, and point at the current design (90d59677)
-- docs(SI): point main's router at the si-v3 branch, so a new session can find the v3 work (444152fc)
-- fix(SI): repair the bare table name I put in the README last night -- NO version bump, NO tag (d9c6a6cd)
-- design(SI) #60.5.2-5: the correlation prerequisite, measured -- and it is a fifth SI engine on SQL (d7d09ca8)
 
 ---
+
+## v2.2.444 — one empty string in the recipient list threw away a finished run
+
+**Reported from a production run.** A Risk Analysis completed — every query run, the report built, the
+workbook written — and then died on the very last step, sending the email.
+
+### What happened
+
+The recipient list in the customer's configuration ended with an empty entry:
+
+```powershell
+$global:RiskAnalysis_Detailed_To = @("first@example.com","second@example.com","")
+```
+
+That is what a trailing comma leaves behind, or deleting an address and leaving its quotes. It looks
+harmless, and nothing in the engine ever looked at the values — the list went straight to the mail
+cmdlet, which validates **each recipient individually** and rejected the blank one:
+
+```
+[ERR] mail failed: Cannot bind argument to parameter 'To' because it is an empty string.
+```
+
+### Why it mattered more than a bad address
+
+**The timing.** By the time mail is sent, the expensive work is done — the report is complete and the
+workbook is already on disk. Losing the run at that point costs the whole execution, not the email.
+The engine's own diagnostic output even printed the list with its trailing `", "`, and nothing
+explained why that was the problem.
+
+### What changed
+
+The recipient list is now cleaned before it is used:
+
+- **Blank, whitespace-only and null entries are removed**, and the run continues normally.
+- **Addresses with stray spaces around them are trimmed, not discarded** — `"  name@example.com  "` is
+  a usable address with a typo around it, and dropping it would silently lose a real recipient.
+- **What was removed is reported**, not quietly tidied away. A configuration that silently loses a
+  recipient looks exactly like one that works, and nobody notices until someone asks why they stopped
+  receiving the report.
+- **If every entry is blank, the email is skipped rather than failing the run** — and the message says
+  plainly that the report and workbook are complete and on disk, so nobody re-runs a long analysis
+  for nothing.
+
+A clean recipient list is unaffected in every respect.
+
+### Tests
+
+13 new tests. Eight cover every shape a configuration can produce — trailing empty, whitespace-only,
+null, untrimmed, all-blank, empty, a single address written without an array, and a clean list that
+must survive completely unchanged. Five confirm the cleaning is actually wired into the engine and
+covers both the authenticated and anonymous send paths, because logic that is never called is not a fix.
 
 ## v2.2.443 — 15 Detailed reports promised an asset name and never delivered one
 

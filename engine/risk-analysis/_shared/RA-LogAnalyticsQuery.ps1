@@ -206,21 +206,46 @@ function Test-AdvancedHuntingHasTable {
     if ($script:_TableInAdvHunting.ContainsKey($TableName)) { return $script:_TableInAdvHunting[$TableName] }
 
     Write-Info ("Probing whether {0} is queryable from advanced hunting (unified Defender XDR portal / data-lake mirroring check) ..." -f $TableName)
+    # 🔑 v2.2.445 -- THIS PROBE IS *SUPPOSED* TO FAIL, AND THE FAILURE MUST NOT LOOK LIKE ONE.
+    # A customer-facing SI_*_CL table is normally NOT mirrored into advanced hunting, so the expected
+    # answer here is a 400 "Failed to resolve table". That is a ROUTING ANSWER, not a fault -- the
+    # engine immediately and correctly falls through to Log Analytics direct.
+    # 🪤 It used to be asked with `-ErrorAction Stop`, which PROMOTES the cmdlet's non-terminating
+    # error to a TERMINATING one. PowerShell transcripts record every terminating error -- even a
+    # caught one -- as a `PS>TerminatingError(...)` block complete with HTTP status, request ids and
+    # x-ms-ags-diagnostic headers. So a healthy run printed four alarming stack dumps, and customers
+    # reading their own transcript asked why their report had errors. It had none.
+    # 🔒 -ErrorAction SilentlyContinue + -ErrorVariable asks the SAME question and gets the SAME
+    # answer without ever raising a terminating error, so nothing reaches the transcript. The
+    # try/catch stays for a genuinely terminating failure (auth, transport).
+    # 🔴 NOTHING IN HERE MAY `throw` ON THE EXPECTED PATH -- a re-thrown error is still a terminating
+    # error, and the transcript would record the very block this change exists to remove. So the
+    # probe result is carried as a MESSAGE and classified below, outside any throw.
+    $msg = $null
     try {
         Ensure-GraphAuth
-        $null = Start-MgBetaSecurityHuntingQuery -Query ("{0} | take 1" -f $TableName) -ErrorAction Stop
+        $probeErr = $null
+        $null = Start-MgBetaSecurityHuntingQuery -Query ("{0} | take 1" -f $TableName) `
+                    -ErrorAction SilentlyContinue -ErrorVariable probeErr
+        if ($probeErr) { $msg = [string]$probeErr[0].Exception.Message }
+    } catch {
+        # Only a GENUINELY terminating failure (auth, transport) reaches here now.
+        $msg = $_.Exception.Message
+    }
+
+    if ([string]::IsNullOrWhiteSpace($msg)) {
         $script:_TableInAdvHunting[$TableName] = $true
         Write-Ok ("{0} IS queryable from advanced hunting. Preferred path." -f $TableName)
-    } catch {
-        $msg = $_.Exception.Message
-        if ($msg -match ("Failed to resolve table or column expression named '{0}'" -f [regex]::Escape($TableName))) {
-            $script:_TableInAdvHunting[$TableName] = $false
-            Write-Info ("{0} is NOT queryable from advanced hunting -- will route to Log Analytics direct." -f $TableName)
-        } else {
-            # Some other error (auth, throttle). Don't cache; let the real call surface it.
-            Write-Warn2 ("AdvancedHunting probe for {0} inconclusive ({1}). Will assume table is accessible and let the real call decide." -f $TableName, $msg)
-            $script:_TableInAdvHunting[$TableName] = $true
-        }
+    }
+    elseif ($msg -match ("Failed to resolve table or column expression named '{0}'" -f [regex]::Escape($TableName))) {
+        # THE EXPECTED ANSWER for a customer CL table. Routing information, not a fault.
+        $script:_TableInAdvHunting[$TableName] = $false
+        Write-Info ("{0} is NOT queryable from advanced hunting -- will route to Log Analytics direct." -f $TableName)
+    }
+    else {
+        # Some other error (auth, throttle). Don't cache; let the real call surface it.
+        Write-Warn2 ("AdvancedHunting probe for {0} inconclusive ({1}). Will assume table is accessible and let the real call decide." -f $TableName, $msg)
+        $script:_TableInAdvHunting[$TableName] = $true
     }
     return $script:_TableInAdvHunting[$TableName]
 }

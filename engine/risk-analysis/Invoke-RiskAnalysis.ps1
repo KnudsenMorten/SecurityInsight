@@ -3444,10 +3444,16 @@ if ($global:AllShapedRows.Count -eq 0) {
     Write-Step ("sorting rows by {0} (descending)" -f $sortCol)
     Tock
 
-    $allRows = @()
-    foreach ($r in $global:AllShapedRows) { $allRows += ,$r }
-
-    $global:final = $allRows | Sort-Object -Descending -Property @{
+    # 🔴 v2.2.445 -- $global:AllShapedRows is ALREADY a List[object] (declared ~line 2033, filled
+    # with .Add()). It used to be copied into a plain array one element at a time:
+    #     $allRows = @(); foreach ($r in $global:AllShapedRows) { $allRows += ,$r }
+    # `+=` REALLOCATES AND COPIES THE ENTIRE ARRAY on every iteration, so building N rows costs
+    # O(N^2) element copies -- roughly 7.3 BILLION for the 121k-row Detailed run that exposed this.
+    # Sort-Object buffers its input anyway, so the List pipes straight in: the copy is DELETED
+    # rather than made faster.
+    # 🪤 NOT `@($global:AllShapedRows)` -- wrapping a List[object] of PSCustomObjects in @() throws
+    # ArgumentException on PS 5.1 (bit TenantManager v1.1.0 twice). Pipe it, or use .ToArray().
+    $global:final = $global:AllShapedRows | Sort-Object -Descending -Property @{
         Expression = {
             $n = 0.0
             $v = $null
@@ -3463,9 +3469,14 @@ if ($global:AllShapedRows.Count -eq 0) {
     Write-Step "exporting to excel (single write)"
     Write-Info ("path: {0}" -f $global:OutputXlsx)
     Tock
+    # 🔑 v2.2.445 -- NO -SortColumn ON PURPOSE. $global:final was just sorted NUMERICALLY above, and
+    # RiskScoreTotal_Weighted is an [int] (RA-RiskScore.ps1:108), so passing -SortColumn made
+    # Export-Worksheet re-sort the identical 121k rows into a byte-identical order.
+    # 🔒 The Excel-ceiling truncation inside Export-Worksheet cuts by INPUT ORDER, and the input
+    # order IS this descending risk sort -- so "the rows that survive are the highest-risk ones"
+    # still holds. Re-adding -SortColumn here would only re-do work already done.
     Export-Worksheet -Path $global:OutputXlsx -SheetName 'Details' `
       -Rows @($global:final) `
-      -SortColumn $global:FinalRiskScoreColumnName -SortDescending `
       -DesiredColumns $global:FinalDesiredColumns `
       -ColumnsToFlatten @('ImpactedAssets','ImpactedAssetsList','IssueList','Logins','Benchmarks','EG_AssetProps','AssetProps','Properties') `
       -TableStyle 'Medium9'
@@ -3733,6 +3744,13 @@ elseif ([bool]$global:SendToLogAnalytics) {
             Write-Info ("  DCR : {0} (rg={1})" -f $laDcrName, $laDcrRg)
             Write-Info ("  DCE : {0}" -f $laDceName)
             Write-Info ("  rows: {0}" -f (@($global:final)).Count)
+            # 🔑 v2.2.445 -- THE INGEST WAS THE ONLY EXPENSIVE PHASE WITH NO TIMING.
+            # Graph connect, yaml load, each hunting query, result conversion, filters, risk scoring,
+            # the final sort and the Excel export are all Tick'd -- so when an operator asked "is the
+            # Log Analytics upload what's taking hours?" on a 121k-row run, the transcript could not
+            # answer it. Every other candidate could be measured and this one could not, which is the
+            # worst possible place for a blind spot. Now it reports like the rest.
+            Tock
 
             try {
                 # UNCONDITIONAL silence of the AzLogDcrIngestPS / Az SDK
@@ -3893,6 +3911,7 @@ elseif ([bool]$global:SendToLogAnalytics) {
                             -TenantId    $global:SpnTenantId `
                             -Verbose:$false 4>$null
 
+                Tick "log analytics ingest"   # v2.2.445 -- see the Tock beside "Ingesting to..."
                 Write-Ok ("ingested to {0}_CL" -f $laTable)
             } catch {
                 # v2.2.358 -- surface the raw Azure error body, not just the

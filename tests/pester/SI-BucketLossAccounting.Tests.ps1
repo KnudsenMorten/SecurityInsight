@@ -224,3 +224,66 @@ Describe '🔑 WIRING -- the run-level roll-up and SI_RunHealth_CL' {
         $pre  | Should -Match 'try \{'
     }
 }
+
+Describe '🔴 EXECUTION -- the six recording lines are RUN from the shipped source, not just present' {
+    # Everything above proves the six Add-RABucketLoss lines EXIST in the right branches. That is
+    # textual evidence, and this codebase has shipped textually-correct-but-unreachable code before.
+    # This block lifts each line VERBATIM out of the engine and EXECUTES it with the variables its
+    # branch would have in scope, then asserts a loss was actually recorded. If a line were ever
+    # edited into something that cannot run -- a renamed variable, a broken format string, a wrong
+    # argument count -- these fail, and the textual assertions above would not.
+
+    BeforeAll {
+        $script:LossLines = @(
+            Select-String -Path $script:Engine -Pattern '^\s*Add-RABucketLoss \(' |
+                ForEach-Object { $_.Line.Trim() }
+        )
+        # Every variable each branch would legitimately have in scope at that point.
+        $script:b                      = 9
+        $script:bucketNo               = 10
+        $script:bucketCountToUse       = 26
+        $script:errMsg                 = 'Internal Server Error'
+        $script:bucketTransientRetries = 4
+        $script:depth                  = 6
+        $script:pN                     = 1
+        $script:pT                     = 2
+        $script:j                      = 3
+        $script:subFanOut              = 4
+        $script:subErr                 = 'timed out'
+    }
+
+    It 'six recording lines were lifted out of the engine' {
+        $script:LossLines.Count | Should -Be 6
+    }
+
+    It '🔴 EVERY one of them, executed verbatim, records exactly one loss' {
+        foreach ($line in $script:LossLines) {
+            Reset-RABucketLoss
+            $b = $script:b; $bucketNo = $script:bucketNo; $bucketCountToUse = $script:bucketCountToUse
+            $errMsg = $script:errMsg; $bucketTransientRetries = $script:bucketTransientRetries
+            $depth = $script:depth; $pN = $script:pN; $pT = $script:pT
+            $j = $script:j; $subFanOut = $script:subFanOut; $subErr = $script:subErr
+
+            { & ([scriptblock]::Create($line)) } | Should -Not -Throw -Because "this line ships in the engine: $line"
+            $script:_RABucketLoss.Count | Should -Be 1 -Because "executing it must record a loss: $line"
+
+            # And the recorded text must be usable -- a format string that silently produced
+            # "{0}/{1}" instead of "10/26" would satisfy a count check while telling an operator
+            # nothing about WHICH bucket was lost.
+            $script:_RABucketLoss[0] | Should -Not -Match '\{\d\}' -Because "unformatted placeholder left in: $line"
+            $script:_RABucketLoss[0] | Should -Not -BeNullOrEmpty
+        }
+    }
+
+    It 'the recorded text identifies the bucket or sub-bucket concretely' {
+        foreach ($line in $script:LossLines) {
+            Reset-RABucketLoss
+            $b = $script:b; $bucketNo = $script:bucketNo; $bucketCountToUse = $script:bucketCountToUse
+            $errMsg = $script:errMsg; $bucketTransientRetries = $script:bucketTransientRetries
+            $depth = $script:depth; $pN = $script:pN; $pT = $script:pT
+            $j = $script:j; $subFanOut = $script:subFanOut; $subErr = $script:subErr
+            $null = & ([scriptblock]::Create($line))
+            $script:_RABucketLoss[0] | Should -Match '(bucket \d+/\d+|sub-bucket depth=\d+)'
+        }
+    }
+}

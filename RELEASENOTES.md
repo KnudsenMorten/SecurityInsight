@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.448
+## v2.2.449
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.449: audit #63 -- three Detailed reports hid severities their own Summary counted (01994e19)
 - release(SI) v2.2.448: the bulk export was writing workbooks 3.6x larger than it needed to (609f00cf)
 - docs(SI) v2.2.447: the export figure, corrected by a full-scale measurement (1094ad83)
 - release(SI) v2.2.446: audit #62 -- a failed bucket no longer shrinks a report in silence (571ab809)
@@ -33,9 +34,64 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): session handoff -- seven releases, one root cause, and what the customer still needs (dd27b5b9)
 - fix(SI) v2.2.432: the exclusion-tag reader runs for every asset and was undefended -- one odd tag could have killed a whole run (ec98ab93)
 - feat(SI) v2.2.431: the exclusions report existed only as Detailed -- add the Summary pair, and make parity a test (9869d29c)
-- feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
 
 ---
+
+## v2.2.449 — three Detailed reports were hiding findings their own Summary counted
+
+**Found by asking why one report said "474 rows → 200 rows after filters".** Three Detailed reports
+were configured to ignore Low and Medium severity findings. Their paired Summary reports were not —
+so the Summary counted findings the Detailed sheet silently left out.
+
+### What was measured
+
+Every report declares which severities are in scope. Three declared a narrower list than their twin:
+
+| report | Detailed scope | Summary scope |
+|---|---|---|
+| Device_Missing_CVEs | … Medium | … Medium, **Low** |
+| Device_Recommendations | … Medium-High | … **Medium, Low** |
+| Azure_Recommendations | … Medium-High | … **Medium, Low** |
+
+With the engine's filter audit enabled, the rows removed were named exactly — no unexpected or
+malformed values, just ordinary `Low` and `Medium`:
+
+```
+Device_Missing_CVEs_Detailed      191 removed   Low 191
+Device_Recommendations_Detailed   274 removed   Medium 249, Low 25     58% of the report
+Azure_Recommendations_Detailed    541 removed   Low 408, Medium 133    92% of the report
+```
+
+On a larger production estate the same three reports were removing **1,742 / 59,225 / 19,714** rows —
+the Azure report delivering 1,474 of 21,188 findings, again **93%**.
+
+### Why this was a defect and not a preference
+
+The Summary reports a **count**; the Detailed lists **which assets**. When they scope differently, the
+number and the list describe different populations — so a Summary saying "N findings" was paired with
+a sheet that could not show you N. Nothing in the run said so; the Detailed report looked fully
+populated, and a report missing 92% of its rows is indistinguishable from an environment that simply
+has no Low or Medium findings.
+
+### The fix
+
+**Every report now defaults to the full severity range — Very High, High, Medium-High, Medium, Low —
+and every Summary/Detailed pair is required to agree.** Both rules are enforced by tests, so a report
+cannot quietly narrow its scope again, and a pair cannot drift apart.
+
+⚠️ **Expect these three reports to get noticeably bigger, and that is the correction.** On the
+production estate measured above the Detailed workbook goes from about **121,000 to about 201,000
+rows (+67%)**, almost entirely Azure recommendations. The newly-included findings are genuinely lower
+severity, so they sort to the bottom of the risk ranking — nothing that mattered before has moved.
+The export stays comfortably inside the improvement from v2.2.445: roughly **35 minutes** for that
+larger workbook, against 5 h 34 m before that release.
+
+📌 **Nothing about tier scoping changed** — all reports already covered all four criticality tiers,
+and that is now asserted too so it cannot drift.
+
+🔑 **If you WANT a narrower report,** the supported way is still an override in
+`RiskAnalysis_Queries_Custom.yaml`; that file is yours and survives upgrades. What changed is the
+shipped default, which now shows everything unless you say otherwise.
 
 ## v2.2.448 — the new export was writing workbooks 3.6× larger than it needed to
 

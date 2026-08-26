@@ -1,10 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.2.453
+## v2.2.454
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- release(SI) v2.2.453: two rows were adding 17 junk columns to every workbook (313e2fae)
+- release(SI) v2.2.454: tall rows read as though the values belonged to the row below (34f965b3)
+- docs(SI): handoff said 2.2.452 and buried the one check that is in flight (af86ea99)
+- release(SI) v2.2.453: two rows were adding 17 junk columns to every workbook (453f27f2)
 - docs(SI): audit #65 -- redundancy scan, filed LOW PRIORITY with its own false positives (c24f6b41)
 - release(SI) v2.2.452: a query failure is one line, not a twenty-line stack dump (a1ea7080)
 - release(SI) v2.2.451: the data-lake check no longer prints an error block when the lake is not onboarded (7b110173)
@@ -32,10 +34,58 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) #25: the count/list guard was keyed on the LIST, so it walked past two reports that broke it (e74fa75d)
 - feat(SI) #55.1: the container host finally keeps a run transcript -- and could not have been rebuilt at all (ab0c8e0f)
 - fix(SI) v2.2.437: two defects found by auditing v2.2.434-435, neither reachable, both real (76d7d009)
-- fix(SI) v2.2.436: a failed discovery source must not look like a stale estate (e7506799)
-- feat(SI) v2.2.435: Okta identity servers are tiered, and an SCCM console stops claiming to be a site server (784f13d0)
 
 ---
+
+## v2.2.454 — tall rows read as though the values belonged to the row below
+
+v2.2.448 cut the workbook to a third of its size by styling seven columns instead of all 291. That
+was the right trade and it stays. It had a visible cost, and this release pays it back for free.
+
+A row carrying a wrapped column is **tall**. Every other cell in that row defaults to **bottom**
+alignment, so short values sink to the foot of the row — and end up level with the *wrapped text of
+the row below*. Reading across, `Endpoint / Vulnerabilities / CVEs (Missing Updates)` appears to
+pair with the risk factors of the next finding. It looks wrong, and it can be read wrong.
+
+The obvious fix is the one v2.2.448 removed, and the measurement is why:
+
+```
+bare load ................................ 0.66 MB
++ table + widths ......................... 0.67 MB
++ vertical alignment on every column ..... 2.40 MB   <-- 3.6x
+```
+
+**The cost was never the alignment.** EPPlus materialises a styled cell for every empty slot it
+styles, and the Details sheet is a cross-report union that is ~85% structurally empty. Styling 291
+columns writes ~1.9M cells that would otherwise not exist.
+
+So this release does not style any cell. It changes the style the cells **already point at** — the
+`Normal` entry in the workbook's `cellStyleXfs` — after the file is written. On the real 6,339 x 299
+Detailed workbook the result is **146 bytes smaller than it went in**, and every value is top-aligned.
+
+### Three things that looked correct and were not
+
+Each of these produced a confident wrong answer before it was measured, and each is now written into
+the source so the next reader does not repeat it:
+
+- **Patching `cellXfs[0]` does nothing in Excel.** It is the entry every unstyled cell's `s="0"`
+  points at, so it looks like the right target. Index 0 is the `Normal` style, and Excel rebuilds it
+  from `cellStyleXfs`, discarding the direct formatting. **EPPlus does not do that reconciliation**,
+  so an EPPlus readback reports `Top` while Excel renders `Bottom`. Only opening the workbook in
+  Excel can verify this change — a readback cannot.
+- **`ZipArchive` Update mode corrupts the package on PS 5.1**, whether the entry is replaced via
+  `SetLength(0)` or `Delete` + `CreateEntry`. It is ~4x faster (106ms vs 404ms) and unusable; the
+  archive is rebuilt in `Create` mode instead.
+- **EPPlus preserves `<alignment vertical="top"/>` across a re-save but drops `applyAlignment="1"`.**
+  The idempotency check therefore requires both markers before skipping, so a workbook re-saved for
+  a second sheet is re-normalised rather than left in a degraded state.
+
+### Safety
+
+The workbook on disk is already complete and valid when this runs, so a bad patch would be pure
+loss. The patched `styles.xml` is parsed before it is written and the workbook is left untouched if
+it is not well-formed; the rebuild goes to a temporary file that only replaces the real one on
+success. Nothing here can fail the export.
 
 ## v2.2.453 — two rows were adding seventeen junk columns to every workbook
 

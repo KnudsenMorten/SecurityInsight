@@ -64,6 +64,144 @@ function Get-RAColumnUnion {
 }
 
 # exporter (single-write workflow; still supports -ClearSheet)
+function Set-WorkbookDefaultTopAlignment {
+  <# 🔴 WHY THIS EXISTS, AND WHY IT IS NOT DONE THROUGH EPPlus.
+     A row carrying a wrapped column is TALL. Every other cell in that row defaults to BOTTOM
+     alignment, so short values sink to the foot of the row and read as though they belong to
+     the row below -- the wrapped text of row N sits level with the plain values of row N+1.
+     Operators reported it as "how it looks" after v2.2.448; it is also a misreading risk.
+
+     The obvious fix -- vertical alignment on every column, or on $ws.Cells -- costs 3.6x the
+     FILE SIZE (0.67 MB -> 2.40 MB measured at 3,000 x 291), which is exactly why v2.2.448
+     restricted alignment to the 7 wrap columns. The cost is NOT the alignment itself: EPPlus
+     MATERIALISES a styled cell for every empty slot it styles, and the Details sheet is a
+     cross-report union that is ~85% structurally empty. So do not style cells at all --
+     change the style the cells ALREADY point at. Measured at -144 bytes on the real 6,339-row
+     Detailed workbook: it comes out slightly SMALLER than it went in.
+
+     🪤 THREE THINGS THAT LOOK CORRECT AND ARE NOT. All three were found by measuring, and each
+        one produced a confident wrong answer first:
+     1. Patching cellXfs[0] -- the entry every unstyled cell's s="0" points at -- does NOTHING
+        in Excel. Index 0 is the Normal style, and Excel rebuilds it from cellStyleXfs,
+        discarding the direct formatting. EPPlus does not do that reconciliation, so its
+        readback reports 'Top' while Excel renders 'Bottom'. ⚠️ AN EPPlus READBACK CANNOT
+        VERIFY THIS FUNCTION. Only opening the workbook in Excel can. The alignment must go on
+        cellStyleXfs[0], which is what Excel reconciles TO.
+     2. ZipArchive 'Update' mode yields a file EPPlus rejects as "not a valid Package file" on
+        PS 5.1 -- via SetLength(0) AND via Delete + CreateEntry. The archive has to be REBUILT
+        in Create mode. Update mode is ~4x faster (106ms vs 404ms) and unusable.
+     3. EPPlus PRESERVES <alignment vertical="top"/> across a re-save but DROPS
+        applyAlignment="1". The idempotency check therefore requires BOTH before skipping, so a
+        workbook re-saved for a second sheet is re-normalised instead of being left degraded.
+
+     Never throws: the workbook on disk is already complete and valid when this runs, so a
+     failure here must cost a cosmetic detail, never the export. #>
+  [CmdletBinding()]
+  param([Parameter(Mandatory=$true)][string]$Path)
+
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    Add-Type -AssemblyName System.IO.Compression            -ErrorAction Stop
+  } catch { return }
+
+  try {
+    # ---- read every part, patching xl/styles.xml on the way past -------------------------
+    $parts = New-Object System.Collections.Generic.List[object]
+    $patched = $false
+    $in = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+      foreach ($e in $in.Entries) {
+        $ms = New-Object System.IO.MemoryStream
+        $rs = $e.Open(); $rs.CopyTo($ms); $rs.Close()
+        $bytes = $ms.ToArray()
+
+        if ($e.FullName -eq 'xl/styles.xml') {
+          $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+          $xml = [System.Text.Encoding]::UTF8.GetString($bytes)
+          if ($hasBom) { $xml = $xml.Substring(1) }
+
+          # 🪤 SELF-CLOSING ALTERNATIVE FIRST, AND THE TWO SHAPES SPELLED OUT SEPARATELY.
+          # `<xf\b[^>]*(?:/>|>.*?</xf>)` looks equivalent and over-matches badly: `[^>]*` eats the
+          # `/` of a self-closing tag, the `>` branch then wins, and `.*?</xf>` runs out of
+          # cellStyleXfs and into the FIRST `</xf>` in cellXfs -- a 412-char span. That span
+          # contains the wrap styles, which legitimately carry applyAlignment and vertical="top",
+          # so the idempotency check below then reads "already normalised" and skips in silence.
+          # Ordered alternation fixes it: a self-closing xf can only match the first branch.
+          $m = [regex]::Match($xml, '(?s)<cellStyleXfs[^>]*>\s*(?<xf><xf\b[^>]*/>|<xf\b[^>]*>.*?</xf>)')
+          if ($m.Success) {
+            $xf0 = $m.Groups['xf'].Value
+            # Skip only when BOTH markers are present -- see trap 3 above.
+            if (-not ($xf0 -match 'applyAlignment' -and $xf0 -match 'vertical\s*=\s*"top"')) {
+              if ($xf0.TrimEnd().EndsWith('/>')) {
+                $attrs = ($xf0.TrimEnd() -replace '^<xf\b','' -replace '/>\s*$','').Trim()
+                $inner = ''
+              } else {
+                $om = [regex]::Match($xf0, '(?s)^<xf\b(?<attrs>[^>]*)>(?<inner>.*)</xf>\s*$')
+                $attrs = $om.Groups['attrs'].Value.Trim()
+                $inner = $om.Groups['inner'].Value
+              }
+              $attrs = ($attrs -replace '\bapplyAlignment\s*=\s*"[^"]*"','').Trim()
+              $attrs = ($attrs + ' applyAlignment="1"').Trim()
+
+              if ($inner -match '<alignment\b') {
+                if ($inner -match 'vertical\s*=\s*"[^"]*"') {
+                  $inner = $inner -replace 'vertical\s*=\s*"[^"]*"','vertical="top"'
+                } else {
+                  $inner = $inner -replace '<alignment\b','<alignment vertical="top"'
+                }
+              } else {
+                $inner = '<alignment vertical="top"/>' + $inner
+              }
+
+              $new = '<xf ' + $attrs + '>' + $inner + '</xf>'
+              $xml = $xml.Remove($m.Groups['xf'].Index, $xf0.Length).Insert($m.Groups['xf'].Index, $new)
+
+              # 🔒 REFUSE TO WRITE XML WE JUST BROKE. A regex that mis-parses the xf element
+              # yields nested <xf> that Excel rejects outright -- and the workbook on disk at
+              # this point is already correct and complete, so a bad patch is pure loss. This
+              # guard caught exactly that during development; keep it.
+              try {
+                $probe = New-Object System.Xml.XmlDocument
+                $probe.LoadXml($xml)
+              } catch {
+                Write-Verbose ("[valign] patched styles.xml is not well-formed; leaving workbook untouched: {0}" -f $_.Exception.Message)
+                return
+              }
+              $enc = New-Object System.Text.UTF8Encoding($hasBom)
+              $bytes = [byte[]]($enc.GetPreamble() + $enc.GetBytes($xml))
+              $patched = $true
+            }
+          }
+        }
+        $parts.Add([pscustomobject]@{ Name = $e.FullName; Data = $bytes })
+      }
+    } finally { $in.Dispose() }
+
+    if (-not $patched) { return }   # already normalised -- no rewrite, no cost
+
+    # ---- rebuild in Create mode (trap 2: Update mode corrupts the package) ---------------
+    $tmp = $Path + '.align.tmp'
+    $fs = [System.IO.File]::Open($tmp, 'Create')
+    try {
+      $out = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+      try {
+        foreach ($p in $parts) {
+          $ne = $out.CreateEntry($p.Name, [System.IO.Compression.CompressionLevel]::Optimal)
+          $os = $ne.Open(); $os.Write($p.Data, 0, $p.Data.Length); $os.Close()
+        }
+      } finally { $out.Dispose() }
+    } finally { $fs.Close() }
+
+    # Only replace the real workbook once the rebuild is complete on disk.
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+  } catch {
+    Write-Verbose ("[valign] default top-alignment not applied: {0}" -f $_.Exception.Message)
+    $stale = $Path + '.align.tmp'
+    if (Test-Path -LiteralPath $stale) { try { Remove-Item -LiteralPath $stale -Force } catch { } }
+  }
+}
+
 function Export-Worksheet {
   param(
     [Parameter(Mandatory)][string]$Path,
@@ -160,6 +298,9 @@ function Export-Worksheet {
     # the visual ambiguity of which row a wrapped line belongs to.
     try { $ws.Cells.Style.VerticalAlignment = 'Top' } catch { }
     Close-ExcelPackage $excel
+    # Same default-top-alignment pass as the bulk path -- this branch writes the placeholder
+    # sheet, and a workbook whose LAST write came through here must still end up normalised.
+    Set-WorkbookDefaultTopAlignment -Path $Path
     $script:_sheetWritten[$safeSheet] = $true
     return
   }
@@ -460,6 +601,11 @@ function Export-Worksheet {
   } finally {
     [System.Threading.Thread]::CurrentThread.CurrentCulture = $_savedCulture
   }
+
+  # Default every unstyled cell to TOP. Runs AFTER the package is closed, on the file, and
+  # after EVERY sheet write: EPPlus drops applyAlignment="1" when it re-saves for the next
+  # sheet, so the last write is the one that has to leave the workbook normalised.
+  Set-WorkbookDefaultTopAlignment -Path $_fullPath
 
   $script:_sheetWritten[$safeSheet] = $true
 }

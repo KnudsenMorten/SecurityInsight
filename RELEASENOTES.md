@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.450
+## v2.2.451
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.451: the data-lake check no longer prints an error block when the lake is not onboarded (7b110173)
 - release(SI) v2.2.450: CRITICAL -- the bulk export referenced a type the engine never loaded (fb870bd1)
 - release(SI) v2.2.449: audit #63 -- three Detailed reports hid severities their own Summary counted (01994e19)
 - release(SI) v2.2.448: the bulk export was writing workbooks 3.6x larger than it needed to (609f00cf)
@@ -33,9 +34,46 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) v2.2.434: a refused cross-source merge now NAMES the assets, on the normal run (aa7e96fe)
 - @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
 - docs(SI): session handoff -- seven releases, one root cause, and what the customer still needs (dd27b5b9)
-- fix(SI) v2.2.432: the exclusion-tag reader runs for every asset and was undefended -- one odd tag could have killed a whole run (ec98ab93)
 
 ---
+
+## v2.2.451 — the data-lake check no longer prints an error block when the lake isn't available
+
+**Reported by an operator: "customers are calling me asking what it means."** A healthy run was
+printing blocks like this into the transcript:
+
+```
+PS>TerminatingError(Invoke-RestMethod): "
+{ "error": { "code": "InvalidDatabaseInQuery",
+             "message": "Database '…' is not available for current user." } }"
+>> TerminatingError(): "lake-query: Response status code does not indicate success: 400 (Bad Request)…
+```
+
+**Nothing had failed.** The engine tries the Sentinel data lake first because it is the fastest route
+when available. It is **not onboarded on most tenants**, so "not available for current user" is the
+*expected* reply — the engine notes it, switches to the normal route, and every report completes. The
+message was a routing decision being reported as a fault, twice per attempt, with the workspace
+identifier attached.
+
+### Why it appeared at all
+
+PowerShell transcripts record **every terminating error — including ones the script catches and
+handles**. So an expected outcome still produced a full stack dump. Two things were raising one: the
+web request itself, and the engine re-packaging that result and re-raising it.
+
+Both now hand the result back instead of raising it, so nothing terminates and nothing reaches the
+transcript.
+
+🔒 **Behaviour is unchanged.** Same detection, same automatic fallback, same policy of staying quiet
+about a route that failed when a later route succeeded — and a genuine fault (authentication,
+network) is still caught and reported exactly as before. Only the noise is gone.
+
+📌 Follows the same fix in v2.2.445 for the advanced-hunting table check, which printed up to four
+similar blocks per healthy run. Between them, a clean run should now produce a clean log.
+
+🪤 **One trap worth recording, because it catches you twice:** re-raising the error inside the fix
+puts the block straight back — a caught-and-rethrown error is still a terminating error. Both fixes
+therefore *return* the failure rather than raising it, and tests now assert that neither re-raises.
 
 ## v2.2.450 — 🔴 CRITICAL: the Excel export could fail at the final write. Upgrade past v2.2.445–.449.
 

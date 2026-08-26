@@ -78,12 +78,24 @@ function Invoke-GraphHuntingQuery {
             if (-not $script:_SentinelLakeUnavailable) {
                 Write-Diag ("[lake] probing Sentinel data lake for {0} ..." -f (Split-Path -Leaf $wsForCL))
                 [void](Save-RARenderedQuery -Query $Query -Tag 'lake')
+                # 🔑 v2.2.451 -- the lake helper now RETURNS its failure instead of THROWING it, so an
+                # un-onboarded lake (the common case) no longer writes a terminating-error block into
+                # the customer's transcript. The catch stays as a backstop for a genuine fault; the
+                # handling below is identical either way.
+                $lakeMsg = $null
                 try {
-                    $lakeRows = Invoke-SISentinelLakeQuery -Query $Query -WorkspaceResourceId $wsForCL -ErrorAction Stop
-                    Write-Ok ("[lake] {0} row(s) returned -- single-query path active." -f (@($lakeRows).Count))
-                    return [pscustomobject]@{ _SIDirectRows = @($lakeRows) }
+                    $lakeRows = Invoke-SISentinelLakeQuery -Query $Query -WorkspaceResourceId $wsForCL
+                    if ($null -ne $lakeRows -and $lakeRows -isnot [array] -and
+                        $lakeRows.PSObject -and $lakeRows.PSObject.Properties['_SILakeError']) {
+                        $lakeMsg = [string]$lakeRows._SILakeError
+                    } else {
+                        Write-Ok ("[lake] {0} row(s) returned -- single-query path active." -f (@($lakeRows).Count))
+                        return [pscustomobject]@{ _SIDirectRows = @($lakeRows) }
+                    }
                 } catch {
                     $lakeMsg = $_.Exception.Message
+                }
+                if ($lakeMsg) {
                     # Multi-path fallback policy (operator ask): when one path (lake) fails
                     # but a later path (hybrid / AH / LA-direct) SUCCEEDS for the same query,
                     # do NOT emit a WARN for the superseded attempt -- it confuses operators

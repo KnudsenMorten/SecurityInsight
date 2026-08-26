@@ -361,6 +361,19 @@ function Export-Worksheet {
     # A workbook ACCUMULATES sheets across calls (the index sheet, Details, the AI summary), so an
     # existing file must be OPENED rather than replaced; deleting the target sheet first is what
     # reproduces Export-Excel's -ClearSheet.
+    # 🔴 v2.2.450 -- LOAD THE ASSEMBLY BEFORE TOUCHING ANY OF ITS TYPES.
+    # The engine only PROBES for ImportExcel at startup; it never imports it. That was fine while the
+    # export called `Export-Excel`, because PowerShell auto-loads a module the first time one of its
+    # CMDLETS is used -- but a bare TYPE reference triggers nothing at all. So the bulk path threw
+    #     Cannot find type [OfficeOpenXml.ExcelPackage]
+    # on the FINAL WRITE of a real run, after every query had already completed. That is the same
+    # failure class as v2.2.439 and v2.2.444: a finished run destroyed at the very last step.
+    # 🪤 AND IT PASSED EVERY OFFLINE TEST. The Pester harness does `Import-Module ImportExcel` in its
+    # BeforeAll; the engine does not. Green offline is not the same as works in production -- the one
+    # thing this solution's own rules keep saying, reproduced here in full.
+    if (-not ('OfficeOpenXml.ExcelPackage' -as [type])) {
+        Import-Module ImportExcel -ErrorAction Stop
+    }
     $_fullPath = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path (Get-Location).Path $Path }
     $pkg = if (Test-Path -LiteralPath $_fullPath) { Open-ExcelPackage -Path $_fullPath }
            else { New-Object OfficeOpenXml.ExcelPackage }

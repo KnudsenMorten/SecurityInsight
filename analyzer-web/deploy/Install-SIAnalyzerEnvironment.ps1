@@ -211,7 +211,7 @@ function Test-AzExists {
 }
 
 Write-Host ''
-Write-Host '=== Install-SIAnalyzerEnvironment (audit #40) ===' -ForegroundColor Cyan
+Write-Host '=== Install-SIAnalyzerEnvironment ===' -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
 # GUARDRAIL (#3b): SIA is BORN in SecurityInsight's own resource group.

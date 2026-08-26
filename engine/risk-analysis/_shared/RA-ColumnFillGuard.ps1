@@ -304,10 +304,10 @@ function Invoke-RAColumnFillGuard {
         Write-Info ("[ColumnFillGuard] {0} report(s) compared against the previous run -- no column lost its content." -f $Snapshots.Count)
     }
     else {
-        Write-Warn2 ("[ColumnFillGuard] {0} column(s) carry LESS data than the previous run while their rows remained. This is how #58.5 hid for 108 releases -- every row present, the columns blank. Investigate before trusting this export." -f $findings.Count)
+        Write-Warn2 ("[ColumnFillGuard] {0} column(s) carry LESS data than the previous run while their rows remained. Every row is present and the columns are blank, which a row count cannot see. Investigate before trusting this export." -f $findings.Count)
         foreach ($f in $findings) {
             if ($f.Kind -eq 'COLUMN-VANISHED') {
-                Write-Warn2 ("  COLUMN-VANISHED {0}.{1}: was {2}/{3} rows ({4}%), column is NO LONGER IN THE SCHEMA. This is the #48 shape -- a column dropped between the query and the export." -f $f.Report, $f.Column, $f.PreviousFilled, $f.PreviousRows, $f.PreviousFillPct)
+                Write-Warn2 ("  COLUMN-VANISHED {0}.{1}: was {2}/{3} rows ({4}%), column is NO LONGER IN THE SCHEMA. The column was dropped between the query and the export." -f $f.Report, $f.Column, $f.PreviousFilled, $f.PreviousRows, $f.PreviousFillPct)
             }
             elseif ($f.Kind -eq 'COLUMN-EMPTIED') {
                 Write-Warn2 ("  COLUMN-EMPTIED  {0}.{1}: was {2}/{3} rows ({4}%), now 0/{5} (0%). The column still ships; it is blank on every row. Either the upstream source stopped supplying it, or an enrichment step silently failed." -f $f.Report, $f.Column, $f.PreviousFilled, $f.PreviousRows, $f.PreviousFillPct, $f.CurrentRows)

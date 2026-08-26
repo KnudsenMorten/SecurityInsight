@@ -195,7 +195,7 @@ function Invoke-SISchedule {
                     Write-SIInfo ("CMDB cache refreshed: {0} services written" -f $cmdbRefresh.ServicesWritten)
                 } else {
                     # #58.2 -- the SELECTED source cannot answer. Say that, rather than naming a path.
-                    Write-Warning ("CMDB source 'generic-csv' was selected but its refresh script is missing at {0}. cmdb* will be populated only from whatever the cache already holds, and NO other CMDB source will be substituted for it -- exactly one source is ever active (#58.1)." -f $refreshScript)
+                    Write-Warning ("CMDB source 'generic-csv' was selected but its refresh script is missing at {0}. cmdb* will be populated only from whatever the cache already holds, and NO other CMDB source will be substituted for it -- exactly one source is ever active." -f $refreshScript)
                 }
             } else {
                 Write-SIInfo ("CMDB provider ENABLED -- cache fresh ({0}h old, interval {1}h) -- skip refresh" -f $age.HoursOld, $intervalH)
@@ -209,7 +209,7 @@ function Invoke-SISchedule {
             # PLAUSIBLE BUT STALE, which is the failure mode this audit exists to stop -- empty is
             # visible, wrong is not. Say what the reader must actually decide about. No other source
             # is substituted; resolution picked exactly one before this ran.
-            Write-Warning ("CMDB refresh FAILED for the selected source 'generic-csv' at {0} -- {1}. Reconcile continues against the cache AS IT ALREADY STANDS, so cmdb* values may be STALE rather than absent; check the cache-age line above before trusting them. No other CMDB source will be substituted (#58.1/#58.2)." -f $loc, $_.Exception.Message)
+            Write-Warning ("CMDB refresh FAILED for the selected source 'generic-csv' at {0} -- {1}. Reconcile continues against the cache AS IT ALREADY STANDS, so cmdb* values may be STALE rather than absent; check the cache-age line above before trusting them. No other CMDB source will be substituted." -f $loc, $_.Exception.Message)
         }
     }
 

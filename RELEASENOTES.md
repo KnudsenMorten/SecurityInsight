@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.449
+## v2.2.450
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.450: CRITICAL -- the bulk export referenced a type the engine never loaded (fb870bd1)
 - release(SI) v2.2.449: audit #63 -- three Detailed reports hid severities their own Summary counted (01994e19)
 - release(SI) v2.2.448: the bulk export was writing workbooks 3.6x larger than it needed to (609f00cf)
 - docs(SI) v2.2.447: the export figure, corrected by a full-scale measurement (1094ad83)
@@ -33,9 +34,47 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
 - docs(SI): session handoff -- seven releases, one root cause, and what the customer still needs (dd27b5b9)
 - fix(SI) v2.2.432: the exclusion-tag reader runs for every asset and was undefended -- one odd tag could have killed a whole run (ec98ab93)
-- feat(SI) v2.2.431: the exclusions report existed only as Detailed -- add the Summary pair, and make parity a test (9869d29c)
 
 ---
+
+## v2.2.450 — 🔴 CRITICAL: the Excel export could fail at the final write. Upgrade past v2.2.445–.449.
+
+**If you are on v2.2.445, .446, .447, .448 or .449, upgrade.** On those versions a Risk Analysis run
+could complete every query, build every report — and then fail while writing the workbook:
+
+```
+[ERROR] Engine failed: Cannot find type [OfficeOpenXml.ExcelPackage]
+```
+
+No workbook, no email, no Log Analytics upload. The whole run lost at the last step.
+
+### What happened
+
+v2.2.445 rewrote the export to hand the whole sheet to the spreadsheet engine in one operation, which
+made it ~30× faster. That new code refers to the spreadsheet library's **type** directly. PowerShell
+loads a module automatically the first time one of its **commands** is used — but a direct type
+reference triggers nothing, and the engine only ever *checked that the library was installed*, it
+never loaded it. The old code happened to call a command, so the library was always loaded by
+accident.
+
+The export now loads the library explicitly before touching it.
+
+### Why the tests did not catch it
+
+The test harness loads the spreadsheet library at the top of the file. The engine does not. So every
+test ran with the library already present and could not reproduce the one condition that mattered.
+**It was caught by a real engine run, not by the suite.**
+
+The regression test now runs `Export-Worksheet` in a **separate process that never loads the library**
+— an in-process test cannot unload a module, so it can only ever reproduce the harness's conditions
+rather than production's. It also fails deliberately if that process starts with the library already
+present, so it can never pass for the wrong reason.
+
+### Scope
+
+Affects the workbook write only. Data collection, scoring, filtering, Log Analytics ingestion and mail
+are untouched — but on an affected version the run ended before reaching them, so nothing downstream
+was produced either. Runs on v2.2.444 and earlier were never affected.
 
 ## v2.2.449 — three Detailed reports were hiding findings their own Summary counted
 

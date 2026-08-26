@@ -244,3 +244,53 @@ Describe 'the empty-rows branch still works' -Skip:(-not [bool](Get-Module -List
         } finally { if (Test-Path $out) { Remove-Item $out -Force } }
     }
 }
+
+Describe '🔴 THE ENGINE NEVER IMPORTS ImportExcel -- the export must load the assembly itself' {
+    # v2.2.450. The bulk path references the EPPlus TYPE directly (`New-Object
+    # OfficeOpenXml.ExcelPackage`). PowerShell auto-loads a module when one of its CMDLETS is first
+    # used, but a bare type reference triggers nothing -- and the engine only PROBES for ImportExcel
+    # at startup, it never imports it. So a real run died with
+    #     Cannot find type [OfficeOpenXml.ExcelPackage]
+    # on the FINAL WRITE, after every query had completed: the v2.2.439 / v2.2.444 failure class,
+    # a finished run destroyed at the last step.
+    #
+    # 🪤 EVERY OFFLINE TEST PASSED. This suite's own BeforeAll does `Import-Module ImportExcel`, so
+    # the type was always already loaded here and never in the engine. THAT is why this case has to
+    # run in a CHILD PROCESS -- an in-process test cannot un-import a module, so it can only ever
+    # reproduce the harness's conditions, not production's.
+
+    It 'Export-Worksheet succeeds in a FRESH process that never imports ImportExcel' {
+        $child = Join-Path ([IO.Path]::GetTempPath()) ("si-noimport-{0}.ps1" -f ([guid]::NewGuid().ToString('N')))
+        $out   = Join-Path ([IO.Path]::GetTempPath()) ("si-noimport-{0}.xlsx" -f ([guid]::NewGuid().ToString('N')))
+        $body  = @"
+`$ErrorActionPreference='Stop'
+if ('OfficeOpenXml.ExcelPackage' -as [type]) { Write-Output 'PRELOADED'; exit 2 }
+`$script:_sheetWritten=@{}
+. '$($script:SIRoot)\engine\risk-analysis\_shared\RA-RunProgress.ps1'
+. '$($script:SIRoot)\engine\risk-analysis\_shared\RA-ExcelReport.ps1'
+`$script:_sheetWritten=@{}
+`$rows=@([pscustomobject][ordered]@{ AssetName='HOST-1'; Score=[double]9.8 })
+Export-Worksheet -Path '$out' -SheetName 'Details' -Rows `$rows ``
+    -DesiredColumns @('AssetName','Score') -TableStyle 'Medium9'
+if (Test-Path '$out') { Write-Output 'OK'; exit 0 } else { Write-Output 'NOFILE'; exit 1 }
+"@
+        Set-Content -Path $child -Value $body -Encoding UTF8
+        try {
+            $res = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $child 2>&1
+            $code = $LASTEXITCODE
+            # exit 2 would mean the child had EPPlus already loaded -- the test would be proving
+            # nothing, so it must fail loudly rather than pass by accident.
+            $code | Should -Not -Be 2 -Because "the child must start WITHOUT EPPlus loaded, or this case is vacuous"
+            $code | Should -Be 0 -Because ("child output: " + ($res -join ' | '))
+        } finally {
+            if (Test-Path $child) { Remove-Item $child -Force }
+            if (Test-Path $out)   { Remove-Item $out   -Force }
+        }
+    }
+
+    It 'the export guards the type before using it' {
+        $script:CodeNC = (($script:Code -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+        $script:CodeNC | Should -Match "OfficeOpenXml\.ExcelPackage' -as \[type\]"
+        $script:CodeNC | Should -Match 'Import-Module ImportExcel'
+    }
+}

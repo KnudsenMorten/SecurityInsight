@@ -2254,6 +2254,7 @@ wrap targets, vertical alignment and date formats are applied per column.
 | write only, 3,000 × 291 | 455.8 s | **3.2 s** |
 | end to end, 3,000 × 291 | ~520 s | **17.5 s** |
 | end to end, 20,000 × 291 | — | **148.9 s** |
+| end to end, **121,111 × 291** (a real customer shape) | **20,051.92 s** observed in production | **1,261.6 s** measured |
 
 **Nothing observable about the workbook changes.** Rows, columns, order, table, filter, header,
 widths, wrapping and alignment are all identical — pinned by `SI-ExcelBulkExport.Tests.ps1`.

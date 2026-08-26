@@ -4,7 +4,7 @@
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
-- release(SI) v2.2.453: two rows were adding 17 junk columns to every workbook (453f27f2)
+- release(SI) v2.2.453: two rows were adding 17 junk columns to every workbook (313e2fae)
 - docs(SI): audit #65 -- redundancy scan, filed LOW PRIORITY with its own false positives (c24f6b41)
 - release(SI) v2.2.452: a query failure is one line, not a twenty-line stack dump (a1ea7080)
 - release(SI) v2.2.451: the data-lake check no longer prints an error block when the lake is not onboarded (7b110173)

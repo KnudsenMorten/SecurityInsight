@@ -437,6 +437,7 @@ Reports:
       - High
       - Medium-High
       - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
@@ -1178,6 +1179,8 @@ Reports:
       - Very High
       - High
       - Medium-High
+      - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category
@@ -1795,6 +1798,8 @@ Reports:
       - Very High
       - High
       - Medium-High
+      - Medium
+      - Low
       OutputPropertyOrder:
       - SecurityDomain
       - Category

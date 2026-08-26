@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.447
+## v2.2.448
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.448: the bulk export was writing workbooks 3.6x larger than it needed to (609f00cf)
 - docs(SI) v2.2.447: the export figure, corrected by a full-scale measurement (1094ad83)
 - release(SI) v2.2.446: audit #62 -- a failed bucket no longer shrinks a report in silence (571ab809)
 - docs(SI) v2.2.445: the three public docs the release notes alone did not cover (4d2e4bd7)
@@ -33,9 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) v2.2.432: the exclusion-tag reader runs for every asset and was undefended -- one odd tag could have killed a whole run (ec98ab93)
 - feat(SI) v2.2.431: the exclusions report existed only as Detailed -- add the Summary pair, and make parity a test (9869d29c)
 - feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
-- fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
 
 ---
+
+## v2.2.448 — the new export was writing workbooks 3.6× larger than it needed to
+
+**A side effect of v2.2.445, found by measuring the finished file rather than the clock.** The faster
+export produced correct workbooks that were **3.6× bigger** than the old one for identical data — at
+one real size, **16.03 MB where the old path wrote 4.44 MB**.
+
+### Why
+
+The old export wrote cells one at a time and skipped empty ones. The new one hands the whole block to
+the spreadsheet engine, which also correctly writes **nothing** for an empty cell — that part was
+never the problem, and was measured to confirm it (0.56 MB with 251 empty columns, 0.56 MB without).
+
+The cost came from **top-alignment being applied to every column**. Styling a column forces the
+spreadsheet engine to create a real, styled cell for every empty slot in it — and the Detailed sheet
+merges roughly sixty reports into one, so around **85% of its cells are empty by construction**.
+Applied to all 291 columns, that alone took the file from 0.67 MB to 2.40 MB in a controlled test.
+
+### The fix
+
+Top-alignment now goes only on the columns that **wrap** — the seven long-text columns it was added
+for in the first place. This is not a compromise: top versus the default centre alignment is only
+visible once a row is tall enough for the text to sit somewhere other than the middle, which happens
+exactly when wrapping fires. In an ordinary single-line row the two are indistinguishable.
+
+| at 20,000 rows × 291 columns | old export | v2.2.445 | **v2.2.448** |
+|---|---|---|---|
+| time | 3,472.09 s | 122.28 s | **107.17 s** |
+| peak memory | 10,032 MB | 1,887 MB | **1,887 MB** |
+| file size | 4.44 MB | 16.03 MB | **4.44 MB** |
+
+⚠️ **Why file size was worth chasing rather than shrugging at.** The report is emailed, and an
+attachment over **20 MB** is dropped from the mail with the workbook left on disk. An inflated
+workbook can therefore silently stop being attached for a customer who was comfortably under the
+limit before.
+
+### Also confirmed by the same round of measurement
+
+The old export's peak memory at that size was **10 GB**; the new one uses **1.9 GB — five times
+less**. A row held as a plain array is far lighter than the rebuilt object the old path created for
+every row. So the faster export is also the one far less likely to run a collection host out of
+memory, which was the open question after v2.2.445.
 
 ## v2.2.447 — the export figure, corrected by a full-scale measurement
 

@@ -169,8 +169,21 @@ Describe 'OUTPUT FIDELITY -- a bulk-written workbook must be indistinguishable' 
         $script:Ws.Column($script:Col['MoreDetails']).Style.WrapText | Should -BeTrue
     }
 
-    It 'cells stay top-aligned' {
-        "$($script:Ws.Column($script:Col['AssetName']).Style.VerticalAlignment)" | Should -Be 'Top'
+    It 'a WRAPPED column is top-aligned -- the only place the alignment is visible' {
+        # Top vs the default Center is indistinguishable in a normal-height single-line row; it only
+        # shows once WrapText makes the row tall. So the two settings belong on the same columns.
+        "$($script:Ws.Column($script:Col['MoreDetails']).Style.VerticalAlignment)" | Should -Be 'Top'
+    }
+
+    It '🔴 a NON-wrapped column is NOT styled -- styling all 291 cost 3.6x the FILE SIZE' {
+        # v2.2.448. LoadFromArrays correctly writes no cell for a null, and this sheet is a
+        # cross-report union that is ~85% structurally empty -- but styling a column MATERIALISES a
+        # styled cell for every empty slot. Measured at 3,000 x 291: 0.67 MB -> 2.40 MB purely from
+        # applying vertical alignment to every column. Nulls themselves cost nothing (0.56 MB with
+        # 251 null columns vs 0.56 MB without); the STYLE is what does.
+        # ⚠️ Not just disk: the mail attachment cap is 20 MB, so an inflated workbook can silently
+        # stop being attached for a customer who was previously under it.
+        "$($script:Ws.Column($script:Col['AssetName']).Style.VerticalAlignment)" | Should -Not -Be 'Top'
     }
 
     It 'the sheet still carries a table, which is what provides the autofilter' {

@@ -413,15 +413,28 @@ function Export-Worksheet {
       # short/empty values readable rather than collapsing it to nothing.
       $_widest = [Math]::Max([int]$_colMaxLen[$headerVal], $headerVal.Length)
       $ws.Column($col).Width = [Math]::Min($maxWidth, [Math]::Max(8, ($_widest + 2)))
+      # 🔴 v2.2.448 -- WRAP AND TOP-ALIGN ARE SET TOGETHER, ON THE WRAP COLUMNS ONLY, AND THAT PAIRING
+      # IS THE WHOLE POINT. Top alignment is only VISIBLE when a row is tall enough for the text to
+      # sit somewhere other than the middle -- which happens exactly when WrapText fires. In a
+      # normal-height single-line row, 'Top' and the default 'Center' are indistinguishable.
+      # 🪤 AND APPLYING IT SHEET-WIDE COSTS 3.6x THE FILE SIZE. Measured at 3,000 x 291:
+      #       bare load ................................ 0.66 MB
+      #       + table + widths ......................... 0.67 MB
+      #       + vertical alignment on every column ..... 2.40 MB   <-- here
+      # The reason is specific to this sheet: LoadFromArrays correctly writes NO cell for a null, and
+      # the Details sheet is a cross-report union that is ~85% structurally empty -- but styling a
+      # column MATERIALISES a styled cell for every one of those empty slots. Nulls themselves cost
+      # nothing (0.56 MB with 251 null columns vs 0.56 MB without); it is the STYLE that does.
+      # 📌 Range-based (`$ws.Cells.Style.VerticalAlignment`) is NOT cheaper -- measured identical at
+      # 2.41 MB. The saving comes from styling 7 columns instead of 291, not from how they are styled.
+      # ⚠️ Why this matters beyond disk: the mail attachment cap is 20 MB, so an inflated workbook can
+      # silently stop being attached for a customer who was previously under it.
       if ($headerVal -and $wrapTargets.ContainsKey($headerVal)) {
-        try { $ws.Column($col).Style.WrapText = $true } catch { }
+        try {
+          $ws.Column($col).Style.WrapText         = $true
+          $ws.Column($col).Style.VerticalAlignment = 'Top'
+        } catch { }
       }
-      # 🔴 VerticalAlignment MOVED HERE from `$ws.Cells.Style.VerticalAlignment = 'Top'`, which set
-      # the style across the FULL used range -- the same 35.2M cells -- to achieve what one
-      # assignment per column achieves. Same visual result, ~121,000x fewer operations.
-      # 📌 Column-level style is known to take effect in exactly this configuration: the WrapText
-      # line directly above has used it since v2.2.226 and operators see the wrapping.
-      try { $ws.Column($col).Style.VerticalAlignment = 'Top' } catch { }
       # 🪤 A [datetime] is stored by EPPlus as its OLE SERIAL. Without this format the cell reads
       # "46260,125" instead of a date -- Export-Excel used to apply it for us. Found by testing the
       # bulk path against mixed types, not by reading the code.

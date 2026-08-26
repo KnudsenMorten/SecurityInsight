@@ -216,19 +216,15 @@ function Export-Worksheet {
     if ($_useCols.Count -gt 0) { $Data = $Data | Select-Object -Property $_useCols.ToArray() }
   }
 
-  if ($ColumnsToFlatten.Count -gt 0) {
-    $Data = $Data | ForEach-Object {
-      $o = [ordered]@{}
-      foreach ($p in $_.PSObject.Properties) {
-        $v = $p.Value
-        if ($ColumnsToFlatten -contains $p.Name) {
-          $v = Convert-CellValue -Value $v
-        }
-        $o[$p.Name] = $v
-      }
-      [pscustomobject]$o
-    }
-  }
+  # 🔴 v2.2.445 -- THE -ColumnsToFlatten PASS IS GONE, DELIBERATELY, AND -ColumnsToFlatten STILL WORKS.
+  # It used to rebuild EVERY row as a new [pscustomobject] just to run Convert-CellValue on a named
+  # handful of columns. The single pass further down already applies the SAME Convert-CellValue to
+  # ANY non-string IDictionary / pscustomobject / IEnumerable -- which is a strict superset of the
+  # listed columns (ImpactedAssets, IssueList, Logins, Benchmarks, ... are all arrays) and uses the
+  # same default join. So this pass produced no value the later one does not, at the cost of a full
+  # O(rows x columns) rebuild of the entire dataset.
+  # 📌 The PARAMETER is kept: callers pass it, it documents intent, and removing it would be a
+  # breaking signature change for no gain. It is simply no longer the mechanism that does the work.
 
   if ($SortColumn) {
     $Data = $Data | Sort-Object -Property $SortColumn -Descending:$SortDescending.IsPresent
@@ -249,10 +245,81 @@ function Export-Worksheet {
   # result / CSA blob / pasted-in text containing such a character makes Excel pop
   # the "Repaired Records: String properties from sharedStrings.xml" dialog on
   # file open. v2.1.206.
-  $Data = $Data | ForEach-Object {
-    $o = [ordered]@{}
-    foreach ($p in $_.PSObject.Properties) {
-      $v = $p.Value
+  # 🔑 v2.2.445 -- COLUMN WIDTHS ARE MEASURED HERE, INSIDE THE PASS WE ALREADY MAKE.
+  # This loop already visits every cell of every row, so the widest rendered value per column costs
+  # one comparison on the way past. What it REPLACES is `$ws.Cells.AutoFitColumns()`, which GDI+
+  # text-measured the ENTIRE used range -- 35,243,301 cells on the 121k-row x 291-column Detailed
+  # run that exposed this -- to produce a number the very next loop then CLAMPED to 50 (90 for
+  # CVSSDesc). Measuring 35 million cells to compute a width that is discarded and replaced with 50
+  # was the single largest cost in a 5h34m export.
+  # 📌 Character count is the correct unit: an Excel column width IS "number of default-font
+  # characters", which is what both clamps are already expressed in.
+  # 🔑 SIDE EFFECT WORTH HAVING: this drops the System.Drawing.Common dependency, so Linux
+  # containers stop falling back to ImportExcel's default width of 10 and now produce the SAME
+  # workbook as Windows. That divergence was silent, and container is a supported topology.
+  # 🔑 THE COLUMN LIST. After the -DesiredColumns Select-Object above, every row carries the SAME
+  # properties in the SAME order, which lets the pass below read them POSITIONALLY (much cheaper than
+  # a name lookup per cell). Without -DesiredColumns the shapes can differ, so the names are UNIONED
+  # across every row first -- audit #26's lesson: never take row 1's shape as the truth for the set.
+  $_uniform = [bool]($DesiredColumns -and $_useCols -and $_useCols.Count -gt 0)
+  if ($_uniform) {
+    $_names = $_useCols.ToArray()
+  } else {
+    $_seenN = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $_nameL = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($r in $Data) {
+      foreach ($p in $r.PSObject.Properties) { if ($_seenN.Add($p.Name)) { [void]$_nameL.Add($p.Name) } }
+    }
+    $_names = $_nameL.ToArray()
+  }
+  $_nCols = $_names.Count
+
+  # 🔴 v2.2.445 -- ONE PASS PRODUCES EVERYTHING THE WRITE NEEDS: scrubbed values as object[], the
+  # widest value per column, and which columns hold dates.
+  #
+  # WHY THIS SHAPE, MEASURED. The old path rebuilt every row as a fresh [pscustomobject] and handed
+  # the collection to ImportExcel's Export-Excel, which walks each row's properties in PowerShell and
+  # writes cells ONE AT A TIME. On PS 5.1 that is ~0.55 ms per cell -- and that single rate predicted
+  # a customer's 121,111-row x 291-column export at 19,384s against an OBSERVED 20,051.92s (5h34m).
+  # 🔑 Cost tracks cell SLOTS, not values: at 3,000 x 291, dropping 86% of the VALUES saved only 9%
+  # of the time (455.8s dense vs 413.0s sparse) -- every declared column is visited whether or not it
+  # holds anything, and the Detailed sheet is a cross-report UNION that is ~85% structurally empty.
+  # EPPlus can load the whole block inside .NET instead. Same 873,000 cells, same machine:
+  #       Export-Excel  (per-cell, PowerShell) ..... 455.8s
+  #       LoadFromArrays (bulk, .NET) ..............   3.2s
+  # end-to-end 520s -> 19s; at 20,000 x 291 the entire write is 127.8s.
+  #
+  # 🔒 THE InvariantCulture SWAP BELOW IS NO LONGER LOAD-BEARING -- AND IS KEPT ANYWAY. LoadFromArrays
+  # hands EPPlus the BOXED .NET value, so a [double] is never stringified and the comma-decimal
+  # hazard (da-DK turning 9.8 into "9,8", Excel re-reading it as 98) cannot arise on this path at
+  # all. Verified under da-DK: 9.8 lands as a NUMBER, not text. The swap stays because the styling
+  # below still formats and it costs nothing.
+  # 🪤 DATES NEED AN EXPLICIT NUMBER FORMAT. EPPlus stores a [datetime] as its OLE serial, so without
+  # a format the cell READS "46260,125" instead of a date. Export-Excel used to apply that format for
+  # us. Caught by testing, not by reading -- hence $_dateCols.
+  $_colMaxLen = @{}
+  $_dateCols  = @{}
+  $_arrays    = New-Object 'System.Collections.Generic.List[object[]]'
+  $_hdrRow    = New-Object 'object[]' $_nCols
+  for ($i = 0; $i -lt $_nCols; $i++) { $_hdrRow[$i] = $_names[$i]; $_colMaxLen[$_names[$i]] = $_names[$i].Length }
+  [void]$_arrays.Add($_hdrRow)
+
+  foreach ($row in $Data) {
+    $a  = New-Object 'object[]' $_nCols
+    $ps = $row.PSObject.Properties
+    # 1. fetch raw values -- positionally when the shape is guaranteed, by name otherwise
+    if ($_uniform) {
+      $i = 0
+      foreach ($p in $ps) { if ($i -lt $_nCols) { $a[$i] = $p.Value }; $i++ }
+    } else {
+      for ($i = 0; $i -lt $_nCols; $i++) {
+        $pp = $ps[$_names[$i]]
+        if ($null -ne $pp) { $a[$i] = $pp.Value }
+      }
+    }
+    # 2. scrub + measure, one common loop over the array (both halves are cheap index ops)
+    for ($i = 0; $i -lt $_nCols; $i++) {
+      $v = $a[$i]
       # Universal flatten: any non-scalar (array / hashtable / pscustomobject)
       # gets joined / JSON-serialized so it lands as a readable string in the cell.
       if ($null -ne $v -and -not ($v -is [string]) -and (
@@ -265,9 +332,17 @@ function Export-Worksheet {
       if ($v -is [string] -and -not [string]::IsNullOrEmpty($v)) {
         $v = ConvertTo-XlsxSafeString $v
       }
-      $o[$p.Name] = $v
+      elseif ($v -is [datetime]) { $_dateCols[$_names[$i]] = $true }
+      $a[$i] = $v
+      # Widest value seen for this column. [int]$null is 0, so an unseen key needs no guard, and
+      # PowerShell hashtable keys are case-insensitive -- matching PSObject property semantics, so
+      # 'OsPlatform' and 'OSPlatform' land on one entry exactly as they do on one column.
+      if ($null -ne $v) {
+        $_len = ([string]$v).Length
+        if ($_len -gt [int]$_colMaxLen[$_names[$i]]) { $_colMaxLen[$_names[$i]] = $_len }
+      }
     }
-    [pscustomobject]$o
+    [void]$_arrays.Add($a)
   }
 
   # locale-defensive Excel write. PowerShell + EPPlus auto-stringify
@@ -282,11 +357,34 @@ function Export-Worksheet {
   $_savedCulture = [System.Threading.Thread]::CurrentThread.CurrentCulture
   try {
     [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::InvariantCulture
-    $excel = $Data | Export-Excel -Path $Path -WorksheetName $safeSheet -TableStyle $TableStyle `
-      -TableName $tableName -AutoFilter -FreezeTopRow -BoldTopRow -ClearSheet -PassThru
+    # 🔑 BULK LOAD -- the entire block in ONE .NET call, instead of a PowerShell write per cell.
+    # A workbook ACCUMULATES sheets across calls (the index sheet, Details, the AI summary), so an
+    # existing file must be OPENED rather than replaced; deleting the target sheet first is what
+    # reproduces Export-Excel's -ClearSheet.
+    $_fullPath = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path (Get-Location).Path $Path }
+    $pkg = if (Test-Path -LiteralPath $_fullPath) { Open-ExcelPackage -Path $_fullPath }
+           else { New-Object OfficeOpenXml.ExcelPackage }
+    if ($null -ne $pkg.Workbook.Worksheets[$safeSheet]) { $pkg.Workbook.Worksheets.Delete($safeSheet) }
+    $ws = $pkg.Workbook.Worksheets.Add($safeSheet)
+    $null = $ws.Cells[1, 1].LoadFromArrays($_arrays)
 
-    $ws = $excel.Workbook.Worksheets[$safeSheet]
-    if (-not $IsLinux) { $ws.Cells.AutoFitColumns() }   # Linux: System.Drawing.Common unavailable
+    # Table + banding + autofilter + frozen bold header: what -TableStyle / -AutoFilter /
+    # -FreezeTopRow / -BoldTopRow used to give us.
+    # 🪤 PS 5.1 CANNOT PARSE a multi-argument indexer nested inside a method-call argument, so the
+    # range MUST be hoisted into its own variable. `$ws.Tables.Add($ws.Cells[1,1,$r,$c], $n)` is a
+    # PARSE error ("Missing ']' after array index expression"), not a runtime one -- it fails before
+    # a single line executes, which is why it looks nothing like a type problem.
+    $_lastRow = $_arrays.Count
+    $_rngAll  = $ws.Cells[1, 1, $_lastRow, $_nCols]
+    $_tbl     = $ws.Tables.Add($_rngAll, $tableName)
+    try { $_tbl.TableStyle = [OfficeOpenXml.Table.TableStyles]$TableStyle } catch { }
+    $_tbl.ShowHeader = $true
+    try { $_tbl.ShowFilter = $true } catch { }
+    $ws.View.FreezePanes(2, 1)
+    $_rngHdr = $ws.Cells[1, 1, 1, $_nCols]
+    $_rngHdr.Style.Font.Bold = $true
+    # 🔴 NO AutoFitColumns HERE -- widths come from $_colMaxLen, collected during the scrub pass
+    # above. See the block comment there for why. (v2.2.445)
     # v2.2.226 -- enable WrapText on known multi-line columns so embedded
     # newlines (\r\n built by the MoreDetails post-process; IssueList /
     # RiskFactor_*_Detailed / ImpactedAssetsList aggregations) render as
@@ -305,17 +403,34 @@ function Export-Worksheet {
     }
     # Wider cap for known long-narrative columns. See empty-rows branch above.
     $wideTargets = @{ 'CVSSDesc' = 90 }
-    for ($col = 1; $col -le $ws.Dimension.Columns; $col++) {
-      $headerVal = [string]$ws.Cells[1, $col].Value
+    for ($col = 1; $col -le $_nCols; $col++) {
+      # Header name comes from $_names, not from a worksheet read -- identical value, no round trip.
+      $headerVal = [string]$_names[$col - 1]
       $maxWidth  = if ($headerVal -and $wideTargets.ContainsKey($headerVal)) { [int]$wideTargets[$headerVal] } else { 50 }
-      if ($ws.Column($col).Width -gt $maxWidth) { $ws.Column($col).Width = $maxWidth }
+      # Width from the lengths collected during the scrub pass, clamped EXACTLY as before. The
+      # header has to be counted too -- it is a cell in the column and was previously measured by
+      # AutoFitColumns. +2 pads for the AutoFilter dropdown arrow; the floor of 8 keeps a column of
+      # short/empty values readable rather than collapsing it to nothing.
+      $_widest = [Math]::Max([int]$_colMaxLen[$headerVal], $headerVal.Length)
+      $ws.Column($col).Width = [Math]::Min($maxWidth, [Math]::Max(8, ($_widest + 2)))
       if ($headerVal -and $wrapTargets.ContainsKey($headerVal)) {
         try { $ws.Column($col).Style.WrapText = $true } catch { }
       }
+      # 🔴 VerticalAlignment MOVED HERE from `$ws.Cells.Style.VerticalAlignment = 'Top'`, which set
+      # the style across the FULL used range -- the same 35.2M cells -- to achieve what one
+      # assignment per column achieves. Same visual result, ~121,000x fewer operations.
+      # 📌 Column-level style is known to take effect in exactly this configuration: the WrapText
+      # line directly above has used it since v2.2.226 and operators see the wrapping.
+      try { $ws.Column($col).Style.VerticalAlignment = 'Top' } catch { }
+      # 🪤 A [datetime] is stored by EPPlus as its OLE SERIAL. Without this format the cell reads
+      # "46260,125" instead of a date -- Export-Excel used to apply it for us. Found by testing the
+      # bulk path against mixed types, not by reading the code.
+      if ($_dateCols.ContainsKey($headerVal)) {
+        try { $ws.Column($col).Style.Numberformat.Format = 'yyyy-mm-dd hh:mm:ss' } catch { }
+      }
     }
-    # All cells top-aligned (ImportExcel default is center). See empty-rows branch.
-    try { $ws.Cells.Style.VerticalAlignment = 'Top' } catch { }
-    Close-ExcelPackage $excel
+    $pkg.SaveAs([System.IO.FileInfo]$_fullPath)
+    $pkg.Dispose()
   } finally {
     [System.Threading.Thread]::CurrentThread.CurrentCulture = $_savedCulture
   }

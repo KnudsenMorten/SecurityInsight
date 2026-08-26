@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.444
+## v2.2.445
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.445: a 5h34m Excel export, measured down to ~15 minutes (08010c22)
 - release(SI) v2.2.444: one empty string in the recipient list threw away a finished run (f9d83adc)
 - docs(SI): FEATURES.md was 35 releases stale, and the v3 section did not know v3 had started (c2cfc9f8)
 - docs(SI): 47 settings the engines read that no config file or doc ever listed (48993db0)
@@ -33,9 +34,82 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
 - fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
 - fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (2a273f7e)
-- docs(SI): surface the si-v3 pointer where a session actually looks, not at line 6692 (6929e488)
 
 ---
+
+## v2.2.445 — a 5½-hour Excel export, cut to about 15 minutes
+
+**Reported from a production run.** A Detailed Risk Analysis spent **20,051.92 seconds — 5 hours 34
+minutes — writing the spreadsheet.** The queries were done, the data was correct; the run simply sat
+in the export. This release makes that step roughly **22× faster** without dropping a single row or
+column, and fixes two other things the same log exposed.
+
+### Why it was slow
+
+The spreadsheet library writes cells **one at a time**. Measured on the affected runtime that is about
+**0.55 milliseconds per cell**, and the Detailed workbook is 121,111 rows × 291 columns — over **35
+million cells**. That one rate predicts the observed time to within 3.4%, so there was no mystery left
+to solve, only a decision about what to do.
+
+Two things were worth knowing:
+
+- **An early theory was wrong and measuring killed it.** Column auto-sizing looked like the culprit; it
+  turned out to be **1%** of the cost.
+- **Empty cells are almost as expensive as full ones.** Removing 86% of the *values* saved only 9% of
+  the time, because every declared column is visited whether or not it holds anything. The Detailed
+  sheet merges roughly sixty reports into one sheet, so most of its cells are structurally empty.
+
+### What changed
+
+The export now builds the sheet in **one pass** and hands the whole block to the spreadsheet engine in
+a **single call**, instead of a per-cell round trip from PowerShell. A second, redundant pass over the
+data was removed at the same time.
+
+| measured | before | after |
+|---|---|---|
+| 3,000 rows × 291 columns | ~520s | **17.5s** |
+| 20,000 rows × 291 columns | — | **148.9s** |
+
+**Nothing about the workbook changes**: same rows, same columns, same order, same table, filter, frozen
+header, column widths, wrapping and alignment.
+
+🔑 **One long-standing hazard disappears entirely.** Numbers are now handed to the spreadsheet engine as
+numbers rather than converted to text first, so on comma-decimal systems (Danish, German, French, Dutch
+and others) a value like `9.8` can no longer be misread as `98`. This is now proven by tests that run
+*in* a comma-decimal locale rather than assumed.
+
+### A second delay, in the same run
+
+Sorting the finished rows was reported as taking **532 seconds**. Almost none of that was sorting — it
+was the engine copying the rows into a new list one at a time, which gets quadratically slower as rows
+grow. At 121,111 rows that copy took **681 seconds** on its own. It is gone: **0.002 seconds**.
+
+### Alarming errors in the log that were never errors
+
+A healthy run printed up to four blocks like this, and customers reasonably asked what had failed:
+
+```
+PS>TerminatingError(...): 'take' operator: Failed to resolve table or column expression
+   named 'SI_..._CL'. Fix semantic errors in your query.  Status: 400 (BadRequest)
+```
+
+Nothing had failed. The engine asks whether a table is reachable by a faster route; for most
+installations the answer is legitimately *no*, and it then uses the normal route. The question was
+being asked in a way that recorded the expected answer as a fault, complete with HTTP headers. It now
+asks the same question quietly. **The routing behaviour is unchanged — only the noise is gone.**
+
+### The upload step is now timed
+
+Every other expensive stage of a run reported how long it took; the Log Analytics upload did not. When
+the question came up — *"is the upload what's taking hours?"* — the log could not answer it. It now
+reports `log analytics ingest completed in N s` like every other stage.
+
+### Also in this release
+
+- Column widths are computed while the data is being prepared rather than by measuring the finished
+  sheet. A side effect worth having: container-based runs no longer fall back to a default narrow
+  width, so they now produce the same workbook as Windows runs.
+- Dates are explicitly formatted as dates. Found by testing the new export path, not by reading it.
 
 ## v2.2.444 — one empty string in the recipient list threw away a finished run
 

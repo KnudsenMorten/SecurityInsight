@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.456
+## v2.2.457
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.457: the AI summary sheet was quietly undoing the workbook's alignment (53307cde)
 - release(SI) v2.2.456: the findings that went missing every run, and why absence is not remediation (860ce577)
 - release(SI) v2.2.455: a query defect was reported as a platform glitch, and re-running could never fix it (c4bb3e67)
 - release(SI) v2.2.454: tall rows read as though the values belonged to the row below (34f965b3)
@@ -33,9 +34,29 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) #25 fourth shape: a make_set list arrives in TWO shapes, and the engine knew only one (2900c5d2)
 - docs(SI): the cert-store trap had TWO contradictory prescriptions, and the cause was neither of them (62409f2f)
 - docs(SI) #55: DESIGN never mentioned run transcripts at all -- and they have been default-on since v2.2.312 (27e921fe)
-- fix(SI) #25: the count/list guard was keyed on the LIST, so it walked past two reports that broke it (e74fa75d)
 
 ---
+
+## v2.2.457 — the AI summary sheet was quietly undoing the workbook's alignment
+
+The default top-alignment added in v2.2.454 was being written correctly and then stripped again
+before the file reached anyone.
+
+Three separate places write the workbook. Two of them go through the shared worksheet export, and
+both were updated in v2.2.454. The third — the sheet holding the AI summary — has its own export
+path, and it runs **last**. Every time it saved, the workbook's default style lost the
+`applyAlignment` flag that makes the alignment take effect, so the finished file carried the
+alignment in a form that no longer applied.
+
+The first live run after v2.2.454 produced exactly that: the setting present, the flag gone. Fixed by
+normalising the style after that sheet is written too — whichever path saves the file last is the one
+that has to leave it correct.
+
+### Verification note kept deliberately
+
+This was found by inspecting the workbook a real run produced, not by reading the code or trusting a
+library's read-back. The library reports the alignment as applied in both the working and the broken
+form, so it cannot distinguish them — only the file itself, or Excel, can.
 
 ## v2.2.456 — the findings that went missing every run, and why absence is not remediation
 

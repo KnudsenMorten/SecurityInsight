@@ -2227,6 +2227,54 @@ the list sit in the **same `summarize`**, so the fix is a FOLLOWING `| extend`, 
 and `Endpoint_ActiveCompromise_Detected_Summary` has **no `ImpactedAssetsList` at all**
 (`dcount(PrimaryEntityId)` only), so `array_length` cannot apply there — decide that one separately.
 
+#### How the workbook is WRITTEN — one bulk load, not a cell at a time (v2.2.445)
+
+The export used to pipe the finished rows into `Export-Excel`, which walks each row's properties in
+PowerShell and writes cells individually. Measured on the 5.1 runtime that is **~0.55 ms per cell**,
+and a Detailed workbook of 121,111 rows × 291 columns is **35.2 million cells** — the rate alone
+predicts a **5 h 34 m** export to within 3.4% of the observed figure.
+
+🔑 **Cost tracks cell SLOTS, not values.** At 3,000 × 291, dropping **86% of the values** saved **9%**
+of the time (455.8 s populated vs 413.0 s mostly-empty). Every declared column is visited whether or
+not it holds anything, and the `Details` sheet is the cross-report **union** of ~60 reports' columns —
+so a CVE row carries ~40 real values in 291 slots and the sheet is ~85% structurally empty.
+
+`Export-Worksheet` now makes **one pass** over the data, which simultaneously:
+
+1. flattens non-scalars and scrubs XML-illegal characters,
+2. records the widest rendered value per column (replacing `AutoFitColumns`), and
+3. notes which columns hold `[datetime]`,
+
+emitting each row as a preallocated `object[]`. The whole block then goes to EPPlus via a single
+**`LoadFromArrays`** call, after which the table style, autofilter, frozen bold header, column widths,
+wrap targets, vertical alignment and date formats are applied per column.
+
+| measured | before | after |
+|---|---|---|
+| write only, 3,000 × 291 | 455.8 s | **3.2 s** |
+| end to end, 3,000 × 291 | ~520 s | **17.5 s** |
+| end to end, 20,000 × 291 | — | **148.9 s** |
+
+**Nothing observable about the workbook changes.** Rows, columns, order, table, filter, header,
+widths, wrapping and alignment are all identical — pinned by `SI-ExcelBulkExport.Tests.ps1`.
+
+⚠️ **Three traps this path carries, all found by running it:**
+- **A `[datetime]` has no format of its own.** EPPlus stores it as an OLE serial, so without an
+  explicit number format the cell reads `46260,125`. Hence step 3 above.
+- **The package is opened/created here**, not by `Export-Excel`. A workbook accumulates sheets across
+  calls (index sheet, `Details`, AI summary), so an existing file must be **opened** and the target
+  sheet deleted — creating a new package instead silently destroys the earlier sheets.
+- **PS 5.1 cannot parse a multi-argument indexer nested inside a method-call argument.**
+  `$ws.Tables.Add($ws.Cells[1,1,$r,$c], $n)` is a *parse* error, not a runtime one, so it fails before
+  a line executes and looks nothing like a type problem. Hoist the range into its own variable.
+
+🔑 **The InvariantCulture swap around the write is no longer load-bearing, and is kept anyway.**
+`LoadFromArrays` hands EPPlus the **boxed** .NET value, so a `[double]` is never stringified and the
+comma-decimal hazard (`9.8` → `"9,8"` → `98`) cannot arise on this path at all. Verified under `da-DK`.
+A side effect worth having: dropping `AutoFitColumns` also drops the `System.Drawing.Common`
+dependency, so Linux containers stop falling back to a default width of 10 and now produce the same
+workbook as Windows.
+
 #### How a column reaches the .xlsx — and how it silently does not (audit #26)
 
 ⚠️ **Emitting a column from KQL is NOT enough to get it into the output.** The export column list is

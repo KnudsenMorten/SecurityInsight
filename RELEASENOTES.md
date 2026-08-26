@@ -4,6 +4,7 @@
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI) v2.2.445: the three public docs the release notes alone did not cover (4d2e4bd7)
 - release(SI) v2.2.445: a 5h34m Excel export, measured down to ~15 minutes (08010c22)
 - release(SI) v2.2.444: one empty string in the recipient list threw away a finished run (f9d83adc)
 - docs(SI): FEATURES.md was 35 releases stale, and the v3 section did not know v3 had started (c2cfc9f8)
@@ -33,7 +34,6 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
 - fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
 - fix(SI) v2.2.427: Get-SIGraphToken had no certificate path, so cert customers were forced onto the one route with a 900s ceiling (c8c3eae6)
-- fix(SI) v2.2.426: AssetTagging had no certificate path, so cert-authenticated customers hit an interactive Graph prompt (2a273f7e)
 
 ---
 

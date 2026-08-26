@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.455
+## v2.2.456
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.456: the findings that went missing every run, and why absence is not remediation (860ce577)
 - release(SI) v2.2.455: a query defect was reported as a platform glitch, and re-running could never fix it (c4bb3e67)
 - release(SI) v2.2.454: tall rows read as though the values belonged to the row below (34f965b3)
 - docs(SI): handoff said 2.2.452 and buried the one check that is in flight (af86ea99)
@@ -33,9 +34,59 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI): the cert-store trap had TWO contradictory prescriptions, and the cause was neither of them (62409f2f)
 - docs(SI) #55: DESIGN never mentioned run transcripts at all -- and they have been default-on since v2.2.312 (27e921fe)
 - fix(SI) #25: the count/list guard was keyed on the LIST, so it walked past two reports that broke it (e74fa75d)
-- feat(SI) #55.1: the container host finally keeps a run transcript -- and could not have been rebuilt at all (ab0c8e0f)
 
 ---
+
+## v2.2.456 — the findings that went missing every run, and why absence is not remediation
+
+v2.2.455 made the engine report this failure honestly. This release fixes it.
+
+`Azure_Recommendations_Detailed` lost one bucket of findings on **every** run. Not intermittently —
+every run, permanently, for any tenant whose data produced an empty bucket. The findings were absent
+from the workbook and from the Log Analytics table, and the run still completed.
+
+### The mechanism
+
+Cross-domain reports inline a snapshot of enrichment data into the query as a KQL `datatable`, split
+into buckets. The column types for that datatable were inferred by scanning the values — **but each
+bucket only ever saw its own slice.**
+
+A bucket with rows inferred `RecCount:long`. A bucket with **no** rows had nothing to scan and fell
+back to typing every column `:string`. The same let-binding therefore had two different schemas in
+one report, and a downstream `case()` mixing them was rejected outright:
+
+```
+[BadRequest] : case: return types are not compatible.
+Number of different types: Distinct types: StringBuffer,I8..
+```
+
+That is a permanent error, not a transient one, so all four attempts failed identically and the
+bucket contributed nothing — on that run and on every run after it.
+
+The narrower version of the same defect could also strike **two populated buckets**: if one bucket's
+slice happened to hold only digits and another's did not, they would disagree on the type without an
+empty bucket being involved at all.
+
+### The fix
+
+Column types are now inferred once from the **complete snapshot** and reused for every bucket, so all
+buckets of a let-binding always agree. An empty bucket emits a correctly typed empty datatable rather
+than an all-string one. The values inlined into each bucket are unchanged — only the declared schema
+is now stable.
+
+Five regression tests lock the invariant, including the empty-bucket case and the two-populated-
+buckets case.
+
+### Why this mattered more than a missing row count
+
+A finding that disappears from a report is not neutral information. Anything downstream that
+reconciles against the previous snapshot — a ticketing or vulnerability-management sync in
+particular — reads a finding's absence as **remediated**, and closes it. The next run that happened
+to bucket the data differently would surface it again, and it would reopen. Real, unremediated
+findings could be closed and reopened on a cycle, with no error anywhere to explain it.
+
+If you sync SI findings into a ticketing system, it is worth checking whether anything was closed
+and later reopened without a corresponding change in the estate.
 
 ## v2.2.455 — a query defect was being reported as a platform glitch, and re-running could never fix it
 

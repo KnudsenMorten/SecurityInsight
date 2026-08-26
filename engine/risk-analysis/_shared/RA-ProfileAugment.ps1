@@ -103,9 +103,25 @@ function Convert-RowsToKqlDatatable {
     param(
         [Parameter(Mandatory)][string]$LetVarName,
         [object[]]$Rows,
-        [string]$BodyKqlForSchemaHint
+        [string]$BodyKqlForSchemaHint,
+        # 🔴 THE SCHEMA MUST BE THE SAME IN EVERY BUCKET OF ONE LET-BINDING, AND IT WAS NOT.
+        # Types are inferred by scanning VALUES, and each bucket only ever saw its OWN slice, so
+        # the same column could come out `long` in one bucket and `string` in another -- and for
+        # an EMPTY bucket every column was forced to `:string` outright. A downstream `case()`
+        # then mixed a string branch with a numeric one and Advanced Hunting rejected the query:
+        #   case: return types are not compatible. Distinct types: StringBuffer,I8
+        # That is a hard BadRequest, so the bucket returned nothing on every attempt and every
+        # future run -- silent, permanent, partial data for the whole report.
+        # Pass the FULL pre-bucketing snapshot here: types come from it, values still come from
+        # $Rows. Empty buckets then emit a correctly-TYPED empty datatable instead of an all-string
+        # one, and every bucket of the binding agrees on the schema.
+        [object[]]$TypeReferenceRows
     )
-    if (-not $Rows -or $Rows.Count -eq 0) {
+    # Types from the reference set when given (the whole snapshot); otherwise from the rows at hand.
+    $typeRows = if ($TypeReferenceRows -and $TypeReferenceRows.Count -gt 0) { $TypeReferenceRows } else { $Rows }
+
+    if (-not $typeRows -or $typeRows.Count -eq 0) {
+        # Nothing anywhere to infer from -- fall back to the name-only hint, then the placeholder.
         if (-not [string]::IsNullOrWhiteSpace($BodyKqlForSchemaHint)) {
             $cols = _ExtractProjectColumns $BodyKqlForSchemaHint
             if ($cols.Count -gt 0) {
@@ -115,7 +131,7 @@ function Convert-RowsToKqlDatatable {
         }
         return ('let {0} = datatable(__placeholder:string)[];' -f $LetVarName)
     }
-    $first = $Rows[0]
+    $first = $typeRows[0]
     $colSpecs  = New-Object System.Collections.Generic.List[string]
     $colNames  = New-Object System.Collections.Generic.List[string]
     $colTypes  = New-Object System.Collections.Generic.List[string]
@@ -123,9 +139,10 @@ function Convert-RowsToKqlDatatable {
         # Az.OperationalInsightsQuery returns ALL values as strings regardless of
         # the underlying KQL column type. Inferring from .TypeNameOfValue is
         # therefore useless -- we need to scan VALUES across ALL rows and detect
-        # the narrowest KQL type whose pattern matches every non-null value.
+        # the narrowest KQL type whose pattern matches every non-null value. Scanned over
+        # $typeRows (the whole snapshot), NOT $Rows, so every bucket agrees on the schema.
         $values = New-Object System.Collections.Generic.List[string]
-        foreach ($r in $Rows) {
+        foreach ($r in $typeRows) {
             $v = $r.PSObject.Properties[$p.Name].Value
             if ($null -ne $v -and -not ([string]::IsNullOrEmpty([string]$v))) {
                 [void]$values.Add([string]$v)
@@ -599,7 +616,7 @@ function Resolve-ProfileCLLetBlocks {
                 Write-Info ("[hybrid] '{0}' pre-grouped {1} rows into {2} buckets in {3:N1}s (one-time O(N) hash pass; subsequent buckets are O(1) lookups)" -f $varName, @($allRows).Count, $BucketCount, ([datetime]::UtcNow - $_t0).TotalSeconds)
             }
             $bucketRows = @($script:_HybridBucketGroupsCache[$groupCacheKey][$BucketIndex])
-            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $bucketRows -BodyKqlForSchemaHint $bodyKql
+            $datatableLet = Convert-RowsToKqlDatatable -LetVarName $varName -Rows $bucketRows -BodyKqlForSchemaHint $bodyKql -TypeReferenceRows @($allRows)
             Write-Info ("[hybrid] '{0}' bucket {1}/{2}: {3}/{4} row(s) inlined ({5} bytes; CL-bucketed via SHA256)" -f $varName, ($BucketIndex + 1), $BucketCount, $bucketRows.Count, $allRows.Count, $datatableLet.Length)
             # v2.2.361 -- record measured bytes-per-row so the AutoBucket escalation
             # handler can size buckets to ~70% of the nginx 1MB cap empirically,

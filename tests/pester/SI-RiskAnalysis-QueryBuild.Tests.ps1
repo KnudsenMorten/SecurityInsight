@@ -346,3 +346,69 @@ Describe 'Cross-domain Attack_Paths Summary reports re-key off EG-native columns
         }
     }
 }
+
+Describe 'Inline datatable schema is identical in every bucket of one let-binding' {
+    # 🔴 A LIVE RUN LOST FINDINGS TO THIS, PERMANENTLY AND SILENTLY.
+    # Types were inferred by scanning VALUES, and each bucket saw only its OWN slice. An EMPTY
+    # bucket therefore typed every column ':string' while its populated siblings typed the same
+    # column 'long'. A downstream case() mixed the two and Advanced Hunting refused the query:
+    #   case: return types are not compatible. Distinct types: StringBuffer,I8
+    # That is a BadRequest, not a timeout, so all 4 attempts failed and the bucket returned
+    # nothing on EVERY run -- the report shipped partial for good, and a consumer that reads a
+    # missing finding as remediation would close it and reopen it the next time it appeared.
+    BeforeAll {
+        $si = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSCommandPath))
+        . (Join-Path $si 'engine\risk-analysis\_shared\RA-ProfileAugment.ps1')
+        function Write-Info { param($m) }
+        function Write-Warn2 { param($m) }
+
+        $script:Snapshot = @(
+            [pscustomobject]@{ AssetId = 'a1'; RecCount = '5';  Tier = '0' }
+            [pscustomobject]@{ AssetId = 'a2'; RecCount = '12'; Tier = '1' }
+            [pscustomobject]@{ AssetId = 'a3'; RecCount = '7';  Tier = '2' }
+        )
+        $script:Body = '| project AssetId, RecCount, Tier'
+        function script:SchemaOf([string]$literal) {
+            [regex]::Match($literal, 'datatable\(([^)]*)\)').Groups[1].Value
+        }
+    }
+
+    It 'types an EMPTY bucket from the full snapshot, not as all-string' {
+        $lit = Convert-RowsToKqlDatatable -LetVarName '_ap' -Rows @() `
+                    -BodyKqlForSchemaHint $script:Body -TypeReferenceRows $script:Snapshot
+        script:SchemaOf $lit | Should -Match 'RecCount:long'
+        script:SchemaOf $lit | Should -Not -Match 'RecCount:string'
+    }
+
+    It 'gives an empty bucket the SAME schema as a populated one' {
+        $populated = Convert-RowsToKqlDatatable -LetVarName '_ap' -Rows @($script:Snapshot[0]) `
+                        -BodyKqlForSchemaHint $script:Body -TypeReferenceRows $script:Snapshot
+        $empty     = Convert-RowsToKqlDatatable -LetVarName '_ap' -Rows @() `
+                        -BodyKqlForSchemaHint $script:Body -TypeReferenceRows $script:Snapshot
+        (script:SchemaOf $empty) | Should -BeExactly (script:SchemaOf $populated)
+    }
+
+    It 'keeps the schema stable when a single bucket slice would infer a NARROWER type' {
+        # Bucket B holds only non-numeric RecCount values. Scanned alone it would say 'string';
+        # scanned against the snapshot it must still say 'long' -- otherwise two POPULATED
+        # buckets disagree, which is the same defect without an empty bucket involved.
+        $mixed = $script:Snapshot + @([pscustomobject]@{ AssetId = 'a4'; RecCount = '9'; Tier = '3' })
+        $a = Convert-RowsToKqlDatatable -LetVarName '_ap' -Rows @($mixed[0])  -TypeReferenceRows $mixed
+        $b = Convert-RowsToKqlDatatable -LetVarName '_ap' -Rows @($mixed[3])  -TypeReferenceRows $mixed
+        (script:SchemaOf $a) | Should -BeExactly (script:SchemaOf $b)
+    }
+
+    It 'still emits only the rows it was given, not the reference set' {
+        $lit = Convert-RowsToKqlDatatable -LetVarName '_ap' -Rows @($script:Snapshot[0]) `
+                    -BodyKqlForSchemaHint $script:Body -TypeReferenceRows $script:Snapshot
+        ([regex]::Matches($lit, 'a1')).Count | Should -Be 1
+        $lit | Should -Not -Match 'a2'
+        $lit | Should -Not -Match 'a3'
+    }
+
+    It 'falls back safely when there is nothing anywhere to infer from' {
+        $lit = Convert-RowsToKqlDatatable -LetVarName '_ap' -Rows @() -BodyKqlForSchemaHint $script:Body
+        $lit | Should -Match 'datatable\('
+        $lit | Should -Match 'AssetId'
+    }
+}

@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.451
+## v2.2.452
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.452: a query failure is one line, not a twenty-line stack dump (a1ea7080)
 - release(SI) v2.2.451: the data-lake check no longer prints an error block when the lake is not onboarded (7b110173)
 - release(SI) v2.2.450: CRITICAL -- the bulk export referenced a type the engine never loaded (fb870bd1)
 - release(SI) v2.2.449: audit #63 -- three Detailed reports hid severities their own Summary counted (01994e19)
@@ -33,9 +34,61 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI) v2.2.435: Okta identity servers are tiered, and an SCCM console stops claiming to be a site server (784f13d0)
 - fix(SI) v2.2.434: a refused cross-source merge now NAMES the assets, on the normal run (aa7e96fe)
 - @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
-- docs(SI): session handoff -- seven releases, one root cause, and what the customer still needs (dd27b5b9)
 
 ---
+
+## v2.2.452 — the query-failure message is one line instead of a twenty-line stack dump
+
+**Operator: "it looks very amateur."** When an advanced-hunting query hit a service limit, the log
+printed this — **twice**, for the same request:
+
+```
+PS>TerminatingError(Start-MgBetaSecurityHuntingQuery_RunExpanded): "The running command stopped
+because the preference variable "ErrorActionPreference" … : Query execution has exceeded the
+allowed limits …
+Status: 400 (BadRequest)
+Headers: Transfer-Encoding : chunked / Vary : Accept-Encoding / request-id : … / x-ms-ags-diagnostic : …
+```
+
+Unlike the previous two noise fixes, **this failure is real and worth reporting** — it is what makes
+the engine split the query into smaller pieces and retry. The problem was never that it was logged;
+it was the *form*. The engine's own one-line summary was already right there underneath:
+
+```
+[WARN] Query exceeded allowed limits/result size; not retrying (deterministic failure).
+```
+
+Now that line is all you get. Two twenty-line dumps become one short message.
+
+### Why it printed twice
+
+PowerShell transcripts record **every** terminating error, and two things were raising one: the query
+command itself, and the engine re-raising it to trigger the retry logic. The command is no longer
+asked in a way that raises one, and what the engine raises is now a short message rather than the
+service's exception object.
+
+### 🔒 Behaviour is unchanged, and that was the hard part
+
+The retry and query-splitting logic reads these failures to decide what to do next. One case is
+delicate enough to be worth stating: the 15-minute ceiling arrives as *"The request was canceled due
+to the configured HttpClient.Timeout…"*, and the engine recognises it **by the error's type**, not by
+its wording — the wording matches none of its patterns. Replacing it with a plain message would have
+**silently stopped the query-splitting** on exactly the large reports that depend on it, with no error
+and no sign in the log.
+
+So the type is carried through in the message, and a test now proves the distinction directly:
+
+```
+plain message   -> not recognised as "too large"   (what a careless fix would produce)
+as shipped      -> recognised                       (unchanged behaviour)
+```
+
+Every other path — service limits, gateway errors, authentication, schema and syntax errors, retries,
+bucket escalation — classifies exactly as before, and is covered by the same suite.
+
+📌 Third and last of the log-noise fixes, after v2.2.445 (advanced-hunting table check) and v2.2.451
+(data lake). A healthy run should now read as healthy, and a failing one should say what failed in a
+sentence.
 
 ## v2.2.451 — the data-lake check no longer prints an error block when the lake isn't available
 

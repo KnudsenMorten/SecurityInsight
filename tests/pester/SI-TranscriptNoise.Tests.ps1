@@ -10,7 +10,8 @@
     response bodies. So a run that is behaving exactly as designed can print several alarming stack
     dumps, and the customer reading their own transcript reasonably concludes something broke.
 
-    TWO PLACES DID THIS, and in both the failure is the EXPECTED answer, not a fault:
+    THREE PLACES DID THIS. In the first two the failure is the EXPECTED answer, not a fault; in the
+    third it is a real failure that was being reported in an unusable FORM:
 
     1. `Test-AdvancedHuntingHasTable` (v2.2.445) -- asks whether a customer's SI_*_CL table is
        mirrored into advanced hunting. For most tenants the answer is legitimately NO, and the engine
@@ -22,11 +23,28 @@
        caller already falls back silently. It produced TWO terminating errors per attempt: one from
        `Invoke-RestMethod -ErrorAction Stop`, and one from our own `throw` of the formatted message.
 
+    3. `Invoke-GraphHuntingQuery` (v2.2.452) -- the REAL advanced-hunting query, not the probe. A
+       query that exceeds AH limits or hits the 900s ceiling IS a genuine failure worth logging, and
+       it drives bucket escalation -- but it printed ~20 lines of HTTP headers TWICE per failure.
+       The failure is still reported; it is now ONE SHORT LINE.
+
     🔑 THE TRAP THAT CATCHES YOU TWICE: re-throwing inside the fix. A caught-and-rethrown error is
-    still a terminating error, so `catch { throw $msg }` writes the very block you are removing. Both
-    fixes therefore RETURN the failure rather than throwing it. I made exactly this mistake in the
-    first cut of fix 1 and caught it before shipping; these tests exist so the next person does not
-    have to.
+    still a terminating error, so `catch { throw $msg }` writes the very block you are removing.
+    Sites 1 and 2 therefore RETURN the failure rather than throwing it. I made exactly this mistake in
+    the first cut of fix 1 and caught it before shipping; these tests exist so the next person does
+    not have to.
+
+    🔴 AND THE TRAP THAT IS WORSE, because it breaks BEHAVIOUR rather than logs. Site 3 must still
+    raise something -- callers depend on it for retry and bucket escalation -- so it raises a SHORT
+    message instead of the SDK's exception object. But the 900s ceiling arrives as
+        "The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing."
+    which matches NEITHER message fallback in Test-IsDeterministicTooLargeError. Today it is caught
+    ONLY by the `-is [TaskCanceledException]` TYPE check -- so raising a PLAIN string would erase the
+    type and SILENTLY DISABLE the AutoBucket ramp on exactly the reports that need sub-bucketing.
+    The type is therefore preserved as TEXT, and a behavioural test proves the difference:
+        plain 900s text  -> Test-IsDeterministicTooLargeError = False
+        prefixed text    -> Test-IsDeterministicTooLargeError = True
+    That case exists because tidying the log must never quietly change what the engine does.
 #>
 
 BeforeAll {
@@ -134,5 +152,57 @@ Describe 'the Sentinel data-lake query (v2.2.451)' {
     It 'a genuine fault still has a backstop catch' {
         # Returning the expected failure must not mean a REAL fault (auth, transport) escapes.
         $script:Caller | Should -Match '\$lakeMsg = \$_\.Exception\.Message'
+    }
+}
+
+Describe 'the advanced-hunting QUERY call (v2.2.452)' {
+    # The third and largest noise site: the real query, not the probe. It printed ~20 lines of HTTP
+    # status, request ids and x-ms-ags-diagnostic headers, TWICE per failure -- once for the cmdlet's
+    # promoted error and once for this function's re-throw. Operator: "it looks very amateur".
+
+    BeforeAll {
+        $script:Hunt = script:BodyOf -File $script:Hunting -Name 'Invoke-GraphHuntingQuery'
+        . (Join-Path $script:SIRoot 'engine\risk-analysis\_shared\RA-AutoBucketing.ps1')
+        # The exact text the 900s ceiling produces, taken from a customer transcript.
+        $script:Real900s = 'The request was canceled due to the configured HttpClient.Timeout of 900 seconds elapsing.'
+    }
+
+    It 'the query is no longer asked with -ErrorAction Stop' {
+        $script:Hunt | Should -Not -Match 'Start-MgBetaSecurityHuntingQuery -Query \$Query -ErrorAction Stop'
+    }
+
+    It 'it asks with SilentlyContinue + an ErrorVariable' {
+        $script:Hunt | Should -Match 'Start-MgBetaSecurityHuntingQuery[^\r\n]*-ErrorAction SilentlyContinue'
+        $script:Hunt | Should -Match '-ErrorVariable ahErr'
+    }
+
+    It 'the raised error is a SHORT message, not the SDK exception object' {
+        # `throw` on an ErrorRecord reproduces the full HTTP dump. Throwing our own string keeps the
+        # transcript entry to one line -- the failure is still reported, just not as a stack dump.
+        $script:Hunt | Should -Match 'throw \(\$__typ \+ \[string\]\$__e\.Exception\.Message\)'
+    }
+
+    It '🔴 THE TYPE SIGNAL IS PRESERVED AS TEXT -- without it, escalation silently stops' {
+        # The 900s ceiling message matches NEITHER message fallback; today only the
+        # -is [TaskCanceledException] TYPE check catches it. Raising a plain string would erase the
+        # type and quietly disable the AutoBucket ramp on exactly the reports that need it.
+        $script:Hunt | Should -Match 'TaskCanceledException: '
+    }
+
+    It '🔴 PROOF the prefix is load-bearing: plain text does NOT classify, prefixed text DOES' {
+        # This is the assertion that would have caught the near-miss. It exercises the REAL
+        # classifier that drives bucket escalation.
+        Test-IsDeterministicTooLargeError -Err $script:Real900s                              | Should -BeFalse
+        Test-IsDeterministicTooLargeError -Err ('TaskCanceledException: ' + $script:Real900s) | Should -BeTrue
+    }
+
+    It 'the catch also matches the type as TEXT, so either path classifies' {
+        $script:Hunt | Should -Match "\`$msg -match 'TaskCanceledException'"
+    }
+
+    It 'a genuine AH limits failure still classifies as bucket overflow' {
+        # The other real message from the customer log -- must be unaffected.
+        Test-IsBucketOverflowError -Err 'Query execution has exceeded the allowed limits. The query execution was preempted.' |
+            Should -BeTrue
     }
 }

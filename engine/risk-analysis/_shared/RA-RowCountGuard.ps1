@@ -162,7 +162,7 @@ function Invoke-RARowCountGuard {
         Write-Info ("[RowCountGuard] {0} report(s) compared against the previous run -- no report lost its findings." -f $Counts.Count)
     }
     else {
-        Write-Warn2 ("[RowCountGuard] {0} report(s) produced FEWER findings than the previous run. This is how #48/#57 hid -- a successful run with missing data. Investigate before trusting this export." -f $findings.Count)
+        Write-Warn2 ("[RowCountGuard] {0} report(s) produced FEWER findings than the previous run. A run can report success and still be missing data. Investigate before trusting this export." -f $findings.Count)
         foreach ($f in $findings) {
             if ($f.Kind -eq 'WENT-TO-ZERO') {
                 Write-Warn2 ("  WENT-TO-ZERO  {0}: {1} -> 0. Either every finding was genuinely remediated, or the query stopped matching (a changed upstream property does exactly this)." -f $f.Report, $f.Previous)

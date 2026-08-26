@@ -594,9 +594,17 @@ if ($looksAuth) {
             # Syntax errors are deterministic -- retrying produces the same parse error.
             # AH/Graph swallows the error body's line/column info, so dump the rendered
             # query path (already written in the staging block above) for portal paste.
-            $looksSyntaxError = ($msg -match 'Fix syntax errors in your query|Expected:|SyntaxError')
-            if ($looksSyntaxError) {
-                Write-Warn2 ("Query failed with KQL syntax error -- not retryable: {0}" -f $msg)
+            # 🔴 SEMANTIC errors are exactly as permanent as syntax errors, and Advanced Hunting
+            # words them DIFFERENTLY. A `case()` whose branches return mixed types comes back as
+            # "Fix SEMANTIC errors in your query" -- which this pattern did not match, so the
+            # query burned all 4 attempts, was recorded as an ordinary lost bucket, and the
+            # operator was told to re-run a report that fails identically every single time.
+            # Platform failures (timeout / 5xx / throttle) are retried below; a query DEFECT
+            # never recovers by being repeated, so it must fail on the first attempt and say so.
+            $looksQueryDefect = ($msg -match 'Fix syntax errors in your query|Fix semantic errors in your query|SyntaxError|SemanticError|Expected:|return types are not compatible')
+            if ($looksQueryDefect) {
+                $defectKind = if ($msg -match 'semantic|not compatible') { 'semantic' } else { 'syntax' }
+                Write-Warn2 ("Query failed with a KQL {0} error -- NOT retryable. Re-running this report will fail identically; the query itself has to be fixed: {1}" -f $defectKind, $msg)
                 try {
                     if ($script:_RAStagingDir -and (Test-Path $script:_RAStagingDir)) {
                         $hashLast = [System.Security.Cryptography.MD5]::Create().ComputeHash([System.Text.Encoding]::UTF8.GetBytes($Query))

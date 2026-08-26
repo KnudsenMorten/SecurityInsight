@@ -324,11 +324,11 @@ if ($StorageAccountId) {
     $tableBase = "https://$stateAccount.table.core.windows.net"
     $envVars += "SIAnalyzer__Governance__TableEndpoint=$tableBase"
     $envVars += "SIAnalyzer__Schedule__TableEndpoint=$tableBase"
-    Write-Host ">> [state] DURABLE in storage account '$stateAccount': governance register '$GovernanceTableName' (audit #7), scheduler send markers '$ScheduleTableName' (audit #9)" -ForegroundColor Cyan
+    Write-Host ">> [state] DURABLE in storage account '$stateAccount': governance register '$GovernanceTableName', scheduler send markers '$ScheduleTableName'" -ForegroundColor Cyan
 } else {
     Write-Host ">> [state] WARNING: no -StorageAccountId. Both of SIA's durable stores fall back to IN-MEMORY:" -ForegroundColor Yellow
-    Write-Host ">> [state]   * governance (audit #7): risk-acceptances, exemptions and the audit trail do NOT survive a restart and are not shared between replicas. The governance page states this." -ForegroundColor Yellow
-    Write-Host ">> [state]   * scheduler (audit #9): the exec-summary email can be sent TWICE per window with more than one replica, and a restart can skip a window. The scheduler logs this at startup." -ForegroundColor Yellow
+    Write-Host ">> [state]   * governance: risk-acceptances, exemptions and the audit trail do NOT survive a restart and are not shared between replicas. The governance page states this." -ForegroundColor Yellow
+    Write-Host ">> [state]   * scheduler: the exec-summary email can be sent TWICE per window with more than one replica, and a restart can skip a window. The scheduler logs this at startup." -ForegroundColor Yellow
 }
 
 if ($Env -eq 'prod') {

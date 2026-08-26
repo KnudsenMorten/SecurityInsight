@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.454
+## v2.2.455
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.455: a query defect was reported as a platform glitch, and re-running could never fix it (c4bb3e67)
 - release(SI) v2.2.454: tall rows read as though the values belonged to the row below (34f965b3)
 - docs(SI): handoff said 2.2.452 and buried the one check that is in flight (af86ea99)
 - release(SI) v2.2.453: two rows were adding 17 junk columns to every workbook (453f27f2)
@@ -33,9 +34,66 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - docs(SI) #55: DESIGN never mentioned run transcripts at all -- and they have been default-on since v2.2.312 (27e921fe)
 - fix(SI) #25: the count/list guard was keyed on the LIST, so it walked past two reports that broke it (e74fa75d)
 - feat(SI) #55.1: the container host finally keeps a run transcript -- and could not have been rebuilt at all (ab0c8e0f)
-- fix(SI) v2.2.437: two defects found by auditing v2.2.434-435, neither reachable, both real (76d7d009)
 
 ---
+
+## v2.2.455 — a query defect was being reported as a platform glitch, and re-running could never fix it
+
+When a bucket fails, the engine retries it four times and then, if it still has nothing, reports the
+report as PARTIAL. That is right for a platform failure. It was being applied to failures that are
+not platform failures at all.
+
+A live run lost a bucket of `Azure_Recommendations_Detailed` like this:
+
+```
+[BadRequest] : case: return types are not compatible.
+Number of different types: Distinct types: StringBuffer,I8..
+Fix semantic errors in your query.
+```
+
+That is a deterministic defect in the query. It failed all four attempts identically, and it will
+fail identically on every future run. The engine nevertheless printed:
+
+> RE-RUN THIS REPORT. A bucket lost to a 500 or a timeout usually succeeds on the next run;
+> nothing here is a permanent data condition.
+
+**Both halves of that sentence were wrong for this failure**, and acting on it costs another full run.
+
+### Why the wrong branch was taken
+
+The engine already fails fast on non-retryable query errors. Its test matched only *syntax*:
+
+```
+'Fix syntax errors in your query|Expected:|SyntaxError'
+```
+
+Advanced Hunting words a type error differently — **"Fix semantic errors in your query"** — so a
+permanent defect fell through to the retry path and was then indistinguishable from a 500.
+
+### What changed
+
+- **Semantic errors are now treated exactly like syntax errors: not retryable.** The query fails on
+  the first attempt instead of the fourth, and the message says the report has to be fixed rather
+  than re-run. Platform failures — timeout, 5xx, throttling — are unchanged and still retried in-run.
+- **The PARTIAL verdict now separates the two causes** and counts them, instead of attributing every
+  lost bucket to the platform.
+- **The verdict states what absence means.** Findings lost this way are missing from the workbook
+  *and* from the Log Analytics table. Anything downstream that treats a finding's disappearance as
+  remediation — a ticketing sync, for instance — would close them and reopen them on the next good
+  run. The log now says plainly that those findings are UNKNOWN, not resolved.
+
+### Still outstanding
+
+**This release does not fix the underlying query.** `Azure_Recommendations_Detailed` still loses that
+bucket on every run; what changes is that the run now says so accurately and stops sending you to
+re-run it. The defect only appears on a bucket whose inline lookup set comes back empty, which is why
+it affects one bucket and not the report as a whole.
+
+### Also in this release
+
+Internal tracking identifiers have been removed from console, log and email output. Messages such as
+"this is how #58.5 hid for 108 releases" meant nothing outside the development repository. The
+operational meaning of each message is unchanged.
 
 ## v2.2.454 — tall rows read as though the values belonged to the row below
 

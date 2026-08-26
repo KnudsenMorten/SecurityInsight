@@ -2111,7 +2111,21 @@ function Write-RABucketLossVerdict {
         Write-Err2 ("        lost bucket -- {0}" -f $r)
         [void]$script:_RABucketLossRun.Add(("{0} :: {1}" -f $ReportName, $r))
     }
-    Write-Err2 ("        RE-RUN THIS REPORT. A bucket lost to a 500 or a timeout usually succeeds on the next run; nothing here is a permanent data condition.")
+    # 🔴 A LOST BUCKET IS NOT AUTOMATICALLY A PLATFORM PROBLEM, AND THE ADVICE MUST NOT PRETEND IT IS.
+    # This used to say, unconditionally, "nothing here is a permanent data condition". A deterministic
+    # KQL defect (a case() returning mixed types) reaches here looking identical to a 500, and the
+    # operator was told to spend another full run re-running something that cannot succeed. Worse, the
+    # findings are missing from the CL table too -- and any consumer that reads absence as remediation
+    # (a ticketing sync, for one) will CLOSE those findings and reopen them on the next good run.
+    $__permanent = @($script:_RABucketLoss | Where-Object { $_ -match 'semantic|syntax|not compatible|BadRequest' })
+    $__transient = $lost - $__permanent.Count
+    if ($__permanent.Count -gt 0) {
+        Write-Err2 ("        {0} of these failed on a QUERY DEFECT, not on the platform. RE-RUNNING WILL FAIL IDENTICALLY -- the query has to be fixed. This IS a permanent data condition, and it will recur on every run until it is." -f $__permanent.Count)
+    }
+    if ($__transient -gt 0) {
+        Write-Err2 ("        {0} of these failed on the platform (timeout / 5xx / throttle) and were already retried in-run; those usually succeed on the next run, so re-run the affected report." -f $__transient)
+    }
+    Write-Err2 ("        Until the affected report is whole again, treat its findings as UNKNOWN rather than resolved -- they are absent from the workbook AND the Log Analytics table, and absence is not remediation.")
 }
 
 # Per-report row counts for this run, filled in as each report finishes and compared against the

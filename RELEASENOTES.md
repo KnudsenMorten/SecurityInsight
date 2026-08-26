@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.446
+## v2.2.447
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- docs(SI) v2.2.447: the export figure, corrected by a full-scale measurement (1094ad83)
 - release(SI) v2.2.446: audit #62 -- a failed bucket no longer shrinks a report in silence (571ab809)
 - docs(SI) v2.2.445: the three public docs the release notes alone did not cover (4d2e4bd7)
 - release(SI) v2.2.445: a 5h34m Excel export, measured down to ~15 minutes (08010c22)
@@ -33,9 +34,32 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - feat(SI) v2.2.431: the exclusions report existed only as Detailed -- add the Summary pair, and make parity a test (9869d29c)
 - feat(SI) v2.2.430: MDE machine tags never excluded anything, and exclusion had no audit trail at all (5be9ebe0)
 - fix(SI) v2.2.429: the CVE reports bucketed AFTER both joins, so every bucket rebuilt the whole graph and discarded 1/N (6ce5c7b8)
-- fix(SI) v2.2.428: the sub-bucket rescue pass split the EG side but re-inlined the WHOLE CL payload into every child (47c816cf)
 
 ---
+
+## v2.2.447 — the export figure, corrected by a full-scale measurement
+
+**Documentation only — no code change.** v2.2.445 said the spreadsheet export would drop from
+5 h 34 m to **"about 15 minutes"**. That number was a projection from a 20,000-row test. The export
+has since been run at the **exact size that produced the original 5 h 34 m — 121,111 rows × 291
+columns** — and the real answer is:
+
+```
+20,051.92s  (5 h 34 m)  observed in production
+ 1,261.56s  (21 min)    measured on the new path      = 16x
+```
+
+All sixteen fidelity checks pass at full scale: row and column counts, row order, numeric types,
+dates, array flattening, nulls, widths, wrapping, alignment, table, filter and bold header.
+
+**Why the projection was optimistic.** The cost per cell is not constant — it grows with the number of
+rows (**20.1 → 25.6 → 35.8 microseconds** at 3,000, 20,000 and 121,111 rows), almost certainly garbage
+collection pressure as the row buffer grows. Extrapolating linearly from a smaller run therefore
+under-reads this workload, which is exactly what happened.
+
+Every published figure has been corrected: **~21 minutes and roughly 16×**, not 15 minutes and 22×.
+The improvement is real and the direction was right; the magnitude was overstated by about a third,
+and it is better for you to have the measured number before you look at a customer run than after.
 
 ## v2.2.446 — a failed query bucket no longer shrinks a report in silence
 
@@ -97,12 +121,13 @@ still correct; what must never happen again is a partial run reading as a clean 
 are re-queued and usually succeed; only a split that also fails is reported. A false "incomplete"
 would teach operators to ignore the line, which would be worse than not having it.
 
-## v2.2.445 — a 5½-hour Excel export, cut to about 15 minutes
+## v2.2.445 — a 5½-hour Excel export, cut to about 21 minutes
 
 **Reported from a production run.** A Detailed Risk Analysis spent **20,051.92 seconds — 5 hours 34
 minutes — writing the spreadsheet.** The queries were done, the data was correct; the run simply sat
-in the export. This release makes that step roughly **22× faster** without dropping a single row or
-column, and fixes two other things the same log exposed.
+in the export. This release makes that step roughly **16× faster** — measured at full scale,
+**20,051.92 s → 1,261.56 s** — without dropping a single row or column, and fixes two other things the
+same log exposed. *(This figure originally read "22×", projected from a smaller test; see v2.2.447.)*
 
 ### Why it was slow
 

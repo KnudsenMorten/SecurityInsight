@@ -234,7 +234,7 @@ keeps its chapter as it moves from planned → delivered.
 - **The workbook is written in one bulk operation, not cell by cell.** ✅ 2026-08-26 — spreadsheet
   libraries normally write one cell at a time, which is fine for a few thousand cells and painful for
   tens of millions: a large Detailed export measured **5 hours 34 minutes**. The whole sheet is now
-  handed to the spreadsheet engine in a single call, taking that to **roughly 15 minutes** with the
+  handed to the spreadsheet engine in a single call, taking that to a measured **21 minutes** at that exact size with the
   same rows, columns, order, table, filter, frozen header, widths and formatting. Two related wins:
   numbers are passed as numbers rather than converted to text, so on comma-decimal systems a value
   like `9.8` can no longer be misread as `98`; and container runs now produce the same column widths

@@ -584,3 +584,105 @@ $global:SI_StorageKey     = '<storage-account-primary-key-base64>'
 
 # Diagnostic / dev-loop helpers.
 # $global:TroubleshootingMode = $true     # extra Write-Host context in some helpers
+
+
+# ============================================================================
+# 16. SETTINGS THE CODE READS THAT THIS FILE NEVER LISTED  (added 2026-08-20)
+# ============================================================================
+# An audit of every $global:SI_* the engines actually read found 47 with no
+# mention in any config file, sample, or doc. Several of them CHANGE WHAT THE
+# REPORTS SAY, so their absence here was the difference between a tunable and a
+# hidden constant. Defaults below are transcribed from the code, not intended.
+#
+# Read by: engine/risk-analysis/*, engine/asset-profiling/stages/*.
+# Every line stays COMMENTED OUT -- uncomment only what you intend to change.
+
+# --- Risk scoring: domain weights (RA) -------------------------------------
+# Relative weight of each domain in the cross-domain risk score. Defaults sum
+# to 1.0. Raising one domain lowers the others' relative influence.
+# $global:SI_RiskReport_GlobalWeight_Endpoint = 0.30
+# $global:SI_RiskReport_GlobalWeight_Identity = 0.30
+# $global:SI_RiskReport_GlobalWeight_Azure    = 0.20
+# $global:SI_RiskReport_GlobalWeight_PublicIP = 0.20
+
+# --- Risk scoring: severity weights (RA) -----------------------------------
+# What each severity band contributes before tier multiplication.
+# $global:SI_RiskReport_SeverityWeight_Critical = 10.0
+# $global:SI_RiskReport_SeverityWeight_High     = 5.0
+# $global:SI_RiskReport_SeverityWeight_Medium   = 2.0
+# $global:SI_RiskReport_SeverityWeight_Low      = 1.0
+
+# --- Risk scoring: tier multipliers (RA) -----------------------------------
+# How much an asset's criticality tier amplifies its score. T0 = 4x a T2 asset.
+# $global:SI_RiskReport_TierMultiplier_T0 = 4.0
+# $global:SI_RiskReport_TierMultiplier_T1 = 2.0
+# $global:SI_RiskReport_TierMultiplier_T2 = 1.0
+# $global:SI_RiskReport_TierMultiplier_T3 = 0.5
+
+# --- CVE report filters (RA) -----------------------------------------------
+# All OFF by default -- every CVE is reported. Each one REMOVES findings.
+# $global:SI_CVE_MinSeverity         = 'High'   # 'Critical'|'High'|'Medium'|$null
+# $global:SI_CVE_MinCvssScore        = 7.0      # 0..10; 0 = off
+# $global:SI_CVE_RequireExploit      = $true    # only CVEs with exploit signals
+# $global:SI_CVE_MaxPublishedAgeDays = 365      # 0 = off
+
+# --- Asset filters: these DROP ROWS from the output ------------------------
+# The engine filters inactive/stale assets by default and reports how many it
+# dropped. These change that decision.
+# $global:SI_IncludeInactive_Endpoint  = $true   # keep inactive endpoints
+# $global:SI_IncludeInactive_Identity  = $true   # keep disabled/stale identities
+# $global:SI_RequireMdeActive_Endpoint = $true   # TIGHTEN: MDE-active only
+# $global:SI_RA_StaleDeviceFilter      = 'strict'  # 'off' (default)|'lenient'|'strict'
+
+# --- Retries and query bucketing (RA) --------------------------------------
+# $global:SI_LAQueryMaxRetries      = 3   # Log Analytics query retries
+# $global:SI_BucketTransientRetries = 3   # retry a bucket on a transient error
+# $global:SI_BucketOverflowRetries  = 3   # retry when a bucket exceeds the limit
+# $global:SI_AutoBucketSubDepthMax  = 6   # max sub-bucket split depth
+# $global:SI_AutoBucketSubFanOut    = 4   # sub-buckets created per split
+
+# --- AI executive summary (RA) ---------------------------------------------
+# Reuse a cached AI summary until it is older than this many hours.
+# $global:SI_AISummary_MaxAgeHours  = 24
+# Where the shared Top-50 asset cache lives.
+# $global:SI_RATop50_BlobContainer  = 'sistaging'
+# $global:SI_RATop50_BlobName       = 'risk-analysis/RiskAnalysis_Top50_Shared.json'
+
+# --- Delivery limits (added v2.2.441) --------------------------------------
+# Excel holds 1,048,576 rows INCLUDING the header. Above this the workbook keeps
+# the TOP N by the sort column (highest risk first) and says how many were left
+# out; the .json sibling and the LA ingest still carry every row.
+# $global:SI_ExcelMaxDataRows    = 1000000
+# Mail attachment budget in MB of MESSAGE, measured base64-ENCODED (attachments
+# inflate ~37%, so a 20 MB file is ~27 MB on the wire). Over budget, the report
+# is sent WITHOUT the attachment rather than the relay rejecting the whole mail.
+# $global:SI_MaxMailAttachmentMB = 20
+# Rows ingested to Log Analytics from the schema-audit / tag-activity streams.
+# Above the cap the run warns with the exact number NOT ingested.
+# $global:SI_SchemaAuditRowCap   = 50
+# $global:SI_TagActivityRowCap   = 50
+
+# --- Table / DCR name overrides --------------------------------------------
+# Only set these if you renamed the destination objects. The engine resolves the
+# shipped names when unset; there is no hard-coded fallback in this file.
+# $global:SI_Endpoint_TableName = 'SI_Endpoint_Profile_CL'
+# $global:SI_Identity_TableName = 'SI_Identity_Profile_CL'
+# $global:SI_Azure_TableName    = 'SI_Azure_Profile_CL'
+# $global:SI_Endpoint_DcrName   = 'dcr-si-endpoint'
+# $global:SI_Identity_DcrName   = 'dcr-si-identity'
+# $global:SI_Azure_DcrName      = 'dcr-si-azure'
+# $global:SI_RiskAnalysis_DcrName_Summary  = 'dcr-si-risk-analysis-summary'
+# $global:SI_RiskAnalysis_DcrName_Detailed = 'dcr-si-risk-analysis-detailed'
+
+# --- Infrastructure + misc --------------------------------------------------
+# Resource groups used when the engine pre-stages workspace / DCE / DCR / storage.
+# $global:SI_WorkspaceResourceGroup = 'rg-securityinsight'
+# $global:SI_StorageResourceGroup   = 'rg-securityinsight'
+# Prestage runs by DEFAULT (the gate is `-ne $false`). Set false to opt out.
+# $global:SI_PrestageInfra = $false
+# Fingerprint cache is OPT-IN (the gate is `-eq $true`); default is OFF.
+# $global:SI_FingerprintCache_Enabled = $true
+# Enable the ServiceNow CMDB source in the Reconcile stage.
+# $global:SI_EnableServiceNowCmdb = $true
+# Simulation only -- forces a synthetic CL row count for scale testing.
+# $global:SI_SimulateCLRowCount = 15000

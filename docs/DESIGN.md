@@ -3209,6 +3209,32 @@ This commit ships:
 No runnable orchestrator yet — preview.1 is design + contracts + one helper. Phase A code lands in preview.2.
 ---
 
+## Delivery limits — what the run will trim, and how it tells you
+
+> Added v2.2.441. Three places bound how much data leaves a run. **None of them is silent any more**:
+> every one states what it dropped, because a limit an operator cannot see is indistinguishable from
+> "that was all the data there was".
+
+**The row path itself is uncapped.** No shipped report query limits rows (the only `take` statements
+are `take 0` / `take 1` existence probes); `AssetLimit` defaults to `0 = no limit` and prints as such
+in the config snapshot; whole-report dedup is disabled; and paged REST never discards pages it has
+already collected. The per-row dedup that *does* drop rows only ever removes rows indistinguishable
+across every column in its key, and it reports the count it removed.
+
+| limit | default | behaviour |
+|---|---|---|
+| **Excel worksheet rows** | 1,000,000 (`$global:SI_ExcelMaxDataRows`) | A sheet holds 1,048,576 rows *including* the header. The workbook keeps the **top N by the sort column** — the cut is applied **after** the sort, so the highest-risk rows survive — and the warning names how many were left out. **Nothing is lost from the run:** the `.json` sibling and the Log Analytics ingest still carry every row. |
+| **Mail attachment** | 20 MB of **message** (`$global:SI_MaxMailAttachmentMB`) | Measured **base64-encoded**, which is how relays measure it: attachments inflate ~37%, so a 20 MB file is ~27 MB on the wire and an on-disk check would pass while the send still fails. An oversized attachment does not arrive smaller — the relay rejects the **whole message**, losing the summary and findings too. So the report is **sent without the attachment**, with a notice prepended to the body giving the file location. `Test-SIMailAttachmentFits` in `RA-Mail.ps1` owns the decision. |
+| **MoreDetails cell** | 25 links, 4,000 chars | Both now state the remainder — `[+87 more link(s) not shown -- 112 total]` and `... [truncated at 4000 chars]`. A field larger than 4,096 chars is skipped during URL harvesting and the run reports how many fields it passed over. |
+
+Two further caps announce themselves rather than trimming quietly: the schema-audit and tag-activity
+rows sent to Log Analytics are capped (`$global:SI_SchemaAuditRowCap` / `$global:SI_TagActivityRowCap`,
+default 50) and warn with the exact number not ingested; and the AI prompt's per-finding asset/link
+slices carry `[+N more of M total]` so the model is never handed a partial list as if it were complete.
+
+⚠️ **Outside SI's control:** `AzLogDcrIngestPS` performs its own row-size handling on ingest (the
+256 KB `drop_largest_field` behaviour). SI does not audit or report that.
+
 ## Operations & runbook
 
 > How to **monitor**, **diagnose**, and **right-size** SecurityInsight asset-profiling runs after they are deployed. This is for the operator after first run.

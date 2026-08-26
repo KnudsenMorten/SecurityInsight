@@ -5435,9 +5435,44 @@ if ([bool]$global:Report_SendMail -and -not [bool]$global:RA_MailEvenIfEmpty) {
 
 Write-Section "mail dispatch decision"
 
+# ---- v2.2.444: SANITISE THE RECIPIENT LIST BEFORE THE SEND DECISION ----
+# 🔴 ONE EMPTY STRING IN THE OPERATOR'S ARRAY KILLED THE ENTIRE DISPATCH. A config line like
+#     $global:RiskAnalysis_Detailed_To = @("a@x.dk","b@y.dk","")
+# -- which is what a trailing comma, or deleting an address and leaving its quotes, produces -- flowed
+# straight into Send-MailMessage's -To. That parameter validates PER ELEMENT, so it threw
+#     "Cannot bind argument to parameter 'To' because it is an empty string"
+# and the whole run failed. Nothing between the config and the cmdlet ever looked at the values.
+#
+# 🪤 AND IT LANDED AT THE WORST POSSIBLE MOMENT: the report was built, the workbook written, every
+# query run -- and the run died on the final dispatch. Same shape as v2.2.439, where a finished Risk
+# Analysis run could be thrown away at the last write. The engine's own diagnostic dump even printed
+# the trailing ", " in the To line, and nothing said why that mattered.
+#
+# Sanitised HERE, above the send decision, so both the anonymous and the secure branch are covered by
+# one filter rather than two that can drift.
+$__toRaw     = @($global:Report_To)
+$to          = @($__toRaw | ForEach-Object { ([string]$_).Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+$__toDropped = $__toRaw.Count - $to.Count
+
+# NAME what was dropped instead of silently tidying it. A config that quietly loses a recipient looks
+# exactly like one that works, and the operator never learns an address was malformed -- which is how
+# someone stops receiving a report and nobody notices for a month.
+if ($__toDropped -gt 0) {
+    Write-Warn2 ("mail recipients: dropped {0} empty/blank entr{1} from the configured recipient list ({2} valid recipient(s) remain). Check for a trailing comma or an empty string in your `$global:RiskAnalysis_*_To / `$global:MailTo array in config\SecurityInsight.custom.ps1." -f `
+        $__toDropped, $(if ($__toDropped -eq 1) { 'y' } else { 'ies' }), $to.Count)
+}
+
+# Every recipient blank is a CONFIG error, not a transport error, and it must not present as one. Mail
+# is non-fatal everywhere else in this engine ("Engine continues"), so it stays non-fatal here: the
+# report and workbook are already complete on disk and are not worth discarding over an email.
+if ([bool]$global:Report_SendMail -eq $true -and $to.Count -eq 0) {
+    Write-Err2 ("mail dispatch SKIPPED -- every configured recipient was empty or blank ({0} entr{1} supplied, 0 usable). The report and workbook are COMPLETE and on disk; only the email was not sent. Fix the recipient array in config\SecurityInsight.custom.ps1 and re-run, or run with -SkipMail to silence this." -f `
+        $__toRaw.Count, $(if ($__toRaw.Count -eq 1) { 'y' } else { 'ies' }))
+    $global:Report_SendMail = $false
+}
+
 if ([bool]$global:Report_SendMail -eq $true) {
 
-    $to          = @($global:Report_To)
     # From address -- resolve in order:
     #   1) $global:SMTPFrom   (canonical; required when SMTP relay demands a verified sender,
     #      e.g. Brevo/SendGrid/Postmark reject mail whose From != verified sender)

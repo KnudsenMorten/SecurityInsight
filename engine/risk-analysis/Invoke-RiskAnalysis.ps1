@@ -3592,6 +3592,72 @@ if ($global:AllShapedRows.Count -eq 0) {
     $global:FinalRiskScoreColumnName = $sortCol
     Tick "final sort"
 
+    #--------------------------------------------------------------------------------------------
+    # v2.2.453 -- DROP OData SERIALISATION ARTEFACTS FROM THE CUSTOMER-FACING OUTPUTS.
+    # Graph advanced hunting annotates each value with a sibling `<name>@odata.type` key
+    # (`#Int64`, `#SByte`, `#Collection(String)`). Three AH call sites already remove them via
+    # `ConvertTo-PSObjectDeep -StripOData` (:2792, :3016, :3150) -- but at least one path does not,
+    # so they survive into the export pool.
+    #
+    # 🔑 THE DAMAGE IS WILDLY DISPROPORTIONATE, which is why this is worth a release:
+    # measured 2026-08-26 on the internal estate, exactly **2 rows out of 6,339** (one report,
+    # Attack_Paths_Detailed_Identity_Group_Membership_to_Privileged_Resources) carried these
+    # properties -- and because Export-Worksheet takes the UNION of column names, those 2 rows
+    # added **17 junk columns to all 316** in every customer's workbook, and to the JSON sibling.
+    #
+    # Log Analytics was never affected: the schema sample is already filtered by this same regex
+    # (see the ingest block below), and Build-DataArrayToAlignWithSchema drops undeclared columns
+    # from the posted rows, so the CL table only ever held the legal names.
+    #
+    # 🔒 SAFETY -- verified before shipping, not assumed. Applying `^[A-Za-z][A-Za-z0-9_]*$` to all
+    # 316 columns of a real Detailed workbook rejected **17, and all 17 were `*@odata.type`**; zero
+    # legitimate columns failed (`TenantId` and `Type` pass -- they are renamed later BY THE INGEST
+    # MODULE, which is correct and unrelated). Rows are rebuilt ONLY when they actually carry an
+    # illegal property, so the normal case costs one property-name scan and allocates nothing.
+    #--------------------------------------------------------------------------------------------
+    $_RAIllegalColName = [regex]'^[A-Za-z][A-Za-z0-9_]*$'
+    $_odataRowsFixed   = 0
+    $_odataColsDropped = New-Object 'System.Collections.Generic.HashSet[string]'
+
+    $_cleanFinal = New-Object 'System.Collections.Generic.List[object]'
+    foreach ($_row in $global:final) {
+        if ($null -eq $_row) { continue }
+
+        $_hasIllegal = $false
+        foreach ($_p in $_row.PSObject.Properties) {
+            if (-not $_RAIllegalColName.IsMatch($_p.Name)) { $_hasIllegal = $true; break }
+        }
+
+        if (-not $_hasIllegal) { [void]$_cleanFinal.Add($_row); continue }
+
+        $_kept = [ordered]@{}
+        foreach ($_p in $_row.PSObject.Properties) {
+            if ($_RAIllegalColName.IsMatch($_p.Name)) { $_kept[$_p.Name] = $_p.Value }
+            else { [void]$_odataColsDropped.Add($_p.Name) }
+        }
+        [void]$_cleanFinal.Add([pscustomobject]$_kept)
+        $_odataRowsFixed++
+    }
+    $global:final = $_cleanFinal.ToArray()
+
+    # The workbook takes its columns from this list via a STRICT Select-Object, so it must be
+    # filtered too -- otherwise the column survives as an empty column even with no row carrying it.
+    if ($global:FinalDesiredColumns) {
+        $_beforeCols = @($global:FinalDesiredColumns).Count
+        $global:FinalDesiredColumns = @($global:FinalDesiredColumns | Where-Object { $_RAIllegalColName.IsMatch([string]$_) })
+        $_droppedCols = $_beforeCols - @($global:FinalDesiredColumns).Count
+        if ($_droppedCols -gt 0 -or $_odataRowsFixed -gt 0) {
+            Write-Info ("[odata] dropped {0} artefact column(s) from the export; they were introduced by {1} row(s) of {2}. Log Analytics was already clean." -f `
+                        $_droppedCols, $_odataRowsFixed, @($global:final).Count)
+            if ($_odataColsDropped.Count -gt 0) {
+                Write-Diag ("[odata] names: {0}" -f ((@($_odataColsDropped) | Sort-Object) -join ', '))
+            }
+        }
+    }
+    elseif ($_odataRowsFixed -gt 0) {
+        Write-Info ("[odata] stripped artefact properties from {0} row(s)" -f $_odataRowsFixed)
+    }
+
     Write-Step "exporting to excel (single write)"
     Write-Info ("path: {0}" -f $global:OutputXlsx)
     Tock

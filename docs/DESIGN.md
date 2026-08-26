@@ -3030,7 +3030,7 @@ RUN pwsh -NoProfile -Command \
      Install-Module -Name Az.ResourceGraph       -RequiredVersion 1.2.1 -Force -Scope AllUsers; \
      Install-Module -Name Az.OperationalInsights -RequiredVersion 3.4.0 -Force -Scope AllUsers; \
      Install-Module -Name powershell-yaml        -RequiredVersion 0.4.12 -Force -Scope AllUsers; \
-     Install-Module -Name AzLogDcrIngestPS       -RequiredVersion 1.6.2 -Force -Scope AllUsers; \
+     Install-Module -Name AzLogDcrIngestPS       -MinimumVersion 1.7.0 -Force -Scope AllUsers; \
      Install-Module -Name ImportExcel            -RequiredVersion 7.8.10 -Force -Scope AllUsers"
 COPY . /app/
 ENTRYPOINT ["pwsh","-NoProfile","-File","/app/container/Start-SIInContainer.ps1"]
@@ -3071,7 +3071,7 @@ In-flight job executions finish on the old image; the next trigger pulls the new
 | Patch (z) | Yes | `-BumpAll -Build -Roll` directly |
 | Minor (y) | After test | Bump + Build on a container-test deployment first, validate, then Roll customer RGs |
 | Major (x) | After test | Same as minor; expect breaking-change surface |
-| `AzLogDcrIngestPS` | Owner-controlled | Pin to whatever we just shipped; never `BumpAll` blindly — `v1.6.3` has a cert-only-auth gate bug, stay on `1.6.2` until `1.6.4` ships |
+| `AzLogDcrIngestPS` | Owner-controlled | **Not pinned — `Ensure-Module.ps1` lists it in `-KeepLatest`, so every engine run probes PSGallery and installs a newer version; `-MinimumVersions` holds a hard floor (`1.6.7`) that fails fast instead of surfacing a confusing "parameter not found".** ⚠️ **v1.7.0 (2026-08-26) is the floor that matters in practice** — below it, ingest data-shaping costs ~1.360s instead of ~24s at 6,339×299, and any column the module has to rename is written with a `$null` value (audit #66). |
 
 **CI hook (optional):** add a weekly scheduled action that runs `-Audit` and opens an issue if the drift count is non-zero. The repo's GitHub Actions already has the credentials for ACR; add a job calling the script with `-Audit` and grepping for `*` rows.
 

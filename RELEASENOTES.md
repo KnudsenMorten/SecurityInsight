@@ -1,9 +1,11 @@
 # Release notes for SecurityInsight
 
-## v2.2.452
+## v2.2.453
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.453: two rows were adding 17 junk columns to every workbook (453f27f2)
+- docs(SI): audit #65 -- redundancy scan, filed LOW PRIORITY with its own false positives (c24f6b41)
 - release(SI) v2.2.452: a query failure is one line, not a twenty-line stack dump (a1ea7080)
 - release(SI) v2.2.451: the data-lake check no longer prints an error block when the lake is not onboarded (7b110173)
 - release(SI) v2.2.450: CRITICAL -- the bulk export referenced a type the engine never loaded (fb870bd1)
@@ -32,11 +34,35 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - fix(SI) v2.2.437: two defects found by auditing v2.2.434-435, neither reachable, both real (76d7d009)
 - fix(SI) v2.2.436: a failed discovery source must not look like a stale estate (e7506799)
 - feat(SI) v2.2.435: Okta identity servers are tiered, and an SCCM console stops claiming to be a site server (784f13d0)
-- fix(SI) v2.2.434: a refused cross-source merge now NAMES the assets, on the normal run (aa7e96fe)
-- @ docs(SI) v2.2.433: an empty new column is waiting on the CLOCK, not on another run (d0ba9d1e)
 
 ---
 
+## v2.2.453 — two rows were adding seventeen junk columns to every workbook
+
+Graph advanced hunting annotates each value with a sibling `<name>@odata.type` key holding the OData
+type name (`#Int64`, `#SByte`, `#Collection(String)`). Three of the paths that read AH results
+already strip those; at least one did not, so they reached the export pool.
+
+Measured on a live estate, the disproportion is the whole story:
+
+```
+rows carrying @odata properties : 2      (of 6,339)
+producing report                : one cross-domain attack-path report
+junk columns added to the xlsx  : 17     (of 316)
+```
+
+Because the workbook takes the **union** of column names across all rows, **two rows out of 6,339
+(0.03%) added seventeen empty columns (5.4%) to every workbook and to the JSON sibling.**
+
+**Log Analytics was never affected.** The ingest already filtered its declared schema to legal
+identifier names, and undeclared columns are dropped from the posted rows — so the table only ever
+held the real columns. This release applies that same rule to the export, so the workbook finally
+matches the table.
+
+Verified before shipping rather than assumed: applying the filter to all 316 columns of a real
+Detailed workbook rejected 17, and **all 17 were `@odata.type` artefacts — no real column was
+touched.** Rows are rebuilt only when they actually carry an artefact, so the normal case costs one
+property-name scan and allocates nothing.
 ## v2.2.452 — the query-failure message is one line instead of a twenty-line stack dump
 
 **Operator: "it looks very amateur."** When an advanced-hunting query hit a service limit, the log

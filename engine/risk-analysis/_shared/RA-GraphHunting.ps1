@@ -441,7 +441,28 @@ function Invoke-GraphHuntingQuery {
             # + duration so progress is observable.
             Write-Info ("submitting query to advanced hunting (attempt {0}/{1}; may take up to 900s if too large)..." -f $attempt, $MaxRetries)
             $_ahSw = [System.Diagnostics.Stopwatch]::StartNew()
-            $ahResp = Start-MgBetaSecurityHuntingQuery -Query $Query -ErrorAction Stop
+            # 🔑 v2.2.452 -- ASK WITHOUT -ErrorAction Stop, THEN RAISE A SHORT ERROR OURSELVES.
+            # `-ErrorAction Stop` PROMOTED the cmdlet's non-terminating error to a terminating one,
+            # and a PowerShell transcript records every terminating error in full: ~20 lines of HTTP
+            # status, request ids and x-ms-ags-diagnostic headers, TWICE per failure (once for the
+            # cmdlet, once for this function's re-throw). Customers reading their own log saw raw
+            # .NET dumps and rang up. The FAILURE is worth logging -- a query that exceeds AH limits
+            # drives bucket escalation -- but the FORM was wrong.
+            # 🔴 THE TRAP, AND IT NEARLY BROKE ESCALATION: the 900s ceiling arrives as
+            # "The request was canceled due to the configured HttpClient.Timeout of 900 seconds
+            # elapsing." That text matches NEITHER message fallback in Test-IsBucketOverflowError
+            # ('a task was canceled' / 'taskcanceledexception') -- today it is caught ONLY by the
+            # `-is [TaskCanceledException]` TYPE check. Throwing a plain string would erase the type
+            # and silently stop the AutoBucket ramp on exactly the reports that need it. So the type
+            # is preserved AS TEXT, which both this function and Test-IsBucketOverflowError already
+            # match on.
+            $ahErr  = $null
+            $ahResp = Start-MgBetaSecurityHuntingQuery -Query $Query -ErrorAction SilentlyContinue -ErrorVariable ahErr
+            if ($ahErr -and @($ahErr).Count -gt 0) {
+                $__e   = @($ahErr)[0]
+                $__typ = if ($__e.Exception -is [System.Threading.Tasks.TaskCanceledException]) { 'TaskCanceledException: ' } else { '' }
+                throw ($__typ + [string]$__e.Exception.Message)
+            }
             $_ahSw.Stop()
             Write-Info ("advanced hunting returned in {0:F1}s" -f $_ahSw.Elapsed.TotalSeconds)
 
@@ -474,7 +495,11 @@ function Invoke-GraphHuntingQuery {
         } catch {
             $msg = $_.Exception.Message
 
-            $isTaskCanceled = ($_.Exception -is [System.Threading.Tasks.TaskCanceledException]) -or ($msg -match 'A task was canceled')
+            # 🔒 'TaskCanceledException' is matched as TEXT as well as by type: since v2.2.452 the
+            # error is raised by us as a short message rather than propagated as the SDK's exception
+            # object, so the type check no longer fires and the text is what carries the signal. Both
+            # forms are accepted so this works whichever path produced the error.
+            $isTaskCanceled = ($_.Exception -is [System.Threading.Tasks.TaskCanceledException]) -or ($msg -match 'A task was canceled') -or ($msg -match 'TaskCanceledException')
             # v2.2.276 -- 502 Bad Gateway from nginx (in front of /security/runHuntingQuery)
             # is the SAME deterministic "query too big" pattern as TaskCanceled. nginx
             # responds 502 when the upstream AH backend produces a response too large

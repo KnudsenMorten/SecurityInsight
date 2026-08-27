@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.458
+## v2.2.459
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.459: the attachment budget, corrected down and finally documented (0910cd65)
 - release(SI) v2.2.458: what the logs told customers, and a report too large to send (6fbb1045)
 - release(SI) v2.2.457: the AI summary sheet was quietly undoing the workbook's alignment (53307cde)
 - release(SI) v2.2.456: the findings that went missing every run, and why absence is not remediation (860ce577)
@@ -33,9 +34,44 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release(SI) v2.2.439: a finished Risk Analysis run could be thrown away at the final write (6f02fd8f)
 - release(SI) v2.2.438: container runs keep a log, and two reports now count what they list (d4027df4)
 - fix(SI) #25 fourth shape: a make_set list arrives in TWO shapes, and the engine knew only one (2900c5d2)
-- docs(SI): the cert-store trap had TWO contradictory prescriptions, and the cause was neither of them (62409f2f)
 
 ---
+
+## v2.2.459 — the attachment budget, corrected down and finally documented
+
+**v2.2.458 raised the mail attachment budget from 20 MB to 34 MB. That was the wrong direction and
+this release corrects it to 24 MB.**
+
+The setting is the **message** budget measured base64-encoded, not the file size on disk. A 34 MB
+budget produces a message of roughly 33 MB — and most relays cap a message at **25 MB** (Exchange
+Online's default; on-premises is often lower). A budget above what the relay accepts is worse than
+one below it: instead of the graceful *"summary sent, attachment dropped"*, the relay rejects the
+**entire message** and the recipient gets nothing at all.
+
+| budget | admits a workbook of | resulting message |
+|---|---|---|
+| 20 | ~14 MB on disk | ~19 MB |
+| **24 (new default)** | **~17 MB on disk** | **~23 MB** |
+| 25 | ~18 MB on disk | ~25 MB |
+| 34 (v2.2.458) | ~24 MB on disk | ~33 MB — rejected by a 25 MB relay |
+
+24 leaves roughly 1.7 MB of headroom under a 25 MB relay, because that cap covers the whole
+message — body and headers as well as the attachment.
+
+### It is now documented where people will actually find it
+
+The setting existed and was configurable, but appeared only in the reference config — never in the
+sample file customers copy, so in practice it was undiscoverable. It is now in:
+
+- the **sample config** (section 9, *Report delivery*), with the relay caveat spelled out
+- the **README**, with a table of what each budget admits
+- the **design doc's** delivery-limits section
+
+### Nothing is enforced
+
+`$global:SI_MaxMailAttachmentMB` remains a per-environment setting. **Lowering it is always safe.**
+Raising it is only safe if you know your relay accepts more — check first, for example on Exchange
+Online with `Get-TransportConfig | fl MaxSendSize`, and set the budget just below that.
 
 ## v2.2.458 — what the logs told customers, and a report too large to send
 ### The attachment budget is raised from 20 MB to 34 MB

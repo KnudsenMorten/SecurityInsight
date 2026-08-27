@@ -1,9 +1,10 @@
 # Release notes for SecurityInsight
 
-## v2.2.457
+## v2.2.458
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.458: what the logs told customers, and a report too large to send (6fbb1045)
 - release(SI) v2.2.457: the AI summary sheet was quietly undoing the workbook's alignment (53307cde)
 - release(SI) v2.2.456: the findings that went missing every run, and why absence is not remediation (860ce577)
 - release(SI) v2.2.455: a query defect was reported as a platform glitch, and re-running could never fix it (c4bb3e67)
@@ -33,9 +34,66 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release(SI) v2.2.438: container runs keep a log, and two reports now count what they list (d4027df4)
 - fix(SI) #25 fourth shape: a make_set list arrives in TWO shapes, and the engine knew only one (2900c5d2)
 - docs(SI): the cert-store trap had TWO contradictory prescriptions, and the cause was neither of them (62409f2f)
-- docs(SI) #55: DESIGN never mentioned run transcripts at all -- and they have been default-on since v2.2.312 (27e921fe)
 
 ---
+
+## v2.2.458 — what the logs told customers, and a report too large to send
+### The attachment budget is raised from 20 MB to 34 MB
+
+A real Detailed workbook reached **22,4 MB on disk / 30,7 MB once base64-encoded** and was dropped
+by the old budget, so the report arrived as a summary with the workbook left on the engine host.
+
+The setting is the **message** budget, not the file size: base64 inflates an attachment by about
+37%, so the new 34 MB budget admits a workbook of roughly **24,8 MB on disk** (the old 20 MB
+admitted about 14,6 MB).
+
+⚠️ **This cannot make a mail relay accept anything.** Exchange Online defaults to 25 MB per message
+and on-premises relays are often lower. A budget set above what your relay accepts turns a graceful
+"summary sent, attachment dropped" into the relay rejecting the entire message — summary included.
+If mail begins failing after this release, check the relay's limit first and set
+`$global:SI_MaxMailAttachmentMB` just below it.
+
+
+Neither of these changes what the engine does. Both change what it says while doing it, and both
+were generating support questions.
+
+### The AI summary was printed one token per line
+
+Every run's transcript carried the executive summary as thousands of one-token lines:
+
+```
+##
+ Top
+50
+ risky
+ assets
+```
+
+The summary is streamed from the AI service, and each chunk was echoed to the console as it
+arrived. That renders as a normal paragraph interactively — but **a PowerShell transcript records
+every write as its own line and ignores the "no newline" instruction**, so an unattended run wrote
+one line per token. Confirmed by reproducing it deliberately rather than reasoning about it: the
+console showed one tidy line where the transcript recorded five.
+
+The summary is now assembled and written once, after the stream completes. Identical text, one
+block instead of thousands of lines.
+
+### A diagnostic line about dropped columns read like data loss
+
+```
+[odata] dropped 17 artefact column(s) from the export; they were introduced by 134 row(s) of 153622
+```
+
+This is meaningless to anyone who has not heard of OData annotations, and it reads as though the
+export threw away findings. It did not: those columns are type annotations the query service adds
+alongside values, they were never findings, and the Log Analytics table never contained them. The
+line is now shown only when diagnostics are requested.
+
+### Also
+
+Internal tracking identifiers have been removed from console, log and email output. Messages that
+referred to internal issue numbers meant nothing outside the development repository. The
+operational meaning of every message is unchanged.
 
 ## v2.2.457 — the AI summary sheet was quietly undoing the workbook's alignment
 

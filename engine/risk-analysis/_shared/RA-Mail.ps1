@@ -31,7 +31,7 @@ function Test-SIMailAttachmentFits {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][long]$SizeBytes,
-        [Parameter()][double]$MaxMb = 20
+        [Parameter()][double]$MaxMb = 34
     )
     $encodedMb = [Math]::Round(($SizeBytes * 1.37) / 1MB, 1)
     [pscustomobject]@{

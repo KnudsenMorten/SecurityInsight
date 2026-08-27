@@ -200,8 +200,8 @@ Describe 'mail attachment size guard -- an oversized workbook must not take the 
         $r.Fits | Should -BeTrue
     }
 
-    It 'the shipped default budget is 20 MB' {
-        (Test-SIMailAttachmentFits -SizeBytes (1MB)).MaxMb | Should -Be 20
+    It 'the shipped default budget is 34 MB' {
+        (Test-SIMailAttachmentFits -SizeBytes (1MB)).MaxMb | Should -Be 34
     }
 
     It 'a typical report attaches without complaint' {

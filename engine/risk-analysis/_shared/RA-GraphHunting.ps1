@@ -183,7 +183,18 @@ function Invoke-GraphHuntingQuery {
         # Endpoint_ActiveCompromise_Detected_Detailed had probe say "NOT in AH" yet
         # AH submission still happened. Log the routing decision so the next run
         # tells us which branch actually fired.
-        Write-Diag ("[route] CL probe done: available={0} | clHits=[{1}] | hasEG={2}" -f $available, ($clTableHits -join ','), $queryReferencesEG)
+        # 🔴 THIS LINE IS VISIBLE ON PURPOSE, AND IT STAYS VISIBLE.
+        # A routing bug has now been seen twice -- v2.2.272 on one report, 2026-08-26 on another --
+        # where the probe answered "not in advanced hunting" and the query was submitted there
+        # anyway, losing the bucket and shipping the report PARTIAL. Both times the breadcrumb that
+        # would have named the branch was Write-Diag, i.e. verbose-only, so neither run could be
+        # explained afterwards. A diagnostic that only fires once someone already suspects a problem
+        # is not a diagnostic. One line per query is a fair price for being able to answer "why did
+        # it go there" from a log the customer already has.
+        $__route = if ($available) { 'advanced hunting' } else { 'Log Analytics direct' }
+        $__tbls  = if (@($clTableHits).Count) { @($clTableHits) -join ', ' } else { 'none' }
+        $__eg    = if ($queryReferencesEG) { ' (query also uses ExposureGraph)' } else { '' }
+        Write-Info ("routing to {0} -- SI tables in this query: {1}{2}" -f $__route, $__tbls, $__eg)
         if (-not $available) {
             # same fallback as LA-ingest path. Resolution order:
             # RA-specific (SI_RiskAnalysis_*, for split-workspace setups) -> v2.2 unified

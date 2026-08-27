@@ -3668,7 +3668,13 @@ if ($global:AllShapedRows.Count -eq 0) {
         $global:FinalDesiredColumns = @($global:FinalDesiredColumns | Where-Object { $_RAIllegalColName.IsMatch([string]$_) })
         $_droppedCols = $_beforeCols - @($global:FinalDesiredColumns).Count
         if ($_droppedCols -gt 0 -or $_odataRowsFixed -gt 0) {
-            Write-Info ("[odata] dropped {0} artefact column(s) from the export; they were introduced by {1} row(s) of {2}. Log Analytics was already clean." -f `
+            # 🔒 DIAGNOSTIC, NOT CUSTOMER-FACING. This used to be Write-Info and it reached every
+            # customer log. "[odata] dropped 17 artefact column(s)" means nothing to an operator who
+            # has never heard of OData annotations, and it reads like the export lost data -- it
+            # generated support calls. Nothing was lost: these columns are Graph type annotations
+            # that were never real findings, and the table never had them. Keep the detail for a
+            # -Verbose run; say nothing on a normal one.
+            Write-Diag ("[odata] dropped {0} artefact column(s) from the export; they were introduced by {1} row(s) of {2}. Log Analytics was already clean." -f `
                         $_droppedCols, $_odataRowsFixed, @($global:final).Count)
             if ($_odataColsDropped.Count -gt 0) {
                 Write-Diag ("[odata] names: {0}" -f ((@($_odataColsDropped) | Sort-Object) -join ', '))
@@ -5114,6 +5120,7 @@ Rules:
         Write-Host "`n[AI SUMMARY RESPONSE]`n" -ForegroundColor Cyan
 
         $sb = New-Object System.Text.StringBuilder
+        $__aiChunks = 0
 
         $reader = $null
         $client = $null
@@ -5182,7 +5189,13 @@ Rules:
                         $text = $obj.choices[0].delta.content
                         if ($text) {
                             [void]$sb.Append($text)
-                            Write-Host -NoNewline $text
+                            # 🪤 NO per-chunk Write-Host HERE, and -NoNewline does NOT save you.
+                            # Start-Transcript records every Write-Host CALL as its own line and
+                            # ignores -NoNewline, so a live typewriter effect that looks like one
+                            # tidy paragraph on the console becomes THOUSANDS of one-token lines in
+                            # the customer's transcript ("##" / " Top" / "50" / " risky"...). The
+                            # summary is printed once, assembled, after the stream completes.
+                            $__aiChunks++
                         }
                     } catch {
                         Write-Warning "Failed to parse AI chunk: $json"
@@ -5191,6 +5204,11 @@ Rules:
             }
 
             $global:AI_SummaryText = ($sb.ToString() -replace "`r`n","`n" -replace "`r","`n").Trim()
+
+            # The whole summary, as ONE Write-Host call: the transcript records it as one block
+            # instead of one line per token. This is what the operator actually reads.
+            Write-Host $global:AI_SummaryText
+            Write-Info ("[AI] summary assembled from {0} streamed chunk(s), {1} chars" -f $__aiChunks, $global:AI_SummaryText.Length)
 
             # Write AI summary into Excel Summary sheet
             try {
@@ -5749,10 +5767,17 @@ if ([bool]$global:Report_SendMail -eq $true) {
     # ⚠️ Base64 inflates an attachment by ~37% on the wire, so the cap is compared against the ENCODED
     # size, not the size on disk. A 10 MB file is ~13.7 MB of message -- which is why a naive on-disk
     # check passes and the relay still rejects.
-    # 20 MB is the MESSAGE budget, not the on-disk file size -- the limit relays actually enforce.
-    # Because base64 inflates by ~37%, a 20 MB budget admits a workbook of roughly 14.6 MB on disk.
+    # 34 MB is the MESSAGE budget, not the on-disk file size -- the limit relays actually enforce.
+    # Because base64 inflates by ~37%, a 34 MB budget admits a workbook of roughly 24.8 MB on disk.
     # Both numbers are printed in the warning so there is never any doubt which one was measured.
-    $_mailMaxMb    = if ($global:SI_MaxMailAttachmentMB -gt 0) { [double]$global:SI_MaxMailAttachmentMB } else { 20 }
+    # 🪤 RAISED FROM 20 TO 34 IN v2.2.458, AND THE RELAY STILL HAS THE FINAL WORD. A real customer
+    # Detailed workbook reached 22.4 MB on disk / 30.7 MB encoded and was dropped by the old budget.
+    # 34 admits it. But this setting cannot make a relay accept anything: Exchange Online defaults to
+    # 25 MB per message and on-prem relays are often lower, so a budget set above the relay's own
+    # limit turns a graceful "summary sent without the attachment" into the relay rejecting the
+    # WHOLE message -- summary included. If mail starts failing after a raise, this is the first
+    # thing to check, and the fix is to lower it to just under what the relay accepts.
+    $_mailMaxMb    = if ($global:SI_MaxMailAttachmentMB -gt 0) { [double]$global:SI_MaxMailAttachmentMB } else { 34 }
     $_attachNotice = ''
     $attachments   = @()
     if (Test-Path -LiteralPath $global:OutputXlsx) {

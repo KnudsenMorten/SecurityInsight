@@ -1,9 +1,12 @@
 # Release notes for SecurityInsight
 
-## v2.2.459
+## v2.2.460
 
 Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo monorepo:
 
+- release(SI) v2.2.460: an uncertain routing answer no longer sends a query where it cannot work (ffdd4600)
+- docs(SI) #73(b) route-map audit: four causes eliminated, and the bug is environmental (7e06c45b)
+- docs(SI) #74 closed: the report-URL idea is dropped, and the reason is not the one you would guess (91c09b5e)
 - release(SI) v2.2.459: the attachment budget, corrected down and finally documented (0910cd65)
 - release(SI) v2.2.458: what the logs told customers, and a report too large to send (6fbb1045)
 - release(SI) v2.2.457: the AI summary sheet was quietly undoing the workbook's alignment (53307cde)
@@ -31,11 +34,50 @@ Latest 30 commits touching SOLUTIONS/SecurityInsight/ in the upstream monorepo m
 - release(SI) v2.2.441: an asset name is ATOMIC, and every silent cap now says what it dropped (2259bf7b)
 - release(SI) v2.2.440 #25 fifth shape: the fix shipped in .438 was correct, and never ran (1268c65f)
 - fix(SI) v2.2.439 tests: my own new test file failed the gate it was written to protect (b202c607)
-- release(SI) v2.2.439: a finished Risk Analysis run could be thrown away at the final write (6f02fd8f)
-- release(SI) v2.2.438: container runs keep a log, and two reports now count what they list (d4027df4)
-- fix(SI) #25 fourth shape: a make_set list arrives in TWO shapes, and the engine knew only one (2900c5d2)
 
 ---
+
+## v2.2.460 — an uncertain answer no longer sends a query where it cannot work
+
+Before a report runs, the engine asks Defender whether one of SecurityInsight's own tables can be
+queried from advanced hunting. The answer decides the route. There are three possible answers, and
+the third one was handled the wrong way round.
+
+| answer | route | correct? |
+|---|---|---|
+| the table **is** available there | advanced hunting | yes — faster, and it works |
+| the table is **not** available | Log Analytics direct | yes — always works |
+| **the question could not be answered** | advanced hunting | **no** |
+
+The two routes are not interchangeable. A SecurityInsight table is always written to the Log
+Analytics workspace, so Log Analytics direct always works. Advanced hunting only works if that
+table has also been mirrored — which is the customer's choice, and not the usual case.
+
+So when the check itself failed — a throttle, a timeout, a moment of unavailability, an error
+worded differently than expected — the engine resolved the uncertainty toward the one route that
+can fail. When it did fail, that portion of the report returned nothing: the findings were missing
+from the workbook **and** from the Log Analytics table, while the run reported success.
+
+**Worse, the guess was remembered for the rest of the run.** A single momentary failure re-routed
+every later query touching that table, not just the one that hit it.
+
+An uncertain answer is now resolved toward the route that always works, and it is no longer
+remembered — the next query asks again. A customer who has mirrored their tables keeps the faster
+advanced-hunting path and regains it as soon as the service answers cleanly.
+
+### The route each query takes is now stated in the log
+
+```
+routing to Log Analytics direct -- SI tables in this query: SI_Endpoint_Profile_CL
+```
+
+This was previously only visible when diagnostics were switched on. A routing problem was reported
+twice, and on both occasions the line that would have explained which route was chosen had not been
+recorded — so neither run could be explained afterwards. One line per query is a fair price for
+being able to answer "why did it go there" from a log you already have.
+
+7 tests cover both changes, including that a table genuinely available in advanced hunting is still
+used from there.
 
 ## v2.2.459 — the attachment budget, corrected down and finally documented
 

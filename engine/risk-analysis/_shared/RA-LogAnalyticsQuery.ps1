@@ -243,9 +243,30 @@ function Test-AdvancedHuntingHasTable {
         Write-Info ("{0} is NOT queryable from advanced hunting -- will route to Log Analytics direct." -f $TableName)
     }
     else {
-        # Some other error (auth, throttle). Don't cache; let the real call surface it.
-        Write-Warn2 ("AdvancedHunting probe for {0} inconclusive ({1}). Will assume table is accessible and let the real call decide." -f $TableName, $msg)
-        $script:_TableInAdvHunting[$TableName] = $true
+        # 🔴 AN INCONCLUSIVE ANSWER IS NOT KNOWLEDGE, AND IT MUST NOT RESOLVE TO ADVANCED HUNTING.
+        # The two routes are not symmetric. A query against an SI-owned SI_*_CL table works over
+        # Log Analytics direct because SI writes that table to the workspace; advanced hunting only
+        # works if the customer has ALSO mirrored it (their choice, and not the common case). So the
+        # route that MIGHT fail is AH, and the route that works is LA-direct.
+        #
+        # This branch used to cache $true -- "assume the table is accessible and let the real call
+        # decide" -- which sends the query to the one destination that can fail. When it does, the
+        # bucket returns nothing, the report ships PARTIAL, and the findings are missing from the
+        # workbook AND the CL table while the run reports success. Reproduced against the real
+        # routing function: any probe error that is not the exact "Failed to resolve table" string
+        # took this branch and routed to AH.
+        #
+        # 🪤 AND IT CACHED THE GUESS FOR THE WHOLE RUN, so one transient blip -- a throttle, a
+        # timeout, an auth hiccup, a reworded service error -- mis-routed EVERY later query
+        # touching that table, not just the one that hit the blip. The comment below this branch
+        # already said "Don't cache"; the code did anyway. That divergence is the bug.
+        #
+        # Now: answer with the route that works, and DO NOT remember it. The next query re-probes,
+        # so a momentary failure costs one cheap `take 1` instead of the rest of the run -- and a
+        # customer who HAS mirrored their tables gets their advanced-hunting path back as soon as
+        # the service answers cleanly again.
+        Write-Warn2 ("AdvancedHunting probe for {0} was inconclusive ({1}). Routing this query to Log Analytics direct, which always works for this table, and re-probing on the next query rather than assuming." -f $TableName, $msg)
+        return $false
     }
     return $script:_TableInAdvHunting[$TableName]
 }

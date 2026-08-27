@@ -206,3 +206,67 @@ Describe 'the advanced-hunting QUERY call (v2.2.452)' {
             Should -BeTrue
     }
 }
+
+Describe 'an inconclusive probe must not route to advanced hunting (v2.2.460)' {
+
+    BeforeAll {
+        $script:Probe  = script:BodyOf -File $script:LAQuery -Name 'Test-AdvancedHuntingHasTable'
+        $script:Router = Get-Content -Raw -LiteralPath $script:Hunting
+    }
+
+    It 'the inconclusive branch answers FALSE, not TRUE' {
+        # The two routes are not symmetric. LA-direct works for an SI-owned SI_*_CL table because
+        # SI writes it to the workspace; advanced hunting only works if the customer ALSO mirrored
+        # it. So an uncertain answer must resolve to the route that works, never the one that can
+        # fail -- when it fails the bucket returns nothing, the report ships PARTIAL, and the
+        # findings are absent from the workbook AND the CL table while the run reports success.
+        $inconclusive = ($script:Probe -split 'inconclusive')[1]
+        $inconclusive | Should -Not -BeNullOrEmpty
+        $inconclusive | Should -Match 'return \$false'
+    }
+
+    It 'the inconclusive branch does NOT cache its guess' {
+        # It cached $true for the WHOLE RUN, so one transient blip -- a throttle, a timeout, a
+        # reworded service error -- mis-routed every later query touching that table. The comment
+        # in the source already said "Don't cache"; the code did anyway.
+        $inconclusive = ($script:Probe -split 'inconclusive')[1]
+        $inconclusive | Should -Not -Match '_TableInAdvHunting\[\$TableName\]\s*=\s*\$true'
+    }
+
+    It 'a table genuinely present in advanced hunting is still cached as available' {
+        # The fix must not disable the optimisation for customers who HAVE mirrored their tables.
+        $script:Probe | Should -Match 'IS queryable from advanced hunting'
+        $script:Probe | Should -Match '_TableInAdvHunting\[\$TableName\]\s*=\s*\$true'
+    }
+
+    It 'a definitive not-mirrored answer is still cached, so it is probed once per run' {
+        $notMirrored = ($script:Probe -split 'Failed to resolve table or column expression')[1]
+        $notMirrored | Should -Match '_TableInAdvHunting\[\$TableName\]\s*=\s*\$false'
+    }
+}
+
+Describe 'the routing decision is visible in a normal run (v2.2.460)' {
+
+    BeforeAll { $script:Router = Get-Content -Raw -LiteralPath $script:Hunting }
+
+    It 'the route taken is announced with Write-Info, not Write-Diag' {
+        # This bug has been seen twice -- v2.2.272 on one report and 2026-08-26 on another -- where
+        # the probe said "not in advanced hunting" and the query went there anyway. Both times the
+        # breadcrumb that would have named the branch was verbose-only, so neither run could be
+        # explained afterwards. A diagnostic that only fires once you already suspect a problem is
+        # not a diagnostic.
+        $script:Router | Should -Match 'Write-Info \("routing to \{0\}'
+    }
+
+    It 'the announcement names the route AND the tables that drove it' {
+        # Route alone is not enough to diagnose: the tables are what the probe was asked about.
+        $script:Router | Should -Match "advanced hunting.*Log Analytics direct|Log Analytics direct.*advanced hunting"
+        $script:Router | Should -Match '\$clTableHits'
+    }
+
+    It 'the verbose-only breadcrumb is not how the route is reported any more' {
+        # Guards the regression directly: if someone demotes this back to Write-Diag, the next
+        # occurrence is unexplainable again.
+        $script:Router | Should -Not -Match 'Write-Diag \("\[route\] CL probe done'
+    }
+}

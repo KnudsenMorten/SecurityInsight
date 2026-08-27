@@ -118,7 +118,31 @@ $global:SI_CmdbRefreshIntervalHours = 24
 $global:SI_ActiveStaleDays          = 30
 
 # ============================================================================
-# 9. CONTAINER APP JOB BOOTSTRAP  (uncomment when running Bootstrap-ContainerAppJob.ps1)
+# 9. REPORT DELIVERY  (mail attachment limit)
+# ============================================================================
+# How large a report may be before it is sent WITHOUT the workbook attached.
+#
+# This is the MESSAGE budget measured base64-ENCODED, not the file size on disk.
+# Attachments inflate about 37% on the wire, so the shipped default of 24 MB
+# admits a workbook of roughly 17 MB on disk.
+#
+# The default is sized for the RELAY, not for the report. Most relays cap a
+# message at 25 MB (Exchange Online's default; on-premises is often lower), and
+# that cap covers the whole message -- body and headers too, not only the
+# attachment. 24 leaves roughly 1.7 MB of headroom under a 25 MB relay.
+#
+# LOWERING THIS IS ALWAYS SAFE. Raising it is only safe if you know your relay
+# accepts more: a budget above the relay's limit means the relay rejects the
+# ENTIRE message, so the recipient loses the summary as well as the workbook.
+# Below the budget the report is simply sent without the attachment, and the
+# mail says where the workbook is.
+#
+# Check your relay first, e.g. Exchange Online:  Get-TransportConfig | fl MaxSendSize
+#
+# $global:SI_MaxMailAttachmentMB = 24
+
+# ============================================================================
+# 10. CONTAINER APP JOB BOOTSTRAP  (uncomment when running Bootstrap-ContainerAppJob.ps1)
 # ============================================================================
 # $global:SI_Bootstrap_ResourceGroupName       = 'rg-securityinsight'
 # $global:SI_Bootstrap_Location                = '<azure-region>'    # REQUIRED. Match $global:SI_Location above.
@@ -142,7 +166,7 @@ $global:SI_ActiveStaleDays          = 30
 # $global:SI_RiskAnalysis_BuildSummaryByAI     = $true
 
 # ============================================================================
-# 10. KV PULLS  (late-binding -- runs after $global:Context is set)
+# 11. KV PULLS  (late-binding -- runs after $global:Context is set)
 # ============================================================================
 # Optional KV pulls: Get-PlatformSecret THROWS when a secret isn't seeded, so each
 # pull is wrapped in try/catch (-ErrorAction Stop) and the miss is logged to verbose

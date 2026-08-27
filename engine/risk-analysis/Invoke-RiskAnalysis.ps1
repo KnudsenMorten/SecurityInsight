@@ -5767,17 +5767,20 @@ if ([bool]$global:Report_SendMail -eq $true) {
     # ⚠️ Base64 inflates an attachment by ~37% on the wire, so the cap is compared against the ENCODED
     # size, not the size on disk. A 10 MB file is ~13.7 MB of message -- which is why a naive on-disk
     # check passes and the relay still rejects.
-    # 34 MB is the MESSAGE budget, not the on-disk file size -- the limit relays actually enforce.
-    # Because base64 inflates by ~37%, a 34 MB budget admits a workbook of roughly 24.8 MB on disk.
+    # 24 MB is the MESSAGE budget, not the on-disk file size -- the limit relays actually enforce.
+    # Because base64 inflates by ~37%, a 24 MB budget admits a workbook of roughly 17 MB on disk.
     # Both numbers are printed in the warning so there is never any doubt which one was measured.
-    # 🪤 RAISED FROM 20 TO 34 IN v2.2.458, AND THE RELAY STILL HAS THE FINAL WORD. A real customer
-    # Detailed workbook reached 22.4 MB on disk / 30.7 MB encoded and was dropped by the old budget.
-    # 34 admits it. But this setting cannot make a relay accept anything: Exchange Online defaults to
-    # 25 MB per message and on-prem relays are often lower, so a budget set above the relay's own
-    # limit turns a graceful "summary sent without the attachment" into the relay rejecting the
-    # WHOLE message -- summary included. If mail starts failing after a raise, this is the first
-    # thing to check, and the fix is to lower it to just under what the relay accepts.
-    $_mailMaxMb    = if ($global:SI_MaxMailAttachmentMB -gt 0) { [double]$global:SI_MaxMailAttachmentMB } else { 34 }
+    # 🪤 THE DEFAULT IS SIZED FOR THE RELAY, NOT FOR THE REPORT, AND THAT IS DELIBERATE.
+    # Most relays cap a message at 25 MB (Exchange Online's default; on-prem is often lower), and
+    # that cap covers the WHOLE message -- body and headers included, not just the attachment this
+    # function measures. 24 leaves roughly 1.7 MB of headroom under a 25 MB relay.
+    # A budget set ABOVE what the relay accepts is worse than one set below it: instead of the
+    # graceful "summary sent, attachment dropped", the relay rejects the ENTIRE message and the
+    # recipient gets nothing at all. v2.2.458 briefly shipped 34 here, which produces a ~33 MB
+    # message and would do exactly that on a 25 MB relay; v2.2.459 corrected it.
+    # Customers whose relay accepts more can raise $global:SI_MaxMailAttachmentMB in their own
+    # config. Lowering it is always safe; raising it is only safe if you know the relay's limit.
+    $_mailMaxMb    = if ($global:SI_MaxMailAttachmentMB -gt 0) { [double]$global:SI_MaxMailAttachmentMB } else { 24 }
     $_attachNotice = ''
     $attachments   = @()
     if (Test-Path -LiteralPath $global:OutputXlsx) {

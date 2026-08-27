@@ -656,7 +656,7 @@ $global:SI_StorageKey     = '<storage-account-primary-key-base64>'
 # Mail attachment budget in MB of MESSAGE, measured base64-ENCODED (attachments
 # inflate ~37%, so a 20 MB file is ~27 MB on the wire). Over budget, the report
 # is sent WITHOUT the attachment rather than the relay rejecting the whole mail.
-# $global:SI_MaxMailAttachmentMB = 34
+# $global:SI_MaxMailAttachmentMB = 24
 # Rows ingested to Log Analytics from the schema-audit / tag-activity streams.
 # Above the cap the run warns with the exact number NOT ingested.
 # $global:SI_SchemaAuditRowCap   = 50
